@@ -58,6 +58,7 @@ vi.mock("sonner", () => ({
   __esModule: true,
 }));
 
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
   Message,
@@ -68,6 +69,7 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { ChatTileErrorNoticeToasts } from "../chat-tile-error-notice-toasts";
@@ -129,6 +131,30 @@ function createHarness(): Harness {
       return callbacks;
     },
   };
+}
+
+/**
+ * The plain text send these suites exercise: content in, no browser context,
+ * nothing staged for restore beyond the content itself.
+ */
+function sendTestMessage(harness: Harness, content: JsonContent): void {
+  harness.handle.store.getState().sendMessage({
+    content,
+    sender: { type: "user", userId: OWNER_ID },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: "medium",
+      serviceTier: null,
+      agentMode: "epic",
+      profileId: null,
+    },
+    attachments: buildAttachmentsFromJSONContent(content),
+    deliveryPolicy: "auto",
+    restoreContent: content,
+    restoreBrowserAnnotations: [],
+  });
 }
 
 function chatEvent(
@@ -266,20 +292,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -345,20 +358,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -463,20 +463,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -537,20 +524,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        queuedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, queuedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -598,20 +572,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -691,20 +652,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -747,20 +695,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -829,20 +764,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");

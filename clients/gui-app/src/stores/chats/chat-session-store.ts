@@ -70,8 +70,8 @@ import type {
   Attachment,
   BrowserContextAttachment,
 } from "@/lib/composer/types";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
-import { collectAnnotationImageHashes } from "@/lib/browser-view/browser-annotation-record";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { browserContextAttachmentToWire } from "@/lib/browser-view/browser-context-attachments";
 import { addWithFifoEviction } from "@/lib/bounded-set";
@@ -168,7 +168,7 @@ export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
   readonly content: JsonContent;
-  readonly attachments?: ReadonlyArray<Attachment>;
+  readonly attachments: ReadonlyArray<Attachment>;
   readonly sender: UserMessageSender;
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
@@ -708,13 +708,7 @@ export interface ChatSessionState {
    * the tile error state's retry affordance.
    */
   retry: () => void;
-  sendMessage: (
-    content: JsonContent,
-    sender: UserMessageSender,
-    settings: ChatRunSettings,
-    deliveryPolicy: ChatQueueDeliveryPolicy,
-  ) => SentChatMessageAction | null;
-  sendMessageWithAttachments: (input: {
+  sendMessage: (input: {
     readonly content: JsonContent;
     readonly sender: UserMessageSender;
     readonly settings: ChatRunSettings;
@@ -3134,17 +3128,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set({ missingWorktreePaths: next });
       },
-      sendMessage: (content, sender, settings, deliveryPolicy) =>
-        get().sendMessageWithAttachments({
-          content,
-          sender,
-          settings,
-          attachments: buildAttachmentsFromJSONContent(content),
-          deliveryPolicy,
-          restoreContent: content,
-          restoreBrowserAnnotations: [],
-        }),
-      sendMessageWithAttachments: (input) => {
+      sendMessage: (input) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
         // A worktree staged mid-chat ("Create new worktree") rides on this send;

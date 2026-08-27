@@ -1,21 +1,17 @@
 import { useState, type SyntheticEvent } from "react";
-import type { BrowserScreencastUnsupportedFeature } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserNavState,
+  BrowserScreencastUnsupportedFeature,
+} from "@traycer/protocol/host/browser/contracts";
 import type {
   TileChromeCapabilities,
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
-import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-link-routing-core";
+import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/browser-link-routing-core";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
 
-export interface ScreencastNavState {
-  readonly url: string;
-  readonly canGoBack: boolean;
-  readonly canGoForward: boolean;
-  readonly loading: boolean;
-}
-
-export const EMPTY_SCREENCAST_NAV_STATE: ScreencastNavState = {
+export const EMPTY_SCREENCAST_NAV_STATE: BrowserNavState = {
   url: "",
   canGoBack: false,
   canGoForward: false,
@@ -55,7 +51,7 @@ const EMPTY_DRAFT: AddressDraft = {
 };
 
 interface UseScreencastTileChromeArgs {
-  readonly navState: ScreencastNavState;
+  readonly navState: BrowserNavState;
   readonly initialUrl: string;
   readonly disabled: boolean;
   readonly onNavigateUrl: (url: string) => void;

@@ -18,7 +18,7 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger } from "@/lib/logger";
 import { flushLiveReadingPositions } from "@/lib/reading-position";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { drainElectronTabHandoffs } from "@/lib/browser-view/electron-tabs";
+import { drainElectronTabHandoffs } from "@/lib/browser-view/sessions/electron-tabs";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process

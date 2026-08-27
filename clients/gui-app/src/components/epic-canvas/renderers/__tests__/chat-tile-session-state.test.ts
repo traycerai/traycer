@@ -739,6 +739,7 @@ describe("canModifyChatMessages", () => {
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
     deliveryPolicy: null,
+    attachments: [],
     timestamp: 0,
     restoreContent: CONTENT,
     restoreBrowserAnnotations: [],

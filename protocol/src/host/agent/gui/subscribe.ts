@@ -1302,11 +1302,6 @@ export type BrowserContextAttachmentWire = z.infer<
   typeof browserContextAttachmentWireSchema
 >;
 
-export {
-  browserAnnotationRecordSchema,
-  type BrowserAnnotationRecord,
-} from "@traycer/protocol/persistence/epic/schemas";
-
 // The client-frame options that precede the two interview actions. Split out
 // (rather than written inline in one array) because `1.7` swaps ONLY the
 // interview pair: keeping the surrounding options in their own consts lets the

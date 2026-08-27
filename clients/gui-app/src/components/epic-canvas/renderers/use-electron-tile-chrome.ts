@@ -4,7 +4,8 @@ import type {
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-link-routing-core";
+import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type {
   BrowserCookieCryptoState,
   BrowserViewCertificateErrorChange,
@@ -123,42 +124,40 @@ export function useElectronTabChrome(
     onAttemptedUrl(nextUrl);
     setCertificateError(null);
     setCertificateProceeding(false);
-    void control({ kind: "navigate", url: nextUrl }).catch(ignoreChromeError);
+    void control({ kind: "navigate", url: nextUrl }).catch(ignoreError);
   };
 
   const reload = (): void => {
     setCertificateError(null);
     setCertificateProceeding(false);
-    void control({ kind: "reload" }).catch(ignoreChromeError);
+    void control({ kind: "reload" }).catch(ignoreError);
   };
 
   const goBack = (): void => {
     if (!canGoBack) return;
     setCertificateError(null);
     setCertificateProceeding(false);
-    void control({ kind: "goBack" }).catch(ignoreChromeError);
+    void control({ kind: "goBack" }).catch(ignoreError);
   };
 
   const goForward = (): void => {
     if (!canGoForward) return;
     setCertificateError(null);
     setCertificateProceeding(false);
-    void control({ kind: "goForward" }).catch(ignoreChromeError);
+    void control({ kind: "goForward" }).catch(ignoreError);
   };
 
   const applyViewportPreset = (preset: BrowserViewViewportPresetId): void => {
     setViewportPreset(preset);
     persistViewportPreset(preset);
     void control({ kind: "setViewportPreset", viewportPreset: preset }).catch(
-      ignoreChromeError,
+      ignoreError,
     );
   };
 
   const cancelDownload = (downloadId: string): void => {
     if (surfaceServices === null) return;
-    void surfaceServices
-      .cancelDownload({ downloadId })
-      .catch(ignoreChromeError);
+    void surfaceServices.cancelDownload({ downloadId }).catch(ignoreError);
   };
 
   const proceedCertificate = (): void => {
@@ -176,7 +175,7 @@ export function useElectronTabChrome(
       })
       .catch((error: unknown) => {
         setCertificateProceeding(false);
-        ignoreChromeError(error);
+        ignoreError(error);
       });
   };
 
@@ -200,17 +199,17 @@ export function useElectronTabChrome(
     onForward: goForward,
     onReload: reload,
     onZoomOut: () => {
-      void control({ kind: "zoomOut" }).catch(ignoreChromeError);
+      void control({ kind: "zoomOut" }).catch(ignoreError);
     },
     onZoomIn: () => {
-      void control({ kind: "zoomIn" }).catch(ignoreChromeError);
+      void control({ kind: "zoomIn" }).catch(ignoreError);
     },
     onResetZoom: () => {
-      void control({ kind: "resetZoom" }).catch(ignoreChromeError);
+      void control({ kind: "resetZoom" }).catch(ignoreError);
     },
     onViewportPresetChange: applyViewportPreset,
     onOpenDevTools: () => {
-      void control({ kind: "openDevTools" }).catch(ignoreChromeError);
+      void control({ kind: "openDevTools" }).catch(ignoreError);
     },
   };
 
@@ -251,5 +250,3 @@ function upsertDownload(
     .map((download, index) => (index === existingIndex ? change : download))
     .slice(-5);
 }
-
-function ignoreChromeError(_error: unknown): void {}

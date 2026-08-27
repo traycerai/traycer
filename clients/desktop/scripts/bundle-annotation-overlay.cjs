@@ -18,6 +18,7 @@ const guestEntry = path.resolve(
   "src",
   "electron-main",
   "browser-view",
+  "annotation",
   "browser-annotation-overlay-guest.ts",
 );
 const outFile = path.resolve(
@@ -25,6 +26,7 @@ const outFile = path.resolve(
   "src",
   "electron-main",
   "browser-view",
+  "annotation",
   "browser-annotation-overlay-guest.generated.ts",
 );
 

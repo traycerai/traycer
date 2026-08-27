@@ -434,13 +434,6 @@ function seedRootPane(
   };
 }
 
-function cloneTileForCanvasDuplicate(
-  ref: EpicCanvasTileRef,
-  instanceId: string,
-): EpicCanvasTileRef {
-  return { ...ref, instanceId };
-}
-
 /** Canvas containing exactly one pane with one tab (tear-off, open-in-new-tab). */
 export function createSingleTileCanvas(
   node: EpicCanvasTileRef,
@@ -480,10 +473,7 @@ export function cloneEpicCanvasState(state: EpicCanvasState): EpicCanvasState {
       instanceIdMap.set(instanceId, nextInstanceId);
       const ref = state.tilesByInstanceId[instanceId];
       if (ref !== undefined) {
-        tiles[nextInstanceId] = cloneTileForCanvasDuplicate(
-          ref,
-          nextInstanceId,
-        );
+        tiles[nextInstanceId] = { ...ref, instanceId: nextInstanceId };
       }
       return nextInstanceId;
     });
@@ -1446,7 +1436,6 @@ export function renameArtifact(
     state,
     (ref) => ref.id === artifactId,
     (ref) => {
-      if (isBrowserSessionTileRef(ref)) return ref;
       if (ref.type !== "terminal") {
         return ref.name === name ? ref : { ...ref, name };
       }

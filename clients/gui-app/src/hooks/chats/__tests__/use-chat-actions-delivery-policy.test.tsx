@@ -31,7 +31,7 @@ const SETTINGS: ChatRunSettings = {
 };
 
 interface SendMessageStoreSlice {
-  readonly sendMessageWithAttachments: (input: {
+  readonly sendMessage: (input: {
     readonly content: JsonContent;
     readonly sender: UserMessageSender;
     readonly settings: ChatRunSettings;
@@ -44,7 +44,7 @@ interface SendMessageStoreSlice {
 
 describe("useChatActions deliveryPolicy threading", () => {
   it("forwards deliveryPolicy to the chat session store sendMessage", () => {
-    const sendMessageWithAttachments = vi.fn(
+    const sendMessage = vi.fn(
       (_input: {
         readonly content: JsonContent;
         readonly sender: UserMessageSender;
@@ -58,7 +58,7 @@ describe("useChatActions deliveryPolicy threading", () => {
         messageId: "message-1",
       }),
     );
-    const storeSlice: SendMessageStoreSlice = { sendMessageWithAttachments };
+    const storeSlice: SendMessageStoreSlice = { sendMessage };
     const handle = createDeliveryPolicyHandle(storeSlice);
 
     const { result } = renderHook(() => useChatActions(handle));
@@ -72,8 +72,8 @@ describe("useChatActions deliveryPolicy threading", () => {
       restoreBrowserAnnotations: [],
     });
 
-    expect(sendMessageWithAttachments).toHaveBeenCalledTimes(1);
-    expect(sendMessageWithAttachments).toHaveBeenCalledWith({
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith({
       content: CONTENT,
       sender: { type: "user", userId: "owner-1" },
       settings: SETTINGS,

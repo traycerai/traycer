@@ -4,10 +4,6 @@ import type {
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
 
-interface BrowserCookieCryptoStateLoad {
-  readonly state: BrowserCookieCryptoState;
-}
-
 const DEGRADED_COOKIE_CRYPTO_STATE: BrowserCookieCryptoState = {
   mode: "degraded",
   persistence: "ephemeral",
@@ -20,7 +16,7 @@ const DEGRADED_COOKIE_CRYPTO_STATE: BrowserCookieCryptoState = {
 export function useBrowserCookieCryptoState(
   browserView: BrowserViewBridge | null,
 ): BrowserCookieCryptoState | null {
-  const [load, setLoad] = useState<BrowserCookieCryptoStateLoad | null>(null);
+  const [state, setState] = useState<BrowserCookieCryptoState | null>(null);
 
   useEffect(() => {
     if (browserView === null) return;
@@ -28,10 +24,10 @@ export function useBrowserCookieCryptoState(
     browserView
       .getCookieCryptoState()
       .then((nextState) => {
-        if (active) setLoad({ state: nextState });
+        if (active) setState(nextState);
       })
       .catch(() => {
-        if (active) setLoad({ state: DEGRADED_COOKIE_CRYPTO_STATE });
+        if (active) setState(DEGRADED_COOKIE_CRYPTO_STATE);
       });
     return () => {
       active = false;
@@ -39,5 +35,5 @@ export function useBrowserCookieCryptoState(
   }, [browserView]);
 
   if (browserView === null) return null;
-  return load?.state ?? null;
+  return state;
 }

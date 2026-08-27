@@ -6,7 +6,7 @@ import { ElectronTabSurface } from "@/components/epic-canvas/renderers/agent-bro
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
-} from "@/lib/browser-view/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tabs";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 
 const state = vi.hoisted(() => ({
@@ -39,9 +39,11 @@ vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
 vi.mock("@/lib/browser-view/use-browser-cookie-crypto-state", () => ({
   useBrowserCookieCryptoState: () => null,
 }));
-vi.mock("@/lib/browser-view/visible-tile-registry", async (load) => {
+vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   const actual =
-    await load<typeof import("@/lib/browser-view/visible-tile-registry")>();
+    await load<
+      typeof import("@/lib/browser-view/tiles/visible-tile-registry")
+    >();
   return { ...actual, useRegisterVisibleBrowserTile: () => undefined };
 });
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({

@@ -1,7 +1,6 @@
 import type {
   BrowserAnnotationCounts,
   BrowserAnnotationRecord,
-  BrowserViewElementCapture,
 } from "@traycer/protocol/persistence/epic/schemas";
 
 export interface BrowserViewTileKey {
@@ -12,30 +11,6 @@ export interface BrowserViewTileKey {
 }
 
 export type BrowserAnnotationMode = "select" | "region" | "draw" | "erase";
-
-export type BrowserAnnotationMarkKind = "element" | "region" | "stroke";
-
-export interface BrowserAnnotationCssRect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-export interface BrowserAnnotationMarkSnapshot {
-  readonly id: string;
-  readonly kind: BrowserAnnotationMarkKind;
-  readonly bounds: BrowserAnnotationCssRect;
-  readonly selector: string | null;
-}
-
-export interface BrowserAnnotationAttachRequest {
-  readonly targetChatId: string;
-  readonly marks: readonly BrowserAnnotationMarkSnapshot[];
-  readonly elements: readonly BrowserViewElementCapture[];
-  readonly comment: string;
-  readonly unionRect: BrowserAnnotationCssRect;
-}
 
 export type BrowserAnnotationAttachPayload = Omit<
   BrowserAnnotationRecord,
@@ -86,7 +61,13 @@ export type BrowserAnnotationStartResult =
       readonly reason: BrowserAnnotationStartFailureReason;
     };
 
-export type BrowserAnnotationSessionEvent =
+/**
+ * `attachRequested` is deliberately absent: it carries marks captured by the
+ * CDP-injected guest overlay and never crosses into this forwarded IPC event
+ * (`desktop`'s `BrowserAnnotationSessionEvent` adds it back for the
+ * desktop-main-only path).
+ */
+export type BrowserAnnotationForwardedSessionEvent =
   | {
       readonly type: "stateChanged";
       readonly mode: BrowserAnnotationMode;
@@ -94,18 +75,9 @@ export type BrowserAnnotationSessionEvent =
     }
   | { readonly type: "cancelled" }
   | {
-      readonly type: "attachRequested";
-      readonly payload: BrowserAnnotationAttachRequest;
-    }
-  | {
       readonly type: "ended";
       readonly reason: Exclude<BrowserAnnotationEndReason, "cancelled">;
     };
-
-export type BrowserAnnotationForwardedSessionEvent = Exclude<
-  BrowserAnnotationSessionEvent,
-  { readonly type: "attachRequested" }
->;
 
 export interface BrowserAnnotationSessionIpcEvent extends BrowserViewTileKey {
   readonly event: BrowserAnnotationForwardedSessionEvent;

@@ -2,7 +2,9 @@ import type {
   BrowserCdpCommand,
   BrowserCdpResult,
   BrowserCdpTarget,
+  BrowserElectronTabHandoffSibling,
   BrowserScreencastServerFrame,
+  BrowserSessionsClientFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -77,11 +79,15 @@ export interface BrowserViewBoundsUpdate extends BrowserViewTileKey {
   readonly bounds: BrowserViewBounds;
 }
 
+export const BROWSER_VIEW_VIEWPORT_PRESET_IDS = [
+  "responsive",
+  "mobile",
+  "tablet",
+  "desktop",
+] as const;
+
 export type BrowserViewViewportPresetId =
-  | "responsive"
-  | "mobile"
-  | "tablet"
-  | "desktop";
+  (typeof BROWSER_VIEW_VIEWPORT_PRESET_IDS)[number];
 
 export type BrowserViewStatus = "loading" | "ready" | "dead";
 
@@ -116,7 +122,6 @@ export interface BrowserViewFindChange extends BrowserViewTileKey {
   readonly status: BrowserViewFindStatus;
   readonly current: number;
   readonly total: number;
-  readonly finalUpdate: boolean;
   readonly errorMessage: string | null;
 }
 
@@ -135,7 +140,6 @@ export interface BrowserViewDownloadChange extends BrowserViewTileKey {
   readonly totalBytes: number;
   readonly receivedBytes: number;
   readonly state: BrowserViewDownloadState;
-  readonly savePath: string | null;
   readonly dangerType: string | null;
   readonly canCancel: boolean;
 }
@@ -160,7 +164,6 @@ export interface BrowserViewCertificateTrust extends BrowserViewTileKey {
 
 export interface BrowserViewOpenTileRequest extends BrowserViewTileKey {
   readonly url: string;
-  readonly disposition: string;
 }
 
 export interface BrowserViewOverlayOcclusion {
@@ -207,18 +210,14 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
   readonly command: BrowserCdpCommand;
 }
 
-interface BrowserViewElectronTabHandoffSibling {
-  readonly tabId: string;
-  readonly registrationId: string;
-  readonly url: string;
-  readonly capturedStorageState: BrowserStorageState | null;
-}
-
 export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
   readonly capturedUrl: string;
   readonly capturedStorageState: BrowserStorageState | null;
-  readonly siblingTabs: readonly BrowserViewElectronTabHandoffSibling[];
-  readonly reason: "gui-quit" | "tab-released" | "crash-no-capture";
+  readonly siblingTabs: readonly BrowserElectronTabHandoffSibling[];
+  readonly reason: Extract<
+    BrowserSessionsClientFrame,
+    { readonly kind: "electronTabHandoff" }
+  >["reason"];
 }
 
 type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
@@ -260,13 +259,6 @@ export type BrowserViewConsoleLevel =
   | "debug"
   | "trace";
 
-export interface BrowserViewStackFrame {
-  readonly functionName: string;
-  readonly url: string;
-  readonly lineNumber: number | null;
-  readonly columnNumber: number | null;
-}
-
 export interface BrowserViewConsoleEntry {
   readonly id: string;
   readonly timestamp: number;
@@ -276,7 +268,6 @@ export interface BrowserViewConsoleEntry {
   readonly url: string | null;
   readonly lineNumber: number | null;
   readonly columnNumber: number | null;
-  readonly stackTrace: readonly BrowserViewStackFrame[];
 }
 
 export type BrowserViewNetworkStatus = "pending" | "finished" | "failed";
@@ -286,16 +277,13 @@ export interface BrowserViewNetworkEntry {
   readonly requestId: string;
   readonly url: string;
   readonly method: string;
-  readonly resourceType: string | null;
   readonly status: BrowserViewNetworkStatus;
   readonly statusCode: number | null;
   readonly statusText: string | null;
   readonly mimeType: string | null;
-  readonly fromCache: boolean;
   readonly startedAt: number;
   readonly completedAt: number | null;
   readonly durationMs: number | null;
-  readonly encodedDataLength: number | null;
   readonly failureText: string | null;
 }
 

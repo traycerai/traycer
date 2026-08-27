@@ -14,6 +14,7 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { basePersistOptions, epicCanvasKey } from "@/lib/persist";
 import { appLogger } from "@/lib/logger";
 import {
@@ -105,7 +106,6 @@ import {
   resolveActivePaneTab,
 } from "@/stores/epics/canvas/tile-tree";
 import {
-  epicCanvasTileFallbackName,
   isUnsupportedEpicTerminalRef,
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
@@ -546,7 +546,7 @@ export interface EpicCanvasStore {
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
     tileInstanceId: string,
-    viewportPreset: string,
+    viewportPreset: BrowserViewViewportPresetId,
   ) => void;
   updateCommGraphTileViewInTab: (
     tabId: string,
@@ -1671,7 +1671,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const siblingNames = epicTabNames(state.tabsById, epicId);
           const tabName =
             sourceTab === null
-              ? epicCanvasTileFallbackName(node)
+              ? node.name
               : nextCopyName(sourceTab.name, siblingNames);
           const tab: EpicViewTab = {
             tabId,

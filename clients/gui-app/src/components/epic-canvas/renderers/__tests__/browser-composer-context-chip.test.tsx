@@ -124,7 +124,6 @@ const ERROR_ENTRY: BrowserViewConsoleEntry = {
   url: "https://example.com/app.js",
   lineNumber: 4,
   columnNumber: 2,
-  stackTrace: [],
 };
 
 const INFO_ENTRY: BrowserViewConsoleEntry = {
@@ -139,16 +138,13 @@ const FAILED_REQUEST: BrowserViewNetworkEntry = {
   requestId: "request-1",
   url: "https://example.com/fail",
   method: "GET",
-  resourceType: "Fetch",
   status: "failed",
   statusCode: null,
   statusText: null,
   mimeType: null,
-  fromCache: false,
   startedAt: 1000,
   completedAt: 1200,
   durationMs: 200,
-  encodedDataLength: null,
   failureText: "net::ERR_FAILED",
 };
 
@@ -346,6 +342,7 @@ function canvasWithSiblingBrowser(): EpicCanvasState {
         id: "browser-session:session-1:tab-1",
         instanceId: "browser-instance",
         type: "browser-session",
+        name: "Browser",
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "tab-1",

@@ -2,7 +2,7 @@ import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import { useBrowserLinkRouter } from "@/lib/browser-view/browser-link-router";
+import { useBrowserLinkRouter } from "@/lib/browser-view/link-routing/browser-link-router";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";

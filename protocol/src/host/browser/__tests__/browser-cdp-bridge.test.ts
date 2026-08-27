@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  browserCdpCommandSchema,
   browserSessionsClientFrameSchema,
   browserSessionsServerFrameSchema,
   browserSessionsV1,
+  CURATED_CDP_METHOD_BY_KIND,
+  CURATED_CDP_METHODS,
   type BrowserCdpCommand,
   type BrowserCdpResult,
 } from "@traycer/protocol/host/browser/contracts";
@@ -214,6 +217,59 @@ describe("browser.sessions@1.0 CDP bridge", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("derives one method and one failure kind per command variant", () => {
+    const commandKinds = browserCdpCommandSchema.def.options.map(
+      (option): string => String(option.shape.kind.def.values[0]),
+    );
+    expect(Object.keys(CURATED_CDP_METHOD_BY_KIND).sort()).toEqual(
+      [...commandKinds].sort(),
+    );
+    expect(new Set(CURATED_CDP_METHODS).size).toBe(commandKinds.length);
+    expect(COMMANDS.map((command): string => command.kind).sort()).toEqual(
+      [...commandKinds].sort(),
+    );
+
+    for (const kind of commandKinds) {
+      const parsed = browserSessionsClientFrameSchema.safeParse({
+        kind: "cdpResult",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        result: {
+          kind,
+          ok: false,
+          error: { kind: "cdp_error", message: "boom", code: null },
+        },
+      });
+      expect(parsed.success, `expected ${kind} failure to parse`).toBe(true);
+    }
+  });
+
+  it("defaults the key-event fields a lenient caller omits", () => {
+    const sparseKeyEvent = {
+      kind: "cdpDispatchKeyEvent",
+      type: "keyDown",
+      key: "Enter",
+      code: "Enter",
+      text: null,
+    };
+    expect(browserCdpCommandSchema.parse(sparseKeyEvent)).toEqual({
+      ...sparseKeyEvent,
+      modifiers: null,
+      unmodifiedText: null,
+      windowsVirtualKeyCode: null,
+      location: null,
+      isKeypad: null,
+      autoRepeat: null,
+      commands: null,
+    });
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...REQUEST,
+        command: sparseKeyEvent,
+      }).success,
+    ).toBe(true);
   });
 
   it("keeps the bridge on the single unreleased browser.sessions baseline", () => {

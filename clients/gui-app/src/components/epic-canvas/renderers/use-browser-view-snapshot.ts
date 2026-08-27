@@ -3,7 +3,7 @@ import {
   getBrowserViewSnapshot,
   subscribeBrowserViewSnapshot,
   type BrowserViewSnapshotState,
-} from "@/lib/browser-view/browser-overlay-coordinator";
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 
 export function useBrowserViewSnapshot(

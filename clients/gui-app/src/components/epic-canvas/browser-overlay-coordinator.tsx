@@ -7,7 +7,8 @@ import {
   resolveBrowserOverlayOcclusionTargets,
   setBrowserViewSnapshot,
   subscribeBrowserOverlayLayout,
-} from "@/lib/browser-view/browser-overlay-coordinator";
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { registerReservedBrowserChords } from "@/lib/browser-view/reserved-chords-registration";
 import type {
   BrowserViewBridge,
@@ -100,7 +101,7 @@ function BrowserOverlayCoordinator(props: {
           if (disposed) return;
           applyRestoredTiles(result.restoredTiles);
         })
-        .catch(ignoreBrowserOverlayError);
+        .catch(ignoreError);
     };
 
     const runScan = (): void => {
@@ -136,7 +137,7 @@ function BrowserOverlayCoordinator(props: {
             applyRestoredTiles(result.restoredTiles);
           })
           .then(() => ackWhenPainted(target.overlayId))
-          .catch(ignoreBrowserOverlayError);
+          .catch(ignoreError);
       });
     };
 
@@ -177,7 +178,7 @@ function BrowserOverlayCoordinator(props: {
           .then((result) => {
             applyRestoredTiles(result.restoredTiles);
           })
-          .catch(ignoreBrowserOverlayError);
+          .catch(ignoreError);
       });
       activeSignaturesByOverlayId.clear();
     };
@@ -185,5 +186,3 @@ function BrowserOverlayCoordinator(props: {
 
   return null;
 }
-
-function ignoreBrowserOverlayError(_error: unknown): void {}

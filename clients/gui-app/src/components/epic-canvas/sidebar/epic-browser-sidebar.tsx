@@ -84,6 +84,7 @@ import {
   nextSettledTabIdentity,
   type SettledTabIdentity,
 } from "@/lib/browser-view/browser-tab-display";
+import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import { cn } from "@/lib/utils";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import {
@@ -441,7 +442,7 @@ function nextBrowserSidebarTabRows(
   const previousByKey = new Map(previous.map((row) => [row.key, row]));
   const next = sessions.flatMap((session) =>
     session.tabs.map((tab) => {
-      const key = `${session.hostId}:${session.sessionId}:${tab.tabId}`;
+      const key = compositeKey(session.hostId, session.sessionId, tab.tabId);
       return {
         key,
         session,

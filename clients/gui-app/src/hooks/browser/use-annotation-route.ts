@@ -4,7 +4,7 @@ import { useSidebarChatOrder } from "@/components/epic-canvas/sidebar/epic-sideb
 import {
   resolveAnnotationRoute,
   type AnnotationRoute,
-} from "@/lib/browser-view/browser-annotation-router";
+} from "@/lib/browser-view/annotation/browser-annotation-router";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useLastFocusedChatStore } from "@/stores/chat/last-focused-chat-store";
 import { EMPTY_CHATS_SLICE } from "@/stores/epics/open-epic/types";

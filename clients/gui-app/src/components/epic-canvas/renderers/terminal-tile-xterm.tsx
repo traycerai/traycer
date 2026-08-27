@@ -46,7 +46,7 @@ import { appLogger } from "@/lib/logger";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
-import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/browser-link-router";
+import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/link-routing/browser-link-router";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";

@@ -142,7 +142,7 @@ vi.mock("../../browser-view/browser-session", () => ({
   registerBrowserViewWebContents: vi.fn(),
 }));
 
-vi.mock("../../browser-view/browser-cookie-crypto", () => ({
+vi.mock("../../browser-view/storage/browser-cookie-crypto", () => ({
   getBrowserCookieCryptoState: vi.fn(() =>
     Promise.resolve({
       mode: "real",
@@ -155,7 +155,7 @@ vi.mock("../../browser-view/browser-cookie-crypto", () => ({
   ),
 }));
 
-vi.mock("../../browser-view/browser-storage-state", () => ({
+vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {
     observe(): void {}
 

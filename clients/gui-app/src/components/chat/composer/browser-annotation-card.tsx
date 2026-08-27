@@ -8,11 +8,11 @@ import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
 import {
   formatAnnotationCounts,
   type BrowserAnnotationRecord,
-} from "@/lib/browser-view/browser-annotation-record";
+} from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   ANNOTATION_STALENESS_COPY,
   annotationStalenessHint,
-} from "@/lib/browser-view/browser-annotation-staleness";
+} from "@/lib/browser-view/annotation/browser-annotation-staleness";
 import { cn } from "@/lib/utils";
 
 export function BrowserAnnotationCard(props: {

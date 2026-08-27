@@ -5,14 +5,14 @@ import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/u
 import {
   registerBrowserOverlayTile,
   updateBrowserOverlayTileRect,
-} from "@/lib/browser-view/browser-overlay-coordinator";
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import type {
   BrowserViewBoundsUpdate,
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
-vi.mock("@/lib/browser-view/browser-overlay-coordinator", () => ({
+vi.mock("@/lib/browser-view/tiles/browser-overlay-coordinator", () => ({
   rectFromDomRect: (rect: {
     left: number;
     top: number;

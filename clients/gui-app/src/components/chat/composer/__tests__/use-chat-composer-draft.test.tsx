@@ -10,8 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
-import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/__tests__/browser-annotation-fixtures";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 import {
   buildQuoteBlockquote,
   appendQuoteToDraft,

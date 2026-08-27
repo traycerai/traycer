@@ -35,6 +35,7 @@ describe("makeBrowserSessionTileRef", () => {
     expect(first.instanceId).not.toBe(second.instanceId);
     expect(first.sessionId).toBe("sess-a");
     expect(first.tabId).toBe("tab-1");
+    expect(first.name).toBe("Browser");
     expect(first.viewportPreset).toBe("responsive");
     expect(first).not.toHaveProperty("url");
     expect(first).not.toHaveProperty("chatId");
@@ -47,6 +48,7 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       id: "browser-session:sess-1:tab-9",
       instanceId: "inst-1",
       type: TILE_KIND_BROWSER_SESSION,
+      name: "Browser",
       hostId: HOST,
       sessionId: "sess-1",
       tabId: "tab-9",
@@ -64,6 +66,7 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       id: "browser-session:sess-1:tab-1",
       instanceId: "inst-1",
       type: TILE_KIND_BROWSER_SESSION,
+      name: "Browser",
       hostId: HOST,
       sessionId: "sess-1",
       tabId: "tab-1",
@@ -73,6 +76,9 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       browserSessionTileSchema.parse({ ...base, sessionId: undefined }),
     ).toBeNull();
     expect(browserSessionTileSchema.parse({ ...base, tabId: 42 })).toBeNull();
+    expect(
+      browserSessionTileSchema.parse({ ...base, viewportPreset: "widescreen" }),
+    ).toBeNull();
     expect(
       browserSessionTileSchema.parse({ ...base, type: "browser-peek" }),
     ).toBeNull();
@@ -85,6 +91,7 @@ describe("isBrowserSessionTileRef", () => {
       id: "browser-session:s:t",
       instanceId: "i",
       type: TILE_KIND_BROWSER_SESSION,
+      name: "Browser",
       hostId: HOST,
       sessionId: "s",
       tabId: "t",

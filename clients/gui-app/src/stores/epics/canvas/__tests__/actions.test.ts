@@ -38,10 +38,7 @@ import type {
   EpicNodeRef,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
-import {
-  epicCanvasTileFallbackName,
-  isBlankTileRef,
-} from "@/stores/epics/canvas/types";
+import { isBlankTileRef } from "@/stores/epics/canvas/types";
 import {
   GIT_BUNDLE_CHANGES,
   GIT_FILE_A,
@@ -1072,6 +1069,7 @@ describe("updateBrowserTileViewportPreset", () => {
       id: "browser-session:s:t",
       instanceId: "inst-session-1",
       type: "browser-session",
+      name: "Browser",
       hostId: TEST_HOST_ID,
       sessionId: "s",
       tabId: "t",
@@ -1175,7 +1173,7 @@ describe("instanceId / content-id decoupling", () => {
     expect(renamed.root).toBe(rootBefore);
     const pane = rootPane(renamed);
     const tab = paneTabRefs(renamed, pane)[0];
-    expect(epicCanvasTileFallbackName(tab)).toBe("Renamed Spec");
+    expect(tab.name).toBe("Renamed Spec");
     expect(tab.instanceId).toBe(SPEC_A.instanceId);
     expect(pane.previewTabId).toBe(SPEC_A.instanceId);
   });
@@ -1266,7 +1264,7 @@ describe("openBlankTabInPane", () => {
     expect(pane.tabInstanceIds).toHaveLength(2);
     const blank = paneTabRefs(state, pane)[1];
     expect(isBlankTileRef(blank)).toBe(true);
-    expect(epicCanvasTileFallbackName(blank)).toBe("New tab");
+    expect(blank.name).toBe("New tab");
     expect(pane.activeTabId).toBe(blank.instanceId);
     expect(activationContentIds(state, pane)).toEqual([blank.id, SPEC_A.id]);
     expect(state.activePaneId).toBe(paneId);

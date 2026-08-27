@@ -11,13 +11,12 @@ import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
-
-type StreamConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,

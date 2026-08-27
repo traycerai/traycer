@@ -5,6 +5,7 @@ import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-id
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -169,10 +170,11 @@ export interface BrowserSessionTileRef {
   readonly id: string;
   readonly instanceId: string;
   readonly type: typeof TILE_KIND_BROWSER_SESSION;
+  readonly name: string;
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
-  readonly viewportPreset: string;
+  readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */
@@ -613,10 +615,6 @@ export type EpicCanvasTileRef =
   | PrDetailTileRef
   | PrDiffTileRef
   | BlankTileRef;
-
-export function epicCanvasTileFallbackName(ref: EpicCanvasTileRef): string {
-  return ref.type === TILE_KIND_BROWSER_SESSION ? "Browser" : ref.name;
-}
 
 export function isPublishedChatTileRef(
   value: EpicCanvasTileRef,

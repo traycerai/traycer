@@ -1,5 +1,6 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type {
   BrowserViewBridge,
   BrowserViewFindChange,
@@ -111,7 +112,7 @@ function createBrowserTileFindAdapter(args: {
         forward,
         findNext,
       })
-      .catch(ignoreBrowserFindError);
+      .catch(ignoreError);
   };
 
   const navigate = (forward: boolean): void => {
@@ -146,7 +147,7 @@ function createBrowserTileFindAdapter(args: {
   const clearWithRequest = (requestId: number): void => {
     void args.browserView
       ?.stopFindInPage({ ...args.tileKey, requestId })
-      .catch(ignoreBrowserFindError);
+      .catch(ignoreError);
     publish(
       createBrowserFindSnapshot({
         requestId,
@@ -245,5 +246,3 @@ function isFindChangeForTile(
     change.pageSessionId === key.pageSessionId
   );
 }
-
-function ignoreBrowserFindError(_error: unknown): void {}

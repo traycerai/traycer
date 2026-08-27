@@ -517,9 +517,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     can run code on an attached tab's page - reading or doing anything the
     user could there - and, because every in-app browser tab shares one
     `persist:traycer-browser` partition and `browser-repl-api.ts`'s
-    `navigate()` performs no origin check (`authorizeBrowserAction` in
-    `browser-origin-policy.ts` has zero production callers - origin tier is
-    metadata only), the agent can navigate to and act on any other site the
+    `navigate()` performs no origin check (nothing gates navigation on an
+    origin; the origin tier is metadata only), the agent can navigate to and act on any other site the
     user is logged into in that shared browser, not only the tab attached -
     per ticket 11 and v3's "accepted blast radius": this is the one place
     that risk is surfaced to the user, so the copy must not be softened or

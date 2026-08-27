@@ -11,7 +11,7 @@ import type {
   BrowserViewDownloadState,
 } from "../../ipc-contracts/browser-view-types";
 import { log } from "../app/logger";
-import { getBrowserCookieCryptoState } from "./browser-cookie-crypto";
+import { getBrowserCookieCryptoState } from "./storage/browser-cookie-crypto";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
 const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";

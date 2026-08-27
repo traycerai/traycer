@@ -103,12 +103,24 @@ const browserSessionInfoSchema = z
   .strict();
 export type BrowserSessionInfo = z.infer<typeof browserSessionInfoSchema>;
 
+/** One tab addressed through its owning session. */
+export const browserTabIdentitySchema = z
+  .object({
+    sessionId: z.string(),
+    tabId: z.string(),
+  })
+  .strict();
+export type BrowserTabIdentity = z.infer<typeof browserTabIdentitySchema>;
+
 /** `epicId` is the stream's sole authorization and routing scope. */
 export const browserSessionsOpenRequestSchema = z
   .object({
     epicId: z.string(),
   })
   .strict();
+export type BrowserSessionsOpenRequest = z.infer<
+  typeof browserSessionsOpenRequestSchema
+>;
 
 export const browserStorageCookieSchema = z
   .object({
@@ -191,8 +203,7 @@ const browserSessionsCoreServerFrameSchemas = [
       z
         .object({
           ok: z.literal(true),
-          sessionId: z.string(),
-          tabId: z.string(),
+          ...browserTabIdentitySchema.shape,
         })
         .strict(),
       z
@@ -249,21 +260,6 @@ const cdpRequestFrameFields = {
   registrationId: z.string(),
   target: browserCdpTargetSchema,
 } as const;
-
-const browserCdpCommandKindSchema = z.enum([
-  "cdpNavigate",
-  "cdpCaptureScreenshot",
-  "cdpGetFrameTree",
-  "cdpCreateIsolatedWorld",
-  "cdpEvaluate",
-  "cdpCallFunctionOn",
-  "cdpReleaseObject",
-  "cdpDispatchMouseEvent",
-  "cdpInsertText",
-  "cdpDispatchKeyEvent",
-  "cdpSetDeviceMetricsOverride",
-  "cdpDescribeNode",
-]);
 
 const cdpNavigateCommandSchema = z
   .object({
@@ -350,13 +346,15 @@ const cdpDispatchKeyEventCommandSchema = z
     key: z.string().nullable(),
     code: z.string().nullable(),
     text: z.string().nullable(),
-    modifiers: z.number().int().nullable(),
-    unmodifiedText: z.string().nullable(),
-    windowsVirtualKeyCode: z.number().int().nullable(),
-    location: z.number().int().nonnegative().nullable(),
-    isKeypad: z.boolean().nullable(),
-    autoRepeat: z.boolean().nullable(),
-    commands: z.array(z.string()).nullable(),
+    // Defaulted rather than merely nullable: a caller that omits one of these
+    // means "let CDP decide", which dispatch encodes by omitting the param.
+    modifiers: z.number().int().nullable().default(null),
+    unmodifiedText: z.string().nullable().default(null),
+    windowsVirtualKeyCode: z.number().int().nullable().default(null),
+    location: z.number().int().nonnegative().nullable().default(null),
+    isKeypad: z.boolean().nullable().default(null),
+    autoRepeat: z.boolean().nullable().default(null),
+    commands: z.array(z.string()).nullable().default(null),
   })
   .strict();
 const cdpSetDeviceMetricsOverrideCommandSchema = z
@@ -395,6 +393,51 @@ export const browserCdpCommandSchema = z.discriminatedUnion("kind", [
 export type BrowserCdpCommand = z.infer<typeof browserCdpCommandSchema>;
 
 /**
+ * The curated vocabulary's only per-command datum beyond its params schema.
+ * Keyed by `BrowserCdpCommand["kind"]`, so a new command variant is a compile
+ * error until its method lands here, and `dispatchCuratedCdp` reads the method
+ * it sends from nowhere else.
+ */
+export const CURATED_CDP_METHOD_BY_KIND = {
+  cdpNavigate: "Page.navigate",
+  cdpCaptureScreenshot: "Page.captureScreenshot",
+  cdpGetFrameTree: "Page.getFrameTree",
+  cdpCreateIsolatedWorld: "Page.createIsolatedWorld",
+  cdpEvaluate: "Runtime.evaluate",
+  cdpCallFunctionOn: "Runtime.callFunctionOn",
+  cdpReleaseObject: "Runtime.releaseObject",
+  cdpDispatchMouseEvent: "Input.dispatchMouseEvent",
+  cdpInsertText: "Input.insertText",
+  cdpDispatchKeyEvent: "Input.dispatchKeyEvent",
+  cdpSetDeviceMetricsOverride: "Emulation.setDeviceMetricsOverride",
+  cdpDescribeNode: "DOM.describeNode",
+} as const satisfies Record<BrowserCdpCommand["kind"], string>;
+
+export type CuratedCdpMethod =
+  (typeof CURATED_CDP_METHOD_BY_KIND)[keyof typeof CURATED_CDP_METHOD_BY_KIND];
+
+export const CURATED_CDP_METHODS: readonly CuratedCdpMethod[] = Object.values(
+  CURATED_CDP_METHOD_BY_KIND,
+);
+
+const CURATED_CDP_COMMAND_KINDS = [
+  "cdpNavigate",
+  "cdpCaptureScreenshot",
+  "cdpGetFrameTree",
+  "cdpCreateIsolatedWorld",
+  "cdpEvaluate",
+  "cdpCallFunctionOn",
+  "cdpReleaseObject",
+  "cdpDispatchMouseEvent",
+  "cdpInsertText",
+  "cdpDispatchKeyEvent",
+  "cdpSetDeviceMetricsOverride",
+  "cdpDescribeNode",
+] as const satisfies readonly BrowserCdpCommand["kind"][];
+
+const browserCdpCommandKindSchema = z.enum(CURATED_CDP_COMMAND_KINDS);
+
+/**
  * A returned JavaScript value. CDP distinguishes an absent `RemoteObject.value`
  * (JavaScript `undefined`) from a present JSON `null`; the wire must preserve
  * that distinction instead of using `null` as an absence sentinel.
@@ -403,7 +446,6 @@ export const browserCdpValueSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("json"), value: z.json() }).strict(),
   z.object({ kind: z.literal("undefined") }).strict(),
 ]);
-export type BrowserCdpValue = z.infer<typeof browserCdpValueSchema>;
 
 const browserCdpSuccessResultSchema = z.discriminatedUnion("kind", [
   z
@@ -619,6 +661,17 @@ const browserCdpClientFrameSchemas = [
   }),
 ] as const;
 
+/** One tab captured alongside the tab being handed off to headless. */
+export const browserElectronTabHandoffSiblingSchema = z.object({
+  tabId: z.string(),
+  registrationId: z.string(),
+  url: z.string(),
+  capturedStorageState: browserStorageStateSchema.nullable(),
+});
+export type BrowserElectronTabHandoffSibling = z.infer<
+  typeof browserElectronTabHandoffSiblingSchema
+>;
+
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   ...browserSessionsCoreClientFrameSchemas,
   ...browserCdpClientFrameSchemas,
@@ -680,14 +733,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     registrationId: z.string(),
     capturedUrl: z.string(),
     capturedStorageState: browserStorageStateSchema.nullable(),
-    siblingTabs: z.array(
-      z.object({
-        tabId: z.string(),
-        registrationId: z.string(),
-        url: z.string(),
-        capturedStorageState: browserStorageStateSchema.nullable(),
-      }),
-    ),
+    siblingTabs: z.array(browserElectronTabHandoffSiblingSchema),
     reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
   }),
 ]);
@@ -727,6 +773,9 @@ export const browserScreencastOpenRequestSchema = z
     role: browserScreencastViewerRoleSchema,
   })
   .strict();
+export type BrowserScreencastOpenRequest = z.infer<
+  typeof browserScreencastOpenRequestSchema
+>;
 
 const browserScreencastMetadataSchema = z.object({
   offsetTop: z.number(),
@@ -748,6 +797,17 @@ const browserScreencastUnsupportedFeatureSchema = z.enum([
 export type BrowserScreencastUnsupportedFeature = z.infer<
   typeof browserScreencastUnsupportedFeatureSchema
 >;
+
+/** Full navigation snapshot every time; consumers never reconstruct deltas. */
+export const browserNavStateSchema = z
+  .object({
+    url: z.string(),
+    canGoBack: z.boolean(),
+    canGoForward: z.boolean(),
+    loading: z.boolean(),
+  })
+  .strict();
+export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
 
 export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -810,14 +870,10 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     ...textFrameFields,
     generation: z.number().int().nonnegative(),
   }),
-  // Full navigation snapshot every time; consumers never reconstruct deltas.
   z.object({
     kind: z.literal("navState"),
     ...textFrameFields,
-    url: z.string(),
-    canGoBack: z.boolean(),
-    canGoForward: z.boolean(),
-    loading: z.boolean(),
+    ...browserNavStateSchema.shape,
   }),
   z.object({
     kind: z.literal("unsupportedInteraction"),

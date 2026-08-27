@@ -9,8 +9,8 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useChatComposerDraft } from "@/components/chat/composer/use-chat-composer-draft";
 import type { ModelOption } from "@/components/home/data/landing-options";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
-import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/__tests__/browser-annotation-fixtures";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 import { selectedModelRejectsImageAttachments } from "@/lib/composer/chat-run-settings";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";

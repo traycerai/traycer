@@ -26,14 +26,14 @@ export function browserTabHostname(url: string): string | null {
 }
 
 export function browserTabFaviconUrl(url: string): string | null {
-  const parsed = parseHttpBrowserUrl(url);
+  const parsed = parseHttpUrl(url);
   return parsed === null
     ? null
     : new URL("/favicon.ico", parsed.origin).toString();
 }
 
 export function browserTabOrigin(url: string): string | null {
-  return parseHttpBrowserUrl(url)?.origin ?? null;
+  return parseHttpUrl(url)?.origin ?? null;
 }
 
 function isTransientBrowserTabStatus(
@@ -274,12 +274,12 @@ function shortestUniqueIdSuffixes(
 }
 
 function browserTabHostLabel(url: string): string | null {
-  const host = parseHttpBrowserUrl(url)?.host ?? "";
+  const host = parseHttpUrl(url)?.host ?? "";
   return host.length > 0 ? host : null;
 }
 
 function browserTabPathname(url: string): string | null {
-  return parseHttpBrowserUrl(url)?.pathname ?? null;
+  return parseHttpUrl(url)?.pathname ?? null;
 }
 
 function parseBrowserUrl(url: string): URL | null {
@@ -290,7 +290,12 @@ function parseBrowserUrl(url: string): URL | null {
   }
 }
 
-function parseHttpBrowserUrl(url: string): URL | null {
+/**
+ * The one http(s) URL parser for the browser feature - link routing and
+ * context attachments consume it too, so a URL that fails to parse has one
+ * failure convention (`null`) everywhere.
+ */
+export function parseHttpUrl(url: string): URL | null {
   const parsed = parseBrowserUrl(url);
   return parsed?.protocol === "http:" || parsed?.protocol === "https:"
     ? parsed

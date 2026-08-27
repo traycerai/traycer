@@ -7,7 +7,7 @@ import {
   clearBrowserViewSnapshot,
   getBrowserViewSnapshot,
   registerBrowserOverlayTile,
-} from "@/lib/browser-view/browser-overlay-coordinator";
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import type {
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayOcclusionResult,

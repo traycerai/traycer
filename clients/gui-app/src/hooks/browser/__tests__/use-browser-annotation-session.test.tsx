@@ -2,15 +2,15 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
-import type { AnnotationRoute } from "@/lib/browser-view/browser-annotation-router";
+import type { AnnotationRoute } from "@/lib/browser-view/annotation/browser-annotation-router";
 import type { BrowserAnnotationAttachedIpcEvent } from "@traycer-clients/shared/platform/browser-annotation";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
-import { attachBrowserAnnotation } from "@/lib/browser-view/browser-annotation-attach";
+import { attachBrowserAnnotation } from "@/lib/browser-view/annotation/browser-annotation-attach";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/__tests__/browser-annotation-fixtures";
+import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 
-vi.mock("@/lib/browser-view/browser-annotation-attach", () => ({
+vi.mock("@/lib/browser-view/annotation/browser-annotation-attach", () => ({
   attachBrowserAnnotation: vi.fn(),
 }));
 

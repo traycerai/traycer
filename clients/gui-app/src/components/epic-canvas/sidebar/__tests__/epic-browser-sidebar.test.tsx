@@ -32,7 +32,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
-import { dismissPip } from "@/lib/browser-view/pip-store";
+import { dismissPip } from "@/lib/browser-view/pip/pip-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 

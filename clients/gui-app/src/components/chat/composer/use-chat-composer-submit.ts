@@ -22,7 +22,7 @@ import {
   getImageBytes,
   sessionImageBytes,
 } from "@/lib/composer/landing-image-store";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { v4 as uuidv4 } from "uuid";
 import {
   buildAttachmentsFromJSONContent,

@@ -8,6 +8,7 @@ import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
 } from "../../ipc-contracts/browser-annotation-types";
+import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "../../ipc-contracts/browser-view-types";
 import type {
   BrowserLabsStateUpdate,
   BrowserViewAttachSurface,
@@ -26,12 +27,7 @@ import type {
 import type { PipCaptureStartInput } from "../../ipc-contracts/browser-view-types";
 
 const nonEmptyStringSchema = z.string().min(1);
-const viewportPresetSchema = z.enum([
-  "responsive",
-  "mobile",
-  "tablet",
-  "desktop",
-]);
+const viewportPresetSchema = z.enum(BROWSER_VIEW_VIEWPORT_PRESET_IDS);
 const tileKeySchema = z.object({
   viewTabId: nonEmptyStringSchema,
   paneId: nonEmptyStringSchema,

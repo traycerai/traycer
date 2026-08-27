@@ -1,7 +1,6 @@
 import { app, powerMonitor, session } from "electron";
 import { join } from "node:path";
 import { DESKTOP_APP_USER_MODEL_ID } from "../../config";
-import { shouldUseMockKeychain } from "../browser-view/browser-cookie-crypto";
 import { readInAppBrowserBetaEnabledSync } from "./browser-labs-state";
 import { log } from "./logger";
 
@@ -42,16 +41,11 @@ export function trimUnusedChromiumFeatures(): void {
       "AutofillServerCommunication",
     ].join(","),
   );
-  if (shouldUseMockKeychain({ inAppBrowserBetaEnabled })) {
+  const useMockKeychain = !inAppBrowserBetaEnabled;
+  if (useMockKeychain) {
     app.commandLine.appendSwitch("use-mock-keychain");
-    log.info("[lifecycle] use-mock-keychain enabled", {
-      inAppBrowserBetaEnabled,
-    });
-  } else {
-    log.info("[lifecycle] use-mock-keychain skipped", {
-      inAppBrowserBetaEnabled,
-    });
   }
+  log.info("[lifecycle] use-mock-keychain", { useMockKeychain });
   // Cap Chromium's HTTP/code disk cache. Without a cap it grows to a
   // percentage of free disk; this app serves its bundle from a single
   // `app://` origin, so 256 MB is generous and bounds the footprint.

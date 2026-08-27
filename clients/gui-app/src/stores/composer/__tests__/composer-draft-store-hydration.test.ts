@@ -61,7 +61,6 @@ const CONSOLE_ENTRY: BrowserViewConsoleEntry = {
   url: "https://example.com/app.js",
   lineNumber: 4,
   columnNumber: 2,
-  stackTrace: [],
 };
 
 beforeEach(() => {

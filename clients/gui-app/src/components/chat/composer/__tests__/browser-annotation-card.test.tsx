@@ -13,60 +13,31 @@ import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   STUB_ANNOTATION_ELEMENT,
   STUB_ANNOTATION_PARAGRAPH,
   createStubBrowserAnnotationPayloadFor,
-} from "@/lib/browser-view/__tests__/browser-annotation-fixtures";
+} from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 import {
-  deleteImage,
+  drainImages,
+  installIdbWorking,
+} from "@/lib/browser-view/annotation/__tests__/browser-annotation-idb-fixtures";
+import {
   getImageBytes,
-  imageHashKeys,
   putImage,
-  releaseSession,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-function idbStringKey(key: IDBValidKey): string {
-  if (typeof key !== "string") {
-    throw new Error("landing image store keys are string hashes");
-  }
-  return key;
-}
-
-function installIdbWorking(): void {
-  vi.mocked(idbSet).mockImplementation((key, value) => {
-    idbData.set(idbStringKey(key), value);
-    return Promise.resolve();
-  });
-  vi.mocked(idbDel).mockImplementation((key) => {
-    idbData.delete(idbStringKey(key));
-    return Promise.resolve();
-  });
-  vi.mocked(idbGet).mockImplementation((key) =>
-    Promise.resolve(idbData.get(idbStringKey(key))),
-  );
-}
-
-vi.mock("idb-keyval", () => {
-  const dummyStore = () => Promise.reject(new Error("unused"));
-  return {
-    createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
-    set: vi.fn((key: string, value: unknown) => {
-      idbData.set(key, value);
-      return Promise.resolve();
-    }),
-    del: vi.fn((key: string) => {
-      idbData.delete(key);
-      return Promise.resolve();
-    }),
-    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
-  };
+vi.mock("idb-keyval", async () => {
+  // Dynamic import: the factory is hoisted above the static imports, so the
+  // fixture binding is not initialized yet when this runs.
+  const { createIdbKeyvalMock } =
+    await import("@/lib/browser-view/annotation/__tests__/browser-annotation-idb-mock");
+  return createIdbKeyvalMock(idbData);
 });
 
 const LONG_COMMENT =
@@ -88,13 +59,6 @@ const createObjectURL = vi.fn(
   (_obj: Blob | MediaSource) => `blob:mock/${++urlCounter}`,
 );
 const revokeObjectURL = vi.fn((_url: string) => undefined);
-
-async function drainImages(): Promise<void> {
-  for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
-    releaseSession(hash);
-  }
-}
 
 function makeRecord(
   overrides: Partial<BrowserAnnotationRecord> & {
@@ -205,10 +169,10 @@ function renderCard(
 beforeEach(async () => {
   URL.createObjectURL = createObjectURL;
   URL.revokeObjectURL = revokeObjectURL;
-  installIdbWorking();
+  installIdbWorking(idbData, idbGet, idbSet, idbDel);
   await drainImages();
   vi.clearAllMocks();
-  installIdbWorking();
+  installIdbWorking(idbData, idbGet, idbSet, idbDel);
   useComposerDraftStore.setState({ drafts: {} });
 });
 

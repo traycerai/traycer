@@ -4,9 +4,7 @@
  * (clipboard -> landing image store), and the landing submit re-inline all
  * encode/decode identically instead of each rolling its own loop.
  */
-
-/** A view guaranteed to be backed by a plain `ArrayBuffer` (not shared). */
-type ImageBytes = Uint8Array<ArrayBuffer>;
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 const CHUNK_SIZE = 0x8000;
 
