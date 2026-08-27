@@ -1536,11 +1536,15 @@ describe("MobileRunnerHost", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       // ...and deliver a callback BEFORE the owning read resolves. The stale
       // read must not have closed the quarantine: this observation folds
-      // silently. A mutant that clears the window in the stale branch routes
-      // it through live confirmation and fires against the pre-suspend
-      // baseline.
+      // silently, WITHOUT starting a confirmation read of its own. That is
+      // the discriminating probe: with the quarantine intact exactly one
+      // parked read remains (the current owner), while a mutant that clears
+      // the window in the stale branch routes the callback into live
+      // confirmation and parks a SECOND read - regardless of what that
+      // accidental confirmation would later compare against.
       fireNetworkCallbackOnly({ connected: true, connectionType: "cellular" });
       await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(capacitorEventMocks.pendingSeedReleases).toHaveLength(1);
       expect(changes).toEqual([]);
       capacitorEventMocks.releaseNetworkSeed();
       await new Promise((resolve) => setTimeout(resolve, 0));
