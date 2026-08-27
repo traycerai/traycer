@@ -17,9 +17,14 @@ import { createContext, use } from "react";
 
 export interface ChatTreeSurface {
   /**
-   * Runs after a row has opened its tile, for a surface that has to do
-   * something else as well - the switcher sheet closes here, so the tile the
-   * user picked becomes the full-screen mobile tile.
+   * Runs when a row action has finished with the surface - the switcher sheet
+   * closes here, so whatever the user picked takes the screen.
+   *
+   * Not only tile opens. A row's tap calls it after opening the tile; "New
+   * child agent" calls it before opening the modal, which opens no tile at all.
+   * What the two share is that the surface has served its purpose and should
+   * get out of the way, and that is the property being named - an action that
+   * dismisses from one control and not another is a divergence, not a feature.
    *
    * Deliberately NOT an override of the opening itself. A row's tap opens a
    * PREVIEW tile on both form factors, and on the phone that is the load-

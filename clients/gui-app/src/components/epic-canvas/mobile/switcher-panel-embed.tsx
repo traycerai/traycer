@@ -6,7 +6,10 @@ import { FileTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar
 
 /** The switcher categories whose body is the desktop panel body, unmodified. */
 export type SwitcherEmbedCategory =
-  "file-tree" | "git-diff" | "pull-requests" | "sharing";
+  | "file-tree"
+  | "git-diff"
+  | "pull-requests"
+  | "sharing";
 
 interface SwitcherPanelEmbedProps {
   readonly category: SwitcherEmbedCategory;
