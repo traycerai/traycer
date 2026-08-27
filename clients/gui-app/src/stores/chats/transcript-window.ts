@@ -682,11 +682,16 @@ export function applySkeletonChunk(
     skeleton[chunk.fromOrdinal + index] = chunk.entries[index];
   }
   const complete = chunk.isFinal;
-  // A short assembly means chunks were lost. Serving ordinals off an index the
-  // client KNOWS is incomplete is the one thing the coordinate cannot survive,
-  // so declare it void and let the caller re-request rather than render a
-  // transcript that is silently missing rows.
-  const lost = complete && skeleton.length !== window.rowCount;
+  // Chunks were lost. Serving ordinals off an index the client KNOWS is
+  // incomplete is the one thing the coordinate cannot survive, so declare it
+  // void and let the caller re-request rather than render a transcript that is
+  // silently missing rows.
+  //
+  // Length alone does not detect it. The skeleton is a SPARSE array, so its
+  // length is one past the highest ordinal ever assigned - a dropped INTERIOR
+  // chunk followed by the final one still ends at `rowCount`, and the holes in
+  // between read as complete. Only every ordinal being present is completeness.
+  const lost = complete && !coversEveryOrdinal(skeleton, window.rowCount);
   const next: TranscriptWindow = {
     ...window,
     skeleton,
@@ -695,6 +700,23 @@ export function applySkeletonChunk(
     clock: window.clock + 1,
   };
   return dropSpansContradictedBySkeleton(next, chunk);
+}
+
+/**
+ * Whether every ordinal below `rowCount` has an entry.
+ *
+ * One O(rowCount) pass, paid once per skeleton stream on the final chunk only
+ * - not per chunk, and never on the streaming path.
+ */
+function coversEveryOrdinal(
+  skeleton: readonly (RowSkeletonEntry | undefined)[],
+  rowCount: number,
+): boolean {
+  if (skeleton.length !== rowCount) return false;
+  for (let ordinal = 0; ordinal < rowCount; ordinal += 1) {
+    if (skeleton[ordinal] === undefined) return false;
+  }
+  return true;
 }
 
 function dropSpansContradictedBySkeleton(
@@ -794,6 +816,34 @@ export function applyIndexChange(
   // because neither renumbers an ordinal. An epoch that does not match here is
   // a frame from a coordinate space this client has already left.
   if (input.epoch !== window.epoch) return window;
+
+  // A frame can be LOST without the stream dying: the host's pump surfaces a
+  // deterministic send failure as fatal, but keeps drop-and-continue for a
+  // flaky socket write. So `rowCount` can grow by more than the entries that
+  // reached this client.
+  //
+  // Seating the survivors from the stale `rowCount` would put them at the
+  // MISSING frame's ordinals: the wrong entry lands at a real ordinal, the
+  // ordinals those rows actually occupy stay holes, and nothing later repairs
+  // either - every identity check against them rejects a valid range forever.
+  // `skeletonComplete` merely goes false, which requests no repair.
+  //
+  // The count is the whole detector, because `appended` is the only member
+  // that moves `rowCount` and it always appends contiguously at the end.
+  const appendedRows = input.changes.reduce(
+    (total, change) =>
+      change.type === "appended" ? total + change.entries.length : total,
+    0,
+  );
+  if (input.rowCount - window.rowCount !== appendedRows) {
+    return {
+      ...emptyTranscriptWindow(),
+      epoch: input.epoch,
+      rowCount: input.rowCount,
+      invalidated: true,
+      clock: window.clock + 1,
+    };
+  }
 
   const skeleton = [...window.skeleton];
   // Appended entries are seated at the ordinals they NAME - which begin at the

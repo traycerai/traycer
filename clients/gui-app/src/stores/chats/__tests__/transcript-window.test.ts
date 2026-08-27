@@ -242,6 +242,35 @@ describe("skeleton chunks", () => {
     expect(short.skeletonComplete).toBe(false);
   });
 
+  it("declares the index void when a dropped INTERIOR chunk leaves a hole", () => {
+    // The sparse-array trap: the final chunk reaches `rowCount`, so length
+    // agrees and the skeleton reads complete while ordinals 3-5 are holes.
+    // Length is not coverage.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 9,
+      tail: { fromOrdinal: 9, messages: [], events: [] },
+    });
+    const first = applySkeletonChunk(seeded, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 3),
+      isFinal: false,
+    });
+    // The chunk covering 3-5 never arrives; the final chunk covering 6-8 does.
+    const withHole = applySkeletonChunk(first, {
+      epoch: 1,
+      fromOrdinal: 6,
+      entries: skeletonEntries(6, 3),
+      isFinal: true,
+    });
+
+    expect(withHole.skeleton).toHaveLength(9);
+    expect(withHole.skeleton[4]).toBeUndefined();
+    expect(withHole.skeletonComplete).toBe(false);
+    expect(withHole.invalidated).toBe(true);
+  });
+
   it("ignores a chunk from a coordinate space the client has left", () => {
     const window = windowWithSkeleton(4);
     const stale = applySkeletonChunk(window, {
@@ -350,6 +379,43 @@ describe("index deltas", () => {
     expect(appended.skeleton[30]).toBeUndefined();
     expect(appended.rowCount).toBe(102);
     expect(appended.skeletonComplete).toBe(false);
+  });
+
+  it("voids the coordinate when a lost frame makes the append growth discontinuous", () => {
+    // The host's pump keeps drop-and-continue for a non-deterministic send
+    // failure, so an `indexChanged` can be lost while the stream survives.
+    // The next frame then reports a `rowCount` two larger while carrying one
+    // entry. Seating it from the stale `rowCount` puts row-101 at ordinal 100
+    // - a wrong entry at a real ordinal, with 101 left a hole and nothing
+    // later repairing either.
+    const held = windowWithSkeleton(100);
+
+    const afterLoss = applyIndexChange(held, {
+      epoch: 1,
+      rowCount: 102,
+      changes: [{ type: "appended", entries: skeletonEntries(101, 1) }],
+    });
+
+    expect(afterLoss.invalidated).toBe(true);
+    expect(afterLoss.rowCount).toBe(102);
+    // Nothing was seated at the ordinal the lost frame owned.
+    expect(afterLoss.skeleton[100]).toBeUndefined();
+  });
+
+  it("accepts an append whose entry count accounts for the whole growth", () => {
+    // The positive control for the discontinuity guard: without it the test
+    // above passes for a window that rejects every append.
+    const held = windowWithSkeleton(100);
+
+    const appended = applyIndexChange(held, {
+      epoch: 1,
+      rowCount: 102,
+      changes: [{ type: "appended", entries: skeletonEntries(100, 2) }],
+    });
+
+    expect(appended.invalidated).toBe(false);
+    expect(appended.skeleton[100]?.rowId).toBe("row-100");
+    expect(appended.skeleton[101]?.rowId).toBe("row-101");
   });
 
   it("drops the whole span containing a row that was rewritten in place", () => {

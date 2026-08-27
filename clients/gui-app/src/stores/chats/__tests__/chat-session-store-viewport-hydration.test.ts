@@ -784,6 +784,37 @@ describe("chat session viewport hydration: a range answered out of order", () =>
       harness.handle.dispose();
     }
   });
+
+  it("keeps tracking the replacement, so a discarded answer mints no new request", () => {
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      const firstRequestId = harness.lastRangeRequestId();
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 0, toOrdinal: 5 });
+      const secondRequestId = harness.lastRangeRequestId();
+      expect(harness.rangeRequests).toHaveLength(2);
+
+      harness.callbacks().onRange(rangeAnswering(firstRequestId, 10, 20));
+
+      // The replacement is still on the wire. Forgetting it here re-issues the
+      // same ask under a new id, whose answer then finds the slot mismatched
+      // again - one new request per answer, forever, with the gap never
+      // hydrating. The re-plan must dedupe against the request still tracked.
+      expect(harness.rangeRequests).toHaveLength(2);
+
+      // And the replacement still answers normally afterwards.
+      harness.callbacks().onRange(rangeAnswering(secondRequestId, 0, 5));
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 0)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
 });
 
 describe("chat session viewport hydration: resnapshot after invalidation", () => {

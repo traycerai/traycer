@@ -2683,8 +2683,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
+        const tracked = inFlightHydrationRequest;
         const stale = rangeResponseIsStale(frame.range);
-        inFlightHydrationRequest = null;
+        // Clear the slot ONLY for the request this response actually answers.
+        //
+        // Clearing it unconditionally forgets a replacement that is still on
+        // the wire, and the re-plan below then re-issues it under a new id -
+        // whose own answer arrives to find the slot mismatched again. Every
+        // answer discarded, every discard minting exactly one more request:
+        // a self-sustaining loop in which the visible gap never hydrates.
+        //
+        // Reached by ordinary scrolling: replanning while a request is
+        // outstanding replaces the slot, so the first answer back is already
+        // one this store has moved on from.
+        if (tracked !== null && tracked.requestId === frame.range.requestId) {
+          inFlightHydrationRequest = null;
+        }
         if (stale) {
           // Seat nothing. The ordinals stay unhydrated, so the re-plan below
           // asks for them again - which is the whole point: a discarded
