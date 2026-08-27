@@ -9,7 +9,7 @@ interface Entry {
 }
 
 const entries = new Map<MotionValue<number>, Entry>();
-let armedGroupId: string | null = null;
+const armedGroupIds = new Set<string>();
 
 export function registerTileStripItem(value: MotionValue<number>): () => void {
   entries.set(value, {
@@ -36,11 +36,11 @@ export function syncTileStripItem(input: {
 }
 
 export function armTileStripCommitHandoff(groupId: string): void {
-  armedGroupId = groupId;
+  armedGroupIds.add(groupId);
 }
 
 export function runTileStripCommitHandoff(groupId: string): void {
-  const armed = armedGroupId === groupId;
+  const armed = armedGroupIds.has(groupId);
   for (const entry of entries.values()) {
     const node = entry.node;
     if (
@@ -56,5 +56,5 @@ export function runTileStripCommitHandoff(groupId: string): void {
     entry.value.jump(previous + entry.value.get() - next);
     animate(entry.value, entry.targetX, entry.transition);
   }
-  if (armed) armedGroupId = null;
+  if (armed) armedGroupIds.delete(groupId);
 }

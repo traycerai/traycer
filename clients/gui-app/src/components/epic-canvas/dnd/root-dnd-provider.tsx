@@ -14,6 +14,7 @@
 import {
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
+  getPaneCorridorPositionFromPoint,
   readComposerAttachmentDropTargetData,
   readEpicCanvasDropTargetData,
   type EpicCanvasDragSourceData,
@@ -314,9 +315,18 @@ function isUnarmedPaneBodyTransit(
   source: EpicCanvasDragSourceData,
   target: EpicCanvasDropTargetData,
   point: PointLike | null,
+  targetRect: RectLike | null,
 ): boolean {
   if (source.kind !== ARTIFACT_TAB_DND_TYPE) return false;
   if (target.kind !== "artifact-tab-group-body") return false;
+  if (
+    point === null ||
+    targetRect === null ||
+    getPaneCorridorPositionFromPoint(point, targetRect) === null
+  ) {
+    paneBodyDwell().reset();
+    return true;
+  }
   return !updatePaneBodyArm(target.groupId, point, performance.now());
 }
 
@@ -516,7 +526,9 @@ function updateCanvasSourcePreview(
   // body gesture. Suppressing the preview while still committing would be
   // Sprint 01's F2 (a merge that fired having shown nothing) in a zone that is
   // ~84% of every pane instead of a 16px band.
-  if (isUnarmedPaneBodyTransit(source, target, resolvedPoint)) {
+  if (
+    isUnarmedPaneBodyTransit(source, target, resolvedPoint, readOverRect(event))
+  ) {
     refs.lastResolved.current = null;
     dndStore.dropPreviewChanged(null);
     dndStore.tileStripOffsetsChanged(new Map());
@@ -547,10 +559,11 @@ function updateArtifactTileStripPreview(
   point: PointLike | null,
   refs: ReparentRefs,
 ): boolean {
-  return (
+  const ownsFrame =
     source.kind === ARTIFACT_TAB_DND_TYPE &&
-    updateTileStripPreview(source, point, refs)
-  );
+    updateTileStripPreview(source, point, refs);
+  if (ownsFrame) useEpicDndStore.getState().headerStripDropIndexChanged(null);
+  return ownsFrame;
 }
 
 /**
@@ -1092,10 +1105,10 @@ function armTileHandoffForDrop(
 ): void {
   if (
     source.kind === ARTIFACT_TAB_DND_TYPE &&
-    drop.preview?.kind === "artifact-tab-strip" &&
-    drop.preview.groupId === source.sourceGroupId
+    drop.preview?.kind === "artifact-tab-strip"
   ) {
     armTileStripCommitHandoff(source.sourceGroupId);
+    armTileStripCommitHandoff(drop.preview.groupId);
   }
 }
 
