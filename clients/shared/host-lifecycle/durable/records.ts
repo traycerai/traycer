@@ -68,6 +68,14 @@ export type PendingActivation = {
 
 /** Supported schema versions per durable file family. */
 export const SUBSTRATE_SUPPORTED_VERSIONS: readonly number[] = [1];
+/**
+ * The version substrate WRITERS emit — derived from the supported list so a
+ * writer can never mint a `v` the decoder here refuses. Writers live in
+ * other bundles (Desktop's `update-mutation.ts`); importing this is what
+ * keeps their emitted records decodable when the list moves.
+ */
+export const SUBSTRATE_RECORD_WRITE_VERSION: number =
+  SUBSTRATE_SUPPORTED_VERSIONS[SUBSTRATE_SUPPORTED_VERSIONS.length - 1];
 export const TRANSITION_SUPPORTED_VERSIONS: readonly number[] = [1];
 export const ACTIVATION_JOURNAL_SUPPORTED_VERSIONS: readonly number[] = [1];
 export const INSTALL_SUPPORTED_VERSIONS: readonly number[] = [1];

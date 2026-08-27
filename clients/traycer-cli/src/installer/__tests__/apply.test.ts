@@ -173,6 +173,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath,
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -200,6 +201,7 @@ async function writeStaged(
     executablePath: executableRelPath,
     platform: currentInstallPlatform(),
     arch: currentInstallArch(),
+    executableSha256: null,
     ...overrides,
   };
   await writeHostStagedRecordAt(stagedDir, record);

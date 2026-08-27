@@ -119,6 +119,7 @@ import {
   withMintedAdoption,
 } from "../update-mutation";
 import type { HostFsLayout } from "../host-paths";
+import { freshHostFsLayout } from "./host-fs-layout-test-support";
 
 const roots: string[] = [];
 
@@ -133,28 +134,8 @@ async function freshHome(): Promise<string> {
  * string — mirrors the sibling `update-mutation-capability-edges.test.ts`
  * fixture.
  */
-async function freshLayout(): Promise<HostFsLayout> {
-  const root = await mkdtemp(join(tmpdir(), "desktop-minted-adoption-test-"));
-  roots.push(root);
-  const rootDir = join(root, "host-home");
-  await mkdir(rootDir, { recursive: true });
-  return {
-    rootDir,
-    pidMetadataFile: join(rootDir, "pid.json"),
-    identityEnrollmentFile: join(rootDir, "identity", "enrollment.json"),
-    logFile: join(rootDir, "host.log"),
-    installDir: join(rootDir, "install"),
-    installRecordFile: join(rootDir, "install", "install.json"),
-    stagedDir: join(rootDir, "staged"),
-    stagedRecordFile: join(rootDir, "staged", "staged.json"),
-    pendingLoginItemRevisionFile: join(
-      rootDir,
-      "pending-login-item-revision.json",
-    ),
-    substrateFile: join(rootDir, "substrate.json"),
-    transitionJournalFile: join(rootDir, "transition.json"),
-    environment: "production",
-  };
+function freshLayout(): Promise<HostFsLayout> {
+  return freshHostFsLayout(roots, "desktop-minted-adoption-test-");
 }
 
 /** Every proof file this module ever writes is named under this prefix. */

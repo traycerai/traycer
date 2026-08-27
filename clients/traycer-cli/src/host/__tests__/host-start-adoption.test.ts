@@ -280,19 +280,34 @@ describe("host-start parent adoption", () => {
     },
   );
 
-  it("fails closed for a permission-error adoption entry", async () => {
-    const hostHomeDir = await freshHome();
-    homeRef.current = hostHomeDir;
-    const adoptionPath = join(hostHomeDir, ".host-start-adoption.json");
-    await mkdir(hostHomeDir, { recursive: true });
-    await writeFile(adoptionPath, "not-json", "utf8");
-    await chmod(adoptionPath, 0);
-    try {
-      await expectPresentEntryNotAbsent();
-    } finally {
-      await chmod(adoptionPath, 0o600).catch(() => undefined);
-    }
-  });
+  // A chmod-0 file only actually denies reads for a non-root, non-Windows
+  // process: Windows `fs` permission bits do not gate readability the same
+  // way, and root bypasses the DAC check entirely, so this reliably reaches
+  // the intended "unreadable" path only under a normal POSIX, non-root user.
+  const cannotDenyReads =
+    process.platform === "win32" ||
+    (typeof process.getuid === "function" && process.getuid() === 0);
+
+  it.skipIf(cannotDenyReads)(
+    "fails closed for a permission-error adoption entry",
+    async () => {
+      const hostHomeDir = await freshHome();
+      homeRef.current = hostHomeDir;
+      const adoptionPath = join(hostHomeDir, ".host-start-adoption.json");
+      await mkdir(hostHomeDir, { recursive: true });
+      await writeFile(adoptionPath, "not-json", "utf8");
+      await chmod(adoptionPath, 0);
+      try {
+        const result = await consumeHostStartAdoption("production", null, null);
+        expect(result).toEqual({
+          kind: "error",
+          reason: "host-start adoption could not be read",
+        });
+      } finally {
+        await chmod(adoptionPath, 0o600).catch(() => undefined);
+      }
+    },
+  );
 
   it("atomically claims one intended proof while a different host-start sees no proof", async () => {
     const hostHomeDir = await freshHome();

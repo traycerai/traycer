@@ -212,10 +212,17 @@ describe("hostOptionUpdateBadge", () => {
     return { ...UNKNOWN_FLEET_UPDATE_VIEW, ...overrides };
   }
 
+  // `qualified: false` explicitly here — `viewOf`'s base
+  // (`UNKNOWN_FLEET_UPDATE_VIEW`) carries `qualified: true`, and production
+  // change 7 (`hostOptionUpdateBadge` now retains-badges ANY qualified view,
+  // not only a `kind: "unknown"` one) means a live-phase fixture that forgot
+  // to override `qualified` would silently exercise the RETAINED arm instead
+  // of the live one, reading "last seen updating" where the test's own title
+  // promises "updating".
   it("a LIVE updating phase reads 'updating'", () => {
-    expect(hostOptionUpdateBadge(viewOf({ kind: "downloading" }))).toBe(
-      "updating",
-    );
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "downloading", qualified: false })),
+    ).toBe("updating");
   });
 
   it("a retained (last-known) updating phase reads 'last seen updating'", () => {
@@ -235,9 +242,22 @@ describe("hostOptionUpdateBadge", () => {
   });
 
   it("a LIVE failed attempt reads 'update failed' (no 'last seen' prefix — it is current)", () => {
-    expect(hostOptionUpdateBadge(viewOf({ kind: "failed" }))).toBe(
-      "update failed",
-    );
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "failed", qualified: false })),
+    ).toBe("update failed");
+  });
+
+  // Production change 7: a QUALIFIED view carrying a non-`unknown` kind (a
+  // stale-but-not-yet-decayed read - `projectFleetUpdateView`'s `qualified`
+  // flag is deliberately independent of `kind`) must retain-badge exactly
+  // like the `kind: "unknown"` case above, not render the present-tense live
+  // word. This is the case `viewOf`'s own default (`qualified: true`) was
+  // silently exercising in the two "LIVE" fixtures above before they pinned
+  // `qualified: false` explicitly.
+  it("a QUALIFIED (stale-but-not-decayed) downloading view reads 'last seen updating', never the present-tense word", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "downloading", qualified: true })),
+    ).toBe("last seen updating");
   });
 
   it("A BARE unknown with NO retained phase renders NULL — the pre-@1.3-peer noise case", () => {

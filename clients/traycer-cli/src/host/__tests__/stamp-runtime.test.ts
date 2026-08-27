@@ -117,6 +117,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath: join(installDir, "traycer-host"),
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);

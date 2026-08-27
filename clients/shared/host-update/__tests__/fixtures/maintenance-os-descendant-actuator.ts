@@ -109,6 +109,11 @@ async function supervisor(): Promise<void> {
   );
   if (wrapper.stdout === null || wrapper.pid === undefined)
     throw new Error("supervisor did not establish wrapper pipe");
+  // Bound once, right after the guard: `wrapper.pid` is a property read that
+  // TypeScript cannot narrow across the closure below, which is what forced
+  // the `wrapper.pid!` non-null assertion. A local `const` carries the
+  // guard's proof instead of re-asserting it at every use site.
+  const wrapperPid: number = wrapper.pid;
   wrapper.stderr?.setEncoding("utf8");
   wrapper.stderr?.on("data", (chunk: string) => process.stderr.write(chunk));
   let shuttingDown = false;
@@ -117,7 +122,7 @@ async function supervisor(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     try {
-      process.kill(-wrapper.pid!, "SIGTERM");
+      process.kill(-wrapperPid, "SIGTERM");
     } catch {
       // D may already have died; E is still in the same process group when
       // the wrapper death was the first event, and the group kill is best
@@ -157,38 +162,44 @@ async function supervisor(): Promise<void> {
       buffer += chunk;
       const newline = buffer.indexOf("\n");
       if (newline === -1) return;
-      try {
-        const message = JSON.parse(buffer.slice(0, newline)) as {
-          readonly kind?: string;
-          readonly pid?: number;
-        };
-        if (message.kind !== "bind-actuator" || message.pid === undefined) {
-          reject(new Error("wrapper did not publish descendant actuator"));
-          return;
+      void (async () => {
+        try {
+          const message = JSON.parse(buffer.slice(0, newline)) as {
+            readonly kind?: string;
+            readonly pid?: number;
+          };
+          if (message.kind !== "bind-actuator" || message.pid === undefined) {
+            reject(new Error("wrapper did not publish descendant actuator"));
+            return;
+          }
+          descendantPid = message.pid;
+          // Awaited BEFORE the stdout publish below: `helper` waits for the
+          // "bind-actuator" stdout line and then immediately reads this
+          // file. Publishing first raced the write - the reader could
+          // observe the stdout line before the file existed.
+          await writeFile(
+            join(barrierDir, "wrapper-bind"),
+            JSON.stringify({
+              wrapperPid,
+              descendantPid: message.pid,
+            }),
+          );
+          // The lock envelope is C, not transient D. C owns the process group
+          // and remains the authoritative live publisher until that group is
+          // reaped.
+          process.stdout.write(
+            `${JSON.stringify({
+              kind: "bind-actuator",
+              pid: process.pid,
+              supervisedProcessGroupId: wrapperPid,
+              retainOnPublisherDeath: true,
+            })}\n`,
+          );
+          resolve();
+        } catch {
+          reject(new Error("wrapper emitted malformed binding"));
         }
-        descendantPid = message.pid;
-        void writeFile(
-          join(barrierDir, "wrapper-bind"),
-          JSON.stringify({
-            wrapperPid: wrapper.pid,
-            descendantPid: message.pid,
-          }),
-        );
-        // The lock envelope is C, not transient D. C owns the process group
-        // and remains the authoritative live publisher until that group is
-        // reaped.
-        process.stdout.write(
-          `${JSON.stringify({
-            kind: "bind-actuator",
-            pid: process.pid,
-            supervisedProcessGroupId: wrapper.pid,
-            retainOnPublisherDeath: true,
-          })}\n`,
-        );
-        resolve();
-      } catch {
-        reject(new Error("wrapper emitted malformed binding"));
-      }
+      })();
     });
     wrapper.once("exit", (code) => {
       if (code !== 0)
@@ -246,6 +257,13 @@ async function helper(): Promise<void> {
           retainOnPublisherDeath: message.retainOnPublisherDeath,
         })
           .then(async () => {
+            // The supervisor now awaits the `wrapper-bind` write before it
+            // publishes "bind-actuator" on stdout, but this consumer must
+            // still wait for the file itself rather than assume the two
+            // events are ordered on this side too - `waitFor` is the same
+            // barrier-file-presence primitive used everywhere else in this
+            // fixture, not a redundant check.
+            await waitFor(join(barrierDir, "wrapper-bind"));
             const binding = JSON.parse(
               await readFile(join(barrierDir, "wrapper-bind"), "utf8"),
             ) as {

@@ -243,18 +243,6 @@ export type DesktopActivationOutcome =
     };
 
 /**
- * Only ONE park is reachable from this segment, and that is a fact about the
- * phase graph rather than a simplification.
- *
- * The drain runs while the record is still `preparing`, whose legal successors
- * include `waiting-to-activate` - so deferring there genuinely re-arms the
- * park. Once `restarting` is committed the graph offers
- * `{verifying, failed, superseded}` and nothing else: there is no edge back to
- * a park, deliberately, because `restarting` is the durable promise that a
- * bootout is imminent and un-promising it is not a state the record can
- * express. Anything that goes wrong after that point is therefore terminal.
- */
-/**
  * Two parks are reachable, and both sit BEFORE the point of no return.
  *
  * (This comment previously asserted only one was reachable. That was true
@@ -284,17 +272,6 @@ export type DesktopActivationFailure =
   | "activation-not-performed";
 
 /**
- * Run one packaged-macOS activation segment.
- *
- * The ordering between the drain and the bootout is the whole contract, so it
- * is worth stating plainly: `restarting` is committed BEFORE the tombstone,
- * the tombstone is flushed BEFORE the bootout, and there is no gate of any
- * kind between the flush and the bootout. Once the record promising a return
- * is on disk, the return must actually happen - a deferrable check there would
- * leave clients holding an expected-restart episode for a restart nobody
- * performed.
- */
-/**
  * Is there a durable activation continuation this executor already owns?
  *
  * Consumes the canonical `isTerminalPhase` rather than testing phase names
@@ -318,6 +295,17 @@ async function hasAdoptedActivationContinuation(
   );
 }
 
+/**
+ * Run one packaged-macOS activation segment.
+ *
+ * The ordering between the drain and the bootout is the whole contract, so it
+ * is worth stating plainly: `restarting` is committed BEFORE the tombstone,
+ * the tombstone is flushed BEFORE the bootout, and there is no gate of any
+ * kind between the flush and the bootout. Once the record promising a return
+ * is on disk, the return must actually happen - a deferrable check there would
+ * leave clients holding an expected-restart episode for a restart nobody
+ * performed.
+ */
 export async function runDesktopActivationSegment(
   request: DesktopActivationRequest,
   deps: DesktopActivationDeps,

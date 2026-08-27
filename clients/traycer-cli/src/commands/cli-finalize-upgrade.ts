@@ -31,23 +31,24 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
   const environment = ctx.runtime.environment;
+  // ONE options value for acquisition and for every in-attempt revalidation:
+  // two literals that must stay identical are how admission policies drift.
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment,
+    reason: "cli-finalize-upgrade",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "service-maintenance",
+  };
   try {
     const outcome = await withCliUpdateContender(
-      {
-        environment,
-        reason: "cli-finalize-upgrade",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-        admission: "service-maintenance",
-      },
+      contenderOptions,
       (capability) =>
-        runFinalizeUpgradeSwapWithAttempt({ environment }, capability, {
-          environment,
-          reason: "cli-finalize-upgrade",
-          waitMs: 30_000,
-          pollIntervalMs: 100,
-          admission: "service-maintenance",
-        }),
+        runFinalizeUpgradeSwapWithAttempt(
+          { environment },
+          capability,
+          contenderOptions,
+        ),
     );
     return {
       data: outcome,
@@ -55,7 +56,16 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
       exitCode: 0,
     };
   } catch (err) {
-    if (err instanceof CliError && err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY) {
+    // Both refusals defer the same way: no marker is written, so
+    // `pendingUpgrade` stays populated and the next `host restart` retries.
+    // An active durable attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE from the
+    // nonterminal-attempt admission verdict) is a scheduling refusal exactly
+    // like a busy cli-lock, not a finalization failure.
+    if (
+      err instanceof CliError &&
+      (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
+        err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
+    ) {
       const outcome: FinalizeSwapOutcome = { status: "lock-timeout" };
       return { data: outcome, human: humanForOutcome(outcome), exitCode: 0 };
     }

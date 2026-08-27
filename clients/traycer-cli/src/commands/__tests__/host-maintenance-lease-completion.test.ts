@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -151,6 +152,98 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
     expect(drainIdx).toBeGreaterThan(armIdx);
     expect(reconcileIdx).toBeGreaterThan(drainIdx);
   });
+
+  it("serializes frame handlers on a single dispatch tail instead of firing and forgetting", () => {
+    // A fire-and-forget dispatch let the close path restore the holder and
+    // reject while a destructive handler (an `execute`'s service stop, a
+    // `bind-actuator`'s publication) was still mid-flight. `drainFrames` must
+    // chain each handler onto `dispatchTail` rather than invoking it bare.
+    const drainFramesIdx = supervisor.indexOf(
+      "const drainFrames = (): void => {",
+    );
+    const dataHandlerIdx = supervisor.indexOf(
+      'child.stdout.on("data"',
+      drainFramesIdx,
+    );
+    expect(drainFramesIdx).toBeGreaterThan(-1);
+    expect(dataHandlerIdx).toBeGreaterThan(drainFramesIdx);
+    const drainFramesBody = supervisor.slice(drainFramesIdx, dataHandlerIdx);
+    expect(drainFramesBody).toContain("dispatchTail = dispatchTail.then(");
+  });
+
+  it("settleFailure fences on the dispatch tail before any teardown or restoration", () => {
+    // The tail must be awaited right after `settled = true` and before the
+    // actuator-group/restore section — restoring the holder under a
+    // still-running handler re-opens the race this settlement exists to
+    // close.
+    const settleFailureIdx = supervisor.indexOf(
+      "const settleFailure = async (error: Error): Promise<void> => {",
+    );
+    const onTerminationIdx = supervisor.indexOf(
+      "onTermination = (): void => {",
+    );
+    expect(settleFailureIdx).toBeGreaterThan(-1);
+    expect(onTerminationIdx).toBeGreaterThan(settleFailureIdx);
+    const settleFailureBody = supervisor.slice(
+      settleFailureIdx,
+      onTerminationIdx,
+    );
+    const settledIdx = settleFailureBody.indexOf("settled = true;");
+    const dispatchTailAwaitIdx = settleFailureBody.indexOf(
+      "await dispatchTail;",
+    );
+    const actuatorGroupIdx = settleFailureBody.indexOf(
+      "if (actuatorGroupId !== null)",
+    );
+    expect(settledIdx).toBeGreaterThan(-1);
+    expect(dispatchTailAwaitIdx).toBeGreaterThan(settledIdx);
+    expect(actuatorGroupIdx).toBeGreaterThan(dispatchTailAwaitIdx);
+  });
+
+  it("the clean-completion path fences on the dispatch tail before waiting on the process group", () => {
+    // Same fence, other settlement path: the resolve IIFE inside
+    // `onTermination` must await `dispatchTail` before
+    // `waitForProcessGroupExit`/`restoreHolder`, not after.
+    const completionIIFEIdx = supervisor.indexOf("void (async () => {");
+    const restoreHolderCallIdx = supervisor.indexOf(
+      "await restoreHolder();",
+      completionIIFEIdx,
+    );
+    expect(completionIIFEIdx).toBeGreaterThan(-1);
+    expect(restoreHolderCallIdx).toBeGreaterThan(completionIIFEIdx);
+    const iifeBody = supervisor.slice(completionIIFEIdx, restoreHolderCallIdx);
+    const dispatchTailAwaitIdx = iifeBody.indexOf("await dispatchTail;");
+    const waitForGroupExitIdx = iifeBody.indexOf(
+      "await waitForProcessGroupExit(actuatorGroupId);",
+    );
+    expect(dispatchTailAwaitIdx).toBeGreaterThan(-1);
+    expect(waitForGroupExitIdx).toBeGreaterThan(dispatchTailAwaitIdx);
+  });
+
+  it("kills the child and rethrows when the initial liveness rebind fails", () => {
+    // The executor is parked at its start gate waiting for frames that will
+    // now never come; a bare rethrow with no kill would leave a privileged
+    // child process alive with nothing supervising it.
+    const rebindAwaitIdx = supervisor.indexOf(
+      "await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});",
+    );
+    const catchIdx = supervisor.indexOf(
+      "} catch (rebindError) {",
+      rebindAwaitIdx,
+    );
+    const returnPromiseIdx = supervisor.indexOf(
+      "return new Promise(",
+      catchIdx,
+    );
+    expect(rebindAwaitIdx).toBeGreaterThan(-1);
+    expect(catchIdx).toBeGreaterThan(rebindAwaitIdx);
+    expect(returnPromiseIdx).toBeGreaterThan(catchIdx);
+    const catchBody = supervisor.slice(catchIdx, returnPromiseIdx);
+    const killIdx = catchBody.indexOf('child.kill("SIGTERM");');
+    const rethrowIdx = catchBody.indexOf("throw rebindError;");
+    expect(killIdx).toBeGreaterThan(-1);
+    expect(rethrowIdx).toBeGreaterThan(killIdx);
+  });
 });
 
 describe("assertPathHelpersBoundToTarget", () => {
@@ -186,8 +279,9 @@ describe("assertPathHelpersBoundToTarget", () => {
   it("refuses when the sealed target names a different account than the path helpers resolve", async () => {
     // A directory that exists (so `realpathSync` succeeds) but is not this
     // process's home — the win32 shape, where `os.homedir()` ignores the `HOME`
-    // the root script sets and the binding silently does not take.
-    const error = await runLease("/tmp");
+    // the root script sets and the binding silently does not take. `tmpdir()`
+    // instead of a hardcoded "/tmp" so this also exists on Windows.
+    const error = await runLease(tmpdir());
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/different account|sealed target/);
   });

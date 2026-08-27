@@ -191,7 +191,6 @@ function trackedHandle(
   handle: LockHandle,
   resource: AttemptResource,
 ): UpdateAttemptLockHandle {
-  let tracked: UpdateAttemptLockHandle;
   const state: HandleState = {
     resource,
     underlying: handle,
@@ -201,7 +200,7 @@ function trackedHandle(
     releasePromise: null,
     mutationWaiters: [],
   };
-  tracked = {
+  const tracked: UpdateAttemptLockHandle = {
     hostHomeDir: resource.hostHomeDir,
     path: handle.path,
     metadata: handle.metadata,

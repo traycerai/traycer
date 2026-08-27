@@ -152,6 +152,7 @@ import {
   commitInstallFromSource as commitInstallFromSourceWithAuthority,
   currentInstallArch,
   currentInstallPlatform,
+  discardStagedHostInstallSource,
   installHost,
   setSwapRenameDelaysForTests,
   SWAP_RENAME_DELAYS_MS,
@@ -875,5 +876,28 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
     ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
 
     expect(existsSync(staged.stagingDir)).toBe(false);
+  });
+
+  // Change 12 (fixup ticket): `cleanupStagingArtifacts`'s finally-block
+  // cleanup used to let a rejecting `verifyMutationCapability` throw
+  // straight out of `discardStagedHostInstallSource`/`commitHostInstallSource`'s
+  // `finally` - which, from a REAL `finally`, replaces whatever the caller
+  // was already returning or throwing. Best-effort cleanup losing its
+  // capability must degrade to "leave the leftovers for the next admitted
+  // run's sweep", never surface as this call's own failure.
+  it("discardStagedHostInstallSource does not throw when verifyMutationCapability rejects during cleanup, and leaves the staging dir for a later sweep", async () => {
+    const staged = freshStagedSource("2.0.0");
+    expect(existsSync(staged.stagingDir)).toBe(true);
+
+    await expect(
+      discardStagedHostInstallSource(ENV, staged, async () => {
+        throw new Error("mutation capability lost mid-cleanup");
+      }),
+    ).resolves.toBeUndefined();
+
+    // The capability loss skipped the destructive removal rather than
+    // throwing through it - the staged tree is still on disk for the next
+    // admitted run to sweep.
+    expect(existsSync(staged.stagingDir)).toBe(true);
   });
 });

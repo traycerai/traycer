@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
@@ -12,6 +11,7 @@ import {
   writeSubstrateOwnerWithAttempt,
 } from "../update-mutation";
 import type { HostFsLayout } from "../host-paths";
+import { freshHostFsLayout } from "./host-fs-layout-test-support";
 
 // The tombstone-ordering contract (design §3.4): the caller must never boot
 // the SMAppService job out unless `publishRestartTombstoneWithAttempt`
@@ -30,28 +30,8 @@ afterEach(async () => {
   );
 });
 
-async function freshLayout(): Promise<HostFsLayout> {
-  const root = await mkdtemp(join(tmpdir(), "update-mutation-tombstone-test-"));
-  roots.push(root);
-  const rootDir = join(root, "host-home");
-  await mkdir(rootDir, { recursive: true });
-  return {
-    rootDir,
-    pidMetadataFile: join(rootDir, "pid.json"),
-    identityEnrollmentFile: join(rootDir, "identity", "enrollment.json"),
-    logFile: join(rootDir, "host.log"),
-    installDir: join(rootDir, "install"),
-    installRecordFile: join(rootDir, "install", "install.json"),
-    stagedDir: join(rootDir, "staged"),
-    stagedRecordFile: join(rootDir, "staged", "staged.json"),
-    pendingLoginItemRevisionFile: join(
-      rootDir,
-      "pending-login-item-revision.json",
-    ),
-    substrateFile: join(rootDir, "substrate.json"),
-    transitionJournalFile: join(rootDir, "transition.json"),
-    environment: "production",
-  };
+function freshLayout(): Promise<HostFsLayout> {
+  return freshHostFsLayout(roots, "update-mutation-tombstone-test-");
 }
 
 describe("publishRestartTombstoneWithAttempt", () => {

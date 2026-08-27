@@ -574,7 +574,7 @@ printf '%s\\n' "$@"
         );
         chmodSync(cliPath, 0o755);
 
-        await expect(
+        expect(
           execFileSync(launcherPath, [agentLabel], { encoding: "utf8" }),
         ).toBe(`host\nstart\n--service-label\n${agentLabel}\n`);
         expect(readFileSync(invocationsPath, "utf8")).toBe(

@@ -11,7 +11,7 @@ records _what it did_; the acting code lives in the CLI and the desktop.
 
 ## Lock order — `update-attempt.lock` is always outer to `cli-lock`
 
-```
+```text
 acquire update-attempt.lock          ← coarse, whole execution segment
     acquire cli-lock                 ← short, one install-tree mutation
     release cli-lock

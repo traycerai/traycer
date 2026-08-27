@@ -209,24 +209,12 @@ export async function withCliUpdateContender<T>(
 }
 
 /**
- * Context-preserving variant for an independent recovery action. The policy
+ * Context-preserving name for an independent recovery action. The policy
  * context comes from the same canonical record read that admitted the outer
  * lock; no caller may re-read and race it after deciding whether to relaunch.
+ * An alias, not a copy: the two entry points must never drift apart.
  */
-export async function withCliUpdateContenderContext<T>(
-  options: WithCliUpdateContenderOptions,
-  run: (
-    capability: UpdateMutationCapability,
-    cliLock: CliLockHandle,
-    context: UpdateContenderExecutionContext,
-  ) => Promise<T>,
-): Promise<T> {
-  return withCliUpdateExecutionSegment(options, (capability, context) =>
-    withCliAttemptMutation(capability, options, (cliLock) =>
-      run(capability, cliLock, context),
-    ),
-  );
-}
+export const withCliUpdateContenderContext = withCliUpdateContender;
 
 export async function requireCliUpdateMutationCapability(
   capability: UpdateMutationCapability,

@@ -109,18 +109,16 @@ export async function backfillSubstrateOwnerAtLaunch(
           ? { kind: "already-recorded" }
           : { kind: "deferred", cause: "raw-fallback-recorded" };
       }
-      if (
-        owner.cause === "transition-in-flight" ||
-        owner.cause === "transition-record-faulted" ||
-        owner.cause === "substrate-record-faulted" ||
-        owner.cause === "label-substrate-contradiction"
-      ) {
-        // Fail closed. A faulted or contradicted record is diagnosable
-        // evidence; silently replacing it with a fresh claim would destroy
-        // the only trace of how the machine got into that state.
+      // Fail closed BY CONSTRUCTION: `substrate-absent` is the only cause
+      // that authorizes a write (the installed-base migration case). A
+      // faulted or contradicted record is diagnosable evidence — silently
+      // replacing it with a fresh claim would destroy the only trace of how
+      // the machine got into that state — and a cause added later to
+      // `HostServiceOwnerUnknownCause` defers instead of falling through an
+      // enumerated deferral list into the commit.
+      if (owner.cause !== "substrate-absent") {
         return { kind: "deferred", cause: owner.cause };
       }
-      // `substrate-absent` only: the installed-base migration case.
       await writeSubstrateOwnerWithAttempt(
         capability,
         options.layout,

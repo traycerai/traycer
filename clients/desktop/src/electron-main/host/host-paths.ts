@@ -169,10 +169,15 @@ export interface HostFsLayout {
    */
   readonly substrateFile: string;
   /**
-   * `transition.json` - an in-flight ownership takeover between substrates.
-   * Its mere presence vetoes the owner projection to `unknown`: mid-transition
-   * neither substrate is authoritative, and guessing either way is how a
-   * contender boots out a job the other half is still registering.
+   * `transition.json` - an ownership takeover between substrates, retained
+   * as durable history after it settles. An IN-FLIGHT journal (decodable,
+   * non-terminal phase) vetoes the owner projection to `unknown`, because
+   * mid-transition neither substrate is authoritative and guessing either
+   * way is how a contender boots out a job the other half is still
+   * registering. A terminal journal is history and does not veto — a
+   * presence-only veto excluded the machine permanently — and an
+   * undecodable one fails closed. See `projectHostServiceOwner` in
+   * `host-owner.ts`.
    *
    * Lockstep with the CLI's `hostTransitionJournalPath`.
    */

@@ -1,4 +1,8 @@
 import type { HostActivationState } from "./host-state";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
 
 // Type surface for `HostController` (Host Update Layer Redesign Tech Plan,
 // "Desktop main: HostController" > "State model" / "Canonical status").
@@ -89,8 +93,9 @@ export interface LocalAttemptFacts {
   readonly generation: number;
   readonly sequence: number;
   readonly targetVersion: string;
-  readonly phase: string;
-  readonly continuation: string | null;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
 }
 

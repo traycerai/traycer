@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   createUpdateMutationCapabilityAdoption,
@@ -100,13 +100,6 @@ function adoptionPath(home: string): string {
 
 function acknowledgementPath(home: string, nonce: string): string {
   return join(resolve(home), `.host-start-adoption.${nonce}.ack`);
-}
-
-function claimedPath(home: string, nonce: string): string {
-  return join(
-    resolve(home),
-    `.host-start-adoption.${nonce}.${process.pid}.${randomUUID()}.claimed`,
-  );
 }
 
 /**
@@ -336,11 +329,7 @@ export async function consumeHostStartAdoption(
     // A different labelled service may have raced a new proof into the fixed
     // discovery path. Restore only if it is still vacant; otherwise discard
     // this private old claim, never the current proof.
-    try {
-      await rename(claimedCandidate, path);
-    } catch {
-      await rm(claimedCandidate, { force: true }).catch(() => undefined);
-    }
+    await restoreClaimToVacantPath(claimedCandidate, path);
   };
   try {
     const claimedRead = await readRegularFileNoFollow(claimedCandidate);
@@ -506,11 +495,26 @@ async function removeAdoptionIfNonce(
   // A different publisher won the shared discovery name. Preserve its proof
   // if nobody has since supplied another one; otherwise discard only our
   // private cleanup claim, never the current canonical name.
+  await restoreClaimToVacantPath(claimed, path);
+}
+
+// Put a privately-named claim back at the fixed discovery path ONLY if that
+// path is still vacant. `rename` cannot express vacancy — it replaces an
+// existing destination on POSIX and on Windows alike, which would let an old
+// claim erase a newer publisher's proof. An exclusive hard `link` fails with
+// EEXIST when the name is occupied, so the proof that was raced in survives;
+// the private claim name is removed in either outcome.
+async function restoreClaimToVacantPath(
+  claimed: string,
+  path: string,
+): Promise<void> {
   try {
-    await rename(claimed, path);
+    await link(claimed, path);
   } catch {
-    await rm(claimed, { force: true }).catch(() => undefined);
+    // Occupied by a newer proof (or the claim vanished): discard only the
+    // private claim below, never the canonical name.
   }
+  await rm(claimed, { force: true }).catch(() => undefined);
 }
 
 function parseAdoption(input: string): HostStartAdoptionFile | null {

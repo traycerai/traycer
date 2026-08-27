@@ -146,6 +146,49 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(lease.cancel).toHaveBeenCalledTimes(1);
   });
 
+  // Change 7 (fixup ticket): the adoption cleanup used to `await
+  // adoption.cancel()` bare in `runWithHostStartAdoption`'s `finally` - a
+  // rejecting cancel() would then replace whatever the actuator itself
+  // threw or returned. It is now `.catch(() => undefined)`, so a lease
+  // that fails to cancel must never mask the primary outcome.
+  it("does not let a rejecting adoption cancel() mask the primary outcome", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => {
+        throw new Error("cancel transport failed");
+      }),
+    };
+    adoptionMock.publish.mockResolvedValue(lease);
+    const install = vi.fn(async () => undefined);
+    const hostStartAdoptionLabel = vi.fn(
+      async (label: { id: string }) => label.id,
+    );
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: contenderOptions.reason,
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: contenderOptions.admission,
+      },
+      async (capability) => {
+        await installHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          { install, hostStartAdoptionLabel },
+          serviceOptions,
+        );
+        return "installed";
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "installed" });
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("reject a forged capability before invoking the service actuator", async () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;

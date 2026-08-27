@@ -523,17 +523,25 @@ describe("registerHostLoginItem", () => {
     expect(existsSync(legacyCliManifestPath())).toBe(false);
   });
 
-  it("continues to the agent register when the legacy-serviceName unregister throws - legacy cleanup is best-effort and must never block the escape to the fresh label", async () => {
+  it("parks with `deferred-busy` when the legacy-serviceName unregister throws - a throwing clear is a FAILED teardown, not best-effort noise to skip past into the fresh label", async () => {
+    // `false` from `setLoginItemSettingsWithGuard` now means the Electron
+    // call THREW, distinct from a clean "nothing to clear". The old
+    // behaviour ("legacy cleanup is best-effort, always continue") let a
+    // still-live legacy registration coexist with a freshly registered
+    // agent label; `retireLegacyLabelRegistrations` now reports the failure
+    // upward and the cycle parks before ever touching the agent label.
     setLoginItemSettings.mockImplementationOnce(() => {
       throw new Error("no inert old plist in this bundle");
     });
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
-    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
-    expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "deferred-busy",
+    );
+    // Only the one throwing call — the cycle never reaches the agent-label
+    // unregister/register pair.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
   });
 
   it("returns the post-register status verbatim so callers can branch on `requires-approval`", async () => {
@@ -573,14 +581,19 @@ describe("registerHostLoginItem", () => {
     // `snapshotLoginItemRegistration` reads primary then legacy before any
     // destructive edge - both must pass the entry guard for this test to
     // actually exercise the throw path below, rather than parking earlier.
+    //
+    // Isolates the AGENT (primary) clear specifically: the legacy-
+    // serviceName unregister must SUCCEED here, otherwise
+    // `retireLegacyLabelRegistrations`'s own failed-clear park (pinned
+    // above) fires first and this test would stop proving anything about
+    // the agent-side catch it names.
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
-    // Every call throws: the first (legacy-serviceName unregister) is
-    // swallowed as best-effort cleanup, the second (agent unregister)
-    // fails the cycle closed before any further status read.
-    setLoginItemSettings.mockImplementation(() => {
-      throw new Error("SMAppService bridge said no");
-    });
+    setLoginItemSettings
+      .mockImplementationOnce(() => undefined) // legacy-serviceName unregister succeeds
+      .mockImplementation(() => {
+        throw new Error("SMAppService bridge said no");
+      });
 
     await expect(registerHostLoginItem(undefined)).resolves.toBe(
       "not-registered",
@@ -682,30 +695,35 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
     // registration failure the way an `unreadable`/`failed` park would.
   });
 
-  it("fail-closed: a legacy manifest removal that FAILS parks before primary registration - the second half of the original defect", async () => {
-    writeLegacyCliManifest();
-    const agentsDir = join(workHome, "Library", "LaunchAgents");
-    // Readable/searchable (the probe succeeds, sees `present`) but not
-    // writable, so the `rm` itself throws - distinct from the unreadable-
-    // probe park, and the half of the original defect where a legacy
-    // manifest that could not be removed still let the cycle register a
-    // second, competing label beside it.
-    chmodSync(agentsDir, 0o500);
-    try {
-      getLoginItemSettings
-        .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
-        .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
-        .mockReturnValue({ status: "not-registered" });
+  it.skipIf(process.getuid?.() === 0)(
+    "fail-closed: a legacy manifest removal that FAILS parks before primary registration - the second half of the original defect",
+    async () => {
+      writeLegacyCliManifest();
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      // Readable/searchable (the probe succeeds, sees `present`) but not
+      // writable, so the `rm` itself throws - distinct from the unreadable-
+      // probe park, and the half of the original defect where a legacy
+      // manifest that could not be removed still let the cycle register a
+      // second, competing label beside it. Root bypasses the write bit, so
+      // this fixture is meaningless under root - skip it there, exactly like
+      // the unreadable-directory tests in this file already do.
+      chmodSync(agentsDir, 0o500);
+      try {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
+          .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
+          .mockReturnValue({ status: "not-registered" });
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe(
-        "deferred-busy",
-      );
-      expect(setLoginItemSettings).not.toHaveBeenCalled();
-    } finally {
-      chmodSync(agentsDir, 0o755);
-    }
-    expect(existsSync(legacyCliManifestPath())).toBe(true);
-  });
+        await expect(registerHostLoginItem(undefined)).resolves.toBe(
+          "deferred-busy",
+        );
+        expect(setLoginItemSettings).not.toHaveBeenCalled();
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      expect(existsSync(legacyCliManifestPath())).toBe(true);
+    },
+  );
 
   it("fail-closed: a manifest that reappears immediately after removal never reaches primary registration", async () => {
     writeLegacyCliManifest();
@@ -841,29 +859,35 @@ describe("unregisterHostLoginItemGuarded - CLI LaunchAgent manifest retirement (
     expect(existsSync(legacyCliManifestPath())).toBe(true);
   });
 
-  it("`failed`: a manifest removal that errors reports false and leaves the manifest in place", async () => {
-    writeLegacyCliManifest();
-    const agentsDir = join(workHome, "Library", "LaunchAgents");
-    // Readable/searchable (probe sees `present`) but not writable, so `rm`
-    // itself throws - mirrors the register-side "removal FAILS" fixture.
-    chmodSync(agentsDir, 0o500);
-    try {
-      getLoginItemSettings
-        .mockReturnValueOnce({ status: "not-registered" })
-        .mockReturnValueOnce({ status: "not-registered" });
+  it.skipIf(process.getuid?.() === 0)(
+    "`failed`: a manifest removal that errors reports false and leaves the manifest in place",
+    async () => {
+      writeLegacyCliManifest();
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      // Readable/searchable (probe sees `present`) but not writable, so `rm`
+      // itself throws - mirrors the register-side "removal FAILS" fixture.
+      // Root bypasses the write bit, so this fixture is meaningless under
+      // root - skip it there, exactly like the unreadable-directory tests in
+      // this file already do.
+      chmodSync(agentsDir, 0o500);
+      try {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" })
+          .mockReturnValueOnce({ status: "not-registered" });
 
-      await expect(
-        unregisterHostLoginItemGuarded(async () => true),
-      ).resolves.toBe(false);
-    } finally {
-      chmodSync(agentsDir, 0o755);
-    }
-    expect(existsSync(legacyCliManifestPath())).toBe(true);
-    // Both clears still ran - the manifest step is last, and a failure
-    // there does not retroactively undo the two clears that already
-    // committed. `false` is what tells the caller teardown is incomplete.
-    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
-  });
+        await expect(
+          unregisterHostLoginItemGuarded(async () => true),
+        ).resolves.toBe(false);
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      expect(existsSync(legacyCliManifestPath())).toBe(true);
+      // Both clears still ran - the manifest step is last, and a failure
+      // there does not retroactively undo the two clears that already
+      // committed. `false` is what tells the caller teardown is incomplete.
+      expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.skipIf(process.getuid?.() === 0)(
     "`unreadable` probe: an unreadable LaunchAgents directory parks at the FIRST guard, before any bootout or clear",
@@ -923,6 +947,51 @@ describe("unregisterHostLoginItemGuarded - CLI LaunchAgent manifest retirement (
 
     expect(existsSync(legacyCliManifestPath())).toBe(false);
     expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+  });
+
+  // `false` from `setLoginItemSettingsWithGuard` means the Electron call
+  // THREW - a failed teardown, not a clean "nothing was registered". The
+  // fix this pair pins: neither clear may report "torn down" over a throw
+  // it never observed succeeding, and a failed primary clear must not go on
+  // to attempt the legacy clear or manifest removal as if it had.
+  it("primary clear throws: reports false rather than success, and never reaches the legacy clear or manifest removal", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+    setLoginItemSettings.mockImplementationOnce(() => {
+      throw new Error("SMAppService bridge said no (primary clear)");
+    });
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+
+    // Only the one throwing call - the primary clear's failure short-
+    // circuits before the legacy clear is ever attempted.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  it("legacy clear throws after a successful primary clear: reports false and leaves the manifest in place", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+    setLoginItemSettings
+      .mockImplementationOnce(() => undefined) // primary clear succeeds
+      .mockImplementationOnce(() => {
+        throw new Error("SMAppService bridge said no (legacy clear)");
+      });
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+    // The manifest removal step never runs - the legacy clear's failure
+    // short-circuits before it, so the raw RunAtLoad manifest survives.
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
   });
 
   // Register-side regression guard (#7 of the brief): all 4 tests in
@@ -1504,29 +1573,44 @@ describe("unregisterHostLoginItemGuarded - removable-state entry guard", () => {
     expect(setLoginItemSettings).toHaveBeenCalled();
   });
 
-  it("STILL refuses not-found — the fail-closed arms are intact", async () => {
-    // The paired direction. Widening the guard must not turn it into "always
-    // proceed": `not-found` means the in-bundle plist is not where
-    // SMAppService looks, so there is no registration to act on and no
-    // mutation should be attempted.
+  // Reversed direction (production change 3(i)): `not-found`/`not-supported`
+  // no longer refuse removal outright — a status we could read (even one with
+  // nothing to clear) admits the removal, and only that label's own
+  // SMAppService clear leg is skipped as meaningless. The bootouts and the
+  // manifest retirement still run; the OTHER label's clear (here,
+  // `not-registered`, which IS clearable) still fires. Only `null` (unreadable
+  // status) or an unreadable legacy manifest still refuse outright.
+  it("not-found admits removal — its own clear leg is skipped, the other label's still runs", async () => {
     getLoginItemSettings
       .mockReturnValueOnce({ status: "not-found" }) // snapshot: primary
       .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
 
     await expect(
       unregisterHostLoginItemGuarded(async () => true),
-    ).resolves.toBe(false);
-    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    ).resolves.toBe(true);
+    // Only the legacy label's clear ran — the primary leg has nothing to
+    // clear under `not-found` and is skipped, not attempted-and-ignored.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.plist",
+    });
   });
 
-  it("STILL refuses not-supported", async () => {
+  it("not-supported admits removal — its own clear leg is skipped, the other label's still runs", async () => {
     getLoginItemSettings
       .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
       .mockReturnValueOnce({ status: "not-supported" }); // snapshot: legacy
 
     await expect(
       unregisterHostLoginItemGuarded(async () => true),
-    ).resolves.toBe(false);
-    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    ).resolves.toBe(true);
+    // Only the primary label's clear ran — the legacy leg has no API to
+    // clear with under `not-supported` and is skipped, not attempted.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.agent.plist",
+    });
   });
 });

@@ -332,6 +332,17 @@ async function placedFileFingerprint(
  * As with the durable attempt record reader, zero inode/device values are not
  * positive same-object evidence on Windows. Recovery would rather refuse than
  * attest bytes through a descriptor it cannot bind to the canonical pathname.
+ *
+ * SUPPORTED-FILESYSTEM POLICY, stated explicitly: the host install tree lives
+ * under the user's home, and the filesystems that can host it on supported
+ * platforms (NTFS/ReFS on Windows, the POSIX filesystems elsewhere) all
+ * report non-zero file IDs through libuv, so this guard never fires there. A
+ * filesystem that reports zero (FAT-family media, some network redirectors)
+ * is deliberately REJECTED rather than given a weaker fallback: recovery
+ * yields "unreadable", cannot mint "verified", and the attempt parks for an
+ * ordinary re-install instead of attesting bytes it cannot positively bind.
+ * That trade — no silent recovery on an identity-less filesystem — is the
+ * point of the guard, not a gap in it.
  */
 function sameRegularFileIdentity(
   a: Pick<Stats, "dev" | "ino">,

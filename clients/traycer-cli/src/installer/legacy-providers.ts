@@ -165,9 +165,11 @@ export async function preserveLegacyProviders(
         // Carryover is best-effort only for provider-pack I/O failures. It is
         // still a canonical-install mutation after the swap, so losing the
         // outer contender is not a pack failure we may log and continue past.
-        // Keep these checks outside the broad mkdir/rename catch below: that
-        // catch deliberately tolerates a locked Windows pack, but must never
-        // swallow a failed ownership proof and move a later pack anyway.
+        // The pre-mkdir check below sits OUTSIDE the broad mkdir/rename
+        // catch; the pre-rename check sits INSIDE it, which makes the
+        // `authorityFailed` rethrow at the top of that catch load-bearing:
+        // the catch tolerates a locked Windows pack, but must never swallow
+        // a failed ownership proof and move a later pack anyway.
         await verify();
         try {
           await mkdir(dest, { recursive: true });

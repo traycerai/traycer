@@ -1324,6 +1324,15 @@ export async function runHostStart(
       recordedEnding = value;
       onRecordedEnding?.();
     };
+    // The stderr pipe is its own emitter with the same once-only, throw-when-
+    // unhandled `error` semantics — the tee below marks its listener
+    // MANDATORY for exactly that reason, and attaching it only after
+    // admission left the same await window open for an early EIO. Recorded
+    // rather than merely swallowed: an `error`-then-`close` that both fired
+    // before the tee's listeners exist would leave its end-wait to the
+    // fallback timeout, and the recorded state lets the tee settle it
+    // immediately for a stream that is already dead.
+    let stderrErroredEarly = false;
     try {
       const admission = await deps.admitHostStartSpawn(opts, async () => {
         // Re-resolve the install record under the outer attempt boundary.
@@ -1368,6 +1377,26 @@ export async function runHostStart(
         spawnedWhileAdmitting.child.once("exit", (code, signal) =>
           recordEnding({ kind: "exit", code, signal }),
         );
+        spawnedWhileAdmitting.child.stderr?.on("error", () => {
+          stderrErroredEarly = true;
+        });
+        // The layer0 probe pipe (fd 3, present when this attempt runs
+        // probed) is one more separate emitter with the same unhandled-
+        // `error`-is-a-crash semantics, and its consumer
+        // (`observeProbeStatus`) also attaches only after admission. Inert
+        // rather than recorded: an errored pipe simply never yields a frame,
+        // and `readLayer0Frame` is already bounded, so the observation
+        // degrades to `{ marker: null }` on its own.
+        // `Array.isArray` first: injected test doubles are partial
+        // `ChildProcess` shapes without a `stdio` array, and the type cannot
+        // see that.
+        const stdioStreams = spawnedWhileAdmitting.child.stdio;
+        const layer0Status = Array.isArray(stdioStreams)
+          ? stdioStreams[LAYER0_STATUS_FD]
+          : undefined;
+        if (isReadable(layer0Status)) {
+          layer0Status.on("error", () => undefined);
+        }
         return spawnedWhileAdmitting.child;
       });
       if (admission.kind !== "ran") {
@@ -1606,6 +1635,10 @@ export async function runHostStart(
       stderr.on("close", () => {
         resolveStderrEnded();
       });
+      // The spawn-site recorder may have observed the stream's one `error`
+      // before any of the listeners above existed; a dead stream emits
+      // nothing further, so settle the wait from the recorded state.
+      if (stderrErroredEarly) resolveStderrEnded();
     }
 
     const probeObservation =

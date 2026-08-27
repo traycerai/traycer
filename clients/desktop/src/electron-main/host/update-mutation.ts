@@ -19,6 +19,7 @@ import {
 } from "@traycer/protocol/config/host-stop-intent";
 import type { HostServiceSubstrate } from "./host-owner";
 import type { HostFsLayout } from "./host-paths";
+import { SUBSTRATE_RECORD_WRITE_VERSION } from "@traycer-clients/shared/host-lifecycle";
 
 export class DesktopAttemptCapabilityError extends Error {
   readonly verdict: string;
@@ -90,9 +91,12 @@ export async function unregisterHostLoginItemWithAttempt(
  * The durable schema `substrate.json` carries. `v` is the version gate the
  * shared decoder reads; the shape must stay byte-compatible with
  * `SubstrateRecord` (`@traycer-clients/shared/host-lifecycle`), which is the
- * only decoder either side uses.
+ * only decoder either side uses. The version comes FROM that module — a
+ * local literal here could emit a `v` the decoder's supported list no
+ * longer accepts, and the host would then reject every `substrate.json`
+ * this writer produced.
  */
-const SUBSTRATE_RECORD_VERSION = 1;
+const SUBSTRATE_RECORD_VERSION = SUBSTRATE_RECORD_WRITE_VERSION;
 
 /**
  * The record shape and its path both come from `@traycer/protocol/config`,

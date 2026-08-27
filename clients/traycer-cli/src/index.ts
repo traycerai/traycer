@@ -1105,7 +1105,10 @@ function registerHostCommands(program: Command): void {
       .requiredOption("--generation <n>", "Expected attempt generation")
       .requiredOption("--sequence <n>", "Expected attempt sequence")
       .requiredOption("--target-version <version>", "Expected target version"),
-    (opts) => {
+    // Validation lives INSIDE the returned command so the refusal flows
+    // through the runner's CliError handling (typed code + exit path) instead
+    // of escaping the factory and reaching the entrypoint as UNEXPECTED.
+    (opts) => (ctx) => {
       const generation = parsePositiveIntegerArg(String(opts.generation));
       const sequence = parsePositiveIntegerArg(String(opts.sequence));
       if (generation === null || sequence === null) {
@@ -1122,7 +1125,7 @@ function registerHostCommands(program: Command): void {
         generation,
         sequence,
         targetVersion: String(opts.targetVersion),
-      });
+      })(ctx);
     },
   );
 

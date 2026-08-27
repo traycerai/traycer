@@ -368,6 +368,17 @@ async function superviseRootMaintenanceExecutor(
   // dispatch keeps the publication order the protocol assumes, while the
   // early capture means no frame is ever lost to the await.
   let frameDispatchArmed = false;
+  // ONE dispatch tail, and settlement awaits it. Handlers are asynchronous —
+  // an `execute` runs a real service stop or uninstall — and a fire-and-
+  // forget dispatch let the close path restore the holder and reject while
+  // that destructive handler was still mid-flight: the outer execution
+  // segment then released its lock and admitted the next contender INTO the
+  // running operation. A buffered `bind-actuator` had the analogous race,
+  // able to land its group-bound publication after the restoration it was
+  // supposed to precede. Serializing on the tail also matches the executor
+  // protocol, which is strictly request/response; every link catches into
+  // `refuse`, so the tail itself never rejects and awaiting it cannot throw.
+  let dispatchTail: Promise<void> = Promise.resolve();
   const drainFrames = (): void => {
     for (;;) {
       const newline = buffer.indexOf("\n");
@@ -381,19 +392,21 @@ async function superviseRootMaintenanceExecutor(
         refuse("maintenance executor emitted malformed protocol data");
         continue;
       }
-      void handleRootExecutorRequest(
-        request,
-        capability,
-        contenderOptions,
-        child.stdin,
-        finish,
-        refuse,
-        supervisorPid,
-        (groupId) => {
-          actuatorGroupId = groupId;
-        },
-      ).catch((err) =>
-        refuse(err instanceof Error ? err.message : String(err)),
+      dispatchTail = dispatchTail.then(() =>
+        handleRootExecutorRequest(
+          request,
+          capability,
+          contenderOptions,
+          child.stdin,
+          finish,
+          refuse,
+          supervisorPid,
+          (groupId) => {
+            actuatorGroupId = groupId;
+          },
+        ).catch((err) =>
+          refuse(err instanceof Error ? err.message : String(err)),
+        ),
       );
     }
   };
@@ -407,7 +420,18 @@ async function superviseRootMaintenanceExecutor(
   // at its start gate and cannot run a raw actuator. The later group-bound
   // publication closes the hard-C-death interval without retaining a lock
   // forever for a supervisor that died before starting any work.
-  await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});
+  try {
+    await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});
+  } catch (rebindError) {
+    // Every failure exit of this function must take the child with it. The
+    // executor is parked at its start gate waiting for frames that will now
+    // never come, and its live handle would keep this CLI's event loop alive
+    // after the outer request already reported refusal — a privileged flow
+    // hung on a process nothing supervises. The throwing guards above kill
+    // before throwing for the same reason.
+    child.kill("SIGTERM");
+    throw rebindError;
+  }
   return new Promise((resolve, reject) => {
     const restoreHolder = async (): Promise<void> => {
       await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {});
@@ -415,6 +439,14 @@ async function superviseRootMaintenanceExecutor(
     const settleFailure = async (error: Error): Promise<void> => {
       if (settled) return;
       settled = true;
+      // The dispatch tail FIRST, before any teardown or restoration: a
+      // handler still mid-flight holds real work (an `execute`'s service
+      // stop, a `bind-actuator`'s publication), and restoring the holder
+      // under it re-opens exactly the ordering this settlement exists to
+      // close. The tail never rejects (every link catches into `refuse`),
+      // and no new frames can arrive after `close`, so this await is
+      // bounded by work already accepted.
+      await dispatchTail;
       if (actuatorGroupId !== null) {
         if (process.platform === "win32") {
           // Node has no Job-object membership proof. Keep the token published
@@ -441,6 +473,9 @@ async function superviseRootMaintenanceExecutor(
       if (completion !== null && event.code === 0) {
         settled = true;
         void (async () => {
+          // Same fence as `settleFailure`: a trailing handler must finish
+          // before the holder is restored under it.
+          await dispatchTail;
           if (actuatorGroupId !== null && process.platform !== "win32") {
             await waitForProcessGroupExit(actuatorGroupId);
           }
@@ -527,6 +562,17 @@ async function handleRootExecutorRequest(
   refuse("maintenance executor requested an unsupported action");
 }
 
+// Ceiling on proving a supervised actuator group gone, on both the clean and
+// the terminating path. Without it, ONE surviving group member (a
+// SIGKILL-resistant D-state process, or a descendant that double-forked into
+// the group) parks these polls forever: the supervision promise never
+// settles, `runHostMaintenanceLease` never returns, and the update-attempt
+// capability stays held by a process nobody is watching. Hitting the deadline
+// throws, and every reject path here deliberately SKIPS `restoreHolder` — the
+// published retain-on-death token stays, so no contender can race the group
+// we failed to prove dead. That wedges THIS lease, not the machine.
+const PROCESS_GROUP_EXIT_DEADLINE_MS = 60_000;
+
 async function terminateAndReapProcessGroup(groupId: number): Promise<void> {
   try {
     process.kill(-groupId, "SIGTERM");
@@ -536,6 +582,7 @@ async function terminateAndReapProcessGroup(groupId: number): Promise<void> {
     // hand publication back to B.
   }
   const escalationAt = Date.now() + 2_000;
+  const deadline = Date.now() + PROCESS_GROUP_EXIT_DEADLINE_MS;
   let escalated = false;
   for (;;) {
     const liveness = processGroupLiveness(groupId);
@@ -551,16 +598,27 @@ async function terminateAndReapProcessGroup(groupId: number): Promise<void> {
         // Re-probe on the next iteration; this can mean the group exited.
       }
     }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "supervised actuator group survived SIGKILL past the exit deadline",
+      );
+    }
     await waitForMaintenanceProcessGroupPoll();
   }
 }
 
 async function waitForProcessGroupExit(groupId: number): Promise<void> {
+  const deadline = Date.now() + PROCESS_GROUP_EXIT_DEADLINE_MS;
   for (;;) {
     const liveness = processGroupLiveness(groupId);
     if (liveness === "gone") return;
     if (liveness === "indeterminate") {
       throw new Error("could not prove supervised actuator group exited");
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "supervised actuator group did not exit before the deadline",
+      );
     }
     await waitForMaintenanceProcessGroupPoll();
   }

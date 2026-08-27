@@ -422,7 +422,12 @@ describe("subscribeRemoteSessionReadiness — the BORROWABILITY edges (Ticket 06
     session.ready = true;
     const readings: boolean[] = [];
     subscribeRemoteSessionReadiness(() => {
-      readings.push(tryAcquireReadyRemoteSession(identity.hostId) !== null);
+      // Capture and release the borrow rather than discarding the handle: a
+      // leaked borrow would inflate `borrowCount` for every other test that
+      // shares this module's `entriesByKey` map.
+      const borrow = tryAcquireReadyRemoteSession(identity.hostId);
+      readings.push(borrow !== null);
+      borrow?.release();
     });
 
     const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);

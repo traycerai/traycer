@@ -191,6 +191,23 @@ describe("compatibility fence — the detective half", () => {
       expect(verdict.diagnostic).toContain(phase);
     },
   );
+
+  it.each(["complete", "failed", "superseded"] as const)(
+    "is clear for a TERMINAL attempt phase (%s) — history beside a legacy marker is not concurrency",
+    (phase) => {
+      // A terminal record (complete/failed/superseded) has no legal
+      // successors, so an abort/park disposition would be unapplyable. This
+      // is distinct from the post-tombstone (`restarting`/`verifying`) case
+      // above, which still aborts: those phases are live and non-terminal,
+      // only barred from parking.
+      expect(
+        decideLegacyMarkerConcurrency({
+          legacyMarkerPresent: true,
+          attemptPhase: phase,
+        }),
+      ).toEqual({ kind: "clear" });
+    },
+  );
 });
 
 describe("cohort policy (O4) — failure degrades TO the fence, never through it", () => {

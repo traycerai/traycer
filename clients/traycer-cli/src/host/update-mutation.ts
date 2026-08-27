@@ -237,7 +237,10 @@ async function runWithHostStartAdoption(
     await start();
     await adoption.waitForSpawn();
   } finally {
-    await adoption.cancel();
+    // Cleanup must never replace the actuator error: callers classify it to
+    // choose between park/abort and an ordinary busy refusal, and a rejected
+    // cancel() propagating out of this `finally` would swap in its own error.
+    await adoption.cancel().catch(() => undefined);
   }
 }
 

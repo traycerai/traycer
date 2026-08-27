@@ -24,7 +24,7 @@ import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type {
   HostAvailableManifest,
-  HostGetInstallationInfoResponse,
+  HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -141,7 +141,7 @@ export function buildOverviewHostFixture(options: {
   readonly busy?: boolean;
   readonly busySessionCount?: number;
   readonly busyBreakdown?: HostBusyBreakdown | null;
-  readonly installation?: HostGetInstallationInfoResponse;
+  readonly installation?: HostGetInstallationInfoResponseV11;
   /**
    * Replaces (rather than merges into) individual method handlers after the
    * defaults are built — for a test that needs a pending/erroring RPC, or a

@@ -38,12 +38,23 @@ describe("recordObservationFromLocalAttempt", () => {
   });
 
   it("an unrecognised phase string -> null (refusing beats guessing a newer vocabulary)", () => {
+    // `LocalAttemptFacts["phase"]` is now the closed `HostUpdateAttemptPhase`
+    // union, so this can no longer be built through `facts({ phase: ... })`
+    // without a value the type already rejects. Widen explicitly to a plain
+    // `string` for the one field under test, then cross to the real type with
+    // a single assertion between comparable shapes — never `as any` / `as
+    // unknown as` — to still exercise a wire payload from a newer build this
+    // one does not recognise.
+    const futureFacts: Omit<LocalAttemptFacts, "phase"> & {
+      readonly phase: string;
+    } = {
+      ...facts({}),
+      phase: "some-future-phase-this-build-does-not-know",
+    };
     expect(
       recordObservationFromLocalAttempt({
         hostId: HOST_ID,
-        localAttempt: facts({
-          phase: "some-future-phase-this-build-does-not-know",
-        }),
+        localAttempt: futureFacts as LocalAttemptFacts,
         observedAtMs: OBSERVED_AT_MS,
       }),
     ).toBeNull();

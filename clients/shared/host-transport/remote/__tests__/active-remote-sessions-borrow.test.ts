@@ -86,6 +86,12 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 afterEach(() => {
+  // Every entry this suite creates is module-scoped state
+  // (`active-remote-sessions.ts`'s `entriesByKey` is a single shared map), so
+  // a test that leaves an entry lingering or held would otherwise bleed into
+  // the next one. Retiring closes/marks everything outstanding before the
+  // fake-timer teardown below.
+  retireAllRemoteSessions();
   vi.useRealTimers();
 });
 
@@ -403,5 +409,51 @@ describe("hasBorrowableRemoteSession", () => {
     // linger: a lingering entry is honest liveness EVIDENCE but is exactly
     // the zero-consumer entry a poller must not be allowed to adopt.
     expect(hasBorrowableRemoteSession(identity.hostId)).toBe(false);
+  });
+
+  it("a ready `terminal`-policy (one-shot) session is never borrowable, even fully held and ready; a `revalidate` one for the same host is", () => {
+    // `findBorrowableEntry` requires `authRecovery === "revalidate"`. A ready
+    // `"terminal"` one-shot runs with `auth: null`, so the first UNAUTHORIZED
+    // goes terminal-fatal - closing that owner's stream subscriptions and
+    // rejecting its pending calls - which a status poll must never trigger by
+    // borrowing it.
+    const base = freshIdentity();
+    const terminalIdentity: RemoteSessionIdentity = {
+      ...base,
+      authRecovery: "terminal",
+    };
+    const terminalSession = fakeSession();
+    terminalSession.ready = true;
+    const terminalOwner = acquireRemoteSession(
+      terminalIdentity,
+      BORROW_TEST_POLICY,
+      () => terminalSession,
+    );
+
+    expect(hasBorrowableRemoteSession(base.hostId)).toBe(false);
+    expect(tryAcquireReadyRemoteSession(base.hostId)).toBeNull();
+
+    // The positive control: a `"revalidate"` entry for the SAME hostId is
+    // borrowable, so the refusal above is about the policy field, not about
+    // the host having no eligible entry at all.
+    const revalidateIdentity: RemoteSessionIdentity = {
+      ...base,
+      authRecovery: "revalidate",
+    };
+    const revalidateSession = fakeSession();
+    revalidateSession.ready = true;
+    const revalidateOwner = acquireRemoteSession(
+      revalidateIdentity,
+      BORROW_TEST_POLICY,
+      () => revalidateSession,
+    );
+
+    expect(hasBorrowableRemoteSession(base.hostId)).toBe(true);
+    const borrow = tryAcquireReadyRemoteSession(base.hostId);
+    expect(borrow).not.toBeNull();
+    borrow?.release();
+
+    terminalOwner.close();
+    revalidateOwner.close();
   });
 });

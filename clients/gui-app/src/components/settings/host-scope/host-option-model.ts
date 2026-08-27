@@ -227,6 +227,15 @@ export function hostOptionUpdateBadge(view: FleetUpdateView): string | null {
     // cannot support.
     return retained === null ? null : `last seen ${retained}`;
   }
+  if (view.qualified) {
+    // A stale view can carry a NON-unknown kind too (`qualified` is the
+    // view's own "surfaces MUST qualify this" flag, deliberately separate
+    // from `kind`). Rendering `liveBadgeWord` for it would present "last
+    // knew it was downloading" as "is downloading" — the exact present-tense
+    // claim the retained vocabulary exists to avoid.
+    const retained = retainedBadgeWord(view.kind);
+    return retained === null ? null : `last seen ${retained}`;
+  }
   return liveBadgeWord(view.kind);
 }
 

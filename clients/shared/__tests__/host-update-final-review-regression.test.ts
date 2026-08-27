@@ -3,6 +3,10 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import {
+  expectVerifierBeforeEvery,
+  sliceFrom,
+} from "./source-scan-test-support";
 
 const SHARED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLIENTS_ROOT = join(SHARED_ROOT, "..");
@@ -15,39 +19,6 @@ const NO_ATTEMPT_FACADE_FILES = new Set([
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
-
-function sliceFrom(source: string, start: string, end: string): string {
-  const startAt = source.indexOf(start);
-  const endAt = source.indexOf(end, startAt + start.length);
-  expect(startAt, `missing source marker: ${start}`).toBeGreaterThan(-1);
-  expect(endAt, `missing source marker: ${end}`).toBeGreaterThan(startAt);
-  return source.slice(startAt, endAt);
-}
-
-function offsets(source: string, pattern: RegExp): number[] {
-  return Array.from(source.matchAll(new RegExp(pattern.source, "g"))).map(
-    (match) => match.index ?? -1,
-  );
-}
-
-function expectVerifierBeforeEvery(
-  source: string,
-  actuator: RegExp,
-  verifier: RegExp,
-): void {
-  const verifierOffsets = offsets(source, verifier);
-  let previousActuator = -1;
-  for (const actuatorOffset of offsets(source, actuator)) {
-    expect(
-      verifierOffsets.some(
-        (verifierOffset) =>
-          verifierOffset > previousActuator && verifierOffset < actuatorOffset,
-      ),
-      `missing verifier before actuator at offset ${actuatorOffset}`,
-    ).toBe(true);
-    previousActuator = actuatorOffset;
-  }
 }
 
 async function sourceFiles(root: string): Promise<string[]> {
@@ -199,6 +170,18 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       true,
       ts.ScriptKind.TS,
     );
+    // Widened past the bare `.spawn(...)` property-access shape: a
+    // production spawn can equally arrive as a bare imported identifier
+    // (`spawn(...)`, `spawnSync(...)`, `execFile(...)`, `fork(...)`), and a
+    // detector that only matched the property-access form would silently
+    // stop covering an admission bypass the moment a call site switched
+    // shapes.
+    const SPAWN_LIKE_NAMES = new Set([
+      "spawn",
+      "spawnSync",
+      "execFile",
+      "fork",
+    ]);
     const spawnOwnership: boolean[] = [];
     const visit = (node: ts.Node, admissionDepth: number): void => {
       const isAdmission =
@@ -206,11 +189,13 @@ describe("Ticket 02 final-review OSS enforcement", () => {
         ts.isPropertyAccessExpression(node.expression) &&
         node.expression.name.text === "admitHostStartSpawn";
       const nextDepth = admissionDepth + (isAdmission ? 1 : 0);
-      if (
+      const isSpawnLike =
         ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "spawn"
-      ) {
+        ((ts.isPropertyAccessExpression(node.expression) &&
+          SPAWN_LIKE_NAMES.has(node.expression.name.text)) ||
+          (ts.isIdentifier(node.expression) &&
+            SPAWN_LIKE_NAMES.has(node.expression.text)));
+      if (isSpawnLike) {
         spawnOwnership.push(nextDepth > 0);
       }
       ts.forEachChild(node, (child) => visit(child, nextDepth));
@@ -300,17 +285,23 @@ describe("Ticket 02 final-review OSS enforcement", () => {
   });
 
   it("keeps every retry, uninstall, and Desktop registration edge behind live revalidation", async () => {
-    const [renameRetry, install, uninstall, loginItem, macos] =
-      await Promise.all([
-        readFile(join(CLI_ROOT, "installer", "rename-retry.ts"), "utf8"),
-        readFile(join(CLI_ROOT, "installer", "install.ts"), "utf8"),
-        readFile(join(CLI_ROOT, "installer", "uninstall.ts"), "utf8"),
-        readFile(join(DESKTOP_ROOT, "app", "host-login-item.ts"), "utf8"),
-        readFile(join(CLI_ROOT, "service", "platforms", "macos.ts"), "utf8"),
-      ]);
+    const [renameRetry, uninstall, loginItem, macos] = await Promise.all([
+      readFile(join(CLI_ROOT, "installer", "rename-retry.ts"), "utf8"),
+      readFile(join(CLI_ROOT, "installer", "uninstall.ts"), "utf8"),
+      readFile(join(DESKTOP_ROOT, "app", "host-login-item.ts"), "utf8"),
+      readFile(join(CLI_ROOT, "service", "platforms", "macos.ts"), "utf8"),
+    ]);
 
-    const retryLoop = renameRetry.slice(
-      renameRetry.indexOf("export async function renameWithRetryPlan("),
+    // `end: null` slices to end-of-file (both functions below are the last
+    // export in their file) while still failing loudly - via `sliceFrom`'s
+    // own start-marker assertion - if the marker text is ever renamed or
+    // moved, rather than silently degrading to `.slice(-1)`'s
+    // last-character sliver the way a bare `indexOf` + single-arg `.slice`
+    // would on a missing marker.
+    const retryLoop = sliceFrom(
+      renameRetry,
+      "export async function renameWithRetryPlan(",
+      null,
     );
     expect(retryLoop).toContain("plan.verifyBeforeAttempt");
     expectVerifierBeforeEvery(
@@ -318,36 +309,16 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       /await rename\(/,
       /await plan\.verifyBeforeAttempt\(\)/,
     );
+    const onRetryOffset = retryLoop.indexOf("plan.onRetry");
+    expect(onRetryOffset, "missing plan.onRetry reference").toBeGreaterThan(-1);
     expect(
-      retryLoop.indexOf(
-        "await plan.verifyBeforeAttempt();",
-        retryLoop.indexOf("plan.onRetry"),
-      ),
-    ).toBeGreaterThan(retryLoop.indexOf("plan.onRetry"));
+      retryLoop.indexOf("await plan.verifyBeforeAttempt();", onRetryOffset),
+    ).toBeGreaterThan(onRetryOffset);
 
-    const atomicSwap = sliceFrom(
-      install,
-      "async function atomicSwap(",
-      "// Reads the `version.json` sidecar",
-    );
-    // Forward swaps share a live retry plan; constrained rollback carries the
-    // same verifier inline. The authority is therefore on the plan passed to
-    // the helper, not necessarily textually before every call site.
-    expect(atomicSwap).toMatch(
-      /const swapRenamePlan = \{[\s\S]*verifyBeforeAttempt: opts\.verifyMutationCapability/,
-    );
-    expect(atomicSwap).toContain(
-      "await renameWithRetryPlan(target, trash, swapRenamePlan);",
-    );
-    expect(atomicSwap).toContain(
-      "await renameWithRetryPlan(opts.stagingDir, target, swapRenamePlan);",
-    );
-    expect(atomicSwap).toMatch(
-      /await renameWithRetryPlan\(trash, target, \{[\s\S]*verifyBeforeAttempt: opts\.verifyMutationCapability,/,
-    );
-
-    const uninstallBody = uninstall.slice(
-      uninstall.indexOf("export async function uninstallHost("),
+    const uninstallBody = sliceFrom(
+      uninstall,
+      "export async function uninstallHost(",
+      null,
     );
     expectVerifierBeforeEvery(uninstallBody, /await rm\(/, /await verify\(\)/);
     expect(uninstallBody).toMatch(
@@ -431,8 +402,11 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     for (const [route, end] of routes) {
       const body = sliceFrom(controller, `async ${route}(`, end);
       if (route === "activateInstalledCliOwned") {
-        expect(body).toContain("HOST_UPDATE_ATTEMPT_ACTIVE_CODE");
-        expect(body).toContain("HOST_BUSY_CODE");
+        // Was three inline CLI_LOCK_BUSY/HOST_UPDATE_ATTEMPT_ACTIVE/HOST_BUSY
+        // branches; now routes through the one shared classifier table like
+        // every other mutation route, so the pin follows the call site
+        // rather than the retired inline codes.
+        expect(body).toContain("classifyMutationSubprocessError");
       } else {
         const usesCentralRecoveryClassifier =
           (route === "respawn" ||
@@ -454,7 +428,13 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       "private async completeServiceStart(",
     );
     expect(stamp).toMatch(/stamp-runtime/);
-    expect(stamp).toMatch(/catch\s*\(err\)[\s\S]*throw err/);
+    // No try/catch wraps the CLI call: a typed contender refusal must
+    // propagate UNCHANGED so the caller's central classifier keeps its
+    // attach/yield guidance - wrapping it in `Error` here would collapse an
+    // active-attempt refusal into a generic activation failure and
+    // advertise the wrong recovery.
+    expect(stamp).toContain("No try/catch here on purpose");
+    expect(stamp).not.toMatch(/catch\s*\(err\)/);
     const completion = sliceFrom(
       controller,
       "private async completeServiceStart(",
@@ -506,5 +486,60 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     );
     expect(classifier).toContain("activeUpdateAttemptOutcome");
     expect(classifier).toContain("lockBusyOutcome");
+  });
+
+  // Security finding (aside-dirs no-op verifiers): `legacyMutationVerifier`
+  // and `renameWithRetryLegacy` both exist to intentionally SKIP the live
+  // update-attempt-capability revalidation the rest of this suite enforces
+  // everywhere else. They are legitimate for non-contender metadata
+  // maintenance ONLY - a new caller reaching for either one is choosing to
+  // bypass the exact protection this whole file certifies, so the importer
+  // set is pinned to an explicit allowlist rather than left open to grow
+  // silently.
+  //
+  // Shrinking this list (a caller stops using the no-op path) requires only
+  // updating it here. GROWING it requires justifying, in the PR that adds
+  // the new caller, why that caller is not a contender for the mandatory
+  // verifier it is opting out of.
+  it("pins the exact importer set of the aside-dirs no-op verifiers - shrinking updates this list, growing needs justification", async () => {
+    const files = await sourceFiles(CLI_ROOT);
+    const productionFiles = files.filter(
+      (filePath) => !filePath.split(sep).includes("__tests__"),
+    );
+
+    const relativePath = (filePath: string): string =>
+      relative(CLI_ROOT, filePath).split(sep).join("/");
+
+    const legacyMutationVerifierImporters: string[] = [];
+    const renameWithRetryLegacyImporters: string[] = [];
+    for (const filePath of productionFiles) {
+      const text = await readFile(filePath, "utf8");
+      if (text.includes("legacyMutationVerifier")) {
+        legacyMutationVerifierImporters.push(relativePath(filePath));
+      }
+      if (text.includes("renameWithRetryLegacy")) {
+        renameWithRetryLegacyImporters.push(relativePath(filePath));
+      }
+    }
+
+    // Verified against the actual tree with:
+    //   grep -rl legacyMutationVerifier clients/traycer-cli/src
+    //   grep -rl renameWithRetryLegacy clients/traycer-cli/src
+    expect(legacyMutationVerifierImporters.sort()).toEqual(
+      [
+        "host/host-log-rotation.ts", // its own local const of the same name
+        "installer/aside-dirs.ts", // definition
+        "installer/install.ts",
+        "installer/stage-reconcile.ts",
+        "installer/uninstall.ts",
+        "store/owned-temp.ts",
+      ].sort(),
+    );
+    expect(renameWithRetryLegacyImporters.sort()).toEqual(
+      [
+        "installer/rename-retry.ts", // definition
+        "store/well-known-cli.ts",
+      ].sort(),
+    );
   });
 });

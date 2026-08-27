@@ -419,6 +419,10 @@ describe("useFleetUpdateViews — global concurrency across real per-host querie
 });
 
 describe("useFleetUpdateViews — retention across a declined read (G3e)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("a host whose read DECLINES keeps its previous observation rather than vanishing — and once stale, retains the phase through the SAME qualified-unknown mechanism as the direct projection", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const hostId = "host-retained";

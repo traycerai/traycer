@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostUpdateAttemptRecord } from "@traycer-clients/shared/host-update";
+import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
 
 // `host free-port-and-restart`'s command-level wiring (Host Update Layer
 // Redesign Tech Plan, "Lifecycle lock coverage"): the kill (when a pid
@@ -103,46 +103,6 @@ vi.mock("node:os", async (importOriginal) => {
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
-
-// Mirrors `host-restart.test.ts`'s `attemptRecord`/`writeAttemptRecordForRestart`
-// fixtures exactly, so a stop-only/restart-current record on disk drives
-// `contenderContext.recoveryAction` through the real, unmocked shared
-// contender layer rather than a stubbed field.
-function attemptRecord(
-  overrides: Partial<HostUpdateAttemptRecord>,
-): HostUpdateAttemptRecord {
-  return {
-    schemaVersion: 2,
-    attemptId: "attempt-1",
-    generation: 1,
-    sequence: 1,
-    trigger: "manual",
-    targetVersion: "1.2.3",
-    phase: "downloading",
-    execution: "active",
-    continuation: null,
-    progress: null,
-    startedAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    completedAt: null,
-    error: null,
-    ...overrides,
-  };
-}
-
-async function writeAttemptRecordForFreePortAndRestart(
-  overrides: Partial<HostUpdateAttemptRecord>,
-): Promise<void> {
-  const { hostHomeDir } = await import("../../store/paths");
-  const { updateAttemptRecordPath } =
-    await import("@traycer-clients/shared/host-update");
-  const home = hostHomeDir("production");
-  mkdirSync(home, { recursive: true });
-  writeFileSync(
-    updateAttemptRecordPath(home),
-    `${JSON.stringify(attemptRecord(overrides))}\n`,
-  );
-}
 
 function fakeCtx(): CommandContext {
   return {
@@ -318,7 +278,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       mocks.controllerCalls = [];
       mocks.lockCalls = [];
       mocks.killCalls = [];
-      await writeAttemptRecordForFreePortAndRestart({
+      await writeAttemptRecordForEnvironment("production", {
         phase: "waiting-to-activate",
         execution: "parked",
         continuation: "activate",
@@ -347,7 +307,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       mocks.controllerCalls = [];
       mocks.lockCalls = [];
       mocks.killCalls = [];
-      await writeAttemptRecordForFreePortAndRestart({
+      await writeAttemptRecordForEnvironment("production", {
         phase: "waiting-to-activate",
         execution: "parked",
         continuation: "activate",
@@ -369,11 +329,46 @@ describe("buildHostFreePortAndRestartCommand", () => {
       });
     });
 
+    // Regression for the `killError` warning composing with whichever
+    // action actually ran, instead of a hardcoded "restart requested"
+    // claim: before this fix, a failed SIGTERM on a stop-only outcome
+    // still told the caller a restart was requested even though the
+    // service was only stopped.
+    it("a stop-only record with a failed SIGTERM composes the warning with the action that actually ran (stop), not a hardcoded restart claim", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      mocks.killResult = { killed: false, killError: "EPERM" };
+      await writeAttemptRecordForEnvironment("production", {
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+
+      const { serviceLabelFor } = await import("../../service");
+      const label = serviceLabelFor("production");
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: 4242,
+        port: 51820,
+        deferIfParked: false,
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({ killed: false, killError: "EPERM" });
+      expect(result.human).toBe(
+        `stopped '${label.id}' without activating parked update bytes; warning: failed to terminate pid 4242: EPERM`,
+      );
+      mocks.killResult = { killed: true, killError: null };
+    });
+
     it("a restart-current record (restarting/activate) still restarts even with --defer-if-parked set", async () => {
       mocks.controllerCalls = [];
       mocks.lockCalls = [];
       mocks.killCalls = [];
-      await writeAttemptRecordForFreePortAndRestart({
+      await writeAttemptRecordForEnvironment("production", {
         phase: "restarting",
         execution: "active",
         continuation: "activate",

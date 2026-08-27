@@ -142,19 +142,27 @@ export async function writeAdoptionProof(
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
     0o600,
   );
+  let failure: unknown = null;
+  let failed = false;
   try {
     await handle.writeFile(JSON.stringify(file), "utf8");
     await handle.sync();
   } catch (err) {
+    failure = err;
+    failed = true;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  if (failed) {
     // The caller CANNOT clean this up: we reject before returning the handle
     // that carries `cancel`, so the nonce is never handed out. Without this
     // the partial proof would accumulate forever - inert once the holder
     // releases, but never deleted, because the age bound only applies to a
-    // nonce somebody knows to look for.
+    // nonce somebody knows to look for. The unlink runs AFTER `close()` so
+    // it also works on Windows, where removing an open file fails — and that
+    // rm swallowing its own error was exactly how the leak survived there.
     await rm(path, { force: true }).catch(() => undefined);
-    throw err;
-  } finally {
-    await handle.close();
+    throw failure;
   }
   return {
     nonce,

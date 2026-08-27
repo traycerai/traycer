@@ -163,6 +163,13 @@ describe("aside invalidation authority", () => {
       if (verifyCalls === 2) throw new Error("mutation authority lost");
     };
 
+    // This `describe` has no `beforeEach`/`afterEach` of its own - the
+    // existing resets live in `reconcileHostStage`'s hooks below, which
+    // never run for this suite. Reset explicitly immediately before the
+    // call under test so this assertion is not merely riding the module's
+    // zero-valued initial state (CodeRabbit review of PR #1480).
+    mocks.unlinkCalls = 0;
+    mocks.rmCalls = 0;
     await expect(
       invalidateAsideDir(target, aside, "install.json", noopLogger, verify),
     ).rejects.toThrow("mutation authority lost");
@@ -195,6 +202,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath,
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -222,6 +230,7 @@ async function writeStagedAt(
     executablePath: executableRelPath,
     platform: currentInstallPlatform(),
     arch: currentInstallArch(),
+    executableSha256: null,
     ...overrides,
   };
   await writeHostStagedRecordAt(stagedDir, record);
@@ -336,6 +345,7 @@ describe("reconcileHostStage", () => {
       executablePath: "traycer-host",
       platform: currentInstallPlatform(),
       arch: currentInstallArch(),
+      executableSha256: null,
     });
     // Deliberately never write the executable file itself.
 

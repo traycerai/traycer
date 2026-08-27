@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +33,7 @@ import {
   clearRestartTombstoneWithAttempt,
   publishRestartTombstoneWithAttempt,
 } from "../update-mutation";
+import { freshHostFsLayout } from "./host-fs-layout-test-support";
 import type {
   DesktopActivationCycleOutcome,
   DesktopActivationDeps,
@@ -55,28 +55,8 @@ afterEach(async () => {
   );
 });
 
-async function freshLayout(): Promise<HostFsLayout> {
-  const root = await mkdtemp(join(tmpdir(), "desktop-update-executor-test-"));
-  roots.push(root);
-  const rootDir = join(root, "host-home");
-  await mkdir(rootDir, { recursive: true });
-  return {
-    rootDir,
-    pidMetadataFile: join(rootDir, "pid.json"),
-    identityEnrollmentFile: join(rootDir, "identity", "enrollment.json"),
-    logFile: join(rootDir, "host.log"),
-    installDir: join(rootDir, "install"),
-    installRecordFile: join(rootDir, "install", "install.json"),
-    stagedDir: join(rootDir, "staged"),
-    stagedRecordFile: join(rootDir, "staged", "staged.json"),
-    pendingLoginItemRevisionFile: join(
-      rootDir,
-      "pending-login-item-revision.json",
-    ),
-    substrateFile: join(rootDir, "substrate.json"),
-    transitionJournalFile: join(rootDir, "transition.json"),
-    environment: "production",
-  };
+function freshLayout(): Promise<HostFsLayout> {
+  return freshHostFsLayout(roots, "desktop-update-executor-test-");
 }
 
 function eligibleCohort(): void {

@@ -1,5 +1,8 @@
 import { compareHostVersions } from "../host-version/compare-host-versions";
-import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import {
+  isTerminalPhase,
+  type HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
 
 // Ticket 07 — the compatibility fence.
 //
@@ -198,6 +201,10 @@ export function decideLegacyMarkerConcurrency(
   // which is the pre-cutover world working normally. There is nothing to abort
   // and nothing was mixed.
   if (input.attemptPhase === null) return { kind: "clear" };
+  // A terminal record is the same case wearing a phase: complete/failed/
+  // superseded have no legal successors, so an abort/park disposition would
+  // be unapplyable. History beside a legacy marker is not concurrency.
+  if (isTerminalPhase(input.attemptPhase)) return { kind: "clear" };
   const disposition: LegacyMarkerAbortDisposition = POST_TOMBSTONE_PHASES.has(
     input.attemptPhase,
   )

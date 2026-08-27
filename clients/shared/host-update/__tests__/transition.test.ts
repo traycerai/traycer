@@ -1514,7 +1514,7 @@ describe("decideAttemptRecovery - target change supersedes rather than resuming 
     });
   });
 
-  it("still supersedes for a changed target even when the OLD target's evidence would otherwise prove complete", () => {
+  it("terminalizes complete rather than superseding when the OLD target's evidence proves completion", () => {
     // Recovery must not silently "complete" an attempt for a target the
     // caller no longer wants, then separately create the new one - the old
     // target's own evidence match is irrelevant once requestedTargetVersion

@@ -54,7 +54,6 @@ export interface RunHostUninstallContext {
 }
 
 interface StopServiceBeforeRuntimePurgeArgs {
-  readonly controller: RuntimePurgeStopController;
   readonly environment: Environment;
   readonly label: ServiceLabel;
   readonly logger: ILogger;
@@ -78,13 +77,6 @@ export interface HostUninstallActuators {
 // the process exited. Service deregistration/install removal remain
 // best-effort even when this confirmation fails.
 export async function stopServiceBeforeRuntimePurge(
-  args: StopServiceBeforeRuntimePurgeArgs,
-  stop: () => Promise<void>,
-): Promise<boolean> {
-  return stopServiceBeforeRuntimePurgeWith(args, stop);
-}
-
-async function stopServiceBeforeRuntimePurgeWith(
   args: StopServiceBeforeRuntimePurgeArgs,
   stop: () => Promise<void>,
 ): Promise<boolean> {
@@ -150,6 +142,11 @@ export async function runHostUninstallWithAttempt(
 ): Promise<CommandResult> {
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment: ctx.environment,
+    // The maintenance lease creates the capability for the sudo CALLER's
+    // canonical home while this process runs elevated. Revalidation must name
+    // the same home, or every in-attempt verify resolves the elevated
+    // process's own home and refuses with wrong-host-home.
+    hostHomeDir: capability.hostHomeDir,
     reason: "host-uninstall",
     waitMs: 30_000,
     pollIntervalMs: 100,
@@ -220,7 +217,6 @@ async function runHostUninstallWithActuators(
     // unless stop confirms the process is gone. A failed stop can leave
     // the host actively writing its pid metadata and log.
     const stopArgs = {
-      controller,
       environment: ctx.environment,
       label,
       logger: ctx.logger,

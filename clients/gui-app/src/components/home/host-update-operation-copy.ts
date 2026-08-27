@@ -184,23 +184,6 @@ export function operationProgressPercent(view: FleetUpdateView): number | null {
 }
 
 /**
- * The measured byte detail — `"80 MB of 200 MB"`, `"80 MB"`, or `null`.
- *
- * INDEPENDENT of {@link operationProgressPercent}, which is the whole point.
- * The contract asks for "real percentage/bytes when known" and the wire makes
- * the three fields separately nullable, so a host streaming an unsized body
- * reports bytes with no percentage at all. Gating the counters on the
- * percentage — which both surfaces effectively did by rendering neither —
- * discarded a complete `80 MB of 200 MB` and left an anonymous moving bar.
- *
- * Formatting goes through `formatHostTransfer`, the app's ONE byte vocabulary.
- * This deliberately does not roll its own: the file that owns that helper
- * records what happened when Settings and the boot surface each had their own
- * (the two disagreed on wording AND on units, MB against MiB, for the same
- * download), and a third copy here would be the same mistake with a longer
- * comment.
- */
-/**
  * Whether to draw the progress BAR — as distinct from the numbers beside it.
  *
  * Shared by both surfaces rather than re-derived at each, because they had the
@@ -226,6 +209,23 @@ export function showsProgressBar(view: FleetUpdateView): boolean {
   return true;
 }
 
+/**
+ * The measured byte detail — `"80 MB of 200 MB"`, `"80 MB"`, or `null`.
+ *
+ * INDEPENDENT of {@link operationProgressPercent}, which is the whole point.
+ * The contract asks for "real percentage/bytes when known" and the wire makes
+ * the three fields separately nullable, so a host streaming an unsized body
+ * reports bytes with no percentage at all. Gating the counters on the
+ * percentage — which both surfaces effectively did by rendering neither —
+ * discarded a complete `80 MB of 200 MB` and left an anonymous moving bar.
+ *
+ * Formatting goes through `formatHostTransfer`, the app's ONE byte vocabulary.
+ * This deliberately does not roll its own: the file that owns that helper
+ * records what happened when Settings and the boot surface each had their own
+ * (the two disagreed on wording AND on units, MB against MiB, for the same
+ * download), and a third copy here would be the same mistake with a longer
+ * comment.
+ */
 export function operationProgressBytes(view: FleetUpdateView): string | null {
   const progress = view.progress;
   if (progress.kind === "none") return null;

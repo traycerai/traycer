@@ -51,11 +51,6 @@ describe("stopServiceBeforeRuntimePurge", () => {
     await expect(
       stopServiceBeforeRuntimePurge(
         {
-          controller: {
-            stop: async (receivedLabel) => {
-              expect(receivedLabel).toBe(label);
-            },
-          },
           environment: "dev",
           label,
           logger: noopLogger,
@@ -71,11 +66,6 @@ describe("stopServiceBeforeRuntimePurge", () => {
     await expect(
       stopServiceBeforeRuntimePurge(
         {
-          controller: {
-            stop: async () => {
-              throw new Error("host still running");
-            },
-          },
           environment: "production",
           label,
           logger: noopLogger,

@@ -8,6 +8,7 @@ import {
   type DesktopRegistrationTakeover,
 } from "../service";
 import { withCliUpdateContender } from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import {
@@ -60,15 +61,19 @@ export function buildServiceInstallCommand(
       args.attemptAdoption,
       Date.now(),
     );
+    // ONE options value for acquisition and every in-attempt revalidation:
+    // three literals that must stay identical are how admission policies
+    // drift.
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "service-install",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "service-maintenance",
+      adoption,
+    };
     const locked = await withCliUpdateContender(
-      {
-        environment: ctx.runtime.environment,
-        reason: "service-install",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-        admission: "service-maintenance",
-        adoption,
-      },
+      contenderOptions,
       async (capability) => {
         const label = serviceLabelFor(ctx.runtime.environment);
         const cli = await resolveServiceCliInvocation({
@@ -94,14 +99,7 @@ export function buildServiceInstallCommand(
           });
           takeover = await takeoverDesktopRegistrationWithAttempt(
             capability,
-            {
-              environment: ctx.runtime.environment,
-              reason: "service-install",
-              waitMs: 30_000,
-              pollIntervalMs: 100,
-              admission: "service-maintenance",
-              adoption,
-            },
+            contenderOptions,
             controller,
             label,
           );
@@ -121,14 +119,7 @@ export function buildServiceInstallCommand(
         });
         await installHostServiceWithAttempt(
           capability,
-          {
-            environment: ctx.runtime.environment,
-            reason: "service-install",
-            waitMs: 30_000,
-            pollIntervalMs: 100,
-            admission: "service-maintenance",
-            adoption,
-          },
+          contenderOptions,
           controller,
           {
             label,

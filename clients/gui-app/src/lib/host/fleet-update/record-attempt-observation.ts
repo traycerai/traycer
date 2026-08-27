@@ -84,8 +84,12 @@ export function recordObservationFromLocalAttempt(input: {
 }
 
 /**
- * `LocalAttemptFacts.phase` crosses the IPC boundary as a plain string, so it
- * is narrowed HERE against the canonical list rather than trusted.
+ * `LocalAttemptFacts.phase` is now DECLARED as the protocol union, but the
+ * value still crosses an IPC boundary as runtime data read off disk — the
+ * type describes what a well-behaved producer sends, not what arrives. The
+ * narrowing stays as the runtime enforcement of that declaration: refusing
+ * beats guessing, and a phase this build does not know is not evidence it
+ * can render.
  */
 function narrowPhase(value: string): HostUpdateAttemptPhase | null {
   return HOST_UPDATE_ATTEMPT_PHASES.find((phase) => phase === value) ?? null;

@@ -776,16 +776,22 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           .getAttribute("aria-disabled"),
       ).not.toBe("true");
 
-      // Positive control: the assertions above CAN fail — an
-      // `aria-disabled="true"` element trips them, proving this is not a
-      // vacuous check against whatever this harness happens to render.
-      const restartItem = screen.getByTestId("host-overview-restart");
-      restartItem.setAttribute("aria-disabled", "true");
-      expect(
-        screen
-          .getByTestId("host-overview-restart")
-          .getAttribute("aria-disabled"),
-      ).toBe("true");
+      // Positive control: the assertions above CAN fail — mutate the
+      // element to the disabled state, then assert the ORIGINAL negative
+      // expectation now throws. Asserting the mutated value against itself
+      // was self-referential and could never fail; re-running the actual
+      // `.not.toBe("true")` check is what proves it is not vacuous against
+      // whatever this harness happens to render.
+      screen
+        .getByTestId("host-overview-restart")
+        .setAttribute("aria-disabled", "true");
+      expect(() => {
+        expect(
+          screen
+            .getByTestId("host-overview-restart")
+            .getAttribute("aria-disabled"),
+        ).not.toBe("true");
+      }).toThrow();
     },
   );
 

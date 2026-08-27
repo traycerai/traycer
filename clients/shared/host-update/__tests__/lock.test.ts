@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename as nodeRename,
   rm,
   stat,
   writeFile,
@@ -11,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetAttemptHolderCacheForTest,
   __resetHeldInProcessForTest,
@@ -26,7 +27,18 @@ import { updateAttemptLockPath } from "../paths";
 import {
   __setLockReadPlatformForTest,
   readLockHolder,
+  rewriteLockLivenessIfToken,
 } from "../../host-lock/cross-process-lock";
+
+// F-round coverage (CodeRabbit): `rewriteLockLivenessIfToken`'s temp-file
+// rename is the ONLY `rename()` call anywhere in `cross-process-lock.ts`, so
+// wrapping it here is a surgical seam - the default implementation always
+// delegates to the real `rename`, and only the one test below overrides it
+// for a single call.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -311,6 +323,90 @@ describe("lock-path special entries and missing-flag fallback", () => {
       });
     },
   );
+});
+
+describe("cross-process-lock direct coverage - parseLockMetadata / rewriteLockLivenessIfToken", () => {
+  afterEach(() => {
+    // Restore the default (real-delegating) implementation so a later test
+    // in this file never inherits this describe block's override.
+    vi.mocked(nodeRename).mockClear();
+  });
+
+  it("drops a recorded supervisedProcessGroupId of 1 rather than treating group 1 (init's) as a live supervised actuator", async () => {
+    const dir = await freshDir();
+    const lockPath = updateAttemptLockPath(dir);
+    // Hand-authored, mirroring exactly what a pre-hardening writer (or a
+    // corrupt/adversarial value) could put on disk - `parseLockMetadata` is
+    // private, so `readLockHolder` is the public surface this drop is
+    // observable through.
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        reason: "group-id-one-fixture",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        hostname: null,
+        token: "group-one-token",
+        processStartedAtMs: null,
+        processStartIdentity: null,
+        supervisedProcessGroupId: 1,
+      }),
+    );
+
+    const holder = await readLockHolder(lockPath);
+    expect(holder.kind).toBe("held");
+    if (holder.kind !== "held") return;
+    // `process.kill(-1, 0)` asks "can I signal ANY process", which is true
+    // on every running machine - a recorded group of 1 would otherwise
+    // classify any machine's holder as live forever. No supervised actuator
+    // can legitimately lead process group 1 (init's), so the parser drops
+    // the field entirely rather than passing it through to the liveness
+    // probe.
+    expect(holder.holder.supervisedProcessGroupId).toBeUndefined();
+  });
+
+  it("a rewriteLockLivenessIfToken whose rename fails returns false rather than throwing", async () => {
+    const dir = await freshDir();
+    const lockPath = updateAttemptLockPath(dir);
+    const acquired = await acquireUpdateAttemptLock({
+      hostHomeDir: dir,
+      reason: "rewrite-liveness-rename-failure",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    expect(acquired.kind).toBe("acquired");
+    if (acquired.kind !== "acquired") return;
+    handles.push(acquired.handle);
+    const token = acquired.handle.metadata.token;
+    expect(token).not.toBeNull();
+    if (token === null) return;
+
+    // `rename()` is the ONLY `rename` call anywhere in
+    // `cross-process-lock.ts` (see the module-scope `vi.mock` above), so
+    // this fails exactly the rename this function performs after its
+    // temp-file open/writeFile/sync succeed - not the break-lock
+    // acquisition or the canonical-lock read that precede it.
+    vi.mocked(nodeRename).mockRejectedValueOnce(
+      Object.assign(new Error("simulated rename failure"), {
+        code: "EACCES",
+      }),
+    );
+
+    const rewritten = await rewriteLockLivenessIfToken(lockPath, token, {
+      ...acquired.handle.metadata,
+      supervisedProcessGroupId: process.pid,
+    });
+    expect(rewritten).toBe(false);
+
+    // The canonical lock is untouched by the failed rewrite - still the
+    // original token, still no supplemental liveness published.
+    const holder = await readLockHolder(lockPath);
+    expect(holder.kind).toBe("held");
+    if (holder.kind === "held") {
+      expect(holder.holder.token).toBe(token);
+      expect(holder.holder.supervisedProcessGroupId).toBeUndefined();
+    }
+  });
 });
 
 describe("acquireUpdateAttemptLock - in-process re-entrancy", () => {

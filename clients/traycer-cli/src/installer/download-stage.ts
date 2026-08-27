@@ -241,16 +241,21 @@ async function replaceStagedDir(
   }
 }
 
+// The one shape every stage-maintenance leg shares. Named once so a changed
+// admission literal or wait policy cannot drift between the three copies the
+// inline types used to be.
+interface StageMaintenanceContenderOptions {
+  readonly environment: Environment;
+  readonly reason: string;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+  readonly admission: "stage-maintenance";
+}
+
 /** The stage-promotion actuator; capability is checked at the rename edge. */
 async function replaceStagedDirWithAttempt(
   capability: UpdateMutationCapability,
-  contenderOptions: {
-    readonly environment: Environment;
-    readonly reason: string;
-    readonly waitMs: number;
-    readonly pollIntervalMs: number;
-    readonly admission: "stage-maintenance";
-  },
+  contenderOptions: StageMaintenanceContenderOptions,
   environment: Environment,
   tempDir: string,
   logger: ILogger,
@@ -275,13 +280,7 @@ async function replaceStagedDirWithAttempt(
 async function ensureHostInstalledPrecondition(
   environment: Environment,
   capability: UpdateMutationCapability,
-  contenderOptions: {
-    readonly environment: Environment;
-    readonly reason: string;
-    readonly waitMs: number;
-    readonly pollIntervalMs: number;
-    readonly admission: "stage-maintenance";
-  },
+  contenderOptions: StageMaintenanceContenderOptions,
 ): Promise<void> {
   await withCliAttemptMutation(capability, contenderOptions, async () => {
     await reconcileHostStageWithAttempt(environment, () =>
@@ -317,13 +316,7 @@ export async function downloadAndStageHost(
 async function downloadAndStageHostInSegment(
   opts: DownloadAndStageHostOptions,
   capability: UpdateMutationCapability,
-  contenderOptions: {
-    readonly environment: Environment;
-    readonly reason: string;
-    readonly waitMs: number;
-    readonly pollIntervalMs: number;
-    readonly admission: "stage-maintenance";
-  },
+  contenderOptions: StageMaintenanceContenderOptions,
 ): Promise<HostDownloadOutcome> {
   const logger = createCliLogger(opts.environment);
 
@@ -704,17 +697,29 @@ async function downloadAndStageHostInSegment(
     archiveConsumed = true;
     return outcome;
   } finally {
+    // Verification stays outside the best-effort I/O catches — an unadmitted
+    // delete must never run — but a capability loss inside this `finally`
+    // must not THROW either: it would replace the primary outcome (the
+    // promote-time error the caller classifies, or a completed promotion)
+    // with E_CLI_LOCK_BUSY. Losing the capability skips the destructive
+    // edge and leaves the leftovers to the next admitted run's sweep.
+    const cleanupAdmitted = async (reason: string): Promise<boolean> => {
+      try {
+        await requireCliUpdateMutationCapability(capability, {
+          ...contenderOptions,
+          reason,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     if (ownedPath !== null && !ownedConsumed) {
-      // Verification deliberately remains outside the best-effort I/O catch:
-      // capability loss must abort the remaining cleanup rather than be
-      // reported as an ordinary temp-directory failure.
-      await requireCliUpdateMutationCapability(capability, {
-        ...contenderOptions,
-        reason: "host-download-temp-cleanup",
-      });
-      await rm(ownedPath, { recursive: true, force: true }).catch(
-        () => undefined,
-      );
+      if (await cleanupAdmitted("host-download-temp-cleanup")) {
+        await rm(ownedPath, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      }
     }
     // The verified archive is not auto-cleaned on success (by contract -
     // see registry/client.ts's `downloadAndVerify`): the caller owns
@@ -723,14 +728,12 @@ async function downloadAndStageHostInSegment(
     // now the SHARED download cache, not a private per-invocation temp.
     if (archiveConsumed) {
       // Drop the archive AND the claim on it.
-      await requireCliUpdateMutationCapability(capability, {
-        ...contenderOptions,
-        reason: "host-download-archive-release",
-      });
-      await releaseDownloadSlot(opts.environment, verified.archivePath).catch(
-        () => undefined,
-      );
-    } else {
+      if (await cleanupAdmitted("host-download-archive-release")) {
+        await releaseDownloadSlot(opts.environment, verified.archivePath).catch(
+          () => undefined,
+        );
+      }
+    } else if (await cleanupAdmitted("host-download-archive-release")) {
       // Something between the transfer and the promote decision threw. These
       // bytes already cleared sha256 AND minisign, so re-downloading them
       // could not produce anything different - it would just spend another
@@ -738,10 +741,6 @@ async function downloadAndStageHostInSegment(
       // hit the same local failure. Drop the claim and leave them: the next
       // run's `acquireDownloadSlot` spares this version's slot from the
       // sweep and resumes it over a single 416 round-trip.
-      await requireCliUpdateMutationCapability(capability, {
-        ...contenderOptions,
-        reason: "host-download-archive-release",
-      });
       await releaseDownloadSlotOwnership(
         opts.environment,
         verified.archivePath,

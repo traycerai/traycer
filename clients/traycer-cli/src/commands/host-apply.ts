@@ -1,5 +1,6 @@
 import type { ApplyHostOutcome } from "../installer/apply";
 import { withCliUpdateContender } from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { applyHostWithAttempt } from "../host/update-mutation";
@@ -41,34 +42,26 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       args.attemptAdoption,
       Date.now(),
     );
+    // ONE options value for acquisition and revalidation: two literals that
+    // must stay identical are how admission policies drift.
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "host-apply",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "legacy-update-shadow",
+      adoption,
+    };
     const outcome = await withCliUpdateContender(
-      {
-        environment: ctx.runtime.environment,
-        reason: "host-apply",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-        admission: "legacy-update-shadow",
-        adoption,
-      },
+      contenderOptions,
       (capability) =>
-        applyHostWithAttempt(
-          capability,
-          {
-            environment: ctx.runtime.environment,
-            reason: "host-apply",
-            waitMs: 30_000,
-            pollIntervalMs: 100,
-            admission: "legacy-update-shadow",
-            adoption,
-          },
-          {
-            environment: ctx.runtime.environment,
-            force: args.force,
-            noService: args.noService,
-            expectedStageFingerprint: args.expectedStageFingerprint,
-            onProgress: (info) => ctx.progress(info),
-          },
-        ),
+        applyHostWithAttempt(capability, contenderOptions, {
+          environment: ctx.runtime.environment,
+          force: args.force,
+          noService: args.noService,
+          expectedStageFingerprint: args.expectedStageFingerprint,
+          onProgress: (info) => ctx.progress(info),
+        }),
     );
     ctx.runtime.logger.info("Host apply command completed", {
       environment: ctx.runtime.environment,

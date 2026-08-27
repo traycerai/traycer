@@ -301,6 +301,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath,
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -1547,20 +1548,37 @@ describe("downloadAndStageHost", () => {
     // a source-contract guard for the exact cleanup boundary. Runtime holder
     // loss is exercised by the contender/lifecycle suites; this assertion
     // prevents a future refactor from moving these checks outside the edges.
+    //
+    // The promote-time discard edge still checks and THROWS directly (a
+    // capability loss there aborts the promote decision itself). The three
+    // `finally`-block cleanup edges route through the shared
+    // `cleanupAdmitted()` helper instead (fixup ticket, change 11): a
+    // capability loss there must skip the destructive op and return `false`
+    // rather than throw, so it can never replace the primary promote/discard
+    // outcome the caller classifies with a spurious `E_CLI_LOCK_BUSY`.
     const source = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "../download-stage.ts"),
       "utf8",
     );
     expect(source).toContain('reason: "host-download-discard"');
-    expect(source).toContain('reason: "host-download-temp-cleanup"');
-    expect(source).toContain('reason: "host-download-archive-release"');
+    expect(source).toContain(
+      "const cleanupAdmitted = async (reason: string): Promise<boolean>",
+    );
+    expect(source).toContain('cleanupAdmitted("host-download-temp-cleanup")');
+    expect(source).toContain(
+      'cleanupAdmitted("host-download-archive-release")',
+    );
     expect(source).toContain("await releaseDownloadSlot(");
     expect(source).toContain("await releaseDownloadSlotOwnership(");
-    expect(source.indexOf('reason: "host-download-temp-cleanup"')).toBeLessThan(
-      source.indexOf("await rm(ownedPath"),
+    // The helper never throws: a lost capability returns `false` instead.
+    expect(source).toMatch(
+      /cleanupAdmitted[\s\S]*?catch\s*{\s*return false;\s*}/,
     );
     expect(
-      source.lastIndexOf('reason: "host-download-archive-release"'),
+      source.indexOf('cleanupAdmitted("host-download-temp-cleanup")'),
+    ).toBeLessThan(source.indexOf("await rm(ownedPath"));
+    expect(
+      source.lastIndexOf('cleanupAdmitted("host-download-archive-release")'),
     ).toBeLessThan(source.lastIndexOf("await releaseDownloadSlotOwnership("));
   });
 });

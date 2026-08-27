@@ -134,14 +134,21 @@ async function supervisor() {
         }
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
+      // Boolean liveness probe rather than throw-inside-try with a
+      // self-filtering catch (which matched its OWN thrown error back out by
+      // message string - fragile, and easy to accidentally swallow a
+      // genuinely different failure that happens to share wording).
+      let groupStillLive = false;
       try {
         process.kill(-wrapper.pid, 0);
+        groupStillLive = true;
+      } catch {
+        // ESRCH (or equivalent) means the group is gone - the success path.
+      }
+      if (groupStillLive) {
         throw new Error(
           "TERM-resistant process group remained live after SIGKILL",
         );
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("remained live"))
-          throw error;
       }
       await writeFile(
         join(barrierDir, "descendant-killed"),
@@ -181,29 +188,35 @@ async function supervisor() {
       buffer += chunk;
       const newline = buffer.indexOf("\n");
       if (newline === -1) return;
-      try {
-        const message = JSON.parse(buffer.slice(0, newline));
-        if (message.kind !== "bind-actuator" || message.pid === undefined) {
-          reject(new Error("node supervisor received malformed binding"));
-          return;
+      void (async () => {
+        try {
+          const message = JSON.parse(buffer.slice(0, newline));
+          if (message.kind !== "bind-actuator" || message.pid === undefined) {
+            reject(new Error("node supervisor received malformed binding"));
+            return;
+          }
+          descendantPid = message.pid;
+          // Awaited BEFORE the stdout publish below: the consumer waits for
+          // the "bind-actuator" stdout line and then immediately reads this
+          // file. Publishing first raced the write - the reader could
+          // observe the stdout line before the file existed.
+          await writeFile(
+            join(barrierDir, "wrapper-bind"),
+            JSON.stringify({ wrapperPid: wrapper.pid, descendantPid }),
+          );
+          process.stdout.write(
+            `${JSON.stringify({
+              kind: "bind-actuator",
+              pid: process.pid,
+              supervisedProcessGroupId: wrapper.pid,
+              retainOnPublisherDeath: true,
+            })}\n`,
+          );
+          resolve();
+        } catch (error) {
+          reject(error);
         }
-        descendantPid = message.pid;
-        void writeFile(
-          join(barrierDir, "wrapper-bind"),
-          JSON.stringify({ wrapperPid: wrapper.pid, descendantPid }),
-        );
-        process.stdout.write(
-          `${JSON.stringify({
-            kind: "bind-actuator",
-            pid: process.pid,
-            supervisedProcessGroupId: wrapper.pid,
-            retainOnPublisherDeath: true,
-          })}\n`,
-        );
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
+      })();
     });
     wrapper.once("exit", (code) => {
       if (code !== 0)

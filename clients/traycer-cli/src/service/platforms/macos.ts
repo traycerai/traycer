@@ -900,7 +900,14 @@ async function probeDesktopAgentOwnership(
   const agentOwnership = await inspectLaunchdOwnership(
     `${guiDomain()}/${agentLabelId}`,
     run,
-  ).catch((): LaunchdOwnership => ({ kind: "not-loaded" }));
+  ).catch((cause: unknown): LaunchdOwnership => {
+    // Advisory means tolerant of launchctl faults, not of a revoked mutation
+    // capability: reporting "no Desktop agent" for an authority failure would
+    // route adoption to the logical label and publish a grant the Desktop
+    // supervisor rejects. Same re-throw discipline as every other probe here.
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return { kind: "not-loaded" };
+  });
   if (agentOwnership.kind !== "smappservice") return null;
   return { agentLabelId, loadedPath: agentOwnership.path };
 }

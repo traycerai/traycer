@@ -976,6 +976,13 @@ function findBorrowableEntry(hostId: string): CacheEntry | null {
   for (const entry of entriesByKey.values()) {
     if (
       entry.identity.hostId === hostId &&
+      // Only durable, auth-revalidating sessions may serve borrowed reads. A
+      // ready `"terminal"` one-shot shares the hostId and can precede the
+      // durable entry in map order, but it runs with `auth: null`, so the
+      // first UNAUTHORIZED goes terminal-fatal — closing that owner's stream
+      // subscriptions and rejecting its pending calls because a status poll
+      // happened to pick it. Observation must never spend a one-shot's life.
+      entry.identity.authRecovery === "revalidate" &&
       !entry.superseded &&
       entry.lingerTimer === null &&
       entry.refCount > 0 &&

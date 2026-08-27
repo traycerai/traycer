@@ -725,30 +725,6 @@ const HOST_UPDATE_ACTIVATING_MESSAGE =
   "An update is activating - the host will restart on its own.";
 
 /**
- * Decode the bundled CLI's verification report into Desktop's outcome type.
- *
- * ## Why this is a decoder and not a cast
- *
- * It used to be `streamBundled<DesktopVerificationOutcome>(...)`, which is a
- * type assertion over JSON from ANOTHER PROCESS. Two things were wrong with
- * that, and the second is worse than the first:
- *
- *  1. The two sides do not share a discriminator. The CLI reports
- *     `{ outcome: ... }` (`traycer-cli/src/host/update-verify.ts`); Desktop
- *     reads `{ kind: ... }`. So the asserted field was **always `undefined`**
- *     and no arm ever matched.
- *  2. Even had they agreed, the bytes come from a separately-versioned binary.
- *     A mixed-version CLI can emit a shape this build has never seen, and an
- *     assertion cannot notice. Desktop bundles the CLI *binary*, not its
- *     source, so the type genuinely cannot be shared - decoding is the correct
- *     architecture here, not a workaround for the rename.
- *
- * Total by construction: anything unrecognized becomes `indeterminate`, never
- * a terminal verdict. An unreadable answer is the absence of evidence, and
- * turning it into `complete` is exactly how a `verifying` record would acquire
- * a success it never earned.
- */
-/**
  * The parked identity a `resumed` report may name, or `null`.
  *
  * All three fields or none: a partially decoded identity is not a weaker
@@ -784,6 +760,30 @@ function decodeParkedIdentity(
   return { attemptId, generation, sequence };
 }
 
+/**
+ * Decode the bundled CLI's verification report into Desktop's outcome type.
+ *
+ * ## Why this is a decoder and not a cast
+ *
+ * It used to be `streamBundled<DesktopVerificationOutcome>(...)`, which is a
+ * type assertion over JSON from ANOTHER PROCESS. Two things were wrong with
+ * that, and the second is worse than the first:
+ *
+ *  1. The two sides do not share a discriminator. The CLI reports
+ *     `{ outcome: ... }` (`traycer-cli/src/host/update-verify.ts`); Desktop
+ *     reads `{ kind: ... }`. So the asserted field was **always `undefined`**
+ *     and no arm ever matched.
+ *  2. Even had they agreed, the bytes come from a separately-versioned binary.
+ *     A mixed-version CLI can emit a shape this build has never seen, and an
+ *     assertion cannot notice. Desktop bundles the CLI *binary*, not its
+ *     source, so the type genuinely cannot be shared - decoding is the correct
+ *     architecture here, not a workaround for the rename.
+ *
+ * Total by construction: anything unrecognized becomes `indeterminate`, never
+ * a terminal verdict. An unreadable answer is the absence of evidence, and
+ * turning it into `complete` is exactly how a `verifying` record would acquire
+ * a success it never earned.
+ */
 function decodeVerificationReport(value: unknown): DesktopVerificationOutcome {
   if (value === null || typeof value !== "object") {
     return {
@@ -1430,28 +1430,25 @@ export class HostController {
     readiness: Extract<HostReadinessResult, { readonly ready: true }>,
   ): Promise<void> {
     if (expectedInstallGeneration === null) return;
-    let outcome: StampRuntimeResultShape;
-    try {
-      outcome = parseStampRuntimeResult(
-        await this.runBundled<unknown>([
-          "host",
-          "stamp-runtime",
-          "--expected-install-generation",
-          expectedInstallGeneration,
-          "--observed-pid",
-          String(readiness.pid),
-          "--observed-started-at",
-          readiness.startedAt,
-          "--observed-runtime-version",
-          readiness.version,
-        ]),
-      );
-    } catch (err) {
-      // Preserve a typed contender refusal for the caller's central mutation
-      // classifier. Wrapping it in `Error` used to collapse an active update
-      // into a generic activation failure and advertise the wrong recovery.
-      throw err;
-    }
+    // No try/catch here on purpose: a typed contender refusal propagates
+    // unchanged so the caller's central mutation classifier keeps the
+    // attach/yield guidance. Wrapping it in `Error` used to collapse an
+    // active update into a generic activation failure and advertise the
+    // wrong recovery.
+    const outcome = parseStampRuntimeResult(
+      await this.runBundled<unknown>([
+        "host",
+        "stamp-runtime",
+        "--expected-install-generation",
+        expectedInstallGeneration,
+        "--observed-pid",
+        String(readiness.pid),
+        "--observed-started-at",
+        readiness.startedAt,
+        "--observed-runtime-version",
+        readiness.version,
+      ]),
+    );
     if (
       outcome.outcome === "stamped" ||
       (outcome.outcome === "superseded" &&
@@ -2301,13 +2298,17 @@ export class HostController {
         };
       },
     );
-    if (outcome.kind === "busy") {
-      // Desktop-lock contention is transient, not terminal - some other
-      // controller-driven SMAppService section is mid-cycle right now.
-      // Skip this opportunistic refresh silently rather than failing an
-      // otherwise-healthy convergeReady call.
+    if (outcome.kind === "busy" || outcome.kind === "nonterminal-attempt") {
+      // Both are ordinary, transient contention for an OPPORTUNISTIC
+      // refresh: another SMAppService section is mid-cycle, or a durable
+      // update attempt is active and this refresh yielded to it. The host
+      // this call already confirmed reachable needed no work — reporting
+      // `deferred` here would fail an otherwise-healthy convergeReady over
+      // work that was never required. The actionable refusals
+      // (record-fail-closed, capability-not-live) still map below.
       log.debug(
-        "[host-controller] pending LaunchAgent revision deferred - desktop lock busy",
+        "[host-controller] pending LaunchAgent revision deferred - contention",
+        { refusal: outcome.kind },
       );
       return null;
     }
@@ -3381,15 +3382,10 @@ export class HostController {
       );
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
-      if (err instanceof TraycerCliError) {
-        if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome();
-        if (err.code === HOST_UPDATE_ATTEMPT_ACTIVE_CODE) {
-          return this.activeUpdateAttemptOutcome(err.message);
-        }
-        if (err.code === HOST_BUSY_CODE)
-          return this.hostBusyOutcome("retry-with-force");
-      }
-      return { kind: "failed", message: describeError(err) };
+      // One classifier table for every Desktop-owned CLI mutation route — an
+      // inline copy of its three branches is the drift the central table
+      // exists to prevent.
+      return this.classifyMutationSubprocessError(err, "retry-with-force");
     }
     const result = parseServiceStartResult(raw);
     try {
@@ -4233,7 +4229,18 @@ export class HostController {
         // Returns null for every state that is not a pending packaged-macOS
         // activation, so the sequence below stays byte-identical.
         const continuation = await this.routeForceRestartContinuation(true);
-        if (continuation !== null) return continuation;
+        if (continuation !== null) {
+          // A completed continuation IS a relaunch — verification reported
+          // `complete`, so the host restarted onto the new bytes. It must
+          // satisfy every respawn submitted before it, same rule as the
+          // plain path below; otherwise the queued respawn still sees its
+          // submission generation and force-restarts the host that just
+          // came up, killing the sessions that reconnected to it.
+          if (continuation.kind === "ok" && continuation.value.activated) {
+            this.respawnGeneration += 1;
+          }
+          return continuation;
+        }
         this.hostLifecycle.notifyRespawning();
         const prePid =
           (await readRunningHostIdentity(this.layout))?.pid ?? null;

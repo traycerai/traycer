@@ -523,6 +523,18 @@ async function retireLegacyLabelRegistrations(
     revalidateBeforeMutation,
   );
   if (unregistered === null) return false;
+  // `false` is a clear that THREW, not a clear that found nothing — the
+  // legacy record can still be registered and start the host under the old
+  // label, which is the competing-registration state this retirement exists
+  // to prevent. Claiming "retired" over it was the same lie the manifest
+  // comment below the uninstall path calls out.
+  if (!unregistered) {
+    log.warn(
+      "[host-login-item] legacy-label SMAppService clear failed - parking the retirement",
+      { serviceName: LEGACY_HOST_SERVICE_NAME },
+    );
+    return false;
+  }
   log.info("[host-login-item] retired legacy-label SMAppService registration", {
     serviceName: LEGACY_HOST_SERVICE_NAME,
     unregistered,
@@ -824,16 +836,27 @@ async function retireCompetingCliRegistrationUnserialized(
     );
     return "agent-possibly-wedged";
   }
-  if (
-    revalidateBeforeRemoval !== null &&
-    !(await mutationAllowed(revalidateBeforeRemoval))
-  ) {
-    return null;
-  }
+  // No pre-guard here: `removeCliLabelManifest` revalidates at its own rm
+  // edge (the probe before it is read-only), so a second copy of the same
+  // admission check only invited the two to drift.
   const outcome = await removeCliLabelManifest(revalidateBeforeRemoval);
   if (outcome === "deferred") return null;
   if (outcome === "absent") return "nothing-to-retire";
   if (outcome === "failed") return "retire-failed";
+  // The same proof the register and uninstall paths demand: `rm(force)`
+  // cannot tell "removed it" from "there was nothing there", and a manifest
+  // recreated underneath us (a concurrent CLI install) must not be reported
+  // `retired` — relapse-possible is exactly what `retire-failed` means.
+  const after = await probeCliLabelManifest(
+    userLaunchAgentPlistPath(CLI_HOST_LABEL),
+  );
+  if (after.kind !== "absent") {
+    log.warn(
+      "[host-login-item] CLI LaunchAgent manifest was not provably absent after the launch repair",
+      { probe: after.kind },
+    );
+    return "retire-failed";
+  }
   log.info(
     "[host-login-item] retired competing CLI registration (dual-registration repair)",
   );
@@ -972,23 +995,54 @@ async function unregisterHostLoginItemUnserialized(
     parkRegistrationAfterAuthorityLoss("legacy uninstall bootout");
     return false;
   }
-  const cleared = await setLoginItemSettingsWithGuard(
-    false,
-    HOST_SERVICE_NAME,
-    revalidateBeforeMutation,
-  );
-  if (cleared === null) {
-    parkRegistrationAfterAuthorityLoss("primary uninstall clear");
-    return false;
+  // A `not-found`/`not-supported` label has no SMAppService record to clear
+  // (or no API to clear it with) — that leg's work is already done. The
+  // bootouts above and the manifest retirement below still run for it; the
+  // clear is the ONLY step those statuses make meaningless.
+  let cleared = true;
+  if (statusHasClearableRegistration(priorRegistration.primary)) {
+    const clearedOutcome = await setLoginItemSettingsWithGuard(
+      false,
+      HOST_SERVICE_NAME,
+      revalidateBeforeMutation,
+    );
+    if (clearedOutcome === null) {
+      parkRegistrationAfterAuthorityLoss("primary uninstall clear");
+      return false;
+    }
+    // `false` means `setLoginItemSettings` THREW: the SMAppService/BTM
+    // registration can still be present, and it is the PRIMARY one — the
+    // exact "host comes back at next login" outcome the manifest comment
+    // below calls a lie to report success over. Not an authority loss (no
+    // park), but a failed teardown all the same.
+    if (!clearedOutcome) {
+      log.warn(
+        "[host-login-item] primary SMAppService clear failed - teardown is not complete",
+        { serviceName: HOST_SERVICE_NAME },
+      );
+      return false;
+    }
+    cleared = clearedOutcome;
   }
-  const clearedLegacy = await setLoginItemSettingsWithGuard(
-    false,
-    LEGACY_HOST_SERVICE_NAME,
-    revalidateBeforeMutation,
-  );
-  if (clearedLegacy === null) {
-    parkRegistrationAfterAuthorityLoss("legacy uninstall clear");
-    return false;
+  let clearedLegacy = true;
+  if (statusHasClearableRegistration(priorRegistration.legacy)) {
+    const clearedLegacyOutcome = await setLoginItemSettingsWithGuard(
+      false,
+      LEGACY_HOST_SERVICE_NAME,
+      revalidateBeforeMutation,
+    );
+    if (clearedLegacyOutcome === null) {
+      parkRegistrationAfterAuthorityLoss("legacy uninstall clear");
+      return false;
+    }
+    if (!clearedLegacyOutcome) {
+      log.warn(
+        "[host-login-item] legacy SMAppService clear failed - teardown is not complete",
+        { serviceName: LEGACY_HOST_SERVICE_NAME },
+      );
+      return false;
+    }
+    clearedLegacy = clearedLegacyOutcome;
   }
   // The raw `RunAtLoad` manifest, retired with the same proof register
   // demands. Booting out the jobs and clearing the SMAppService records does
@@ -1083,24 +1137,40 @@ async function canBeginDestructiveRegistration(
  * user who had toggled the login item off could never remove it — the
  * registration outlived the uninstall.
  *
- * Every other refusal is preserved deliberately: `not-found` and
- * `not-supported` mean there is no registration to act on or no API to act
- * with, and an `unreadable` legacy manifest still disqualifies because we
- * cannot retire what we cannot see.
+ * `not-found` and `not-supported` are removable too, for the same "nothing to
+ * restore" reason: both mean the SMAppService leg for that label has nothing
+ * to clear — but the raw `RunAtLoad` manifest is a separate artifact that
+ * those statuses say nothing about, and refusing here left it on disk to
+ * start the host at the next login after an explicit deregistration. The
+ * clear legs skip those statuses instead (see the caller); only `null` (a
+ * status we could not read) and an `unreadable` legacy manifest still refuse,
+ * because we cannot retire what we cannot see.
  */
 async function canBeginRegistrationRemoval(
   snapshot: LoginItemRegistrationSnapshot,
 ): Promise<boolean> {
   // `null` (no readable status) stays refused, exactly as before.
   const removable = (status: HostLoginItemStatus | null): boolean =>
-    status === "not-registered" ||
-    status === "enabled" ||
-    status === "requires-approval";
+    status !== null;
   return (
     removable(snapshot.primary) &&
     removable(snapshot.legacy) &&
     snapshot.legacyManifest !== "unreadable"
   );
+}
+
+/**
+ * Whether the SMAppService CLEAR leg has anything to act on for a label in
+ * `status`. `not-found` has no registration to clear and `not-supported` has
+ * no API to clear it with — skipping is that leg's success, not a shortcut:
+ * the bootouts and the manifest retirement still run for both.
+ */
+function statusHasClearableRegistration(
+  status: HostLoginItemStatus | null,
+): boolean {
+  // `null` cannot reach the clear legs (the entry guard refuses it); if it
+  // ever did, attempting the clear is the conservative answer.
+  return status !== "not-found" && status !== "not-supported";
 }
 
 function parkRegistrationAfterAuthorityLoss(edge: string): void {

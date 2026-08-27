@@ -347,6 +347,35 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(existsSync(markerPath())).toBe(false);
   });
 
+  it("on an active host-update attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE), writes no marker, never runs the swap, and does not throw", async () => {
+    // Mirrors the cli-lock-timeout test above: the catch in
+    // `cli-finalize-upgrade.ts` maps BOTH `CLI_LOCK_BUSY` and
+    // `HOST_UPDATE_ATTEMPT_ACTIVE` to the same deferred "lock-timeout"
+    // outcome (exit 0). `withCliLock` is the seam this suite already uses
+    // to inject a CliError from inside the contender's critical section -
+    // the outer `withCliUpdateContender` unwraps whichever CliError
+    // propagates out of it identically regardless of which layer actually
+    // raised it, so reusing this seam with the other code is a faithful
+    // regression test for the new mapping.
+    const { CLI_ERROR_CODES: freshCodes, cliError: freshCliError } =
+      await import("../../runner/errors");
+    mocks.lockThrows = freshCliError({
+      code: freshCodes.HOST_UPDATE_ATTEMPT_ACTIVE,
+      message: "a host update attempt is in progress",
+      details: null,
+      exitCode: 75,
+    });
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    const result = await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.exitCode).toBe(0);
+    expect(mocks.controllerCalls).toEqual([]);
+    expect(existsSync(markerPath())).toBe(false);
+  });
+
   it("propagates a non-lock error from withCliLock instead of swallowing it", async () => {
     mocks.lockThrows = new Error("unexpected disk failure");
 

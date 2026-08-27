@@ -38,6 +38,7 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { ServiceMutationAuthorityError } from "../../mutation-authority";
 
 const execFileAsync = promisify(execFile);
 
@@ -202,6 +203,35 @@ describe("macOS service lifecycle", () => {
     expect(
       calls.some((call) => call.args[1]?.endsWith(`/${agentLabelId}`)),
     ).toBe(true);
+  });
+
+  // Change 9 (PR #1480 review round 4): the desktop-agent probe's `.catch`
+  // used to fold EVERY launchctl failure into `not-loaded`, including a
+  // revoked mutation capability - which would route adoption to the CLI's
+  // own logical label and publish a grant the Desktop supervisor rejects.
+  // The probe is advisory only for genuine launchctl faults (a hung/
+  // unspawnable process, "not found"); an authority loss must propagate so
+  // the caller parks/aborts instead of silently mis-adopting.
+  it("propagates a service-mutation-authority loss from the desktop-agent probe instead of reading it as not-loaded", async () => {
+    const agentLabelId = smAppServiceAgentLabelId(label);
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (args[0] !== "print") {
+        return buildSuccessResult();
+      }
+      const target = args[1] ?? "";
+      if (target.endsWith(`/${agentLabelId}`)) {
+        throw authorityError;
+      }
+      return { stdout: "", stderr: "not loaded", exitCode: 1 };
+    };
+
+    const controller = createMacosController(runner);
+    await expect(controller.hostStartAdoptionLabel(label)).rejects.toBe(
+      authorityError,
+    );
   });
 
   // Without this key, background-task management names the login item

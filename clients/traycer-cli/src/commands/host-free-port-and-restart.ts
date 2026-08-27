@@ -4,6 +4,7 @@ import {
   requireCliUpdateMutationCapability,
   withCliUpdateContenderContext,
 } from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import {
   restartHostServiceWithAttempt,
   stopHostServiceWithAttempt,
@@ -50,6 +51,16 @@ export function buildHostFreePortAndRestartCommand(
       });
     }
     const label = serviceLabelFor(ctx.runtime.environment);
+    // ONE options value for acquisition and every in-segment revalidation:
+    // separate literals that must stay identical are how admission policies
+    // drift.
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "host-free-port-and-restart",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "recovery-maintenance",
+    };
     const {
       killed,
       killError,
@@ -57,13 +68,7 @@ export function buildHostFreePortAndRestartCommand(
       deferredForParkedActivation,
       attestation,
     } = await withCliUpdateContenderContext(
-      {
-        environment: ctx.runtime.environment,
-        reason: "host-free-port-and-restart",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-        admission: "recovery-maintenance",
-      },
+      contenderOptions,
       async (capability, _cliLock, contenderContext) => {
         let killedInner = false;
         let killErrorInner: string | null = null;
@@ -81,24 +86,11 @@ export function buildHostFreePortAndRestartCommand(
             port: args.port,
             commandName: "host free-port-and-restart",
             verifyMutationCapability: () =>
-              requireCliUpdateMutationCapability(capability, {
-                environment: ctx.runtime.environment,
-                reason: "host-free-port-and-restart",
-                waitMs: 30_000,
-                pollIntervalMs: 100,
-                admission: "recovery-maintenance",
-              }),
+              requireCliUpdateMutationCapability(capability, contenderOptions),
           });
           killedInner = result.killed;
           killErrorInner = result.killError;
         }
-        const contenderOptions = {
-          environment: ctx.runtime.environment,
-          reason: "host-free-port-and-restart",
-          waitMs: 30_000,
-          pollIntervalMs: 100,
-          admission: "recovery-maintenance" as const,
-        };
         const controller = createServiceController();
         const restart = contenderContext.recoveryAction === "restart-current";
         // Classified under the same lock acquisition that guards the action
@@ -155,16 +147,18 @@ export function buildHostFreePortAndRestartCommand(
     const noRelaunch = deferredForParkedActivation
       ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation`
       : `stopped '${label.id}' without activating parked update bytes`;
+    // The kill warning composes with whichever service action actually ran —
+    // a failed SIGTERM on a stop-only or deferred outcome must not claim a
+    // restart was requested.
+    const action = restarted
+      ? `restart requested for service '${label.id}'`
+      : noRelaunch;
     const human =
       killError !== null
-        ? `restart requested; warning: failed to terminate pid ${args.pid ?? "?"}: ${killError}`
+        ? `${action}; warning: failed to terminate pid ${args.pid ?? "?"}: ${killError}`
         : args.pid !== null
-          ? restarted
-            ? `terminated pid ${args.pid}; restart requested for service '${label.id}'`
-            : `terminated pid ${args.pid}; ${noRelaunch}`
-          : restarted
-            ? `restart requested for service '${label.id}'`
-            : noRelaunch;
+          ? `terminated pid ${args.pid}; ${action}`
+          : action;
     return {
       data: {
         port: args.port,

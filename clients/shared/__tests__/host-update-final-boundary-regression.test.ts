@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  expectVerifierBeforeEvery,
+  sliceFrom,
+} from "./source-scan-test-support";
 
 const SHARED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI_ROOT = join(SHARED_ROOT, "..", "traycer-cli", "src");
@@ -9,40 +13,6 @@ const DESKTOP_ROOT = join(SHARED_ROOT, "..", "desktop", "src", "electron-main");
 
 async function source(path: string): Promise<string> {
   return readFile(path, "utf8");
-}
-
-function sliceFrom(sourceText: string, start: string, end: string): string {
-  const startAt = sourceText.indexOf(start);
-  const endAt = sourceText.indexOf(end, startAt + start.length);
-  expect(startAt, `missing source marker: ${start}`).toBeGreaterThan(-1);
-  expect(endAt, `missing source marker: ${end}`).toBeGreaterThan(startAt);
-  return sourceText.slice(startAt, endAt);
-}
-
-function offsets(sourceText: string, pattern: RegExp): number[] {
-  return Array.from(sourceText.matchAll(new RegExp(pattern.source, "g"))).map(
-    (match) => match.index ?? -1,
-  );
-}
-
-function expectVerifierBeforeEvery(
-  sourceText: string,
-  actuator: RegExp,
-  verifier: RegExp,
-): void {
-  const verifierOffsets = offsets(sourceText, verifier);
-  let previousActuatorOffset = -1;
-  for (const actuatorOffset of offsets(sourceText, actuator)) {
-    expect(
-      verifierOffsets.some(
-        (verifierOffset) =>
-          verifierOffset > previousActuatorOffset &&
-          verifierOffset < actuatorOffset,
-      ),
-      `missing verifier before actuator at offset ${actuatorOffset}`,
-    ).toBe(true);
-    previousActuatorOffset = actuatorOffset;
-  }
 }
 
 describe("host update final actuator regression boundaries", () => {
@@ -73,10 +43,18 @@ describe("host update final actuator regression boundaries", () => {
     const downloadStage = await source(
       join(CLI_ROOT, "installer", "download-stage.ts"),
     );
+    // `replaceStagedDirWithAttempt` is a thin wrapper (contender options in,
+    // one delegated call out) - the actual renames and the aside invalidation
+    // it exists to guard live in `replaceStagedDir`, which it calls. The
+    // non-empty-actuator-offsets guard in `expectVerifierBeforeEvery` is what
+    // caught this suite pointing at the wrong function: the wrapper's body
+    // contains no `renameWithRetry(`/`invalidateAsideDir(` calls at all, so
+    // the old (pre-guard) version of this test passed vacuously on zero
+    // matches.
     const promotion = sliceFrom(
       downloadStage,
-      "async function replaceStagedDirWithAttempt(",
-      "// Phase 0 - brief lock",
+      "async function replaceStagedDir(",
+      "// The one shape every stage-maintenance leg shares.",
     );
 
     expect(promotion).toContain("verifyMutationCapability");
@@ -161,17 +139,43 @@ describe("host update final actuator regression boundaries", () => {
     );
   });
 
-  it("keeps active-attempt subprocess errors distinct from E_HOST_BUSY", async () => {
+  it("keeps active-attempt subprocess errors distinct from E_HOST_BUSY, inside the one classifier every mutation route shares", async () => {
     const controller = await source(
       join(DESKTOP_ROOT, "host", "host-controller.ts"),
     );
     expect(controller).toContain('"E_HOST_UPDATE_ATTEMPT_ACTIVE"');
-    expect(controller).toContain("attemptId");
-    expect(controller).toContain("disposition");
-    const activeCode = controller.indexOf('"E_HOST_UPDATE_ATTEMPT_ACTIVE"');
-    const hostBusyCode = controller.indexOf('"E_HOST_BUSY"');
-    expect(activeCode).toBeGreaterThan(-1);
-    expect(hostBusyCode).toBeGreaterThan(-1);
     expect(controller).toContain("HOST_UPDATE_ATTEMPT_ACTIVE_CODE");
+
+    // Narrowed to the classifier's OWN body (rather than whole-file
+    // `toContain` checks, which pass on a match anywhere in the file and
+    // prove nothing about this specific function): the active-attempt code
+    // must be classified BEFORE the generic host-busy code, so a durable
+    // coordination refusal is never mistaken for an ordinary workload-busy
+    // condition a Force action could retry.
+    const classifier = sliceFrom(
+      controller,
+      "private classifyMutationSubprocessError<",
+      "// ---- stageLatest",
+    );
+    expect(classifier).toContain("HOST_UPDATE_ATTEMPT_ACTIVE_CODE");
+    expect(classifier).toContain("HOST_BUSY_CODE");
+    expect(classifier.indexOf("HOST_UPDATE_ATTEMPT_ACTIVE_CODE")).toBeLessThan(
+      classifier.indexOf("HOST_BUSY_CODE"),
+    );
+    expect(classifier).toContain("activeUpdateAttemptOutcome");
+    expect(classifier).toContain("hostBusyOutcome");
+
+    // The `host restart` catch (inside `runCliRecoveryServiceCycle`, which
+    // `respawn` drives) must route through this one classifier rather than
+    // re-inlining its own CLI_LOCK_BUSY/HOST_UPDATE_ATTEMPT_ACTIVE/HOST_BUSY
+    // branches - the shape a prior review round removed.
+    const recoveryCycle = sliceFrom(
+      controller,
+      "private async runCliRecoveryServiceCycle(",
+      "const result = parseServiceStartResult(raw);",
+    );
+    expect(recoveryCycle).toContain(
+      'classifyMutationSubprocessError(err, "retry-with-force")',
+    );
   });
 });

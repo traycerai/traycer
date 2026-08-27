@@ -69,6 +69,7 @@ function sampleRecord(executablePath: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1234,
     executablePath,
+    executableSha256: null,
   };
 }
 

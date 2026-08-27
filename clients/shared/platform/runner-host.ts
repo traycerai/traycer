@@ -29,6 +29,10 @@ import type {
   HostGetInstallationInfoResponse,
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -1627,8 +1631,9 @@ export interface LocalAttemptFacts {
   readonly generation: number;
   readonly sequence: number;
   readonly targetVersion: string;
-  readonly phase: string;
-  readonly continuation: string | null;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
 }
 

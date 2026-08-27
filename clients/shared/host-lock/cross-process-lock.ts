@@ -174,6 +174,18 @@ function lockReadPlatform(): LockReadPlatform {
   return lockReadPlatformForTest ?? defaultLockReadPlatform;
 }
 
+// SUPPORTED-FILESYSTEM POLICY: this flagless-fallback identity proof only
+// runs where O_NOFOLLOW/O_NONBLOCK are unavailable (Node on Windows). There
+// the lock lives under the user's profile, and the filesystems that can host
+// it on supported Windows (NTFS/ReFS) report non-zero volume serials and
+// 64-bit file IDs through libuv's handle-based stat. A filesystem that
+// reports zero (FAT-family media, some network redirectors) is deliberately
+// REJECTED — every read degrades to `read-error`, which the break/release
+// machinery already treats as busy/indeterminate. That direction is safe
+// (locks cannot be stolen there, only not broken) and intentional: an
+// identity-less filesystem cannot carry the TOCTOU proof this fallback
+// exists to provide, and weakening it to a regular-file check would let a
+// swapped FIFO/symlink through on exactly the platforms that need the guard.
 function samePositiveFileIdentity(
   a: Pick<Stats, "ino" | "dev">,
   b: Pick<Stats, "ino" | "dev">,
@@ -316,10 +328,15 @@ function parseLockMetadata(raw: string): LockMetadata | null {
       ? obj.processStartIdentity
       : null,
   };
+  // `> 1`, not `> 0`: probing group 1 runs `process.kill(-1, 0)`, which
+  // POSIX defines as "signal every process the caller may signal" — it
+  // answers "does anything at all run", never "is THIS group alive", so a
+  // recorded group of 1 would classify any machine's holder as live forever.
+  // No supervised actuator can legitimately lead process group 1 (init's).
   const supervisedProcessGroupId =
     typeof obj.supervisedProcessGroupId === "number" &&
     Number.isSafeInteger(obj.supervisedProcessGroupId) &&
-    obj.supervisedProcessGroupId > 0
+    obj.supervisedProcessGroupId > 1
       ? obj.supervisedProcessGroupId
       : undefined;
   return {
@@ -656,12 +673,24 @@ export async function rewriteLockLivenessIfToken(
     // temp + rename makes publication itself atomic to every reader.
     const temporaryPath = `${path}.${randomUUID()}.liveness`;
     try {
-      await writeFile(temporaryPath, JSON.stringify(next, null, 2), {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
+      const temporary = await open(temporaryPath, "wx", 0o600);
+      try {
+        await temporary.writeFile(JSON.stringify(next, null, 2), "utf8");
+        // The rename swaps directory entries atomically, but only a flushed
+        // temp guarantees the entry resolves to full content after a power
+        // loss — a zero-length canonical lock is exactly the empty record
+        // `acquireLockAtPath` age-breaks after its grace window, while the
+        // supervised actuator may still be running.
+        await temporary.sync();
+      } finally {
+        await temporary.close().catch(() => undefined);
+      }
       await rename(temporaryPath, path);
+    } catch {
+      // A failed republication is a refusal, not an exception: every other
+      // denial in this function returns false, and callers treat a rebind as
+      // deniable rather than wrapping it in try/catch.
+      return false;
     } finally {
       await unlink(temporaryPath).catch(() => undefined);
     }
@@ -701,6 +730,10 @@ function probeProcessGroupLiveness(
   processGroupId: number,
 ): "alive" | "dead" | "indeterminate" {
   if (process.platform === "win32") return "indeterminate";
+  // Parse already refuses group ids ≤ 1, but this probe is the last line:
+  // `process.kill(-1, 0)` asks "can I signal ANY process", which is true on
+  // every running machine and would report an eternal holder.
+  if (processGroupId <= 1) return "indeterminate";
   try {
     // A negative PID probes the POSIX process group. Its leader may already
     // have exited while a platform child continues the irreversible edge.

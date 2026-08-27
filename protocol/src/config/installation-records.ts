@@ -41,14 +41,16 @@ const tolerantNullableStringSchema = z.preprocess(
 // shipped.  Keep older records readable for their existing lifecycle paths,
 // but normalize a missing or malformed attestation to `null` so recovery can
 // deliberately refuse to treat it as proof of placed bytes.
+//
+// No `.optional()` on the inner schema: the preprocess step always hands it a
+// matching string or `null`, so `undefined` could never reach it — an
+// optional arm would only widen the inferred record types with an
+// `undefined` no reader or writer produces.
+const SHA256_HEX = /^[a-f0-9]{64}$/;
 const tolerantOptionalSha256Schema = z.preprocess(
   (value) =>
-    typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null,
-  z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .nullable()
-    .optional(),
+    typeof value === "string" && SHA256_HEX.test(value) ? value : null,
+  z.string().regex(SHA256_HEX).nullable(),
 );
 
 /** The installed host record. Missing legacy `installId`/`runtimeVersion` read as null. */

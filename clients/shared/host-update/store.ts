@@ -884,7 +884,17 @@ async function commitAttemptMutationInternal(options: {
           canonical: await readRecordAtPath(lease.recordPath),
         };
       }
-      throw err;
+      // Every other throw out of `writeRecordAtomic` (mkdir, temp open/write/
+      // fsync, the rename itself) happened BEFORE a durable rename could
+      // land, so the canonical record is unchanged — but the callers of
+      // `deps.commit` await an outcome and switch on `kind`; a raw rejection
+      // here would bypass their activation-result handling entirely. Fold it
+      // into the same conservative arm: do not proceed, evidence attached.
+      return {
+        kind: "durability-unverified",
+        cause: `record-write-failed:${errorCode(err) ?? String(err)}`,
+        canonical: await readRecordAtPath(lease.recordPath),
+      };
     }
     if (written.kind === "refused") {
       return { kind: "rejected", reason: "record-path-refused", canonical };
