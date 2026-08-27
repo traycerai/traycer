@@ -751,6 +751,65 @@ describe("chat session viewport hydration: review fixes", () => {
     }
   });
 
+  it("restreams when the SOLE skeleton chunk is the one that is lost", () => {
+    // The hole an earlier receipt gate left, and the reason the watchdog now
+    // reads the snapshot's totals instead. That gate only monitored a stream
+    // which had delivered something, so it saw a stream that stopped part way
+    // and was blind to one that never started - losing the whole skeleton was
+    // invisible while losing its last frame was caught.
+    //
+    // "No chunk" is unambiguous evidence of loss rather than of a chat with
+    // nothing to send: `chunkRowSkeleton` yields one empty final chunk for an
+    // EMPTY skeleton precisely so the two are distinguishable, and the host
+    // streams it behind every bootstrap snapshot.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      const before = harness.resnapshotCount();
+
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS - 1);
+      expect(harness.resnapshotCount()).toBe(before);
+
+      vi.advanceTimersByTime(2);
+      expect(harness.resnapshotCount()).toBe(before + 1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("restreams when the summary stream's first chunk never arrives", () => {
+    // The same hole on the other stream, and it did not need the summaries to
+    // be unlucky on their own: under a receipt gate the summaries were watched
+    // only once a summary chunk had landed, so a skeleton that completed
+    // perfectly left a summary stream that lost its opening chunk unmonitored.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      const base = snapshot({
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail", 20)],
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...base,
+        snapshot: { ...base.snapshot, accumulatedFileChangeCount: 3 },
+      });
+      // The skeleton is healthy and complete, so it can indict nothing. The
+      // only thing outstanding is the file list the snapshot promised.
+      harness.callbacks().onSkeletonChunk(skeletonChunk(0, 40, true));
+      const before = harness.resnapshotCount();
+
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
+
+      expect(harness.resnapshotCount()).toBe(before + 1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("a legacy snapshot after a windowed one resets the line", () => {
     const harness = createViewportHarness();
     try {

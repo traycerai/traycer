@@ -354,3 +354,92 @@ describe("chat transcript row height memory", () => {
     ).toBe(UNCALIBRATED);
   });
 });
+
+describe("row height memory across a layout width change", () => {
+  it("forgets a height measured at a different width", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
+    memory.observeSkeleton([row]);
+    memory.observeWidth(600);
+    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+
+    expect(memory.placeholderHeight(row)).toBe(4100);
+
+    memory.observeWidth(1200);
+
+    // Not re-scaled - discarded. A height measured in a narrow tile is not a
+    // better answer than the estimate for the same row in a wide one, so the
+    // fallback is the no-evidence cap rather than the stale exact number.
+    expect(memory.placeholderHeight(row)).toBe(UNCALIBRATED);
+  });
+
+  it("drops the calibration together with the heights it was fitted from", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const measured = assistantRows(4);
+    const unseen = entry({
+      rowId: "later",
+      role: "assistant",
+      byteLength: 8000,
+    });
+    memory.observeSkeleton([...measured, unseen]);
+    memory.observeWidth(600);
+    measured.forEach((row, ordinal) => {
+      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+    });
+
+    expect(memory.placeholderHeight(unseen)).toBe(561);
+
+    memory.observeWidth(1200);
+
+    // The pooled factor is `sum(measured) / sum(estimated)` over rows measured
+    // at 600px. Keeping it would carry that geometry into every placeholder
+    // drawn before the first row is remeasured - which is precisely the set of
+    // rows this module exists to place.
+    expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
+  });
+
+  it("adopts the first width without discarding what was measured before it", () => {
+    // LegendList measures inside its own layout effect, which runs BEFORE the
+    // one that reports width, so the opening commit's heights are always
+    // recorded against no baseline. Treating that first report as a change
+    // would throw away the tail calibration - the only evidence available
+    // before the reader has scrolled anywhere.
+    const memory = createChatTranscriptRowHeightMemory();
+    const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
+    memory.observeSkeleton([row]);
+    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+
+    memory.observeWidth(600);
+
+    expect(memory.placeholderHeight(row)).toBe(4100);
+  });
+
+  it("keeps its memory when the same width is reported again", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
+    memory.observeSkeleton([row]);
+    memory.observeWidth(600);
+    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+
+    // A ResizeObserver fires for height changes too, and the transcript's
+    // height changes on every hydration.
+    memory.observeWidth(600);
+
+    expect(memory.placeholderHeight(row)).toBe(4100);
+  });
+
+  it("ignores a width from a container that has not been laid out", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
+    memory.observeSkeleton([row]);
+    memory.observeWidth(600);
+    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+
+    // A hidden tab or an unmounted tile measures 0 wide. Adopting that as the
+    // baseline would discard the whole memory, and then discard it again when
+    // the real width came back.
+    memory.observeWidth(0);
+
+    expect(memory.placeholderHeight(row)).toBe(4100);
+  });
+});

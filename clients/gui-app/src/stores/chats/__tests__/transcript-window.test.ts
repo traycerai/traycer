@@ -18,6 +18,7 @@ import {
   evictTranscriptWindowToBudget,
   holdsEveryRecordFrom,
   hydratedRecords,
+  mapWindowMessages,
   planTranscriptHydration,
   settleWindowBytes,
   streamWindowMessage,
@@ -1596,6 +1597,147 @@ describe("the inline tail's row context", () => {
       },
     });
     expect(window.spans).toHaveLength(0);
+  });
+});
+
+describe("what a span charges the byte budget", () => {
+  const CONTEXT = {
+    "row-0": { legacyRowAnchorAt: 1234 },
+    "row-1": { legacyRowAnchorAt: 5678 },
+  };
+
+  function hydrated(rowContext: ChatRangeResponse["rowContext"]) {
+    return applyRangeResponse(windowWithSkeleton(10), {
+      ...rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+      rowContext,
+    });
+  }
+
+  it("charges the row context it retains, not only the records", () => {
+    const bare = hydrated({});
+    const withContext = hydrated(CONTEXT);
+
+    // Same rows, same records: the entire difference is context the span holds
+    // for exactly as long as it holds them, since eviction takes a span whole.
+    expect(withContext.hydratedBytes).toBeGreaterThan(bare.hydratedBytes);
+    expect(withContext.spans[0].contextBytes).toBeGreaterThan(0);
+    // Sparse by construction, so the common span pays nothing for the empty
+    // map rather than a constant that describes none of what it holds.
+    expect(bare.spans[0].contextBytes).toBe(0);
+  });
+
+  it("keeps the context charge when a streaming row settles", () => {
+    // `settleWindowBytes` re-measures the RECORDS of a span holding an
+    // unsettled row. Re-deriving the whole charge from records there would
+    // un-charge the context one turn after it was charged - the same defect as
+    // never charging it, reached by a different door.
+    //
+    // Asserted as the GAP between two otherwise identical windows, because the
+    // tempting single-window forms are vacuous: `bytes` still exceeds
+    // `bytes - contextBytes` when the context was never added, and the
+    // `contextBytes` field itself survives any re-measure that spreads a span.
+    const grow = (message: Message): Message =>
+      messageWithText(message, "streamed body ".repeat(50));
+    const withContext = settleWindowBytes(
+      streamWindowMessage(hydrated(CONTEXT), "m-0", grow).window,
+    );
+    const bare = settleWindowBytes(
+      streamWindowMessage(hydrated({}), "m-0", grow).window,
+    );
+
+    expect(withContext.spans[0].contextBytes).toBeGreaterThan(0);
+    expect(withContext.hydratedBytes - bare.hydratedBytes).toBe(
+      withContext.spans[0].contextBytes,
+    );
+  });
+
+  it("keeps the context charge when records are remapped", () => {
+    const rewrite = (message: Message): Message =>
+      messageWithText(message, "a rewritten body");
+    const withContext = mapWindowMessages(hydrated(CONTEXT), rewrite);
+    const bare = mapWindowMessages(hydrated({}), rewrite);
+
+    // Same gap, same reason: a remap rewrites records and leaves the context
+    // map untouched, so the difference after it must still be exactly the
+    // context - not merely "more than zero".
+    expect(withContext.spans[0].contextBytes).toBeGreaterThan(0);
+    expect(withContext.hydratedBytes - bare.hydratedBytes).toBe(
+      withContext.spans[0].contextBytes,
+    );
+  });
+
+  it("measures a merged span's context once rather than summing its members", () => {
+    // The merge DEDUPES the context map exactly as it dedupes records, so a
+    // charge summed from the members would bill a re-served row twice and
+    // leave the window reporting bytes it does not hold.
+    const first = hydrated(CONTEXT);
+    const reserved = applyRangeResponse(first, {
+      ...rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+      rowContext: CONTEXT,
+    });
+
+    expect(reserved.spans).toHaveLength(1);
+    expect(reserved.spans[0].contextBytes).toBe(first.spans[0].contextBytes);
+    // And the merged span's own charge still INCLUDES that context. Re-serving
+    // the identical rows must leave the figure exactly where it was: lower
+    // means the merge dropped the context, higher means it billed it twice.
+    expect(reserved.spans[0].bytes).toBe(first.spans[0].bytes);
+    expect(reserved.spans[0].bytes).toBeGreaterThan(
+      reserved.spans[0].contextBytes,
+    );
+  });
+
+  it("charges the context that rides the snapshot tail", () => {
+    const bare = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 2,
+      tail: {
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+        events: [],
+      },
+    });
+    const withContext = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 2,
+      tail: {
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+        events: [],
+        rowContext: CONTEXT,
+      },
+    });
+
+    // The tail is the OTHER way a span is built, and it carries context for
+    // the same rows a range would.
+    expect(withContext.hydratedBytes).toBeGreaterThan(bare.hydratedBytes);
+  });
+
+  it("evicts a span whose context is what put the window over budget", () => {
+    // The point of charging it. A window whose records fit and whose retained
+    // context does not must still evict, or the bound is a number that agrees
+    // with itself and not with memory.
+    const seeded = hydrated(CONTEXT);
+    const bare = hydrated({});
+    const budget = bare.hydratedBytes;
+
+    expect(seeded.hydratedBytes).toBeGreaterThan(budget);
+
+    const evicted = evictTranscriptWindowToBudget(seeded, budget, null);
+
+    expect(evicted.spans).toHaveLength(0);
   });
 });
 

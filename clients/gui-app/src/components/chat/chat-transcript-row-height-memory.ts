@@ -78,6 +78,13 @@ import {
  * closer than the byte estimate it replaced, so this deliberately does not
  * carry an invalidation channel for it.
  *
+ * WIDTH is the one staleness that does get a channel, because it fails the
+ * argument that excuses the others: a rewritten body makes one entry a little
+ * wrong, while a resize makes every entry wrong at once and in the same
+ * direction, and the surviving number is no longer "closer than the estimate"
+ * - a height measured in a narrow tile is arbitrarily far from the same row's
+ * height in a wide one. See {@link ChatTranscriptRowHeightMemory.observeWidth}.
+ *
  * Nothing here is React state. Heights are hints consumed at mount, so a
  * changed factor must never re-render a mounted transcript; the next
  * placeholder to mount picks up the better number on its own.
@@ -135,6 +142,31 @@ export interface ChatTranscriptRowHeightMemory {
    */
   observeSkeleton(skeleton: readonly (RowSkeletonEntry | undefined)[]): void;
   /**
+   * Tell the memory how wide the transcript is being laid out, so it can
+   * discard measurements that width has invalidated.
+   *
+   * Every number here is width-dependent: markdown re-wraps, tool cards
+   * reflow, and the pooled scale factor is fitted at one width and says
+   * nothing about another. Nothing else can notice - the memory is created
+   * once per `ChatMessages` mount and outlives any number of tile resizes - so
+   * a height measured in a narrow tile is otherwise served verbatim to a
+   * placeholder standing in for the same row in a wide one, reserving
+   * thousands of pixels too many or too few and jumping when the body lands.
+   *
+   * A change discards everything rather than rescaling it, and the discard is
+   * cheaper than it looks: the rows on screen are being remeasured by the very
+   * resize that cleared them, so they re-enter immediately, and what actually
+   * goes is the off-screen entries whose width no longer applies. A drag
+   * re-fills as fast as it clears, so there is no thrash to trade against.
+   *
+   * The FIRST call only records the width. LegendList measures inside its own
+   * layout effect, which runs BEFORE the effect that reports width, so the
+   * opening commit's measurements land before any width has been observed -
+   * discarding them would throw away the tail calibration that is the only
+   * evidence available before the reader has scrolled anywhere.
+   */
+  observeWidth(width: number): void;
+  /**
    * Record a row's REAL measured height.
    *
    * Only ever called for a HYDRATED row. Feeding a placeholder's own measured
@@ -168,6 +200,12 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
    * here, so a guess may reach it.
    */
   let tallestMeasured = 0;
+  /**
+   * The layout width every number above was measured at, or `null` before any
+   * has been reported. `null` is "no baseline yet", never "zero wide" - the
+   * first report adopts a width rather than invalidating against it.
+   */
+  let layoutWidth: number | null = null;
 
   const sample = (entry: RowSkeletonEntry, remembered: RememberedRow): void => {
     if (remembered.sampledRole !== null) return;
@@ -227,6 +265,28 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
         if (remembered === undefined) continue;
         sample(entry, remembered);
       }
+    },
+
+    observeWidth(width): void {
+      // A zero or non-finite width is a container that has not been laid out -
+      // an unmounted tile, a hidden tab - and adopting it as the baseline would
+      // make the next real width read as a change and discard a full memory.
+      if (!Number.isFinite(width) || width <= 0) return;
+      if (layoutWidth === null) {
+        layoutWidth = width;
+        return;
+      }
+      if (layoutWidth === width) return;
+      layoutWidth = width;
+      // The calibration goes with the heights, not just alongside them: the
+      // pooled factor is `sum(measured) / sum(estimated)` over rows measured at
+      // the OLD width, so keeping it would carry the stale evidence into every
+      // placeholder drawn before the first row is remeasured. `tallestMeasured`
+      // likewise - it is the ceiling those measurements justified.
+      rows.clear();
+      byRole.clear();
+      heightTotal = 0;
+      tallestMeasured = 0;
     },
 
     recordMeasuredHeight({ rowId, ordinal, height }): void {

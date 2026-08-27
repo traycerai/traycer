@@ -62,6 +62,7 @@ function span(fromOrdinal: number, rowIds: readonly string[]): HydratedSpan {
     events: [],
     rowContext: {},
     bytes: rowIds.length * 32,
+    contextBytes: 0,
     touchedAt: 1,
   };
 }

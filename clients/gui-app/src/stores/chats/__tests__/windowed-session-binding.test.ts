@@ -864,6 +864,26 @@ describe("index deltas", () => {
           accumulatedFileChangeCount: 0,
         }),
       );
+      // The skeleton the host streams behind every snapshot. Delivered here
+      // because the completion watchdog reads what the snapshot PROMISED
+      // rather than whether a chunk was seen: a fixture that stops at the
+      // snapshot is not a short healthy chat, it is a chat whose only skeleton
+      // chunk was dropped, and the watchdog is right to restream that.
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 5,
+          fromOrdinal: 0,
+          entries: [
+            { rowId: "row-0", createdAt: 1, role: "user", byteLength: 10 },
+            { rowId: "row-1", createdAt: 2, role: "user", byteLength: 10 },
+          ],
+          isFinal: true,
+        },
+      });
       vi.advanceTimersByTime(120_000);
 
       expect(harness.resnapshotCount()).toBe(1);
@@ -936,6 +956,22 @@ describe("accumulated-change chunks", () => {
 
       // A re-streamed set starts at 0 and must REPLACE, not append - otherwise
       // a reconnect doubles every row the panel shows.
+      //
+      // The snapshot that carries the new epoch comes first, because on the
+      // wire it always does: the host emits these chunks only from
+      // `reconcileWindowedIndex`, which runs inside
+      // `emitWindowedSnapshotToSubscriber` and after the snapshot frame. A
+      // chunk naming an epoch the client has never been told about is
+      // therefore not a re-stream but a straggler, and is dropped as one.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 1,
+        }),
+      );
       harness.callbacks().onAccumulatedChanges({
         kind: "accumulatedChanges",
         hasBinaryPayload: false,
@@ -1090,6 +1126,85 @@ describe("accumulated-change chunks", () => {
           .getState()
           .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
       ).toEqual(["a.ts"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("drops a chunk from an abandoned epoch instead of letting it replace the set", () => {
+    // These are the one windowed stream whose chunks never pass through a
+    // function holding the epoch - `applySkeletonChunk` and `applyRangeResponse`
+    // both open with that comparison and can, because they fold into the
+    // window; these land in a store field of their own.
+    //
+    // A stale chunk is not merely ignorable noise. It begins at index 0, which
+    // this handler reads as "a fresh set starts here", so an abandoned epoch's
+    // paths and digests would REPLACE the current ones - and at a matching
+    // length the completeness check would call that the whole story.
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 1,
+        }),
+      );
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          summaries: [summary("current.ts")],
+          isFinal: true,
+        },
+      });
+
+      // A resnapshot rebases the transcript onto a new coordinate space.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 1,
+        }),
+      );
+
+      // Still in flight when the epoch turned over.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          summaries: [summary("abandoned.ts")],
+          isFinal: true,
+        },
+      });
+
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["current.ts"]);
     } finally {
       harness.handle.dispose();
     }

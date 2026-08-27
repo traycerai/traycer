@@ -11,6 +11,7 @@ import type {
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 /**
  * # The client half of the windowed transcript
@@ -71,7 +72,30 @@ export interface HydratedSpan {
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
+  /**
+   * Everything this span holds, in bytes: its records AND its
+   * {@link rowContext}.
+   *
+   * The context is charged because the span RETAINS it for exactly as long as
+   * it retains the records - eviction takes the whole span or none of it. A
+   * budget measuring only the records lets a window reporting 8 MiB hold
+   * materially more and never evict for the difference, which is the bounded
+   * guarantee failing silently rather than loudly. Context-bearing assistant
+   * rows repeat session anchors across thousands of rows, so the gap is
+   * proportional to exactly the long chats this window exists for.
+   */
   readonly bytes: number;
+  /**
+   * What {@link rowContext} alone costs, measured once.
+   *
+   * Held beside `bytes` rather than folded into every re-measure because the
+   * context is immutable for a span's life: it is written only where a span is
+   * BUILT (a range response, the snapshot tail) or MERGED, never by the record
+   * rewrites that re-measure `bytes`. Re-deriving it there would put a JSON
+   * encode of the whole context map on the streaming path - the cost
+   * `unsettledByteMessageIds` exists to keep off it.
+   */
+  readonly contextBytes: number;
   /**
    * The window `clock` value at this span's last read or write, for eviction
    * order. A counter rather than a timestamp so a fold stays pure and a test
@@ -424,7 +448,13 @@ export function mapWindowMessages(
     // Unchanged spans keep their identity AND skip a re-measure, so a remap
     // touching one span does not re-serialize every other span's records.
     return changedFrom(span.messages, messages)
-      ? { ...span, messages, bytes: recordsByteLength(messages, span.events) }
+      ? {
+          ...span,
+          messages,
+          // `contextBytes` carried, not re-derived: a remap rewrites records
+          // and leaves the context map untouched.
+          bytes: recordsByteLength(messages, span.events) + span.contextBytes,
+        }
       : span;
   });
   const liveMessages = window.liveMessages.map(update);
@@ -453,7 +483,14 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   const unsettled = new Set(window.unsettledByteMessageIds);
   const spans = window.spans.map((span) =>
     span.messages.some((message) => unsettled.has(message.messageId))
-      ? { ...span, bytes: recordsByteLength(span.messages, span.events) }
+      ? {
+          ...span,
+          // Same carry as the remap above: only records went unsettled, so
+          // re-deriving the context charge here would buy nothing and put a
+          // whole-map encode on the path this function exists to keep cheap.
+          bytes:
+            recordsByteLength(span.messages, span.events) + span.contextBytes,
+        }
       : span,
   );
   return {
@@ -543,6 +580,26 @@ function recordsByteLength(
   for (const message of messages) bytes += recordByteLength(message);
   for (const event of events) bytes += recordByteLength(event);
   return bytes;
+}
+
+/**
+ * What a span's row context costs on the wire it arrived on.
+ *
+ * The whole map in one encode rather than a per-entry sum, because that is the
+ * shape the host actually sent and the shape this span actually holds; summing
+ * the values would quietly drop the row ids, which are the larger half of a map
+ * whose values are often a single scalar.
+ *
+ * An EMPTY map is 0, not the two bytes `{}` encodes to. Sparse-by-construction
+ * means most spans have no context at all, and charging them for the empty
+ * object would put a constant on every span that says nothing about what it
+ * retains.
+ */
+function contextByteLength(
+  rowContext: Readonly<Record<string, TranscriptRowContext>>,
+): number {
+  if (Object.keys(rowContext).length === 0) return 0;
+  return utf8ByteLength(JSON.stringify(rowContext));
 }
 
 function totalBytes(spans: readonly HydratedSpan[]): number {
@@ -766,13 +823,18 @@ function insertSpan(
     ...overlapping.map((span) => span.rowContext),
     incoming.rowContext,
   ) as Readonly<Record<string, TranscriptRowContext>>;
+  // Re-measured rather than summed from the members: the merge DEDUPES both
+  // the records and the context map, so adding the members' charges would bill
+  // every row a re-served span shares with the one it superseded.
+  const contextBytes = contextByteLength(rowContext);
   const merged: HydratedSpan = {
     fromOrdinal,
     rowIds,
     rowContext,
     messages,
     events,
-    bytes: recordsByteLength(messages, events),
+    bytes: recordsByteLength(messages, events) + contextBytes,
+    contextBytes,
     touchedAt: Math.max(...members.map((span) => span.touchedAt)),
   };
   return [...untouched, merged].sort(
@@ -835,16 +897,21 @@ export function applyWindowedSnapshot(
       ? dropSpansOverlappingFrom(base, input.tail.fromOrdinal)
       : base;
   }
+  // Keyed by row id exactly as a range's is, so a tail seated on the
+  // positional ids `tailRowIdsFor` falls back to simply misses every lookup
+  // rather than seating context under the wrong row.
+  const tailRowContext = input.tail.rowContext ?? {};
+  const tailContextBytes = contextByteLength(tailRowContext);
   const tailSpan: HydratedSpan = {
     fromOrdinal: input.tail.fromOrdinal,
     rowIds: tailRowIds,
-    // Keyed by row id exactly as a range's is, so a tail seated on the
-    // positional ids `tailRowIdsFor` falls back to simply misses every lookup
-    // rather than seating context under the wrong row.
-    rowContext: input.tail.rowContext ?? {},
+    rowContext: tailRowContext,
     messages: input.tail.messages,
     events: input.tail.events,
-    bytes: recordsByteLength(input.tail.messages, input.tail.events),
+    bytes:
+      recordsByteLength(input.tail.messages, input.tail.events) +
+      tailContextBytes,
+    contextBytes: tailContextBytes,
     touchedAt: clock,
   };
   const spans = insertSpan(base.spans, tailSpan);
@@ -1250,13 +1317,15 @@ export function applyRangeResponse(
     return window.invalidated ? window : { ...window, invalidated: true };
   }
   const clock = window.clock + 1;
+  const contextBytes = contextByteLength(response.rowContext);
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
     rowIds: response.rowIds,
     rowContext: response.rowContext,
     messages: response.messages,
     events: response.events,
-    bytes: recordsByteLength(response.messages, response.events),
+    bytes: recordsByteLength(response.messages, response.events) + contextBytes,
+    contextBytes,
     touchedAt: clock,
   };
   const spans = insertSpan(window.spans, span);

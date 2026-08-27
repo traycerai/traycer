@@ -1048,6 +1048,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  // Width invalidates every remembered height at once - see `observeWidth`.
+  // A ResizeObserver on the container rather than React state, for the reason
+  // the memory itself is not state: a resize must not re-render a mounted
+  // transcript, and the width is only wanted as a hint for the placeholders
+  // that mount next. A layout effect for the same ordering as the skeleton
+  // pass above - LegendList measures in its own, which runs first, so the
+  // opening commit's heights are already recorded when the baseline width is
+  // adopted (and `observeWidth` deliberately keeps them).
+  useLayoutEffect(() => {
+    const container = transcriptContainerRef.current;
+    if (container === null) return;
+    const report = (): void => {
+      rowHeightMemory.observeWidth(container.getBoundingClientRect().width);
+    };
+    const observer = new ResizeObserver(report);
+    observer.observe(container);
+    report();
+    return () => observer.disconnect();
+  }, [rowHeightMemory]);
   const messagesRef = useRef(messages);
   const listRowsRef = useRef(listRows);
   // Seeded EMPTY, not with `buildRowKeyToIndex(listRows)`: a `useRef`

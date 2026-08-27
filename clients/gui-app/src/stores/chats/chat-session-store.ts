@@ -2565,64 +2565,45 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     /**
-     * Which chunked streams have actually DELIVERED something this epoch.
+     * Is a chunked delivery still missing part of what it promised?
      *
-     * The watchdog below detects a stream that stopped part way, and "part way"
-     * is only meaningful for a stream that started. A snapshot names totals
-     * (`rowCount`, `accumulatedFileChangeCount`) before any chunk is sent, and
-     * for some chats no chunk is ever sent - a short transcript rides the
-     * snapshot's own tail. Reading those totals alone, an ordinary healthy chat
-     * looks exactly like a stalled one, and every one of them would buy a
-     * pointless whole-transcript resnapshot. `windowed-session-binding`'s
-     * "stops asking once the snapshot lands" is precisely that case.
+     * Read off the TOTALS the snapshot states, and deliberately not off
+     * whether a chunk was ever received. An earlier version gated both streams
+     * behind "this stream has delivered something", to stop a chat that was
+     * never going to stream from reading as stalled. That gate is unsound, and
+     * unsound in exactly the case the watchdog exists for: when a stream's
+     * whole content fits in ONE chunk and that sole chunk is dropped, the gate
+     * never closes, and a stall that loses everything is the one stall it
+     * cannot see. The same hole swallows the summaries whenever the skeleton
+     * arrives and the summary stream's first chunk does not.
      *
-     * Keyed by epoch rather than cleared per snapshot, and that is what keeps
-     * the aux-snapshot case working: an aux-only re-broadcast clears the
-     * resnapshot latch and `invalidated` mid-stream, so the flag has to survive
-     * it to notice that the re-stream never resumed. An epoch change is a new
-     * coordinate space and genuinely starts over.
-     */
-    let chunkStreamsStarted: {
-      epoch: number;
-      skeleton: boolean;
-      summaries: boolean;
-    } | null = null;
-
-    const noteChunkStreamStarted = (which: "skeleton" | "summaries"): void => {
-      const epoch = get().transcriptWindow.epoch;
-      const started =
-        chunkStreamsStarted?.epoch === epoch
-          ? chunkStreamsStarted
-          : { epoch, skeleton: false, summaries: false };
-      started[which] = true;
-      chunkStreamsStarted = started;
-    };
-
-    /**
-     * Is a chunked delivery that STARTED still missing part of what it
-     * promised?
+     * The premise behind it was wrong too. No chat rides the snapshot without a
+     * skeleton stream: `chunkRowSkeleton` states that an EMPTY skeleton yields
+     * one empty final chunk rather than zero, precisely so "this chat has no
+     * rows" is distinguishable from "chunks were lost", and the host streams it
+     * on every bootstrap (`reconcileWindowedIndex`'s `state.kind === "none"`).
+     * A receipt gate on the client threw that distinction away again.
      *
-     * Each stream states its own total, which is what makes this answerable
-     * without counting chunks: the skeleton's is `rowCount` (and
-     * `skeletonComplete` is only set by a chunk carrying `isFinal`, once its
-     * coverage agrees), and the summaries' is `accumulatedFileChangeCount`
-     * from the snapshot. The `started` gate is what stops those totals from
-     * indicting a chat that was never going to stream at all.
+     * So the totals answer it directly:
+     *
+     * - The skeleton is owed until `skeletonComplete`, which only a chunk
+     *   carrying `isFinal` sets, and only once its coverage agrees.
+     * - The summaries are owed while fewer are assembled than
+     *   `accumulatedFileChangeCount` - self-gating, because a chat with no
+     *   accumulated changes promises none and `0 < 0` is false.
+     *
+     * Neither can indict a healthy chat, because the only state that reads as
+     * incomplete is one where a resnapshot genuinely repairs something:
+     * `handleResnapshot` resets the subscriber's index to `none` and its
+     * summary belief to `null`, so the answer to it is always a full skeleton
+     * and a full summary re-stream.
      */
     const chunkedDeliveryIncomplete = (): boolean => {
       const state = get();
-      const started =
-        chunkStreamsStarted?.epoch === state.transcriptWindow.epoch
-          ? chunkStreamsStarted
-          : null;
-      if (started === null) return false;
-      if (started.skeleton && !state.transcriptWindow.skeletonComplete) {
-        return true;
-      }
+      if (!state.transcriptWindow.skeletonComplete) return true;
       return (
-        started.summaries &&
         state.accumulatedFileChangeSummaries.length <
-          state.accumulatedFileChangeCount
+        state.accumulatedFileChangeCount
       );
     };
 
@@ -3322,7 +3303,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Re-arms while the skeleton is still short, disarms once it covers
         // `rowCount`. A stream that simply stops after a non-final chunk is
         // otherwise indistinguishable from one still in progress.
-        noteChunkStreamStarted("skeleton");
         armStreamCompletionWatchdog(false);
         requestPlannedHydration();
       },
@@ -3428,6 +3408,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
+        // The summaries are the ONE windowed stream whose chunks do not pass
+        // through a function that holds the epoch - `applySkeletonChunk` and
+        // `applyRangeResponse` both open with this comparison, and both can
+        // because they fold into the window. These land in a store field of
+        // their own, so the check has to be made here or not at all.
+        //
+        // Dropped on any mismatch, exactly as those two do. A resnapshot or
+        // reindex advances the epoch while a chunk is still in flight, and a
+        // stale one beginning at index 0 would otherwise REPLACE the current
+        // set: the splice below treats `fromIndex: 0` as "a fresh set starts
+        // here", so an abandoned epoch's paths and digests become the panel's,
+        // and if its length happens to match the new count the completeness
+        // check reads them as the whole story.
+        //
+        // Dropped without asking for a re-stream, deliberately. The chunk
+        // carries no evidence that the CURRENT epoch is short - the host
+        // re-emits these only when the summary set itself changed, so a stale
+        // chunk arriving at a client that is already complete would buy a
+        // whole-transcript resnapshot for nothing. Whether anything is
+        // actually missing is what the completion watchdog reads off the
+        // totals, and it is the one place that question is answerable.
+        if (frame.chunk.epoch !== get().transcriptWindow.epoch) return;
         // Chunks are contiguous and in order from `fromIndex`, so a chunk
         // starting at 0 begins a fresh set and any other extends the one being
         // assembled. Splicing at `fromIndex` rather than appending makes a
@@ -3460,7 +3462,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The gap check above only fires when a LATER chunk exposes the hole,
         // so it cannot see the stream simply stopping. Armed after the `set`
         // so the watchdog reads the assembled length this chunk produced.
-        noteChunkStreamStarted("summaries");
         armStreamCompletionWatchdog(false);
       },
       onActionAck: (frame) => {
