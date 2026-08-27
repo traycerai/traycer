@@ -48,6 +48,7 @@ import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
+import { sessionCreatedEpicHostId } from "@/lib/epics/session-created-epics";
 
 export interface EpicSessionProviderProps {
   readonly epicId: string;
@@ -291,11 +292,31 @@ export function EpicSessionProvider(
   const [session, setSession] = useState<MountedSessionState | null>(null);
   const sessionRef = useRef<MountedSessionState | null>(null);
   const originalHostIdRef = useRef<string | null>(null);
-  const [requestedHostId, setRequestedHostId] = useState<string | null>(null);
+  // Seeded from the create-host memory for an epic THIS renderer just
+  // created: `epic.create` is local-first on the create host - the cloud
+  // record is written by that host's deferred background connect - so until
+  // it lands, the create host is the only machine that can serve the epic.
+  // Opening on `effectiveHostId` in that window cold-opens into a cloud
+  // NOT_FOUND, which the access coordinator reads as an adjudicated "epic is
+  // gone" and force-closes the brand-new tab. The seed is time-bounded (see
+  // `sessionCreatedEpicHostId`), so later opens of the same epic follow the
+  // effective host as before - and within this mount it is given up on the
+  // first derivation move (see `seededCreateHostRef` below), so it never
+  // outranks an activation or a failover.
+  const [requestedHostId, setRequestedHostId] = useState<string | null>(() =>
+    sessionCreatedEpicHostId(epicId),
+  );
+  // Whether `requestedHostId` is still that SEED rather than a host the user
+  // asked for through `openOnOriginalHost`. Only the seed is given up, and on
+  // any of the three signals that the create race is no longer what decides
+  // placement: a derivation move, a Retry, or the user naming a host. An
+  // explicit request is the user's and outlives all of them, exactly as it
+  // did before this seed existed.
+  const seededCreateHostRef = useRef(requestedHostId !== null);
   const [retryGeneration, setRetryGeneration] = useState(0);
   const [presentation, setPresentation] = useState<SessionPresentationState>({
     kind: "establishing",
-    targetHostId: effectiveHostId,
+    targetHostId: requestedHostId ?? effectiveHostId,
     originalHostId: null,
   });
   const targetHostId = requestedHostId ?? effectiveHostId;
@@ -347,14 +368,54 @@ export function EpicSessionProvider(
   }, []);
 
   const retryRepoint = useCallback((): void => {
+    // Reaching Retry means the seeded open FAILED at the one job the seed
+    // has, so give it up here too. Without this the seed survives a create
+    // host that died while `effectiveHostId` never moved - the derivation
+    // move below is then never observed - and Retry re-dials the dead host
+    // for as long as the user keeps pressing it, where an UNSEEDED session
+    // would have re-dialed the live effective host. Only the seed is
+    // dropped; a host the user named through `openOnOriginalHost` is what
+    // they are retrying, so it stays.
+    if (seededCreateHostRef.current) {
+      seededCreateHostRef.current = false;
+      setRequestedHostId(null);
+    }
     setRetryGeneration((generation) => generation + 1);
   }, []);
   const openOnOriginalHost = useCallback((): void => {
     const originalHostId = originalHostIdRef.current;
     if (originalHostId === null) return;
+    // An explicit request replaces the seed and stops being one: the user
+    // named this host, so a later derivation move must not silently take it
+    // back the way it takes back the create-host seed.
+    seededCreateHostRef.current = false;
     setRequestedHostId(originalHostId);
     setRetryGeneration((generation) => generation + 1);
   }, []);
+
+  // The create-host seed answers ONE question - which host can serve this epic
+  // while its cloud record is still being written - and that question is
+  // settled in seconds. It must not also outrank a later derivation move: an
+  // unseeded session re-points when `effectiveHostId` changes (Settings ▸
+  // Activate, or a failover), and a session that merely STARTED on its create
+  // host has no standing to refuse that.
+  //
+  // Given up on the move, not on a timer. Expiring the seed on its own clock
+  // would re-point a healthy session for no reason at the two-minute mark -
+  // the create host and the effective host differ by construction in the case
+  // this seed exists for, so a bare expiry IS a re-point. `null` is the
+  // authority's DETACHED default rather than a move, so the first non-null
+  // answer is adopted as the baseline instead of acted on.
+  const lastEffectiveHostIdRef = useRef<string | null>(effectiveHostId);
+  useEffect(() => {
+    if (effectiveHostId === null) return;
+    const previous = lastEffectiveHostIdRef.current;
+    lastEffectiveHostIdRef.current = effectiveHostId;
+    if (previous === null || previous === effectiveHostId) return;
+    if (!seededCreateHostRef.current) return;
+    seededCreateHostRef.current = false;
+    setRequestedHostId(null);
+  }, [effectiveHostId]);
 
   // A selection gap must be visible: the old provider silently bailed and left
   // the task permanently skeleton-bound. But the authority's `null` carries TWO
