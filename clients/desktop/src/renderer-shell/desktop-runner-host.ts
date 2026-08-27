@@ -49,6 +49,7 @@ import type {
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
+  SystemResumeEvent,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -671,7 +672,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   private readonly localHostHandlers = new Set<
     (snapshot: LocalHostSnapshot | null) => void
   >();
-  private readonly systemResumedHandlers = new Set<() => void>();
+  private readonly systemResumedHandlers = new Set<
+    (event: SystemResumeEvent) => void
+  >();
   private readonly bridgeSubscriptions: Disposable[] = [];
 
   constructor(options: DesktopRunnerHostOptions) {
@@ -712,7 +715,9 @@ export class DesktopRunnerHost implements IRunnerHost {
       }),
       this.bridge.onSystemResumed(() => {
         for (const handler of this.systemResumedHandlers) {
-          handler();
+          // `powerMonitor` reports no sleep duration, so this shell cannot
+          // measure how long the runtime was actually suspended.
+          handler({ backgroundedForMs: null });
         }
       }),
     );
@@ -1040,12 +1045,22 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getLastKnownLocalHostId();
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
       dispose: () => {
         this.systemResumedHandlers.delete(handler);
       },
+    };
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    // Desktop has no native reachability edge to bridge; its consumers cover
+    // the equivalent transitions with `window 'online'` and the OS-wake
+    // signal above. No-op subscription per the IRunnerHost contract.
+    void handler;
+    return {
+      dispose: () => undefined,
     };
   }
 
