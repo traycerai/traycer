@@ -4,6 +4,7 @@ import {
   createEvent,
   fireEvent,
   render,
+  screen,
   waitFor,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -24,8 +25,8 @@ const durableCloseMutateAsync =
       readonly terminalId: string;
     }) => Promise<void>
   >();
-// Never invokes any settle callback - and no longer takes one. `submitRename`
-// is fire-and-forget: the editor closes on the commit gesture, so a rename that
+// Never invokes any settle callback - and no longer takes one. The editor
+// settles on `submitRename`'s SYNCHRONOUS return instead, so a rename that
 // stays on the wire for the whole test is exactly the state under assertion.
 const durableRenameMutate =
   vi.fn<
@@ -763,10 +764,13 @@ describe("terminal sidebar Close", () => {
 
   it("keeps a terminal rename editor from opening while one is pending", () => {
     // The counterpart to closing on commit: `canRename` folds in the pending
-    // flag, so the editor cannot be OPENED mid-flight. That is what makes
-    // `submitRename`'s own `!canRename` refusal unreachable from the UI -
-    // without it, closing on commit would silently drop the second rename,
-    // since both paths share one mutation observer.
+    // flag, so the editor cannot be OPENED mid-flight - both rename paths share
+    // one mutation observer and cannot carry two renames at once.
+    //
+    // This closes the common case but NOT every case, and reading it as "so a
+    // refusal is unreachable from the UI" was wrong: it reasons about the state
+    // at OPEN time only. The pair below covers an editor that is already up
+    // when availability drops underneath it.
     durableAuthority.capability = "capable";
     durableAuthority.canMutate = true;
     durableAuthority.collectionIncludesSession = true;
@@ -783,6 +787,60 @@ describe("terminal sidebar Close", () => {
       queryByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
     ).toBeNull();
     expect(durableRenameMutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "the host stops being mutable",
+      apply: (): void => {
+        durableAuthority.canMutate = false;
+      },
+    },
+    {
+      name: "another row's rename goes in flight",
+      apply: (): void => {
+        durableAuthority.renamePending = true;
+      },
+    },
+  ])("keeps a terminal rename editor open when $name mid-edit", ({ apply }) => {
+    durableAuthority.capability = "capable";
+    durableAuthority.canMutate = true;
+    durableAuthority.collectionIncludesSession = true;
+    const view = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    fireEvent.doubleClick(
+      view.getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    );
+    fireEvent.change(
+      view.getByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
+      { target: { value: "Typed title" } },
+    );
+
+    // `canRename` is a CONJUNCTION, and the editor was legitimately opened
+    // while all of it held. Either conjunct can go false underneath it:
+    // `canMutate` is host-wide (a disconnect, a permission change), and the
+    // pending flag is PANEL-wide, since one mutation observer serves every row.
+    apply();
+    view.rerender(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    fireEvent.keyDown(
+      view.getByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
+      { key: "Enter" },
+    );
+
+    expect(durableRenameMutate).not.toHaveBeenCalled();
+    expect(legacyRenameMutate).not.toHaveBeenCalled();
+    // Nothing was sent and nothing was patched optimistically, so closing on
+    // this refusal would have discarded the typed title outright.
+    expect(
+      screen.getByTestId<HTMLInputElement>(
+        `epic-terminal-sidebar-rename-input-${SESSION_ID}`,
+      ).value,
+    ).toBe("Typed title");
   });
 
   it("disables sidebar rename for a capable host compatibility row while canMutate is false", () => {

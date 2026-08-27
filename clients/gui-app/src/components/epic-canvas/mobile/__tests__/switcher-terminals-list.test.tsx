@@ -53,6 +53,13 @@ interface ListQueryHolder {
 interface AuthorityHolder {
   capability: "unknown" | "legacy" | "capable";
   canMutate: boolean;
+  /**
+   * Panel-wide, exactly like the real thing: one mutation observer serves every
+   * row, so a rename in flight on ANY row reads as pending on all of them.
+   * Modelled as real state rather than a hardcoded `false`, which would make a
+   * "refused while pending" assertion vacuous.
+   */
+  renamePending: boolean;
 }
 interface RoleHolder {
   value: "owner" | "viewer";
@@ -78,7 +85,17 @@ const listQuery = vi.hoisted((): ListQueryHolder => ({
 const authority = vi.hoisted((): AuthorityHolder => ({
   capability: "capable",
   canMutate: true,
+  renamePending: false,
 }));
+const durableRenameMutate = vi.hoisted(() =>
+  vi.fn<
+    (request: {
+      readonly hostId: string;
+      readonly terminalId: string;
+      readonly manualTitle: string;
+    }) => void
+  >(),
+);
 const role = vi.hoisted((): RoleHolder => ({ value: "owner" }));
 const hostClient = vi.hoisted((): HostClientHolder => ({
   value: { request: () => undefined },
@@ -147,7 +164,9 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
 vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
   useHostPlainTerminalMutations: () => ({
     close: { mutateAsync: vi.fn(), isPending: false },
-    rename: { mutate: vi.fn(), isPending: false },
+    // Never settles and never calls back: the dialog closes on `submitRename`'s
+    // synchronous return, so a rename left on the wire is the state under test.
+    rename: { mutate: durableRenameMutate, isPending: authority.renamePending },
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
@@ -289,6 +308,8 @@ beforeEach(() => {
   listQuery.refetchCalls = 0;
   authority.capability = "capable";
   authority.canMutate = true;
+  authority.renamePending = false;
+  durableRenameMutate.mockClear();
   role.value = "owner";
   hostClient.value = { request: () => undefined };
   onClose.mockClear();
@@ -480,6 +501,49 @@ describe("<SwitcherTerminalsList /> rows", () => {
       name: "Rename",
     });
     expect(rename.disabled).toBe(true);
+  });
+
+  it("keeps the terminal rename dialog open when the submission is refused", () => {
+    durableCollection.value = completeFleet([
+      durableTerminal({
+        hostId: HOST_A,
+        terminalId: "durable-term",
+        title: "Durable shell",
+        runtime: runningRuntime("durable-term"),
+      }),
+    ]);
+    const tabId = openEpicTab();
+    const view = renderList(tabId);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.change(screen.getByTestId("switcher-rename-input-durable-term"), {
+      target: { value: "Typed title" },
+    });
+
+    // Rename availability drops while the dialog is already up. The pending
+    // flag is PANEL-wide - one mutation observer serves every row - so this is
+    // another row's rename going in flight, which this dialog cannot see.
+    authority.renamePending = true;
+    view.rerender(
+      wrapper(
+        <SwitcherTerminalsList
+          epicId={EPIC_ID}
+          tabId={tabId}
+          onClose={onClose}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("switcher-rename-save-durable-term"));
+
+    expect(durableRenameMutate).not.toHaveBeenCalled();
+    // Nothing was sent and nothing was patched optimistically, so closing on
+    // this refusal would have discarded the typed title outright.
+    expect(screen.getByTestId("switcher-rename-dialog")).toBeTruthy();
+    expect(
+      screen.getByTestId<HTMLInputElement>("switcher-rename-input-durable-term")
+        .value,
+    ).toBe("Typed title");
   });
 });
 
