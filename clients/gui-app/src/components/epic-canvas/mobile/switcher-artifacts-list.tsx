@@ -150,22 +150,49 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
           tabId={tabId}
           onClose={onClose}
         />
-      ) : artifacts.length === 0 ? (
-        <SwitcherArtifactsEmpty filter={artifactFilter} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-          {artifacts.map((record) => (
-            <SwitcherArtifactRow
-              key={record.id}
-              record={record}
-              records={records}
-              epicId={epicId}
-              tabId={tabId}
-              onClose={onClose}
-            />
-          ))}
-        </div>
+        <SwitcherArtifactBrowseList
+          artifacts={artifacts}
+          filter={artifactFilter}
+          records={records}
+          epicId={epicId}
+          tabId={tabId}
+          onClose={onClose}
+        />
       )}
+    </div>
+  );
+}
+
+/**
+ * The category's ordinary list: every artifact surviving the facet filters, in
+ * the epic's sort order. Search replaces this wholesale rather than narrowing
+ * it, because the host ranks its own hits and that ranking is the answer.
+ */
+function SwitcherArtifactBrowseList(props: {
+  readonly artifacts: ReadonlyArray<EpicTreeRecord>;
+  readonly filter: ArtifactFilter;
+  readonly records: ReadonlyArray<EpicTreeRecord>;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly onClose: () => void;
+}) {
+  const { artifacts, records, epicId, tabId, onClose } = props;
+  if (artifacts.length === 0) {
+    return <SwitcherArtifactsEmpty filter={props.filter} />;
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+      {artifacts.map((record) => (
+        <SwitcherArtifactRow
+          key={record.id}
+          record={record}
+          records={records}
+          epicId={epicId}
+          tabId={tabId}
+          onClose={onClose}
+        />
+      ))}
     </div>
   );
 }
