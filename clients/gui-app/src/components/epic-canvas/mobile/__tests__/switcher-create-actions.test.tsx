@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SwitcherNewArtifactMenu,
-  SwitcherNewChatRow,
+  SwitcherNewChatAction,
   SwitcherNewTerminalRow,
 } from "@/components/epic-canvas/mobile/switcher-create-actions";
 
@@ -52,11 +52,11 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("<SwitcherNewChatRow />", () => {
+describe("<SwitcherNewChatAction />", () => {
   it("sets chat composer mode, opens the New Conversation modal for this epic/tab, and closes the sheet", () => {
     const onClose = vi.fn();
     render(
-      <SwitcherNewChatRow epicId="epic-1" tabId="tab-1" onClose={onClose} />,
+      <SwitcherNewChatAction epicId="epic-1" tabId="tab-1" onClose={onClose} />,
     );
     fireEvent.click(screen.getByTestId("switcher-new-chat"));
     expect(spies.setComposerMode).toHaveBeenCalledWith("epic-1", "chat");

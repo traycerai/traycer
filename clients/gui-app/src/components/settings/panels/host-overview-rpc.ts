@@ -17,8 +17,12 @@ import type {
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
+import { useEffect } from "react";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-same-host";
 import { hostMaintenanceMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
 import { useHostServiceWriteLatchStore } from "@/components/settings/panels/host-service-write-latch-store";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -89,6 +93,7 @@ export function useHostIdentityQuery(input: {
 export function useHostOverviewStatusQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
+  readonly hostId: string | null;
 }) {
   return useHostQuery<HostRpcRegistry, "host.status">({
     cacheKeyIdentity: undefined,
@@ -101,8 +106,71 @@ export function useHostOverviewStatusQuery(input: {
     // ages out and `isStale` becomes the signal that demotes the drain count
     // to `null`. Inverting these two would make a healthy query flicker
     // between live and unknown on every tick.
-    options: { enabled: input.enabled, staleTime: 30_000, poll: true },
+    options: {
+      enabled: input.enabled,
+      staleTime: 30_000,
+      poll: true,
+      // Same-host retain-while-refetching so a remount or observer swap
+      // cannot empty `data` and unmount the busy chip for a round trip.
+      // A host mismatch drops the prior payload (never show host A's work
+      // as host B's).
+      placeholderData: keepPreviousDataForSameHost(input.hostId),
+    },
   });
+}
+
+/**
+ * Refetch `host.status` when THIS host's chat or terminal session
+ * membership changes.
+ *
+ * Overview has no busy subscription — only a 10s poll — so a terminal-agent
+ * that just started can sit invisible on the chip until the next tick.
+ * Membership is the event the GUI already has: a new (or gone) session is
+ * exactly when host-side `busyBreakdown` is likely to have moved. Per-handle
+ * status changes on an already-registered session still wait for the poll;
+ * that lag is host-side accounting, not a missing client invalidation.
+ *
+ * Registries are process-wide, so a notify fires for every host. Invalidating
+ * host A's `host.status` on host B's membership momentarily voids SETTLED
+ * busy (and can disable "Apply now"). Compare a host-scoped snapshot and
+ * skip the invalidate when this host's entries did not move.
+ */
+export function useRefreshOverviewStatusOnSessionActivity(input: {
+  readonly hostId: string | null;
+  readonly enabled: boolean;
+}): void {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!input.enabled || input.hostId === null) {
+      return;
+    }
+    const hostId = input.hostId;
+    // Snapshot BEFORE subscribe so a StrictMode remount (cleanup + re-setup)
+    // with unchanged membership does not invalidate.
+    let lastSignature = scopedSessionMembershipSignature(hostId);
+    const refresh = (): void => {
+      const next = scopedSessionMembershipSignature(hostId);
+      if (next === lastSignature) return;
+      lastSignature = next;
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(hostId, "host.status"),
+      });
+    };
+    const unsubTerminal = getTerminalSessionRegistry().subscribe(refresh);
+    const unsubChat = getChatSessionRegistry().subscribe(refresh);
+    return () => {
+      unsubTerminal();
+      unsubChat();
+    };
+  }, [input.enabled, input.hostId, queryClient]);
+}
+
+function scopedSessionMembershipSignature(hostId: string): string {
+  const terminals = getTerminalSessionRegistry()
+    .membershipIdsForHost(hostId)
+    .join(",");
+  const chats = getChatSessionRegistry().membershipIdsForHost(hostId).join(",");
+  return `t:${terminals}|c:${chats}`;
 }
 
 /**

@@ -131,13 +131,11 @@ function setup() {
 
   let capturedCallbacks: TerminalStreamCallbacks | null = null;
   let factoryCalls = 0;
-  __setTerminalStreamClientFactoryForTests(
-    (_sessionId, _cols, _rows, callbacks) => {
-      factoryCalls += 1;
-      capturedCallbacks = callbacks;
-      return { sendAction: () => undefined, close: () => undefined };
-    },
-  );
+  __setTerminalStreamClientFactoryForTests((streamArgs) => {
+    factoryCalls += 1;
+    capturedCallbacks = streamArgs.callbacks;
+    return { sendAction: () => undefined, close: () => undefined };
+  });
 
   function wrapper({ children }: { children: ReactNode }) {
     return (

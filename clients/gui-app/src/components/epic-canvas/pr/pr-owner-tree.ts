@@ -2,6 +2,31 @@ import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
 import type { EpicTreeIndex } from "@/lib/epic-selectors";
 
 /**
+ * What to call a SET of owners.
+ *
+ * `ownerKind` is not always `chat` - a PR can be derived entirely from terminal
+ * agents, and calling those "chats" in a list's accessible name announces the
+ * wrong thing to a screen reader. A uniform set gets its own noun; a mixed one
+ * has no single true noun, so it falls back to the kind-neutral word rather
+ * than picking a side.
+ *
+ * Lives beside the tree helpers rather than in `pr-owner-label.tsx` because
+ * both owner surfaces (the `+N` popover and the row's hover card) need it, and
+ * a component module that also exports a plain function breaks fast refresh.
+ */
+export function prOwnerCollectionNouns(owners: readonly PrOwnerRef[]): {
+  readonly plural: string;
+  readonly capitalized: string;
+} {
+  const kinds = new Set(owners.map((owner) => owner.ownerKind));
+  if (kinds.size === 1) {
+    if (kinds.has("chat")) return { plural: "chats", capitalized: "Chats" };
+    return { plural: "terminal agents", capitalized: "Terminal agents" };
+  }
+  return { plural: "owners", capitalized: "Owners" };
+}
+
+/**
  * One owner in the overflow popover, with the owners nested UNDER it.
  *
  * A PR's owner set is flat on the wire, but the nodes in it are not: a chat

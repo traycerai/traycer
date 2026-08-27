@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
@@ -100,7 +101,14 @@ function renderAt(path: string) {
     routeTree,
     history: createMemoryHistory({ initialEntries: [path] }),
   });
-  render(<RouterProvider router={router} />);
+  // `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
+  // success arm's cloud-cache patch; the mocked mutation hook used to hide
+  // that dependency.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 /**

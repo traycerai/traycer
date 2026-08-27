@@ -6,32 +6,17 @@
  * Radix submenus. When there is not enough room for two menu columns, the same
  * root drills into a detail page with Back instead of flipping left.
  */
-import {
-  ArrowDownWideNarrow,
-  ArrowUpNarrowWide,
-  ChevronLeft,
-  ChevronRight,
-  ListFilter,
-  RotateCcw,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, ListFilter, RotateCcw } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import {
-  EPIC_NODE_ICONS,
-  EPIC_NODE_LABELS,
-} from "@/lib/artifacts/node-display";
-import { cn } from "@/lib/utils";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -39,23 +24,28 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { SortField } from "@/lib/epic-sort";
+import { STATUS_LABELS } from "./epic-sidebar-tree-shared";
 import {
-  ARTIFACT_SORT_FIELDS,
-  CHAT_SORT_FIELDS,
-  DEFAULT_SORT_MODE,
-  SORT_DIRECTION,
-  SORT_FIELD_LABELS,
-  type SortField,
-  type SortMode,
-} from "@/lib/epic-sort";
-import { STATUS_DOT_CLASSES, STATUS_LABELS } from "./epic-sidebar-tree-shared";
+  ArtifactDetailContent,
+  ChatDetailContent,
+  ViewMenuBadge,
+} from "./epic-sidebar-view-menu-details";
 import {
-  ARTIFACT_READ,
-  ARTIFACT_STATUS,
+  ARTIFACT_DETAIL_LABELS,
+  ARTIFACT_READ_OPTIONS,
+  archiveVisibilityLabel,
+  CHAT_DETAIL_LABELS,
+  CHAT_ORIGIN_OPTIONS,
+  CHAT_OWNERSHIP_OPTIONS,
+  selectedSummary,
+  sortSummary,
+  viewTriggerLabel,
+  type ArtifactViewDetail,
+  type ChatViewDetail,
+} from "./epic-sidebar-view-menu-shared";
+import {
   artifactFilterCount,
-  CHAT_ARCHIVE_VISIBILITY,
-  CHAT_OWNERSHIP,
-  CHAT_ORIGIN,
   chatFilterCount,
   DEFAULT_CHAT_ARCHIVE_VISIBILITY,
   isArtifactFilterActive,
@@ -83,83 +73,6 @@ const TWO_COLUMN_MENU_MIN_AVAILABLE_PX = 520;
 const VIEW_MENU_CONTENT_CLASS =
   "w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto";
 const VIEW_MENU_MAX_HEIGHT = "min(70vh, 28rem)";
-
-type ChatViewDetail = "ordering" | "show" | "interface" | "ownership";
-type ArtifactViewDetail = "ordering" | "status" | "type" | "read";
-
-const CHAT_DETAIL_LABELS: Readonly<Record<ChatViewDetail, string>> = {
-  ordering: "Ordering",
-  show: "Show",
-  interface: "Interface",
-  ownership: "Ownership",
-};
-
-const ARTIFACT_DETAIL_LABELS: Readonly<Record<ArtifactViewDetail, string>> = {
-  ordering: "Ordering",
-  status: "Status",
-  type: "Type",
-  read: "Read state",
-};
-
-const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
-  readonly value: ChatOriginFilter;
-  readonly label: string;
-}> = [
-  { value: CHAT_ORIGIN.All, label: "All" },
-  { value: CHAT_ORIGIN.Gui, label: "Chat" },
-  { value: CHAT_ORIGIN.Tui, label: "Terminal" },
-];
-
-const CHAT_OWNERSHIP_OPTIONS: ReadonlyArray<{
-  readonly value: ChatOwnershipFilter;
-  readonly label: string;
-}> = [
-  { value: CHAT_OWNERSHIP.All, label: "All" },
-  { value: CHAT_OWNERSHIP.Mine, label: "Mine" },
-  { value: CHAT_OWNERSHIP.Others, label: "Others" },
-];
-
-const CHAT_ARCHIVE_VISIBILITY_OPTIONS: ReadonlyArray<{
-  readonly value: ChatArchiveVisibility;
-  readonly label: string;
-}> = [
-  {
-    value: CHAT_ARCHIVE_VISIBILITY.Unarchived,
-    label: "Unarchived only",
-  },
-  { value: CHAT_ARCHIVE_VISIBILITY.Archived, label: "Archived only" },
-  { value: CHAT_ARCHIVE_VISIBILITY.All, label: "All chats" },
-];
-
-function archiveVisibilityLabel(visibility: ChatArchiveVisibility): string {
-  return (
-    CHAT_ARCHIVE_VISIBILITY_OPTIONS.find(
-      (option) => option.value === visibility,
-    )?.label ?? "Unarchived only"
-  );
-}
-
-const ARTIFACT_STATUS_OPTIONS: ReadonlyArray<ArtifactStatusFilter> = [
-  ARTIFACT_STATUS.Todo,
-  ARTIFACT_STATUS.InProgress,
-  ARTIFACT_STATUS.Done,
-];
-
-const ARTIFACT_KIND_OPTIONS: ReadonlyArray<EpicArtifactKind> = [
-  "spec",
-  "ticket",
-  "story",
-  "review",
-];
-
-const ARTIFACT_READ_OPTIONS: ReadonlyArray<{
-  readonly value: ArtifactReadFilter;
-  readonly label: string;
-}> = [
-  { value: ARTIFACT_READ.All, label: "All" },
-  { value: ARTIFACT_READ.Unread, label: "Unread" },
-  { value: ARTIFACT_READ.Read, label: "Read" },
-];
 
 interface ViewMenuState<TDetail extends string> {
   readonly open: boolean;
@@ -231,7 +144,6 @@ function ViewMenuTrigger(props: {
   readonly setTriggerElement: (element: HTMLButtonElement | null) => void;
 }) {
   const { filterCount, label, setTriggerElement } = props;
-  const badge = filterCount > 9 ? "9+" : String(filterCount);
   return (
     <TooltipWrapper
       label={label}
@@ -249,39 +161,11 @@ function ViewMenuTrigger(props: {
           className="relative shrink-0 text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
         >
           <ListFilter className="size-4" />
-          {filterCount > 0 ? (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-[9px] leading-none font-semibold text-background ring-1 ring-background"
-            >
-              {badge}
-            </span>
-          ) : null}
+          <ViewMenuBadge filterCount={filterCount} />
         </Button>
       </DropdownMenuTrigger>
     </TooltipWrapper>
   );
-}
-
-function viewTriggerLabel(args: {
-  readonly base: string;
-  readonly filterCount: number;
-  readonly sort: SortMode;
-  readonly showChanged: boolean;
-}): string {
-  const details: string[] = [];
-  if (args.filterCount > 0) {
-    details.push(
-      `${args.filterCount} ${args.filterCount === 1 ? "filter" : "filters"} active`,
-    );
-  }
-  if (isSortModeActive(args.sort)) {
-    details.push(`ordered by ${SORT_FIELD_LABELS[args.sort.field]}`);
-  }
-  if (args.showChanged) details.push("visibility changed");
-  return details.length === 0
-    ? args.base
-    : `${args.base}, ${details.join(", ")}`;
 }
 
 function ViewDetailEntry<TDetail extends string>(props: {
@@ -356,190 +240,6 @@ function DrillInHeader(props: {
   );
 }
 
-function OrderingDetail(props: {
-  readonly fields: ReadonlyArray<SortField>;
-  readonly sort: SortMode;
-  readonly onFieldChange: (field: SortField) => void;
-  readonly onToggleDirection: () => void;
-}) {
-  const resetOrdering = (): void => {
-    props.onFieldChange(DEFAULT_SORT_MODE.field);
-    if (props.sort.direction !== DEFAULT_SORT_MODE.direction) {
-      props.onToggleDirection();
-    }
-  };
-  return (
-    <>
-      <DropdownMenuLabel>Order by</DropdownMenuLabel>
-      <DropdownMenuRadioGroup
-        value={props.sort.field}
-        onValueChange={(next) => {
-          const match = props.fields.find((field) => field === next);
-          if (match !== undefined) props.onFieldChange(match);
-        }}
-      >
-        {props.fields.map((field) => (
-          <DropdownMenuRadioItem
-            key={field}
-            value={field}
-            onSelect={(event) => event.preventDefault()}
-          >
-            {SORT_FIELD_LABELS[field]}
-          </DropdownMenuRadioItem>
-        ))}
-      </DropdownMenuRadioGroup>
-      <DropdownMenuSeparator />
-      <DropdownMenuRadioGroup value={props.sort.direction}>
-        <DropdownMenuRadioItem
-          value={SORT_DIRECTION.Desc}
-          onSelect={(event) => {
-            event.preventDefault();
-            if (props.sort.direction !== SORT_DIRECTION.Desc) {
-              props.onToggleDirection();
-            }
-          }}
-        >
-          <ArrowDownWideNarrow className="size-4" />
-          Descending
-        </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem
-          value={SORT_DIRECTION.Asc}
-          onSelect={(event) => {
-            event.preventDefault();
-            if (props.sort.direction !== SORT_DIRECTION.Asc) {
-              props.onToggleDirection();
-            }
-          }}
-        >
-          <ArrowUpNarrowWide className="size-4" />
-          Ascending
-        </DropdownMenuRadioItem>
-      </DropdownMenuRadioGroup>
-      {isSortModeActive(props.sort) ? (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
-              resetOrdering();
-            }}
-          >
-            <RotateCcw className="size-4" />
-            Reset ordering
-          </DropdownMenuItem>
-        </>
-      ) : null}
-    </>
-  );
-}
-
-function sortSummary(sort: SortMode): string {
-  return `${SORT_FIELD_LABELS[sort.field]} ${
-    sort.direction === SORT_DIRECTION.Asc ? "↑" : "↓"
-  }`;
-}
-
-function selectedSummary(labels: readonly string[]): string {
-  if (labels.length === 0) return "All";
-  if (labels.length === 1) return labels[0];
-  return `${labels.length} selected`;
-}
-
-function ChatDetailContent(props: {
-  readonly detail: ChatViewDetail;
-  readonly filterOrigin: ChatOriginFilter;
-  readonly filterOwnership: ChatOwnershipFilter;
-  readonly sort: SortMode;
-  readonly archiveVisibility: ChatArchiveVisibility;
-  readonly setChatOrigin: (origin: ChatOriginFilter) => void;
-  readonly setChatOwnership: (ownership: ChatOwnershipFilter) => void;
-  readonly setArchiveVisibility: (visibility: ChatArchiveVisibility) => void;
-  readonly setSortField: (field: SortField) => void;
-  readonly toggleSortDirection: () => void;
-}) {
-  switch (props.detail) {
-    case "ordering":
-      return (
-        <OrderingDetail
-          fields={CHAT_SORT_FIELDS}
-          sort={props.sort}
-          onFieldChange={props.setSortField}
-          onToggleDirection={props.toggleSortDirection}
-        />
-      );
-    case "show":
-      return (
-        <DropdownMenuRadioGroup
-          value={props.archiveVisibility}
-          onValueChange={(next) => {
-            const match = CHAT_ARCHIVE_VISIBILITY_OPTIONS.find(
-              (option) => option.value === next,
-            );
-            if (match !== undefined) {
-              props.setArchiveVisibility(match.value);
-            }
-          }}
-          data-testid="epic-sidebar-archive-visibility"
-        >
-          {CHAT_ARCHIVE_VISIBILITY_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              onSelect={(event) => event.preventDefault()}
-              data-testid={`epic-sidebar-archive-visibility-${option.value}`}
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      );
-    case "interface":
-      return (
-        <DropdownMenuRadioGroup
-          value={props.filterOrigin}
-          onValueChange={(next) => {
-            const match = CHAT_ORIGIN_OPTIONS.find(
-              (option) => option.value === next,
-            );
-            if (match !== undefined) props.setChatOrigin(match.value);
-          }}
-        >
-          {CHAT_ORIGIN_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              onSelect={(event) => event.preventDefault()}
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      );
-    case "ownership":
-      return (
-        <DropdownMenuRadioGroup
-          value={props.filterOwnership}
-          onValueChange={(next) => {
-            const match = CHAT_OWNERSHIP_OPTIONS.find(
-              (option) => option.value === next,
-            );
-            if (match !== undefined) props.setChatOwnership(match.value);
-          }}
-        >
-          {CHAT_OWNERSHIP_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              onSelect={(event) => event.preventDefault()}
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      );
-  }
-}
-
 export function ChatFilterMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -595,7 +295,13 @@ export function ChatFilterMenu(props: {
     base: "Filter agents",
     filterCount,
     sort,
-    showChanged: archiveVisibilityChanged,
+    // Gated on `canArchive` alongside the Show detail itself: a stored
+    // preference outlives the permission that set it, and announcing a setting
+    // the menu can no longer expose names something the user cannot go change.
+    visibilityLabel:
+      props.canArchive && archiveVisibilityChanged
+        ? archiveVisibilityLabel(archiveVisibility)
+        : null,
   });
 
   return (
@@ -686,118 +392,6 @@ export function ChatFilterMenu(props: {
   );
 }
 
-function ArtifactDetailContent(props: {
-  readonly detail: ArtifactViewDetail;
-  readonly filterStatuses: readonly ArtifactStatusFilter[];
-  readonly filterKinds: readonly EpicArtifactKind[];
-  readonly filterRead: ArtifactReadFilter;
-  readonly sort: SortMode;
-  readonly toggleStatus: (status: ArtifactStatusFilter) => void;
-  readonly toggleKind: (kind: EpicArtifactKind) => void;
-  readonly setRead: (read: ArtifactReadFilter) => void;
-  readonly setSortField: (field: SortField) => void;
-  readonly toggleSortDirection: () => void;
-}) {
-  switch (props.detail) {
-    case "ordering":
-      return (
-        <OrderingDetail
-          fields={ARTIFACT_SORT_FIELDS}
-          sort={props.sort}
-          onFieldChange={props.setSortField}
-          onToggleDirection={props.toggleSortDirection}
-        />
-      );
-    case "status":
-      return (
-        <>
-          {ARTIFACT_STATUS_OPTIONS.map((status) => (
-            <DropdownMenuCheckboxItem
-              key={status}
-              checked={props.filterStatuses.includes(status)}
-              onCheckedChange={() => props.toggleStatus(status)}
-              onSelect={(event) => event.preventDefault()}
-            >
-              <span
-                className={cn(
-                  "size-2 shrink-0 rounded-full",
-                  STATUS_DOT_CLASSES[status],
-                )}
-              />
-              {STATUS_LABELS[status]}
-            </DropdownMenuCheckboxItem>
-          ))}
-        </>
-      );
-    case "type":
-      return (
-        <ArtifactTypeDetail
-          filterKinds={props.filterKinds}
-          toggleKind={props.toggleKind}
-        />
-      );
-    case "read":
-      return (
-        <DropdownMenuRadioGroup
-          value={props.filterRead}
-          onValueChange={(next) => {
-            const match = ARTIFACT_READ_OPTIONS.find(
-              (option) => option.value === next,
-            );
-            if (match !== undefined) props.setRead(match.value);
-          }}
-        >
-          {ARTIFACT_READ_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              onSelect={(event) => event.preventDefault()}
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      );
-  }
-}
-
-function ArtifactTypeDetail(props: {
-  readonly filterKinds: readonly EpicArtifactKind[];
-  readonly toggleKind: (kind: EpicArtifactKind) => void;
-}) {
-  const artifactIconColors = useSettingsStore(
-    (state) => state.artifactIconColors,
-  );
-  const artifactIconColorMode = useSettingsStore(
-    (state) => state.artifactIconColorMode,
-  );
-
-  return ARTIFACT_KIND_OPTIONS.map((kind) => {
-    const TypeIcon = EPIC_NODE_ICONS[kind];
-    const iconStyle =
-      artifactIconColorMode === "byType"
-        ? { color: artifactIconColors[kind] }
-        : undefined;
-    return (
-      <DropdownMenuCheckboxItem
-        key={kind}
-        checked={props.filterKinds.includes(kind)}
-        onCheckedChange={() => props.toggleKind(kind)}
-        onSelect={(event) => event.preventDefault()}
-      >
-        <TypeIcon
-          className={cn(
-            "size-3.5",
-            artifactIconColorMode === "none" && "text-muted-foreground",
-          )}
-          style={iconStyle}
-        />
-        {EPIC_NODE_LABELS[kind]}
-      </DropdownMenuCheckboxItem>
-    );
-  });
-}
-
 export function ArtifactFilterMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -858,7 +452,8 @@ export function ArtifactFilterMenu(props: {
     base: "Filter artifacts",
     filterCount,
     sort,
-    showChanged: false,
+    // The artifacts panel has no archive-visibility control.
+    visibilityLabel: null,
   });
 
   return (
