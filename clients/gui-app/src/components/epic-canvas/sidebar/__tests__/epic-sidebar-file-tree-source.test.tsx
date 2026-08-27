@@ -209,6 +209,10 @@ let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
 // reads its options once, at construction, and the model exposes no getter the
 // panel could be asked afterwards.
 let capturedItemHeight: number | undefined = undefined;
+// The workspace tree renders its rows inside Pierre's shadow root, so a
+// high-zoom layout correction must be passed through its deliberate CSS escape
+// hatch rather than an app-level selector that cannot reach the rows.
+let capturedUnsafeCSS: string | undefined = undefined;
 
 function notifyModel(): void {
   for (const listener of modelListeners) listener();
@@ -353,11 +357,22 @@ vi.mock("@pierre/trees/react", () => ({
   FileTree: () => <div data-testid="pierre-file-tree-stub" />,
   useFileTreeSearch: () =>
     useSyncExternalStore(subscribeToSearchSnapshot, getSearchSnapshot),
+  /**
+   * Mock of Pierre's `useFileTree` hook for the workspace tree tests.
+   *
+   * Real hook reads `options.onSelectionChange`, `options.itemHeight`, and
+   * `options.unsafeCSS` once at construction and returns a stable model
+   * object. Mirror that contract here so the test can assert exactly the
+   * options the real component passes (selection change, row height, and
+   * the workspace file-tree CSS override).
+   */
   useFileTree: (options: {
     readonly onSelectionChange: (paths: ReadonlyArray<string>) => void;
     readonly itemHeight: number | undefined;
+    readonly unsafeCSS: string | undefined;
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
+    capturedUnsafeCSS = options.unsafeCSS;
     // Mount-captured, exactly like the real hook's `useState(() => new
     // FileTree(options))`. Recording it per RENDER instead would make the row
     // geometry look reactive here when it is not, and the viewport-transition
@@ -628,6 +643,15 @@ describe("sidebar file tree source selection", () => {
 
     expect(pinned.subscribedMethods).toEqual(["workspace.subscribeFileList"]);
     expect(ambient.subscribedMethods).toEqual([]);
+  });
+
+  it("keeps the content lane flexible at browser zoom", () => {
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+
+    expect(capturedUnsafeCSS).toContain('[data-item-section="content"]');
+    expect(capturedUnsafeCSS).toContain("flex: 1 1 0");
+    expect(capturedUnsafeCSS).toContain("max-width: none");
   });
 
   it("builds the tree from the live stream and leaves the unary path disabled", async () => {

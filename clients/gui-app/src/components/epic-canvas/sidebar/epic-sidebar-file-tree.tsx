@@ -58,7 +58,10 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
-import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
+import {
+  PIERRE_FILE_TREE_THEME_STYLE,
+  WORKSPACE_FILE_TREE_UNSAFE_CSS,
+} from "@/components/epic-canvas/pierre-tree-theme";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -644,6 +647,10 @@ function FileTreeBodyForResolvedHost(
     icons: "complete",
     stickyFolders: true,
     gitStatus,
+    // Rows live in Pierre's shadow DOM. Keep the filename's flex lane from
+    // collapsing to its ellipsis marker when browser zoom increases text and
+    // fixed adjacent lanes together.
+    unsafeCSS: WORKSPACE_FILE_TREE_UNSAFE_CSS,
     // `hide-non-matches`: the filter input below drops every row whose
     // name does not match, keeping only matches and their parents.
     fileTreeSearchMode: "hide-non-matches",
