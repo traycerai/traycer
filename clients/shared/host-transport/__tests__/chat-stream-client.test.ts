@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   createRequestContext,
@@ -476,9 +477,10 @@ describe("ChatStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "chat.subscribe",
-      schemaVersion: buildStreamManifest(hostStreamRpcRegistry)[
-        "chat.subscribe"
-      ],
+      schemaVersion: buildStreamManifest(
+        hostStreamRpcRegistry,
+        CLIENT_SERVED_STREAM_MAJORS,
+      )["chat.subscribe"],
       params: { epicId: "epic-1", chatId: "chat-1" },
     });
 

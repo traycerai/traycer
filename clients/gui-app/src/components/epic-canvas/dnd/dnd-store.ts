@@ -9,9 +9,11 @@
  * canvas.
  */
 import { create } from "zustand";
+import type { StripDragState } from "@/components/epic-canvas/dnd/strip-drag-model";
 import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  type EpicCanvasArtifactTabDragData,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasLeftPanelRailDragData,
@@ -97,6 +99,86 @@ export function epicCanvasDropPreviewEqual(
   return matchingEpicCanvasDropPreviewEqual(left, right);
 }
 
+const EMPTY_TILE_OFFSETS: ReadonlyMap<
+  string,
+  ReadonlyMap<string, number>
+> = new Map();
+
+/** Stable empty map so a strip with no offsets never re-renders on identity. */
+const EMPTY_GROUP_OFFSETS: ReadonlyMap<string, number> = new Map();
+
+function tileOffsetsEqual(
+  left: ReadonlyMap<string, ReadonlyMap<string, number>>,
+  right: ReadonlyMap<string, ReadonlyMap<string, number>>,
+): boolean {
+  if (left === right) return true;
+  if (left.size !== right.size) return false;
+  for (const [groupId, leftGroup] of left) {
+    const rightGroup = right.get(groupId);
+    if (rightGroup === undefined || rightGroup.size !== leftGroup.size) {
+      return false;
+    }
+    for (const [tileId, value] of leftGroup) {
+      if (rightGroup.get(tileId) !== value) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Structural equality so a resolve that produced the same gesture state does
+ * not publish a new object every pointer move. The arming timestamps are
+ * deliberately compared too: a re-anchored dwell IS a different state.
+ */
+function headerStripDragStateEqual(
+  left: StripDragState | null,
+  right: StripDragState | null,
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  if (left.kind !== right.kind || left.targetIndex !== right.targetIndex) {
+    return false;
+  }
+  if (left.kind === "reorder" || right.kind === "reorder") return true;
+  if (left.targetItemId !== right.targetItemId) return false;
+  if (left.kind === "merge-armed" && right.kind === "merge-armed") {
+    return (
+      left.armedAtMs === right.armedAtMs &&
+      left.armedAtPointerX === right.armedAtPointerX
+    );
+  }
+  return true;
+}
+
+/**
+ * Whether every gesture-scoped field is already at rest.
+ *
+ * `dragEnded` fires on paths that may have written nothing, and re-setting a
+ * store that is already idle would publish a new object and re-render every
+ * narrow subscriber for nothing. Extracted so adding a gesture field is one
+ * line here rather than another branch inside the action.
+ */
+function isDragStateIdle(state: EpicDndState): boolean {
+  return (
+    state.activeSource === null &&
+    state.activeOverlayTile === null &&
+    state.activeHeaderTab === null &&
+    state.dropPreview === null &&
+    state.headerStripDropIndex === null &&
+    state.headerStripDragState === null &&
+    state.headerStripSourceWidth === null &&
+    state.headerStripOffsets.size === 0 &&
+    state.tileStripOffsets.size === 0 &&
+    state.tileSourceWidth === null &&
+    state.topLevelEdgeSplitPreview === null &&
+    state.topLevelStripPairPreview === null &&
+    state.reparentTargetNodeId === null &&
+    state.reparentTargetViewTabId === null &&
+    state.reparentRootPanelId === null &&
+    state.reparentRootViewTabId === null
+  );
+}
+
 interface EpicDndState {
   /** Typed canvas/rail drag source, null when no canvas drag is active. */
   readonly activeSource: EpicCanvasDragSourceData | null;
@@ -114,6 +196,39 @@ interface EpicDndState {
    * and canvas-source tear-off hovers. Null when not hovering the strip.
    */
   readonly headerStripDropIndex: number | null;
+  /**
+   * Header-tab reorder/merge state from the strip geometry model. Header drags
+   * resolve their insertion index from pointer geometry rather than droppable
+   * hit-testing (see `header-strip-drag-model.ts`), so this - not
+   * `headerStripDropIndex` - is what the strip renders a provisional order
+   * from. `headerStripDropIndex` stays for canvas tear-off onto the strip,
+   * which has no source slot and so cannot oscillate.
+   */
+  readonly headerStripDragState: StripDragState | null;
+  /**
+   * Measured width of the dragged strip item, so the overlay can render the tab
+   * at its real size instead of a differently-shaped floating chip.
+   */
+  readonly headerStripSourceWidth: number | null;
+  /**
+   * Per-item x displacement for the HEADER strip while a header drag is in
+   * flight. The header renders an explicit transform from this rather than a
+   * provisional CSS `order` + layout projection, exactly as the tile strip
+   * does - an absent id means that item sits at x 0.
+   */
+  readonly headerStripOffsets: ReadonlyMap<string, number>;
+  /**
+   * Per-tile x displacement while a tile drag is in flight, keyed by group then
+   * tile id. Tile strips render an explicit transform from this rather than a
+   * provisional CSS `order`; an absent group means every tile sits at x 0.
+   */
+  readonly tileStripOffsets: ReadonlyMap<string, ReadonlyMap<string, number>>;
+  /**
+   * Measured width of the dragged tile, so its overlay is the tile at its own
+   * size rather than a differently-shaped chip. Tile widths are content-sized
+   * and genuinely unequal, so this cannot be a constant.
+   */
+  readonly tileSourceWidth: number | null;
   /** Preview owned by the independent top-level edge-dwell machine. */
   readonly topLevelEdgeSplitPreview: TopLevelEdgeSplitTarget | null;
   /**
@@ -137,9 +252,20 @@ interface EpicDndState {
     source: EpicCanvasDragSourceData,
     overlayTile: EpicCanvasTileRef | null,
   ) => void;
-  readonly headerTabDragStarted: (tab: HeaderTabDragData) => void;
+  readonly headerTabDragStarted: (
+    tab: HeaderTabDragData,
+    sourceWidth: number | null,
+  ) => void;
   readonly dropPreviewChanged: (preview: EpicCanvasDropPreview) => void;
   readonly headerStripDropIndexChanged: (index: number | null) => void;
+  readonly headerStripDragStateChanged: (state: StripDragState | null) => void;
+  readonly tileStripOffsetsChanged: (
+    offsets: ReadonlyMap<string, ReadonlyMap<string, number>>,
+  ) => void;
+  readonly headerStripOffsetsChanged: (
+    offsets: ReadonlyMap<string, number>,
+  ) => void;
+  readonly tileSourceWidthChanged: (width: number | null) => void;
   readonly topLevelEdgeSplitPreviewChanged: (
     preview: TopLevelEdgeSplitTarget | null,
   ) => void;
@@ -162,6 +288,11 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   activeHeaderTab: null,
   dropPreview: null,
   headerStripDropIndex: null,
+  headerStripDragState: null,
+  headerStripSourceWidth: null,
+  headerStripOffsets: EMPTY_GROUP_OFFSETS,
+  tileStripOffsets: EMPTY_TILE_OFFSETS,
+  tileSourceWidth: null,
   topLevelEdgeSplitPreview: null,
   topLevelStripPairPreview: null,
   reparentTargetNodeId: null,
@@ -175,6 +306,11 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeHeaderTab: null,
       dropPreview: null,
       headerStripDropIndex: null,
+      headerStripDragState: null,
+      headerStripSourceWidth: null,
+      headerStripOffsets: EMPTY_GROUP_OFFSETS,
+      tileStripOffsets: EMPTY_TILE_OFFSETS,
+      tileSourceWidth: null,
       topLevelEdgeSplitPreview: null,
       topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
@@ -183,13 +319,18 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       reparentRootViewTabId: null,
     });
   },
-  headerTabDragStarted: (tab) => {
+  headerTabDragStarted: (tab, sourceWidth) => {
     set({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: tab,
       dropPreview: null,
       headerStripDropIndex: null,
+      headerStripDragState: null,
+      headerStripSourceWidth: sourceWidth,
+      headerStripOffsets: EMPTY_GROUP_OFFSETS,
+      tileStripOffsets: EMPTY_TILE_OFFSETS,
+      tileSourceWidth: null,
       topLevelEdgeSplitPreview: null,
       topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
@@ -205,6 +346,33 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   headerStripDropIndexChanged: (index) => {
     if (get().headerStripDropIndex === index) return;
     set({ headerStripDropIndex: index });
+  },
+  headerStripOffsetsChanged: (offsets) => {
+    const current = get().headerStripOffsets;
+    if (current.size === offsets.size) {
+      let same = true;
+      for (const [id, value] of offsets) {
+        if (current.get(id) !== value) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+    set({ headerStripOffsets: offsets });
+  },
+  tileSourceWidthChanged: (width) => {
+    if (get().tileSourceWidth === width) return;
+    set({ tileSourceWidth: width });
+  },
+  tileStripOffsetsChanged: (offsets) => {
+    if (tileOffsetsEqual(get().tileStripOffsets, offsets)) return;
+    set({ tileStripOffsets: offsets });
+  },
+  headerStripDragStateChanged: (next) => {
+    const current = get().headerStripDragState;
+    if (headerStripDragStateEqual(current, next)) return;
+    set({ headerStripDragState: next });
   },
   topLevelEdgeSplitPreviewChanged: (preview) => {
     const current = get().topLevelEdgeSplitPreview;
@@ -251,20 +419,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
     });
   },
   dragEnded: () => {
-    const state = get();
-    if (
-      state.activeSource === null &&
-      state.activeOverlayTile === null &&
-      state.activeHeaderTab === null &&
-      state.dropPreview === null &&
-      state.headerStripDropIndex === null &&
-      state.topLevelEdgeSplitPreview === null &&
-      state.topLevelStripPairPreview === null &&
-      state.reparentTargetNodeId === null &&
-      state.reparentTargetViewTabId === null &&
-      state.reparentRootPanelId === null &&
-      state.reparentRootViewTabId === null
-    ) {
+    if (isDragStateIdle(get())) {
       return;
     }
     set({
@@ -273,6 +428,11 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeHeaderTab: null,
       dropPreview: null,
       headerStripDropIndex: null,
+      headerStripDragState: null,
+      headerStripSourceWidth: null,
+      headerStripOffsets: EMPTY_GROUP_OFFSETS,
+      tileStripOffsets: EMPTY_TILE_OFFSETS,
+      tileSourceWidth: null,
       topLevelEdgeSplitPreview: null,
       topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
@@ -340,6 +500,32 @@ export function useEmptyShellDropActive(viewTabId: string): boolean {
 /** Header strip insertion indicator (reorder + canvas tear-off hovers). */
 export function useHeaderStripDropIndex(): number | null {
   return useEpicDndStore((s) => s.headerStripDropIndex);
+}
+
+export function useActiveHeaderTab(): HeaderTabDragData | null {
+  return useEpicDndStore((s) => s.activeHeaderTab);
+}
+
+export function useHeaderStripOffsets(): ReadonlyMap<string, number> {
+  return useEpicDndStore((s) => s.headerStripOffsets);
+}
+
+export function useTileStripOffsets(
+  groupId: string,
+): ReadonlyMap<string, number> {
+  return useEpicDndStore(
+    (s) => s.tileStripOffsets.get(groupId) ?? EMPTY_GROUP_OFFSETS,
+  );
+}
+
+export function useHeaderStripDragState(): StripDragState | null {
+  return useEpicDndStore((s) => s.headerStripDragState);
+}
+
+export function useActiveArtifactTab(): EpicCanvasArtifactTabDragData | null {
+  return useEpicDndStore((s) =>
+    s.activeSource?.kind === "artifact-tab" ? s.activeSource : null,
+  );
 }
 
 export function useTopLevelEdgeSplitPreview(

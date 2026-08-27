@@ -47,6 +47,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 
 const APPROVAL_ENTRY = {
   id: "notification-1",
@@ -1022,7 +1023,10 @@ describe("host.notifications registry membership", () => {
   });
 
   it("keeps the local-feed method compatible in both directions while cloud feed remains explicitly unsupported by an old peer", () => {
-    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const currentManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const {
       ["host.notifications.cloudFeed.subscribe"]: _cloudFeed,
       ...oldManifest

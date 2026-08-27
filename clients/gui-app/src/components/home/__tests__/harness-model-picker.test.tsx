@@ -1678,7 +1678,7 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.getByRole("tab", { name: "Claude" })).not.toBeNull();
   });
 
-  it("orders the rail by provider defaults and moves degraded providers down", async () => {
+  it("orders the rail by provider defaults, keeping degraded providers in place", async () => {
     const codex = codexModels();
     const claude = claudeModels();
     queryMock.harnesses = [
@@ -1711,12 +1711,16 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     const tabs = screen.getAllByRole("tab");
 
+    // OpenRouter is degraded (setup required) yet HOLDS its canonical slot:
+    // the old degraded sink re-sorted rows when late verdicts landed, which
+    // is exactly the mid-render movement this picker no longer does. Degraded
+    // is a flag on the row, never a position.
     expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Codex",
       "Claude",
+      "OpenRouter",
       "Droid",
       "Cursor",
-      "OpenRouter",
     ]);
     expect(
       screen
@@ -1979,6 +1983,67 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("tab", { name: "Codex" }).getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  it("falls back to a RUNNABLE provider rather than the first degraded one", async () => {
+    // The last-resort branch of `resolveActiveProviderId`, reached the way a
+    // cold boot reaches it: the composer's selected provider (codex, this
+    // suite's default) has an availability probe still in flight, so the
+    // toolbar store holds the selection there while the picker cannot browse
+    // it. The picker has to choose for the user. Claude comes first in
+    // canonical order but is signed out - browse-only. Landing there would
+    // open onto a reauth panel while a provider that can actually run a turn
+    // sits one tab over.
+    //
+    // Order used to answer this by accident, since degraded providers sank to
+    // the bottom of the list this scans. Removing that sink (a late verdict
+    // must not move a row under the cursor) is why the preference is now
+    // stated in the resolver, and why this test exists.
+    const codex = codexModels();
+    const claude = claudeModels();
+    const droid = [
+      model({ harnessId: "droid", slug: "droid-core", label: "Droid Core" }),
+    ];
+    const probingCodex: HarnessOption = {
+      ...CODEX_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: null,
+    };
+    queryMock.harnesses = [probingCodex, CLAUDE_HARNESS, DROID_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(probingCodex, []),
+      catalogHarness(CLAUDE_HARNESS, claude),
+      catalogHarness(DROID_HARNESS, droid),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", claude],
+      ["droid", droid],
+    ]);
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+
+    renderPicker(undefined);
+    // The selected provider's model query is gated on its availability, so an
+    // unsettled codex leaves the trigger with nothing to name.
+    await openPickerByTriggerName("Select model");
+
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    const droidTab = screen.getByRole("tab", { name: "Droid" });
+    expect(droidTab.getAttribute("aria-selected")).toBe("true");
+    expect(claudeTab.getAttribute("aria-selected")).toBe("false");
+    // The degraded provider keeps both its dimming and its canonical place -
+    // the fix is about what gets LANDED on, not about moving anything.
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+    expect(screen.getAllByRole("tab").indexOf(claudeTab)).toBeLessThan(
+      screen.getAllByRole("tab").indexOf(droidTab),
+    );
   });
 
   it("keeps a ready provider entirely ungated while a sibling downloads", async () => {

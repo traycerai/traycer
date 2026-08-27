@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -111,7 +112,10 @@ function completeHandshake(socket: StubStreamWebSocket): void {
   socket.fireOpen();
   socket.fireText({
     kind: "openAck",
-    manifest: buildStreamManifest(hostStreamRpcRegistry),
+    manifest: buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    ),
   });
 }
 
