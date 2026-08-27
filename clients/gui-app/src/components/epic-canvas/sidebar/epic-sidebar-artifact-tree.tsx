@@ -984,9 +984,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           // snapshot. See `use-rename-canvas-tab.ts`.
           if (
             requestId === null ||
-            epicHandle.store
-              .getState()
-              .isLatestPendingRename(nodeId, requestId)
+            epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
           ) {
             renameArtifactInTab(tabId, nodeId, trimmed);
           }

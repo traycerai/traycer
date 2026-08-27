@@ -1621,7 +1621,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       // `use-rename-canvas-tab.ts`.
       if (
         requestId === null ||
-        epicHandle.store.getState().isLatestPendingRename(nodeId, requestId)
+        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
       ) {
         renameArtifactInTab(tabId, nodeId, trimmed);
       }

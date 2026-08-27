@@ -90,11 +90,12 @@ export function useRenameCanvasTab(
         // node: RPC settles are not ordered, so with two renames in flight
         // the older success arm can run after the newer one already wrote -
         // its captured title would overwrite the newer snapshot and
-        // resurface on the next cold render. (A stamped-but-superseded chain
-        // also answers false: the row won, nothing to persist.)
+        // resurface on the next cold render. The guard reads the stamp
+        // TOMBSTONE, not the live chain, so a successful rename whose own
+        // echo swept its chain before the ack still writes.
         if (
           requestId !== null &&
-          !epicHandle.store.getState().isLatestPendingRename(id, requestId)
+          !epicHandle.store.getState().isLatestRenameStamp(id, requestId)
         ) {
           return;
         }

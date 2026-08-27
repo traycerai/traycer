@@ -321,6 +321,29 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
+  it("shows the LAST-STAMPED target when the NEWER entry acks first, not the older still-pending one - an out-of-order ACK must not walk the display backward", () => {
+    const { handle } = newSession("editor");
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const first = handle.store.getState().beginRenameMutation(id, "B");
+    if (first === null) throw new Error("expected a request id");
+    const second = handle.store.getState().beginRenameMutation(id, "C");
+    if (second === null) throw new Error("expected a request id");
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
+
+    // The SECOND (newer) rename's RPC acks FIRST, while the first ("B") is
+    // still pending. Filtering landed entries out of display selection (the
+    // pre-fix behavior) would fall back to the still-pending "B" here -
+    // regressing the newest thing the user asked for until "B" also settles.
+    handle.store.getState().retirePendingMutation(second, "landed");
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
+
+    // "B" acks too - the chain is now fully landed. Continuity across the
+    // final settle: still "C", the last-stamped target.
+    handle.store.getState().retirePendingMutation(first, "landed");
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
+    handle.dispose();
+  });
+
   it("returns null for a viewer role", () => {
     const { handle } = newSession("viewer");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);

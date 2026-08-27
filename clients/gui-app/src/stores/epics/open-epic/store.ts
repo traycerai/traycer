@@ -748,16 +748,20 @@ export interface OpenEpicState {
     outcome: "landed" | "failed",
   ) => boolean;
   /**
-   * Whether `requestId` is still the LAST-STAMPED rename for its node - the
-   * guard the persisted canvas-tab snapshot writes on. RPC settles are not
-   * ordered: with two renames in flight, the older one's success arm can run
-   * after the newer one's, and writing its captured title into the snapshot
-   * would preserve the superseded value across cold renders. Also false when
-   * the chain is gone entirely (superseded by an off-anchor authoritative
-   * move, or the handle detached) - the row already wins there, and the
-   * snapshot has nothing newer to learn from a stale ack.
+   * Whether `requestId` is the LAST-STAMPED rename for its node - the guard
+   * the persisted canvas-tab snapshot writes on. RPC settles are not
+   * ordered: with two renames in flight, the older one's success arm can
+   * run after the newer one's, and writing its captured title into the
+   * snapshot would preserve the superseded value across cold renders.
+   *
+   * Deliberately answered from a stamp TOMBSTONE rather than the live
+   * chain: a successful rename's own echo can reach the store before its
+   * RPC settles, and the dead sweep then removes the chain as an off-anchor
+   * move - a chain-membership answer would refuse the only persisted-tab
+   * write of a rename that SUCCEEDED. The tombstone survives the sweep, so
+   * the only acks it refuses are ones a newer stamp genuinely superseded.
    */
-  isLatestPendingRename: (nodeId: string, requestId: string) => boolean;
+  isLatestRenameStamp: (nodeId: string, requestId: string) => boolean;
   /** Returns true when a delete actually happened. Reparents children. */
   deleteArtifact: (artifactId: string) => boolean;
   /**
@@ -2099,6 +2103,19 @@ export function createOpenEpicStore(
    * the order the user made them.
    */
   const pendingMetadataMutations = new Map<string, PendingMetadataMutation>();
+
+  /**
+   * The last-stamped rename request per node, SURVIVING the chain: the dead
+   * sweep deletes a chain whose row moved off-anchor, and a successful
+   * rename's own echo arriving before its RPC settles is exactly such a
+   * move. The persisted-tab snapshot guard has to tell "an older rename of
+   * ours acked after a newer one" (skip the write) from "our only rename's
+   * echo beat its ack" (write) - chain membership cannot, because the chain
+   * is gone in both. Entries are overwritten per node and cleared at
+   * dispose; request ids are never reused, so a stale tombstone can only
+   * ever refuse a write, never misattribute one.
+   */
+  const latestRenameStampByNode = new Map<string, string>();
 
   /**
    * Mutations OBSERVED to target a record-plane row, by client request id.
@@ -3788,7 +3805,7 @@ export function createOpenEpicStore(
           if (displayed === trimmed) return null;
           const baseline = baselineFor("rename", nodeId, displayed);
           if (baseline === null) return null;
-          return stampPendingMutation({
+          const requestId = stampPendingMutation({
             kind: "rename",
             requestId: crypto.randomUUID(),
             nodeId,
@@ -3796,6 +3813,11 @@ export function createOpenEpicStore(
             baseline,
             landed: false,
           });
+          // The stamp TOMBSTONE outlives the chain - see
+          // {@link OpenEpicState.isLatestRenameStamp} for why the snapshot
+          // guard cannot read chain membership.
+          latestRenameStampByNode.set(nodeId, requestId);
+          return requestId;
         };
 
         /** Stamp an optimistic epic-title change. See {@link beginRenameMutation}. */
@@ -3871,27 +3893,17 @@ export function createOpenEpicStore(
         };
 
         /**
-         * See the {@link OpenEpicState.isLatestPendingRename} contract. Walks
-         * the retained chain in stamp order; the last rename for the node is
-         * the only one whose success arm may write the persisted canvas-tab
-         * snapshot. A landed retire KEEPS its entry, so the arm that calls
-         * retire("landed") and then this still sees its own stamp; a chain
-         * deleted by supersession (or a detach-time retire) answers false,
-         * which correctly skips the write - the authoritative row has already
-         * won.
+         * See the {@link OpenEpicState.isLatestRenameStamp} contract - a
+         * tombstone read, NOT a chain walk. The chain answer shipped first
+         * and was wrong: the fast-echo race (authoritative row catches up
+         * before the RPC settles) sweeps the chain, and the success arm then
+         * found "not latest" for a rename that succeeded, skipping its only
+         * persisted-tab write.
          */
-        const isLatestPendingRename = (
+        const isLatestRenameStamp = (
           nodeId: string,
           requestId: string,
-        ): boolean => {
-          let latest: string | null = null;
-          for (const [id, mutation] of pendingMetadataMutations) {
-            if (mutation.kind !== "rename") continue;
-            if (mutation.nodeId !== nodeId) continue;
-            latest = id;
-          }
-          return latest === requestId;
-        };
+        ): boolean => latestRenameStampByNode.get(nodeId) === requestId;
 
         return {
           epicId,
@@ -4359,6 +4371,7 @@ export function createOpenEpicStore(
             // the map again; clearing just guarantees no stamp outlives it.
             pendingMetadataMutations.clear();
             registryBackedRequestIds.clear();
+            latestRenameStampByNode.clear();
             unsubscribeAuthUserId?.();
             unsubscribeAuthUserId = null;
             projector.detach();
@@ -4373,7 +4386,7 @@ export function createOpenEpicStore(
           beginEpicTitleMutation,
           beginReparentMutation,
           retirePendingMutation,
-          isLatestPendingRename,
+          isLatestRenameStamp,
           deleteArtifact: deleteArtifactAction,
           reparentArtifact: reparentArtifactAction,
           setEpicTitle: setEpicTitleAction,

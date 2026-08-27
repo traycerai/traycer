@@ -233,7 +233,15 @@ function resolvePendingChain(
     const anchored =
       authoritative === baseline || landedTargets.includes(authoritative);
     if (!anchored) return { value: authoritative, changed: false, dead: true };
-    const value = mutationTarget(pending[pending.length - 1]);
+    // The LAST-STAMPED target, not the last still-pending one: ACKs settle
+    // out of order, and filtering landed entries out of display selection
+    // walks the UI backward when the newest intent acks first (rename B
+    // then C; C acks; showing B until B settles regresses the newest thing
+    // the user asked for). The last stamp is the newest intent whatever its
+    // RPC state; when the tail is landed its target is also what the
+    // all-landed branch below will keep showing, so display is continuous
+    // across the final settle.
+    const value = mutationTarget(chain[chain.length - 1]);
     return { value, changed: value !== authoritative, dead: false };
   }
   const lastLanded = landedTargets[landedTargets.length - 1];

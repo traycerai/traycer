@@ -497,7 +497,7 @@ describe("useRenameCanvasTab", () => {
     expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "C");
 
     // The OLDER rename's success arm ("B") settles SECOND, after "C" already
-    // wrote. Before `isLatestPendingRename`, this unconditionally overwrote
+    // wrote. Before `isLatestRenameStamp`, this unconditionally overwrote
     // the snapshot with its own captured "B" - the persisted fallback would
     // regress behind the row/overlay (both still showing "C") and resurface
     // stale on the next cold render. The guard must suppress it.
@@ -604,6 +604,68 @@ describe("useRenameCanvasTab", () => {
       "C",
     );
 
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("still writes the persisted snapshot when the authoritative echo lands BEFORE the RPC settles and kills the chain - the stamp TOMBSTONE survives the dead sweep", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const beginRenameMutationSpy = vi.spyOn(
+      handle.store.getState(),
+      "beginRenameMutation",
+    );
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    act(() => {
+      result.current(artifactTile(id), "B");
+    });
+    const requestId = beginRenameMutationSpy.mock.results[0]?.value;
+    if (requestId === undefined || requestId === null) {
+      throw new Error("expected a request id");
+    }
+
+    // The authoritative row echoes "B" - our own target - BEFORE the RPC
+    // promise settles. The chain has no landed member yet, so the row
+    // reaching our own target reads as off-anchor supersession (row-wins,
+    // not "our echo") and the dead sweep kills it.
+    const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
+    if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
+    const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
+    const rawEntry = artifactsMap.get(id);
+    if (!(rawEntry instanceof Y.Map)) throw new Error("expected entry");
+    const entry: Y.Map<unknown> = rawEntry;
+    act(() => {
+      handle.doc.transact(() => {
+        entry.set("title", "B");
+        entry.set("updatedAt", 123);
+      });
+    });
+
+    // Confirms the chain actually died: nothing left to retire.
+    expect(
+      handle.store.getState().retirePendingMutation(requestId, "landed"),
+    ).toBe(false);
+
+    // The RPC's own success arm runs now. Under the old CHAIN-based guard
+    // (`isLatestPendingRename`), a dead chain answered "not latest" here and
+    // the persisted-tab write - the only one a successful rename ever gets -
+    // was skipped. The tombstone (`isLatestRenameStamp`) survives the sweep,
+    // so the write goes through.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "B");
+
+    beginRenameMutationSpy.mockRestore();
     renameArtifactInTabSpy.mockRestore();
     unmount();
   });
