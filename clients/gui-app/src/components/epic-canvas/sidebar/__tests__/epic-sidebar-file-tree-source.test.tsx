@@ -283,8 +283,7 @@ const mockModel = {
   resetPaths: (
     paths: ReadonlyArray<string>,
     options:
-      | { readonly initialExpandedPaths?: ReadonlyArray<string> }
-      | undefined,
+      { readonly initialExpandedPaths?: ReadonlyArray<string> } | undefined,
   ) => {
     resetPathsCalls.push({
       paths,
@@ -628,6 +627,28 @@ describe("sidebar file tree source selection", () => {
 
     expect(pinned.subscribedMethods).toEqual(["workspace.subscribeFileList"]);
     expect(ambient.subscribedMethods).toEqual([]);
+  });
+
+  /**
+   * Inside the mobile switcher sheet this tree is a vaul drawer descendant.
+   * vaul's `shouldDrag` walks up from the touch target and, finding no
+   * scrollable ancestor, returns true - it drags the drawer instead of letting
+   * the content scroll. Pierre's scroller is inside a shadow root and a touch
+   * inside one retargets to the host, so that walk starts outside the shadow
+   * tree and can never see it. The attribute is what tells vaul to stay out.
+   *
+   * This is the WORKSPACE tree - the surface actually reported - and it needs
+   * its own arm: the git-diff tree's assertion passes with this marker deleted,
+   * so without this the coverage claim would be true of the wrong mount.
+   *
+   * It pins the marker, not the scrolling. Whether a finger scrolls is touch
+   * arbitration, which jsdom cannot decide.
+   */
+  it("marks the tree wrapper as not a drawer-drag surface", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    const tree = screen.getByTestId("pierre-file-tree-stub");
+    expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
   });
 
   it("builds the tree from the live stream and leaves the unary path disabled", async () => {
