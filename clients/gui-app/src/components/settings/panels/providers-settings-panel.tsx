@@ -1042,13 +1042,17 @@ function ProviderDetail({
   // Whether the detail pane below the header is inert - the Account and
   // Profiles controls included.
   //
-  // Keyed on the effective `enabled` flag, which is now the only thing it
-  // could be keyed on: `enabled: false` has exactly one cause - somebody
-  // turned this provider off - so the pane is inert precisely when it is off,
-  // and turning it back on is the one gesture that revives it. Under the
-  // retired tri-state that was not true (an auto-undetected provider read
-  // disabled without anyone having chosen it), which is why this gate used to
-  // read the sticky mode instead.
+  // Keyed on the effective `enabled` flag, which is now the only thing it could
+  // be keyed on. Not because `false` has a single cause - boot seeding leaves
+  // plenty of providers off that nobody ever touched - but because every cause
+  // is now a STICKY row: seeded once, or set by the user's toggle, and never
+  // re-derived. So the pane is inert precisely when the provider is off, and
+  // turning it on is the one gesture that revives it.
+  //
+  // Under the retired tri-state that did not hold: an auto-undetected provider
+  // read disabled from a verdict that could flip under the user without anyone
+  // choosing anything, which is why this gate used to read the sticky mode
+  // instead of the effective flag.
   const detailPaneInert = !state.enabled;
   const canAddProfile = providerCanStartProfileOauth(
     state,

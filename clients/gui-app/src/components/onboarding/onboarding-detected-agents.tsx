@@ -300,6 +300,21 @@ function SignInToEnableButton(props: {
     !isPending &&
     awaitLogin.isSuccess &&
     awaitLogin.data.state?.auth.status !== "authenticated";
+  // This attempt DID authenticate, and the row is still off - so the enable was
+  // the half that failed (this button only renders while `!state.enabled`).
+  //
+  // A press then has to retry the ENABLE, not the login. Restarting the login
+  // is not merely wasteful: a CLI that refuses to start one while an account is
+  // already signed in answers `started: false`, so the retry would render "sign
+  // in did not start" and the button could never complete the action it
+  // advertises. The user's only way out would be leaving onboarding.
+  //
+  // Derived rather than latched: `awaitLogin` already holds this attempt's
+  // verdict, and `onSignIn` resets it, so the phase begins and ends with the
+  // attempt it describes.
+  const authenticatedAwaitingEnable =
+    awaitLogin.isSuccess &&
+    awaitLogin.data.state?.auth.status === "authenticated";
   const onSignIn = (providerId: ProviderId): void => {
     // Scope the await result to THIS attempt. `startLogin.mutate` resets its
     // own result and so clears `declined` on its own; `awaitLogin` is a
@@ -421,7 +436,13 @@ function SignInToEnableButton(props: {
         variant="outline"
         size="sm"
         disabled={isPending}
-        onClick={() => onSignIn(state.providerId)}
+        onClick={() => {
+          if (authenticatedAwaitingEnable) {
+            onEnable(state.providerId);
+            return;
+          }
+          onSignIn(state.providerId);
+        }}
       >
         Sign in to enable
         {/* Unchanged label + inline spinner: starting a login spawns the

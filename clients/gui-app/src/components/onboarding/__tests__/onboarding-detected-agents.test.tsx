@@ -643,6 +643,26 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("retries the ENABLE, not the login, after an authenticated sign-in whose enable failed", () => {
+    // Sign-in succeeded; the enable is what did not take, so the row is still
+    // off and this button is still rendered. Pressing it again must resume at
+    // the failed step. Restarting the login is not just wasted work: a CLI that
+    // refuses to start one while already signed in answers `started: false`, so
+    // the retry would report "sign-in did not start" and the button could never
+    // do what it advertises.
+    const view = startSignInAttempt(false);
+    settleWith(view, {
+      state: { auth: { status: "authenticated" }, authPending: false },
+    });
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(signInButton());
+
+    // The enable was retried directly, and no second OAuth flow was spawned.
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(2);
+    expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
   it("does not carry a settled verdict into an attempt that never started", () => {
     // The two messages are only mutually exclusive because each attempt RESETS
     // the await mutation. Without that, attempt 1's completion outlives it: a
