@@ -283,7 +283,8 @@ const mockModel = {
   resetPaths: (
     paths: ReadonlyArray<string>,
     options:
-      { readonly initialExpandedPaths?: ReadonlyArray<string> } | undefined,
+      | { readonly initialExpandedPaths?: ReadonlyArray<string> }
+      | undefined,
   ) => {
     resetPathsCalls.push({
       paths,
