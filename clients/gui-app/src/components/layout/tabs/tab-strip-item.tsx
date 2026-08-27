@@ -10,6 +10,7 @@ import { X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence } from "motion/react";
+import { useHeaderTabDisplacement } from "./use-header-tab-displacement";
 import * as m from "motion/react-m";
 import {
   useDraggable,
@@ -57,7 +58,7 @@ import {
 } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
 import {
-  HEADER_TAB_LAYOUT_TRANSITION,
+  useHeaderTabDisplacementTransition,
   TAB_CLASS_BASE,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
@@ -93,6 +94,7 @@ interface TabItemProps {
    */
   readonly chrome: "own" | "member";
   readonly includeMotionFrame: boolean;
+  readonly offsetX: number;
   readonly isActive: boolean;
   readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
@@ -462,12 +464,15 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       />
     </ContextMenu>
   );
-  return includeMotionFrame ? (
-    <HeaderTabMotionFrame isDragging={isDragging}>
+  if (!includeMotionFrame) return control;
+  return (
+    <HeaderTabMotionFrame
+      isDragging={isDragging}
+      offsetX={props.offsetX}
+      dnd={dnd}
+    >
       {control}
     </HeaderTabMotionFrame>
-  ) : (
-    control
   );
 });
 
@@ -527,7 +532,11 @@ function useHeaderTabDnd(
       `${config?.stripItemId ?? "member"}:${tabId}`,
     ),
     data: dropData,
-    disabled: config === null || !config.isDropSlot,
+    // The source stays mounted as a full-width layout placeholder while the
+    // overlay follows the pointer. It must not remain a collision target: once
+    // provisional order moves that placeholder under the pointer it would
+    // steal `over` from the neighbour whose center actually opened the slot.
+    disabled: config === null || !config.isDropSlot || isDragging,
   });
   const ref = useMemo(
     () => mergeRefs<HTMLElement>(dragRef, dropRef),
@@ -540,30 +549,30 @@ function HeaderTabDropIndicator(props: {
   readonly visible: boolean;
   readonly side: "left" | "right";
 }) {
+  // No AnimatePresence: its exit animation keeps the OLD indicator mounted
+  // while the new one enters, so the strip shows two landing positions at once
+  // for the length of the exit (~110ms measured). A drop indicator states one
+  // destination, so it unmounts immediately and only its entry animates.
+  if (!props.visible) return null;
   return (
-    <AnimatePresence initial={false}>
-      {props.visible ? (
-        <m.span
-          aria-hidden
-          data-testid="tab-drop-indicator"
-          initial={{ opacity: 0, scaleY: 0.45 }}
-          animate={{ opacity: 1, scaleY: 1 }}
-          exit={{ opacity: 0, scaleY: 0.45 }}
-          transition={{ duration: 0.12, ease: "easeOut" }}
-          className={cn(
-            "absolute inset-y-1 z-20 origin-center",
-            props.side === "left" ? "left-2" : "right-2",
-          )}
-        >
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="h-full"
-            testId={undefined}
-          />
-        </m.span>
-      ) : null}
-    </AnimatePresence>
+    <m.span
+      aria-hidden
+      data-testid="tab-drop-indicator"
+      initial={{ opacity: 0, scaleY: 0.45 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      transition={{ duration: 0.12, ease: "easeOut" }}
+      className={cn(
+        "absolute inset-y-1 z-20 origin-center",
+        props.side === "left" ? "left-2" : "right-2",
+      )}
+    >
+      <DropLine
+        orientation="vertical"
+        glow={false}
+        className="h-full"
+        testId={undefined}
+      />
+    </m.span>
   );
 }
 
@@ -609,17 +618,36 @@ function TabLeadingIcon(props: {
 
 function HeaderTabMotionFrame(props: {
   readonly isDragging: boolean;
+  readonly offsetX: number;
+  /** Drag config; its `stripItemId` is the drag model's measurement anchor. */
+  readonly dnd: HeaderTabDndConfig | null;
   readonly children: React.ReactNode;
 }) {
+  const transition = useHeaderTabDisplacementTransition();
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const x = useHeaderTabDisplacement({
+    nodeRef: frameRef,
+    offsetX: props.offsetX,
+    transition,
+  });
+
   return (
     <m.div
-      layout="position"
+      ref={frameRef}
       initial={false}
-      animate={{
-        opacity: props.isDragging ? 0.36 : 1,
-        scale: props.isDragging ? 0.96 : 1,
-      }}
-      transition={HEADER_TAB_LAYOUT_TRANSITION}
+      animate={{ opacity: props.isDragging ? 0 : 1 }}
+      style={{ x }}
+      // Explicit x from the drag model - deliberately NOT `layout="position"`
+      // plus CSS `order`. That pairing strands a translateX when the item set
+      // changes under an in-flight projection; binding x to state makes the
+      // class unrepresentable rather than merely currently unreachable.
+      //
+      // Position springs, opacity does not: the dragged tab's source frame must
+      // become invisible on the same frame the overlay is painted, or the strip
+      // briefly shows two copies of one tab.
+      transition={transition}
+      data-strip-item-id={props.dnd?.stripItemId}
+      data-strip-item-mergeable="true"
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
       className="relative flex w-56 min-w-[120px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"

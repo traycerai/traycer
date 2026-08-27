@@ -288,7 +288,12 @@ export function resolveCanvasDropPreview(
       index: getArtifactTabDropIndexFromPoint(target, targetRect, point.x) ?? 0,
     };
   }
-  return getEpicCanvasDropPreview(target, targetRect, point);
+  return getEpicCanvasDropPreview(
+    target,
+    targetRect,
+    point,
+    source.kind === ARTIFACT_TAB_DND_TYPE,
+  );
 }
 
 type LeftPanelRailDragSource = Extract<
