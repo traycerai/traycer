@@ -1,8 +1,24 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import type { ReactElement, ReactNode } from "react";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { STATUS_DOT_CLASSES } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
 interface FixtureRecord {
   readonly id: string;
@@ -172,6 +188,91 @@ vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
 
 const PROPS = { epicId: "epic-1", tabId: "tab-1", onClose: () => {} };
 
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function makeMeta(): SnapshotMetaEpic {
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: "epic-1",
+      title: "Epic test",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "u",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+  };
+}
+
+/**
+ * `SwitcherRowActions` (each row's "…" menu) calls `useSwitcherRename`, which
+ * now reads a real session handle for the optimistic overlay
+ * (`beginRenameMutation` / `retirePendingMutation`) rather than firing bare
+ * RPCs - so every render in this suite needs `<EpicSessionContext.Provider>`
+ * around it, not just the tests that exercise a rename. No test here commits
+ * an edit through the menu, so an empty doc is enough for the session to
+ * mount without throwing.
+ */
+function newSessionHandle(): OpenEpicStoreHandle {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = createOpenEpicStore({
+    epicId: "epic-1",
+    streamClientFactory: factory,
+    userId: null,
+    onAuthError: null,
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
+  return handle;
+}
+
+let sessionHandle: OpenEpicStoreHandle;
+
+function SessionWrapper(props: { readonly children: ReactNode }): ReactElement {
+  return (
+    <EpicSessionContext.Provider value={sessionHandle}>
+      {props.children}
+    </EpicSessionContext.Provider>
+  );
+}
+
+/**
+ * The one shared fix: every render in this file goes through the provider.
+ * Uses RTL's `wrapper` option (not a hand-nested element) specifically so it
+ * survives `view.rerender(...)` below - a bare nested element would have the
+ * wrapper swapped OUT the moment a test re-renders with an unwrapped element,
+ * since `rerender` diffs against whatever the root element WAS.
+ */
+function render(ui: ReactElement): RenderResult {
+  return rtlRender(ui, { wrapper: SessionWrapper });
+}
+
 beforeEach(() => {
   holder.records = [];
   holder.activeId = null;
@@ -182,8 +283,12 @@ beforeEach(() => {
   holder.indicatorChatIdCalls = [];
   holder.ownerHostIdByNodeId = {};
   holder.indicators = { epics: {}, chats: {} };
+  sessionHandle = newSessionHandle();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionHandle.dispose();
+});
 
 describe("<SwitcherAgentsList />", () => {
   beforeEach(() => {

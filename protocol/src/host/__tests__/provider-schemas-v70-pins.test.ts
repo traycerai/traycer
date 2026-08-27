@@ -20,7 +20,6 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
-  providersListResponseSchemaV71,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -156,43 +155,44 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     );
   });
 
-  it("v8.0 is the head and names the canonical response; 7.1 and 7.0 name their freezes", () => {
-    // This assertion has now flipped three times, and the flips ARE the
+  it("v8.0 is the head and names the canonical response; 7.0 names its freeze", () => {
+    // This assertion has now flipped four times, and the flips ARE the
     // judgement the freeze rule exists to force. While an unreleased v8.0 sat
     // above v7.0, v7.0 was pinned; collapsing that major made v7.0 the head and
-    // it tracked live again; opening v7.1 for the auth-aware enablement fields
-    // pinned v7.0 to the REAL freeze (`providersListResponseSchemaV70`); and
-    // Reasonix has now pinned 7.1 too and opened a real v8.0.
+    // it tracked live again; opening a v7.1 for the auth-aware enablement
+    // fields pinned v7.0 to the REAL freeze
+    // (`providersListResponseSchemaV70`); and removing those two fields removed
+    // that minor with them - they were its entire delta - so v7.0 is once again
+    // the only frozen line under a real v8.0.
     //
-    // 7.1 froze even though no TAG has shipped it, which is the part worth
-    // reading twice. The "an unreleased line may widen in place" allowance is
-    // about a MAJOR: `versioned-rpc.ts` separately refuses a MINOR whose
-    // response grows an enum over its predecessor, and 7.0 is released - so no
-    // minor of major 7 can ever carry a provider id 7.0 lacks, released or not.
+    // The v7.0 PIN survived all four flips, which is the point: what freezes a
+    // line is another line opening above it, not which one. v8.0 is above it
+    // now, and 7.0 must not drift back onto live just because the line
+    // immediately above it went away.
     //
     // "A line that has STOPPED being the head still points at live" is the
-    // defect being guarded, so every half is asserted: the head names live, and
-    // neither line below it does.
+    // defect being guarded, so both halves are asserted: the head names live,
+    // and the line below it does not.
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
-    const v71 = hostRpcRegistry["providers.list"][7].versions[1].contract;
     const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
     expect(v80.responseSchema).toBe(providersListResponseSchema);
-    expect(v71.responseSchema).toBe(providersListResponseSchemaV71);
-    expect(v71.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
-    expect(v71.responseSchema).toBe(providersListResponseSchemaV71);
-    expect(v80.responseSchema).toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
-    expect(v71.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
+    // Major 7 has exactly ONE minor again. Asserted directly so a future
+    // reader cannot mistake the single-entry table above for an oversight,
+    // and so re-opening a 7.1 has to come here and say why.
+    expect(hostRpcRegistry["providers.list"][7].latestMinor).toBe(0);
+    expect(Object.keys(hostRpcRegistry["providers.list"][7].versions)).toEqual([
+      "0",
+    ]);
     // The REQUEST side did not move: the freezes covered only the response, so
-    // all three lines still bind the live request and
+    // both lines still bind the live request and
     // `providersListRequestSchemaV70` remains the hand-copy held equal to it by
     // the pin above. Request-side enum growth is advisory (a released client
     // never emits a new value), which is why it is allowed to track live here
     // while the response is not.
     expect(v70.requestSchema).toBe(providersListRequestSchema);
-    expect(v71.requestSchema).toBe(providersListRequestSchema);
     expect(v80.requestSchema).toBe(providersListRequestSchema);
     expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });

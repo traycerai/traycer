@@ -47,7 +47,10 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import {
+  invalidateEpicChatRecords,
+  useEpicSyncChatRecords,
+} from "@/hooks/chats/use-epic-chat-records";
 import {
   useEpicArchiveChat,
   useEpicCreateChatForHostClient,
@@ -215,7 +218,18 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
             (entry) => entry.chatId === params.chatId,
           );
           if (index >= 0) {
-            records[index] = { ...records[index], title: params.title };
+            records[index] = {
+              ...records[index],
+              title: params.title,
+              // `revision` is per-chat MONOTONIC and the only ordering fact
+              // `applyChatRecords` has - a served row whose revision does not
+              // strictly exceed what is held is dropped as stale (see
+              // `chat-records-union.test.ts`'s "rejects a STALE poll answer").
+              // A real host bumps this on every write; a fixture that left it
+              // unchanged would describe an update no host actually emits, and
+              // the re-read this test proves would silently no-op.
+              revision: records[index].revision + 1,
+            };
           }
           return Promise.resolve({ updated: true });
         },
@@ -232,6 +246,9 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
               // moved the timestamp alone would describe a row no host emits.
               archived: params.archived,
               archivedAt: params.archived ? 5 : null,
+              // See `epic.renameChat` above - the revision guard drops a
+              // served row that does not strictly advance it.
+              revision: records[index].revision + 1,
             };
           }
           return Promise.resolve({ updated: true });
@@ -457,5 +474,80 @@ describe("the record list runs on the table's cadence", () => {
       .findAll({ queryKey: ["host", HOST_ID, "epic.listChatRecords"] });
     expect(found).toHaveLength(1);
     expect(found[0].observers[0].options.refetchInterval).toBe(20_000);
+  });
+});
+
+describe("a cached answer's fence degrades across a store generation change", () => {
+  it("does not retract a freshly-ingested row in a REOPENED epic's store when the cached answer's fence was captured against the OLD store", async () => {
+    // Generation A: read once, then advance A's ingest counter and force a
+    // second dispatch so the CACHED answer carries a comfortably non-zero
+    // `issuedAtSeq`, fenced against A's `ingestFenceIdentity`.
+    const viewA = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+    await settleFirstRead();
+
+    fixture.handle.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: record({ chatId: "seed-in-a", revision: 1 }),
+    });
+    expect(fixture.handle.store.getState().peekChatIngestSeq()).toBe(1);
+
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(fixture.listCalls.value).toBe(2);
+    });
+
+    // The epic is evicted and reopened: A's store is gone, but the
+    // QueryClient - and the answer it just cached, fenced against A - lives
+    // on. Same epic, same host, same viewer, so the cache key is unchanged.
+    viewA.unmount();
+    fixture.handle.store.getState().dispose();
+
+    const handleB = newSession();
+    // Ingested into B BEFORE the stale cached answer applies to it - the row
+    // the bug retracts. B's own ingest counter restarts at 0/1, numerically
+    // smaller than A's captured fence, which is exactly what let the
+    // omission pass misread this as "already held when the answer issued".
+    handleB.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: record({ chatId: "pushed-into-b", revision: 1 }),
+    });
+
+    const WrapperB = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: fixture.queryClient },
+        createElement(
+          EpicSessionContext.Provider,
+          { value: handleB },
+          createElement(
+            EpicSessionHostClientContext.Provider,
+            { value: fixture.client },
+            props.children,
+          ),
+        ),
+      );
+    renderHook(() => useEpicSyncChatRecords(EPIC_ID), { wrapper: WrapperB });
+
+    // Confirms this is really the CACHED (A-fenced) answer reaching B, not a
+    // fresh read that would trivially get this right: same cache key, still
+    // within `staleTime`, so no third RPC fires.
+    expect(fixture.listCalls.value).toBe(2);
+    await waitFor(() => {
+      expect(handleB.store.getState().chatRecordListAuthoritative).toBe(true);
+    });
+    // The fix: `fenceIdentity` mismatches B's `ingestFenceIdentity`, so the
+    // applying effect degrades the fence to `null` before calling
+    // `applyChatRecords` - the conservative no-session path - instead of
+    // trusting A's numerically-larger-but-meaningless seq. Pre-fix this row
+    // read as omitted-and-already-held, and was retracted.
+    expect(
+      Object.hasOwn(handleB.store.getState().chats.byId, "pushed-into-b"),
+    ).toBe(true);
+
+    handleB.store.getState().dispose();
   });
 });

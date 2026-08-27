@@ -109,6 +109,7 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV20,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -149,6 +150,10 @@ import {
   readChatAttachmentRequestSchema,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
+import {
+  fetchArtifactAttachmentRequestSchema,
+  fetchArtifactAttachmentResponseSchema,
+} from "@traycer/protocol/host/epic/artifact-attachment";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -884,6 +889,16 @@ export const epicReadChatAttachmentV10 = defineRpcContract({
   responseSchema: readChatAttachmentResponseSchema,
 });
 
+// Artifact attachment bytes remain canonical in the root document during the
+// @2 rollout, but no longer travel on `epic.subscribe`. The artifact id is the
+// authorization subject; the hash is only a content address.
+export const epicFetchArtifactAttachmentV10 = defineRpcContract({
+  method: "epic.fetchArtifactAttachment",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: fetchArtifactAttachmentRequestSchema,
+  responseSchema: fetchArtifactAttachmentResponseSchema,
+});
+
 // The per-chat run-settings tuple the row above deliberately does not carry.
 // Optional and host-local for the same reason as the list: it answers out of
 // this host's own chat store. A client without it renders the harness mark the
@@ -972,4 +987,5 @@ export {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV20,
 };

@@ -5,6 +5,8 @@ import {
   buildStreamManifest,
   buildStreamOpenAckManifest,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import {
   defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
@@ -283,6 +285,9 @@ async function flush(): Promise<void> {
 const GIT_STATUS_VERSION = {
   major: 1,
   minor: hostStreamRpcRegistry["git.subscribeStatus"][1].latestMinor,
+  supportedMajors: Object.keys(hostStreamRpcRegistry["git.subscribeStatus"])
+    .map(Number)
+    .sort((left, right) => left - right),
 };
 
 function completeHandshake(socket: StubStreamWebSocket): void {
@@ -364,7 +369,7 @@ describe("WsStreamClient", () => {
     // newer minor unconditionally (additive minors), so it never poisons an
     // unrelated method's open handshake the way the old major bump once did.
     expect(openFrame.manifest).toEqual(
-      buildStreamManifest(hostStreamRpcRegistry),
+      buildStreamManifest(hostStreamRpcRegistry, CLIENT_SERVED_STREAM_MAJORS),
     );
     expect(openFrame).not.toHaveProperty("optionalManifest");
     // WHO IS CONNECTING. `/stream` authenticates independently of `/rpc`, so a
@@ -377,7 +382,13 @@ describe("WsStreamClient", () => {
     });
 
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        undefined,
+      ),
     );
 
     expect(stub.textSent).toHaveLength(2);
@@ -385,7 +396,7 @@ describe("WsStreamClient", () => {
     expect(subscribeFrame).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
 
@@ -414,7 +425,10 @@ describe("WsStreamClient", () => {
     // exercises method isolation, independent of chat.subscribe's real,
     // currently-bridgeable version history.
     const skewedManifest = {
-      ...buildStreamManifest(hostStreamRpcRegistry),
+      ...buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      ),
       "chat.subscribe": { major: 2, minor: 0 },
     };
     stub.fireText(streamOpenAck(skewedManifest, undefined));
@@ -423,7 +437,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
 
@@ -450,7 +464,7 @@ describe("WsStreamClient", () => {
     sockets[0].socket.fireOpen();
     const openFrame = parseText(sockets[0].socket.textSent[0]);
     expect(openFrame.manifest).toEqual(
-      buildStreamManifest(hostStreamRpcRegistry),
+      buildStreamManifest(hostStreamRpcRegistry, CLIENT_SERVED_STREAM_MAJORS),
     );
     expect(openFrame).not.toHaveProperty("optionalManifest");
 
@@ -476,7 +490,7 @@ describe("WsStreamClient", () => {
 
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.manifest).toEqual(
-      buildStreamManifest(hostStreamRpcRegistry),
+      buildStreamManifest(hostStreamRpcRegistry, CLIENT_SERVED_STREAM_MAJORS),
     );
     expect(openFrame).not.toHaveProperty("optionalManifest");
 
@@ -486,16 +500,17 @@ describe("WsStreamClient", () => {
     stub.fireText({
       kind: "openAck",
       manifest: {
-        "epic.subscribe": buildStreamManifest(hostStreamRpcRegistry)[
-          "epic.subscribe"
-        ],
+        "epic.subscribe": buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        )["epic.subscribe"],
       },
     });
 
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
 
@@ -530,7 +545,10 @@ describe("WsStreamClient", () => {
     stub.fireOpen();
 
     const hostV100Manifest = {
-      ...buildStreamManifest(hostStreamRpcRegistry),
+      ...buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      ),
       "chat.subscribe": { major: 1, minor: 0 },
     };
     stub.fireText(streamOpenAck(hostV100Manifest, undefined));
@@ -727,7 +745,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "dual-major.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 0, supportedMajors: [1, 2] },
       params: { id: "item-1" },
     });
 
@@ -743,9 +761,13 @@ describe("WsStreamClient", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), [
-        "credentialUpdate",
-      ]),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        ["credentialUpdate"],
+      ),
     );
     const sentBeforeRotation = stub.textSent.length;
 
@@ -774,7 +796,13 @@ describe("WsStreamClient", () => {
     stub.fireOpen();
     // Older host: openAck omits `capabilities` (schema defaults it to []).
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        undefined,
+      ),
     );
     const sentBeforeRotation = stub.textSent.length;
 
@@ -812,9 +840,13 @@ describe("WsStreamClient", () => {
     // openAck (capability-advertising) → on becoming subscribed the client
     // reconciles the missed rotation and pushes exactly one credentialUpdate.
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), [
-        "credentialUpdate",
-      ]),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        ["credentialUpdate"],
+      ),
     );
 
     const credentialUpdates = stub.textSent
@@ -1320,7 +1352,8 @@ describe("WsStreamClient", () => {
 
     const oldHostOpenAckManifest = buildStreamOpenAckManifest(
       oldHostStreamRpcRegistry,
-      buildStreamManifest(hostStreamRpcRegistry),
+      SERVES_EVERY_INSTALLED_MAJOR,
+      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR),
     );
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -1384,7 +1417,7 @@ describe("WsStreamClient", () => {
     expect(parseText(terminalSocket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "terminal.subscribe",
-      schemaVersion: { major: 1, minor: 6 },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: {
         sessionId: "terminal-session-1",
         cols: 80,
@@ -1602,7 +1635,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-42" },
     });
 
@@ -1622,7 +1655,7 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-42" },
     });
 
@@ -1810,7 +1843,7 @@ describe("WsStreamClient", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-42" },
     });
     expect(statuses.at(-1)).toBe("open");
@@ -2918,7 +2951,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       method: "host.notifications.feed.subscribe",
       // `@1.1` is the newest installed minor of the feed (the arm carrying
       // `host.operation.finished`); the mirrored handshake negotiates it.
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 1, supportedMajors: [1] },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
@@ -2953,7 +2986,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       method: "host.notifications.feed.subscribe",
       // `@1.1` is the newest installed minor of the feed (the arm carrying
       // `host.operation.finished`); the mirrored handshake negotiates it.
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 1, supportedMajors: [1] },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
@@ -4808,7 +4841,13 @@ describe("WsStreamClient readiness", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        undefined,
+      ),
     );
 
     expect(client.isReady()).toBe(true);
@@ -4825,7 +4864,13 @@ describe("WsStreamClient readiness", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        undefined,
+      ),
     );
     expect(client.isReady()).toBe(true);
 
@@ -4868,7 +4913,13 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
     stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        undefined,
+      ),
     );
     await vi.advanceTimersByTimeAsync(0);
     return stub;

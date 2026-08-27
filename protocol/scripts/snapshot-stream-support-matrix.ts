@@ -27,6 +27,7 @@
  */
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 
 const version = process.argv[2];
 if (version === undefined || version.length === 0) {
@@ -37,7 +38,14 @@ if (version === undefined || version.length === 0) {
   process.exit(1);
 }
 
-const manifest = buildStreamManifest(hostStreamRpcRegistry);
+// Unrestricted on purpose: the frozen support matrix records what the
+// REGISTRY installs, which is a fact about the contract set. Narrowing it to
+// one peer's implementation would make the release record depend on which
+// client happened to be built alongside it.
+const manifest = buildStreamManifest(
+  hostStreamRpcRegistry,
+  SERVES_EVERY_INSTALLED_MAJOR,
+);
 const manifestLines = Object.keys(manifest)
   .sort()
   .map((method) => {
