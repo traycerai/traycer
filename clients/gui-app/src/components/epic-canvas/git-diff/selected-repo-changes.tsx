@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -16,9 +15,7 @@ import {
   ChevronDown,
   GitBranch,
   GitCommitHorizontal,
-  Search,
   TriangleAlert,
-  X,
 } from "lucide-react";
 import type {
   GitChangedFile,
@@ -40,12 +37,7 @@ import {
   createGitChangedFileSearchIndex,
   filterGitChangedFiles,
 } from "@/lib/git/git-changed-file-search";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -404,7 +396,7 @@ function GitModuleGroupsEmptyContent(props: {
   readonly trimmedQuery: string;
   readonly placeholder: string;
   readonly ariaLabel: string;
-  readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  readonly onSearchQueryChange: (value: string) => void;
   readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onClearSearch: () => void;
 }): ReactNode {
@@ -429,7 +421,7 @@ function GitModuleGroupsEmptyContent(props: {
           searchQuery={props.searchQuery}
           placeholder={props.placeholder}
           ariaLabel={props.ariaLabel}
-          onSearchChange={props.onSearchChange}
+          onSearchQueryChange={props.onSearchQueryChange}
           onSearchKeyDown={props.onSearchKeyDown}
           onClearSearch={props.onClearSearch}
         />
@@ -559,8 +551,7 @@ function GitModuleGroupsView(props: {
   }, []);
 
   const handleSearchChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const next = event.target.value;
+    (next: string) => {
       setSearchQuery(next);
       clearPendingDebounce();
       debounceTimerRef.current = window.setTimeout(() => {
@@ -727,7 +718,7 @@ function GitModuleGroupsView(props: {
         trimmedQuery={trimmedQuery}
         placeholder={searchCopy.placeholder}
         ariaLabel={searchCopy.ariaLabel}
-        onSearchChange={handleSearchChange}
+        onSearchQueryChange={handleSearchChange}
         onSearchKeyDown={handleSearchKeyDown}
         onClearSearch={handleClearSearch}
       />
@@ -744,7 +735,7 @@ function GitModuleGroupsView(props: {
           searchQuery={searchQuery}
           placeholder={searchCopy.placeholder}
           ariaLabel={searchCopy.ariaLabel}
-          onSearchChange={handleSearchChange}
+          onSearchQueryChange={handleSearchChange}
           onSearchKeyDown={handleSearchKeyDown}
           onClearSearch={handleClearSearch}
         />
@@ -857,37 +848,27 @@ function GitModuleSearch(props: {
   readonly searchQuery: string;
   readonly placeholder: string;
   readonly ariaLabel: string;
-  readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  readonly onSearchQueryChange: (value: string) => void;
   readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onClearSearch: () => void;
 }): ReactNode {
   return (
     <div className="shrink-0 bg-background/50 px-2 py-1.5">
-      <InputGroup className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35">
-        <InputGroupAddon align="inline-start">
-          <Search className="size-3.5" aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="text"
-          value={props.searchQuery}
-          onChange={props.onSearchChange}
-          onKeyDown={props.onSearchKeyDown}
-          placeholder={props.placeholder}
-          aria-label={props.ariaLabel}
-          className="text-ui-sm"
-        />
-        {props.searchQuery.length > 0 ? (
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton
-              size="icon-xs"
-              onClick={props.onClearSearch}
-              aria-label="Clear filter"
-            >
-              <X className="size-3.5" aria-hidden />
-            </InputGroupButton>
-          </InputGroupAddon>
-        ) : null}
-      </InputGroup>
+      <PanelSearchField
+        value={props.searchQuery}
+        onValueChange={props.onSearchQueryChange}
+        onClear={props.onClearSearch}
+        onClose={null}
+        onKeyDown={props.onSearchKeyDown}
+        ref={null}
+        combobox={null}
+        placeholder={props.placeholder}
+        label={props.ariaLabel}
+        clearLabel="Clear filter"
+        closeLabel=""
+        testIdPrefix="git-selected-repo-filter"
+        className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35"
+      />
     </div>
   );
 }

@@ -3,18 +3,11 @@ import {
   useEffect,
   useRef,
   useState,
-  type ChangeEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Search, X } from "lucide-react";
 import type { GitChangedFile } from "@traycer/protocol/host";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { FileList } from "./file-list";
 
 // Mirrors the file-tree explorer panel: the controlled input updates
@@ -43,8 +36,7 @@ export function GitChangedFilesView(
   }, []);
 
   const handleSearchChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const next = event.target.value;
+    (next: string) => {
       setSearchQuery(next);
       clearPendingDebounce();
       debounceTimerRef.current = window.setTimeout(() => {
@@ -76,31 +68,21 @@ export function GitChangedFilesView(
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 bg-background/50 px-2 py-1.5">
-        <InputGroup className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35">
-          <InputGroupAddon align="inline-start">
-            <Search className="size-3.5" aria-hidden />
-          </InputGroupAddon>
-          <InputGroupInput
-            type="text"
-            value={searchQuery}
-            onChange={handleSearchChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Filter changed files..."
-            aria-label="Filter changed files"
-            className="text-ui-sm"
-          />
-          {searchQuery.length > 0 ? (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                size="icon-xs"
-                onClick={handleClear}
-                aria-label="Clear filter"
-              >
-                <X className="size-3.5" aria-hidden />
-              </InputGroupButton>
-            </InputGroupAddon>
-          ) : null}
-        </InputGroup>
+        <PanelSearchField
+          value={searchQuery}
+          onValueChange={handleSearchChange}
+          onClear={handleClear}
+          onClose={null}
+          onKeyDown={handleKeyDown}
+          ref={null}
+          combobox={null}
+          placeholder="Filter changed files..."
+          label="Filter changed files"
+          clearLabel="Clear filter"
+          closeLabel=""
+          testIdPrefix="git-changed-files-filter"
+          className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35"
+        />
       </div>
       <FileList
         epicId={props.epicId}
