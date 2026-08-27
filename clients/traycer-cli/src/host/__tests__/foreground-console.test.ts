@@ -18,6 +18,7 @@ describe("resolveForegroundStartMode", () => {
     quiet: false,
     noProgress: false,
     interactive: false,
+    platform: "darwin",
   };
 
   it.each<[string, Partial<ForegroundStartModeInput>, string]>([
@@ -57,6 +58,29 @@ describe("resolveForegroundStartMode", () => {
       { noProgress: true, interactive: true },
       "mirror",
     ],
+    // A TTY does not imply a human on Windows. Scheduled Tasks registered
+    // before the launcher was hidden execute the CLI directly with a bare
+    // `host start`, no identity flags, InteractiveToken and Hidden=false - so
+    // Task Scheduler allocates a console and isTTY is true, and the argv is
+    // byte-identical to a person typing the command. Those definitions are
+    // still attested and still on machines, so Windows gets the one-shot
+    // banner and not the unbounded mirror.
+    [
+      "win32 + interactive TTY degrades to banner-only",
+      { interactive: true, platform: "win32" },
+      "banner",
+    ],
+    ["win32 without a TTY is still silent", { platform: "win32" }, "silent"],
+    [
+      "win32 + serviceManaged is still silent",
+      { serviceManaged: true, interactive: true, platform: "win32" },
+      "silent",
+    ],
+    [
+      "linux + interactive TTY still mirrors",
+      { interactive: true, platform: "linux" },
+      "mirror",
+    ],
     ["quiet, interactive TTY", { quiet: true, interactive: true }, "silent"],
     ["quiet, non-interactive", { quiet: true }, "silent"],
     ["interactive TTY, no other flags", { interactive: true }, "mirror"],
@@ -71,19 +95,23 @@ describe("resolveForegroundStartMode", () => {
   // evidence a service manager produced the invocation, so it must win over
   // every other combination, not just the ones above.
   it("serviceManaged is silent across the full remaining flag matrix", () => {
+    const platforms: NodeJS.Platform[] = ["darwin", "linux", "win32"];
     for (const json of [false, true]) {
       for (const quiet of [false, true]) {
         for (const noProgress of [false, true]) {
           for (const interactive of [false, true]) {
-            expect(
-              resolveForegroundStartMode({
-                serviceManaged: true,
-                json,
-                quiet,
-                noProgress,
-                interactive,
-              }),
-            ).toBe("silent");
+            for (const platform of platforms) {
+              expect(
+                resolveForegroundStartMode({
+                  serviceManaged: true,
+                  json,
+                  quiet,
+                  noProgress,
+                  interactive,
+                  platform,
+                }),
+              ).toBe("silent");
+            }
           }
         }
       }
@@ -161,6 +189,47 @@ describe("openForegroundConsole", () => {
     console.close();
     expect(tailControl.stopCalls).toBe(1);
     expect(tailControl.drainSyncCalls).toBe(1);
+  });
+
+  // The Windows degradation. The banner is one-shot and a few lines long, so
+  // it is harmless even in a legacy Scheduled Task's console; the mirror polls
+  // and reads for the whole life of a supervisor that can run for weeks, so it
+  // must not start where interactivity cannot be established.
+  it("banner mode: announces and points at 'host logs --follow', but starts NO tail", () => {
+    const written: string[] = [];
+    const byteChunks: Buffer[] = [];
+    const tailControl = makeTailStub();
+
+    const deps: Partial<ForegroundConsoleDeps> = {
+      logPath: () => "/tmp/host.log",
+      writeText: (text) => written.push(text),
+      writeBytes: (chunk) => byteChunks.push(chunk),
+      startTail: (options) => {
+        tailControl.startCalls.push(options);
+        return tailControl.stub;
+      },
+      now: () => "2026-08-27T00:00:00.000Z",
+    };
+
+    const console = openForegroundConsole(
+      { environment: "production", mode: "banner" },
+      deps,
+    );
+
+    expect(written).toHaveLength(1);
+    const banner = written[0] ?? "";
+    expect(banner).toContain("/tmp/host.log");
+    expect(banner).toContain("Ctrl-C");
+    expect(banner).toContain("traycer host logs --follow");
+    expect(banner).toContain("traycer host service start");
+
+    // The whole point: no polling, no reads, no bytes.
+    expect(tailControl.startCalls).toHaveLength(0);
+    expect(byteChunks).toHaveLength(0);
+
+    console.close();
+    expect(tailControl.stopCalls).toBe(0);
+    expect(tailControl.drainSyncCalls).toBe(0);
   });
 
   it("events mode (--json): emits exactly one NDJSON progress line with stage host-supervise, and never calls writeBytes", () => {

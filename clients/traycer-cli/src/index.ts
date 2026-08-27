@@ -721,6 +721,7 @@ function registerHostCommands(program: Command): void {
       // `extractRunnerFlags`' own reading of the same option.
       noProgress: opts.progress === false,
       interactive: process.stdout.isTTY === true,
+      platform: process.platform,
     });
     logger.info("Host supervisor command invoked", {
       environment: config.environment,
@@ -1182,14 +1183,31 @@ function registerHostCommands(program: Command): void {
           "",
         ].join("\n"),
       ),
-    (opts) =>
-      buildHostUpdateCommand({
-        force: opts.force === true,
-        versionRequest:
-          typeof opts.release === "string" && opts.release.length > 0
-            ? opts.release
-            : null,
-      }),
+    (opts) => {
+      const release = typeof opts.release === "string" ? opts.release : null;
+      return async (ctx) => {
+        // An EXPLICIT empty target is a mistake, not a request for latest.
+        // `--version=`, `--release=` and an unset shell variable
+        // (`--release "$PIN"`) all arrive here as "", and treating that as
+        // "resolve latest" would silently update a machine the caller meant
+        // to pin. The hidden-flag version of this option passed "" through to
+        // SemVer validation, which rejected it; keep that refusal, with a
+        // message that names the flag.
+        if (release !== null && release.length === 0) {
+          throw cliError({
+            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+            message:
+              "host update: --release (or its --version alias) needs a version; pass one, or omit the flag entirely to update to the latest release",
+            details: { release },
+            exitCode: 1,
+          });
+        }
+        return buildHostUpdateCommand({
+          force: opts.force === true,
+          versionRequest: release,
+        })(ctx);
+      };
+    },
   );
 
   withRunner(

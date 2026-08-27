@@ -25,6 +25,15 @@ export const LOG_TAIL_MAX_MISSING_RETRIES = 60;
 // rather than an arbitrarily large backlog.
 const MAX_SYNC_DRAIN_BYTES = 256 * 1024;
 
+// Bound for ONE poll's read. `host.log` is unbounded within a host's lifetime
+// (nothing truncates it; rotation only happens at a start), so a follower that
+// allocated `size - offset` in one go would size a buffer off a file another
+// process controls. A supervisor that is mirroring for weeks, or one that
+// resumes after any gap, could allocate gigabytes. Reading a capped slice per
+// tick loses nothing: the offset advances by what was read and the next tick
+// (500ms later) takes the next slice.
+const MAX_TICK_READ_BYTES = 1024 * 1024;
+
 export interface LogTailOptions {
   readonly path: string;
   /**
@@ -35,6 +44,12 @@ export interface LogTailOptions {
   onBytes(chunk: Buffer): void;
   /** The file stayed unreadable past `maxMissingRetries`; the tail has stopped. */
   onExhausted(): void;
+  /**
+   * `drainSync` had more pending than it is allowed to read in one go and
+   * skipped `bytes` to reach the tail. Reported rather than swallowed: output
+   * with a silent hole in it is worse than output that says where the hole is.
+   */
+  onSkipped(bytes: number): void;
   readonly pollIntervalMs: number;
   readonly maxMissingRetries: number;
 }
@@ -83,7 +98,7 @@ export function startLogTail(options: LogTailOptions): LogTail {
         // Truncated or rotated under us: re-read the new file from the top.
         if (stats.size < offset) offset = 0;
         if (stats.size > offset) {
-          const length = stats.size - offset;
+          const length = Math.min(stats.size - offset, MAX_TICK_READ_BYTES);
           const buffer = Buffer.alloc(length);
           const { bytesRead } = await handle.read(buffer, 0, length, offset);
           if (bytesRead > 0) {
@@ -129,12 +144,21 @@ export function startLogTail(options: LogTailOptions): LogTail {
       const size = fstatSync(fd).size;
       if (size < offset) offset = 0;
       if (size > offset) {
-        const length = Math.min(size - offset, MAX_SYNC_DRAIN_BYTES);
+        // Read the TAIL of the backlog, not its head. This runs immediately
+        // before `process.exit`, so whatever it does not emit is lost - and
+        // the lines worth saving are the last ones the host wrote on its way
+        // down, not the oldest 256 KiB of a burst. Skipping forward is what
+        // makes the cap honest about which end it keeps.
+        const pending = size - offset;
+        const skipped = Math.max(0, pending - MAX_SYNC_DRAIN_BYTES);
+        const readFrom = offset + skipped;
+        const length = pending - skipped;
         const buffer = Buffer.alloc(length);
-        const bytesRead = readSync(fd, buffer, 0, length, offset);
+        const bytesRead = readSync(fd, buffer, 0, length, readFrom);
         if (bytesRead > 0) {
-          offset += bytesRead;
+          offset = readFrom + bytesRead;
           chunk = buffer.subarray(0, bytesRead);
+          if (skipped > 0) options.onSkipped(skipped);
         }
       }
     } catch {

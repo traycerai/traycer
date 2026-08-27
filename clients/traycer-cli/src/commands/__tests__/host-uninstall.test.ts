@@ -207,9 +207,37 @@ describe("runHostUninstall", () => {
       { environment: "dev", purgeChannelRuntime: false },
     ]);
     expect(result.exitCode).toBe(0);
+    // NULL, not false. `false` is a claim about a registration and a process
+    // this command never observed and never touched - an automation consumer
+    // reading it would conclude the machine is clean when nothing checked.
     expect(result.data).toMatchObject({
-      serviceRegistrationRetained: false,
+      serviceRegistrationRetained: null,
       retainedServiceState: null,
+      hostStillRunning: null,
     });
+  });
+
+  // `--all`'s stop is cooperative and best-effort: a host that denies or
+  // outlives the claim is left running while the bytes are removed anyway.
+  // Saying nothing is how an operator walks away believing it is down.
+  it("says the host may still be running when --all's cooperative stop is not confirmed", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => {
+          throw new Error("host denied the shutdown claim");
+        },
+        receivedOptions: [],
+        status: async () => NOT_INSTALLED_STATUS,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      serviceUninstalled: true,
+      purgedRuntime: false,
+    });
+    expect(result.human ?? "").toContain("did not confirm shutdown");
+    expect(result.human ?? "").toContain("traycer host stop --force");
   });
 });

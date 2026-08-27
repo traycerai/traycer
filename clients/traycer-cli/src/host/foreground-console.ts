@@ -31,13 +31,17 @@ import {
  * What a `host start` invocation is allowed to print.
  *
  * - `mirror` - a person is watching: banner plus streamed `host.log` appends.
+ * - `banner` - announce and stop there. The banner is one-shot and a few lines
+ *   long; the mirror polls and reads for the entire life of a supervisor that
+ *   can run for weeks. Where interactivity cannot be established beyond doubt,
+ *   the cheap half is still worth printing and the expensive half is not.
  * - `events` - `--json`: one structured lifecycle event, and NEVER raw log
  *   lines. Mirrors `host logs`, whose `--follow` is likewise inert under
  *   `--json` because an NDJSON consumer wants events, not a file firehose.
  * - `silent` - a service manager, a script, or `--quiet`: byte-for-byte the
  *   behaviour this command has always had.
  */
-export type ForegroundStartMode = "mirror" | "events" | "silent";
+export type ForegroundStartMode = "mirror" | "banner" | "events" | "silent";
 
 export interface ForegroundStartModeInput {
   /**
@@ -59,8 +63,13 @@ export interface ForegroundStartModeInput {
    * line on the stdout of automation that explicitly asked for none.
    */
   readonly noProgress: boolean;
-  /** stdout is a terminal. False under launchd/systemd/schtasks and pipes. */
+  /** stdout is a terminal. */
   readonly interactive: boolean;
+  /**
+   * `process.platform`. Windows is the one platform where a TTY does NOT imply
+   * a human - see the mirror gate below.
+   */
+  readonly platform: NodeJS.Platform;
 }
 
 export function resolveForegroundStartMode(
@@ -69,7 +78,36 @@ export function resolveForegroundStartMode(
   if (input.serviceManaged) return "silent";
   if (input.json) return input.noProgress ? "silent" : "events";
   if (input.quiet) return "silent";
-  return input.interactive ? "mirror" : "silent";
+  if (!input.interactive) return "silent";
+  return canMirrorOnPlatform(input.platform) ? "mirror" : "banner";
+}
+
+/**
+ * Is a TTY on this platform sufficient evidence that a PERSON is watching?
+ *
+ * Everywhere but Windows, yes. launchd runs the supervisor under `/bin/sh -c`
+ * with its output bound to a file, and systemd binds it to the journal socket;
+ * neither ever allocates a controlling terminal, so a TTY means a shell.
+ *
+ * On Windows it is NOT sufficient, and this is a live case rather than a
+ * theoretical one. Scheduled Tasks registered before the launcher was hidden
+ * (`fix(windows): hide host task launcher`) execute the CLI DIRECTLY with a
+ * bare `host start`, no identity flags, `LogonType=InteractiveToken` and
+ * `Hidden=false` - so Task Scheduler allocates a console and `stdout.isTTY` is
+ * true. Those definitions are still attested by
+ * `host-lifecycle/identity.ts` and still on machines, because the task
+ * definition is replaced independently of the CLI slot it invokes. From inside
+ * the process that invocation is byte-for-byte identical to a person typing
+ * `traycer host start`.
+ *
+ * So Windows gets the banner and not the mirror. The audit's own rule is that
+ * TTY inference must not be the sole safety boundary; where the inference is
+ * known-unreliable, the unbounded half of the behaviour does not run. A
+ * Windows user still learns the command is blocking, where the log is, and how
+ * to follow it - which is the defect this feature exists to fix.
+ */
+function canMirrorOnPlatform(platform: NodeJS.Platform): boolean {
+  return platform !== "win32";
 }
 
 export interface ForegroundConsoleOptions {
@@ -156,10 +194,17 @@ export function openForegroundConsole(
       `Running the Traycer host in the foreground (environment=${options.environment}).`,
       `  log:  ${path}`,
       `  stop: press Ctrl-C`,
+      ...(options.mode === "banner"
+        ? [
+            `To watch the log, run 'traycer host logs --follow' in another terminal.`,
+          ]
+        : []),
       `To run the host in the background instead, press Ctrl-C and run 'traycer host service start'.`,
       ``,
     ].join("\n"),
   );
+
+  if (options.mode === "banner") return INERT_CONSOLE;
 
   const tail = deps.startTail({
     path,
@@ -170,6 +215,11 @@ export function openForegroundConsole(
     onExhausted: () => {
       deps.writeText(
         `traycer host start: ${path} stayed unreadable; stopped mirroring the host log. The host is still being supervised.\n`,
+      );
+    },
+    onSkipped: (bytes) => {
+      deps.writeText(
+        `\ntraycer host start: skipped ${bytes} bytes of host log to print the most recent output; the full log is at ${path}.\n`,
       );
     },
     pollIntervalMs: LOG_TAIL_POLL_INTERVAL_MS,

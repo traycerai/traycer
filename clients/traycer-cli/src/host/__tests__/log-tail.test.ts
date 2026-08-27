@@ -67,6 +67,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 60,
     });
@@ -86,6 +87,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 60,
     });
@@ -105,6 +107,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 60,
     });
@@ -128,6 +131,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 60,
     });
@@ -161,6 +165,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 60,
     });
@@ -182,6 +187,36 @@ describe("startLogTail", () => {
     expect(text()).toBe(`${head}tail-only\n`);
   });
 
+  // `host.log` is unbounded within a host's lifetime and is written by another
+  // process, so sizing one allocation off `size - offset` lets that process
+  // decide how much memory this one commits. A supervisor mirroring for weeks,
+  // or resuming after any gap, could allocate gigabytes.
+  it("bounds a single poll's read and still delivers the whole backlog across ticks", async () => {
+    writeFileSync(logPath, "");
+    const { onBytes, chunks, text } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: () => undefined,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      maxMissingRetries: 60,
+    });
+
+    // Comfortably over the 1 MiB per-tick cap, written while the follower is
+    // between polls so it all lands as one backlog.
+    const payload = `${"z".repeat(3 * 1024 * 1024)}\n`;
+    appendFileSync(logPath, payload);
+    await waitFor(() => text().length >= payload.length, 5_000);
+
+    // Nothing lost, and no single read took the whole thing.
+    expect(text()).toBe(payload);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(1024 * 1024);
+    }
+  });
+
   it("stop() is idempotent and no bytes are emitted afterwards", async () => {
     writeFileSync(logPath, "");
     const { chunks, onBytes, text } = collector();
@@ -189,6 +224,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 60,
     });
@@ -218,6 +254,7 @@ describe("startLogTail", () => {
       path: logPath,
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: 10_000,
       maxMissingRetries: 60,
     });
@@ -228,6 +265,35 @@ describe("startLogTail", () => {
     expect(text()).toBe("drained-synchronously\n");
   });
 
+  // `drainSync` runs immediately before `process.exit`, so whatever it does
+  // not emit is lost forever. When the backlog exceeds its cap it must keep
+  // the END of it - the host's last words on the way down - not the oldest
+  // slice, which is what a plain "read the first N bytes" cap would have kept.
+  it("drainSync keeps the TAIL of an over-cap backlog and reports the skip", async () => {
+    writeFileSync(logPath, "");
+    const { onBytes, text } = collector();
+    const skips: number[] = [];
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: (bytes) => skips.push(bytes),
+      pollIntervalMs: 10_000,
+      maxMissingRetries: 60,
+    });
+
+    // Over the 256 KiB sync-drain cap, with a recognisable marker at each end.
+    const filler = "f".repeat(400 * 1024);
+    appendFileSync(logPath, `OLDEST-LINE\n${filler}\nFINAL-SHUTDOWN-LINE\n`);
+    tail.drainSync();
+
+    expect(text()).toContain("FINAL-SHUTDOWN-LINE");
+    expect(text()).not.toContain("OLDEST-LINE");
+    expect(text().length).toBeLessThanOrEqual(256 * 1024);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]).toBeGreaterThan(0);
+  });
+
   it("drainSync is safe when the file is missing and must not throw", () => {
     // Never written at all - openSync must fail and be swallowed.
     const { onBytes, chunks } = collector();
@@ -235,6 +301,7 @@ describe("startLogTail", () => {
       path: join(work, "does-not-exist.log"),
       onBytes,
       onExhausted: () => undefined,
+      onSkipped: () => undefined,
       pollIntervalMs: 10_000,
       maxMissingRetries: 60,
     });
@@ -253,6 +320,7 @@ describe("startLogTail", () => {
       onExhausted: () => {
         exhaustedCalls += 1;
       },
+      onSkipped: () => undefined,
       pollIntervalMs: POLL_INTERVAL_MS,
       maxMissingRetries: 2,
     });

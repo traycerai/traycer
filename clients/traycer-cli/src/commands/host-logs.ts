@@ -128,6 +128,9 @@ function followLog(path: string, quiet: boolean): Promise<void> {
         if (!quiet) writeStdoutBytes(chunk);
       },
       onExhausted: cleanup,
+      // `--follow` never calls `drainSync` (it ends on a signal, not on a
+      // process exit it has to beat), so no skip can be reported here.
+      onSkipped: () => undefined,
       pollIntervalMs: LOG_TAIL_POLL_INTERVAL_MS,
       maxMissingRetries: LOG_TAIL_MAX_MISSING_RETRIES,
     });

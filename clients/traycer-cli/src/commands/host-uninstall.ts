@@ -190,8 +190,19 @@ export async function runHostUninstall(
     hadInstallRecord: result.removedRecord !== null,
     retainedServiceState: retainedService?.state ?? null,
   });
+  // Tri-state, deliberately. `--all` leaves nothing retained (false), a probe
+  // that answered says what it saw, and a probe that THREW knows nothing -
+  // reporting `false` there would hand an automated caller a negative fact
+  // about a registration and a process this command never observed and never
+  // touched.
   const serviceRegistrationRetained =
-    retainedService !== null && retainedService.state !== "not-installed";
+    args.all || retainedService !== null
+      ? retainedService !== null && retainedService.state !== "not-installed"
+      : null;
+  const hostStillRunning =
+    args.all || retainedService !== null
+      ? retainedService?.state === "running"
+      : null;
   return {
     data: {
       removedRecord: result.removedRecord,
@@ -201,11 +212,11 @@ export async function runHostUninstall(
       purgedRuntime: result.purgedRuntime,
       // What the machine is left holding, so an automated caller does not
       // have to infer the default path's end state from the absence of
-      // `serviceUninstalled`. `null` on `--all` (nothing is retained) and
-      // whenever the platform probe could not answer.
+      // `serviceUninstalled`. Both are `null` when the platform probe could
+      // not answer - see the tri-state note above.
       serviceRegistrationRetained,
       retainedServiceState: retainedService?.state ?? null,
-      hostStillRunning: retainedService?.state === "running",
+      hostStillRunning,
     },
     human: humanSummary({
       removedVersion: result.removedRecord?.version ?? null,
