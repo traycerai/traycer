@@ -1290,6 +1290,27 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
+      // Both or neither. The handler already refuses `--pid` without `--port`
+      // (it cannot verify ownership without the port), but `--port` alone used
+      // to fall through to a bare restart: no kill attempted, exit 0, and human
+      // output reporting a successful restart. That was survivable while this
+      // command was hidden and only Desktop's controller drove it - it passes
+      // both flags or neither - but `host doctor` now prints this spelling for
+      // a person to type, and a half-typed line must not report success for a
+      // repair it never attempted.
+      //
+      // Bare (neither flag) stays legal: Desktop's `HostController` appends
+      // `--pid`/`--port` conditionally, so `["host","free-port-and-restart"]`
+      // is a live machine call.
+      if (pid === null && port !== null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host free-port-and-restart: --port requires --pid - the PID is what gets terminated, and it is re-checked against the port first. Run 'traycer host doctor' for the filled-in command, or pass neither flag (or use 'traycer host restart') to restart without killing anything.",
+          details: { pid: null, port },
+          exitCode: 1,
+        });
+      }
       return buildHostFreePortAndRestartCommand({
         pid,
         port,

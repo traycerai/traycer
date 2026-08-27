@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import {
   buildWorkspaceListCommand,
   formatWorkspaceListTable,
@@ -74,8 +74,8 @@ afterEach(() => {
 });
 
 function row(
-  overrides: Partial<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow {
+  overrides: Partial<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host_1",
     runningDir: "/Users/dev/src/acme-web",
@@ -90,6 +90,7 @@ function row(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
     ...overrides,
   };
 }
@@ -186,6 +187,54 @@ describe("formatWorkspaceListTable", () => {
     },
   );
 
+  it("REGRESSION: a pending row's missing_worktree_path reason is not reported as 'missing on disk' - it renders 'checking' with GIT '?'", () => {
+    const table = formatWorkspaceListTable([
+      row({
+        isGitResolvePending: true,
+        disabledReason: "missing_worktree_path",
+      }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[3]).toBe("?"); // GIT
+    expect(cells[4]).toBe("checking"); // STATE
+    expect(line).not.toContain("missing on disk");
+  });
+
+  it("a pending row that is otherwise selectable reports STATE 'ready' but GIT stays '?'", () => {
+    const table = formatWorkspaceListTable([
+      row({ isGitResolvePending: true, disabledReason: null }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[3]).toBe("?"); // GIT
+    expect(cells[4]).toBe("ready"); // STATE
+  });
+
+  it("a pending row with a resolved setup reason is NOT masked by the pending git marker", () => {
+    const table = formatWorkspaceListTable([
+      row({ isGitResolvePending: true, disabledReason: "setup_failed" }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[3]).toBe("?"); // GIT
+    expect(cells[4]).toBe("setup failed"); // STATE
+  });
+
+  it("isGitResolvePending: false keeps the existing yes/no GIT rendering and reason-derived STATE, unchanged", () => {
+    const table = formatWorkspaceListTable([
+      row({
+        isGitResolvePending: false,
+        isGitRepo: false,
+        disabledReason: "missing_worktree_path",
+      }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[3]).toBe("no"); // GIT
+    expect(cells[4]).toBe("missing on disk"); // STATE
+  });
+
   it("aligns every non-final column to a consistent start offset across header and rows", () => {
     const table = formatWorkspaceListTable([
       row({
@@ -262,16 +311,17 @@ describe("formatWorkspaceListTable", () => {
 });
 
 describe("buildWorkspaceListCommand", () => {
-  it("preserves --json: data is the raw parsed host response", async () => {
-    const rows = [row({})];
-    rpcMock.mockResolvedValue({ rows });
+  it("preserves --json: data is the raw parsed v1.2 host response, including folderlessCwd and isGitResolvePending", async () => {
+    const rows = [row({ isGitResolvePending: true })];
+    const v12Response = { rows, folderlessCwd: null };
+    rpcMock.mockResolvedValue(v12Response);
 
     const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith("worktree.listBindingsForEpic", {
       epicId: "epic_test",
     });
-    expect(result.data).toEqual({ rows });
+    expect(result.data).toEqual(v12Response);
     expect(result.exitCode).toBe(0);
   });
 });

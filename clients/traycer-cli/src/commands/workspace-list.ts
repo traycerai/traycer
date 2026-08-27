@@ -1,5 +1,5 @@
-import { worktreeListBindingsForEpicResponseSchema } from "@traycer/protocol/host";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import { worktreeListBindingsForEpicResponseSchemaV12 } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import {
   callHostRpc,
   parseHostResponse,
@@ -15,6 +15,16 @@ import type { CommandFn } from "../runner/runner";
  * Human mode renders a scannable table; `--json` still hands back the host's
  * `worktree.listBindingsForEpic` rows verbatim, which is what a caller parsing
  * this wants and what the human table deliberately is not.
+ *
+ * Parses the CANONICAL v1.2 response, not the v1.0 base schema this used to
+ * read. Zod strips unknown keys, so the old parse silently discarded
+ * `isGitResolvePending` - the host's authoritative "these git facts are still
+ * an unverified placeholder" marker - and the table then reported a resolving
+ * row as `not git` / `missing on disk`, which is the one thing the protocol
+ * says a client must not do with a pending row. A pre-v1.2 host is bridged up
+ * transparently (every row stamped `isGitResolvePending: false`, which is
+ * correct: an old host has no pending concept and never sends a signal that
+ * would clear it), the same way `worktree list` reads its v1.4 schema.
  */
 export function buildWorkspaceListCommand(opts: {
   readonly epicId: string | null;
@@ -25,7 +35,7 @@ export function buildWorkspaceListCommand(opts: {
       callHostRpc("worktree.listBindingsForEpic", { epicId }),
     );
     const parsed = parseHostResponse(
-      worktreeListBindingsForEpicResponseSchema,
+      worktreeListBindingsForEpicResponseSchemaV12,
       result,
     );
     return {
@@ -55,7 +65,7 @@ const COLUMNS = [
  * still in the `--json` payload for anyone who needs the pair.
  */
 export function formatWorkspaceListTable(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
 ): string {
   if (rows.length === 0) {
     return [
@@ -68,7 +78,10 @@ export function formatWorkspaceListTable(
     formatRepo(row),
     row.mode,
     row.branch ?? "-",
-    row.isGitRepo ? "yes" : "no",
+    // `isGitRepo` is part of the placeholder a pending row carries, so it gets
+    // the same "not answered yet" treatment as STATE rather than a confident
+    // "no" the next refresh may contradict.
+    row.isGitResolvePending ? "?" : row.isGitRepo ? "yes" : "no",
     formatState(row),
     String(row.sources.length),
     row.runningDir,
@@ -97,7 +110,7 @@ export function formatWorkspaceListTable(
   ].join("\n");
 }
 
-function formatRepo(row: WorktreeBindingSelectorRow): string {
+function formatRepo(row: WorktreeBindingSelectorRowV12): string {
   const identifier = row.repoIdentifier;
   return identifier === null ? "-" : `${identifier.owner}/${identifier.repo}`;
 }
@@ -108,8 +121,17 @@ function formatRepo(row: WorktreeBindingSelectorRow): string {
  * - so a null reason is `ready` and a non-null one is named rather than
  * re-derived from `setupState` (which would have to repeat the host's rules and
  * could disagree with them).
+ *
+ * `isGitResolvePending` wins over the reason, and only over the git-derived
+ * one. The host emits `missing_worktree_path` off an `isGitRepo` it has not
+ * verified yet, so reporting "missing on disk" for such a row states as fact
+ * something the next refresh may retract - the GUI pickers render these as
+ * "checking" for the same reason. A genuine setup-state reason is already
+ * resolved and is reported as-is even while git facts are pending.
  */
-function formatState(row: WorktreeBindingSelectorRow): string {
+function formatState(row: WorktreeBindingSelectorRowV12): string {
+  if (row.isGitResolvePending && row.disabledReason === "missing_worktree_path")
+    return "checking";
   switch (row.disabledReason) {
     case null:
       return "ready";
