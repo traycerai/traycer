@@ -34,6 +34,14 @@ function stripScrollElement(groupId: string): HTMLElement | null {
   return null;
 }
 
+function renderedTranslateX(element: HTMLElement): number {
+  const transform = getComputedStyle(element).transform;
+  if (transform === "none" || transform.length === 0) return 0;
+  const values = transform.slice(transform.indexOf("(") + 1, -1).split(",");
+  const x = Number(values[transform.startsWith("matrix3d(") ? 12 : 4]);
+  return Number.isFinite(x) ? x : 0;
+}
+
 export function readTileStripContentOriginX(groupId: string): number | null {
   const el = stripScrollElement(groupId);
   if (el === null) return null;
@@ -89,13 +97,10 @@ export function tileStripGroupAtPoint(
  * Slots for one tile strip, measured from live rects.
  *
  * Tile frames carry an explicit x transform while a drag is in flight. The
- * caller supplies the currently applied model offsets so measurements can be
+ * currently rendered transform is removed from each rect so measurements are
  * restored to layout-space before a mid-drag item-list remap.
  */
-export function readTileStripSlots(
-  groupId: string,
-  offsets: ReadonlyMap<string, number>,
-): ReadonlyArray<StripSlot> {
+export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
   const el = stripScrollElement(groupId);
   if (el === null) return [];
   const originX = el.getBoundingClientRect().left - el.scrollLeft;
@@ -109,7 +114,7 @@ export function readTileStripSlots(
       {
         itemId,
         width: rect.width,
-        contentLeft: rect.left - originX - (offsets.get(itemId) ?? 0),
+        contentLeft: rect.left - originX - renderedTranslateX(child),
         // Tile strips have no pair-into-split gesture, so no tile is ever a
         // merge target. This - not the zero band width - is what makes the
         // model's merge branch unreachable here.
@@ -141,7 +146,7 @@ export function measureTileStripGeometry(input: {
 }): StripDragGeometry | null {
   const el = stripScrollElement(input.groupId);
   if (el === null) return null;
-  const slots = readTileStripSlots(input.groupId, new Map());
+  const slots = readTileStripSlots(input.groupId);
   const sourceIndex = slots.findIndex(
     (slot) => slot.itemId === input.tileItemId,
   );
@@ -176,7 +181,7 @@ export function measureForeignTileStrip(groupId: string): {
   const originX = readTileStripContentOriginX(groupId);
   if (originX === null) return null;
   return {
-    slots: readTileStripSlots(groupId, new Map()),
+    slots: readTileStripSlots(groupId),
     contentOriginX: originX,
   };
 }

@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,6 +27,8 @@ import {
   type Transition,
 } from "motion/react";
 import * as m from "motion/react-m";
+import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
+import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -218,6 +221,9 @@ export function TabStrip(props: TabStripProps) {
   } = props;
 
   const stripRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    runTileStripCommitHandoff(groupId);
+  });
   const handleWheel = useHorizontalWheelScroll();
   const { setTabRef, getTabElement } = useTabElementRegistry();
   const stripEndDropData = useMemo<EpicCanvasDropTargetData>(
@@ -1079,13 +1085,20 @@ function TabItemMotionFrame(props: {
   readonly children: ReactNode;
 }) {
   const transition = useTileDisplacementTransition();
+  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const x = useTileTabDisplacement({
+    nodeRef,
+    offsetX: props.offsetX,
+    transition,
+  });
   return (
     <m.div
+      ref={nodeRef}
       initial={false}
       animate={{
         opacity: props.isDragging ? 0 : 1,
-        x: props.offsetX,
       }}
+      style={{ x }}
       transition={transition}
       data-tile-item-id={props.tileItemId}
       className="relative flex shrink-0 items-stretch"

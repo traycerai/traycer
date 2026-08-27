@@ -48,10 +48,16 @@ export function readHeaderStripSlots(): ReadonlyArray<StripSlot> {
     const itemId = child.dataset.stripItemId;
     if (itemId === undefined || itemId.length === 0) continue;
     const rect = child.getBoundingClientRect();
+    const transform = getComputedStyle(child).transform;
+    const values = transform.slice(transform.indexOf("(") + 1, -1).split(",");
+    const parsedTranslateX = Number(
+      values[transform.startsWith("matrix3d(") ? 12 : 4],
+    );
+    const translateX = Number.isFinite(parsedTranslateX) ? parsedTranslateX : 0;
     measured.push({
       itemId,
       width: rect.width,
-      contentLeft: rect.left - originX,
+      contentLeft: rect.left - originX - translateX,
       isMergeTarget: child.dataset.stripItemMergeable !== "false",
     });
   }

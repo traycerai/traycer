@@ -55,7 +55,7 @@ describe("tile strip geometry", () => {
     );
   });
 
-  it("removes active model offsets from live slot measurements", () => {
+  it("removes the rendered transform from live slot measurements", () => {
     const scroller = addStrip({
       viewTabId: "view-source",
       groupId: "group-source",
@@ -63,12 +63,10 @@ describe("tile strip geometry", () => {
     });
     const item = document.createElement("div");
     item.dataset.tileItemId = "tile-1";
+    item.style.transform = "matrix(1, 0, 0, 1, 30, 0)";
     item.getBoundingClientRect = () => rect(180, 10, 60, 30);
     scroller.append(item);
 
-    expect(
-      readTileStripSlots("group-source", new Map([["tile-1", 30]]))[0]
-        .contentLeft,
-    ).toBe(50);
+    expect(readTileStripSlots("group-source")[0].contentLeft).toBe(50);
   });
 });

@@ -129,6 +129,7 @@ import {
   HEADER_STRIP_SCROLL_TEST_ID,
   measureHeaderStripGeometry,
   readHeaderStripContentOriginX,
+  readHeaderStripSlots,
 } from "@/components/layout/tabs/header-strip-geometry";
 import { pointIsOutsideViewport } from "@/components/epic-canvas/dnd/viewport-release";
 import {
@@ -137,6 +138,7 @@ import {
 } from "@/components/layout/tabs/tab-detach-channel";
 import { appLogger } from "@/lib/logger";
 import { armHeaderStripCommitHandoff } from "@/components/layout/tabs/header-strip-commit-handoff";
+import { armTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
 import {
   DwellLatch,
   browserDwellTimer,
@@ -182,6 +184,7 @@ let activeHeaderStripGeometry: StripDragGeometry | null = null;
  * which is the scroll-corrected point that actually chose `over`.
  */
 let latestPointerX: number | null = null;
+let latestPointerY: number | null = null;
 
 /**
  * Tile-drag geometry for the gesture in flight: the SOURCE group's strip, plus
@@ -331,6 +334,7 @@ function resetPaneBodyDwellOutsideTarget(
 
 function trackPointerX(event: PointerEvent): void {
   latestPointerX = event.clientX;
+  latestPointerY = event.clientY;
 }
 
 /**
@@ -488,7 +492,12 @@ function updateCanvasSourcePreview(
   // highlight so switching from a row hover back to canvas works.
   clearSidebarReparentPreview(refs);
   if (updateArtifactTileStripPreview(source, point, refs)) return;
-  if (updateHeaderStripTearOffPreview(source, event, point, refs)) return;
+  if (updateHeaderStripTearOffPreview(source, event, point, refs)) {
+    paneBodyDwell().reset();
+    dndStore.headerStripDragStateChanged(null);
+    dndStore.tileStripOffsetsChanged(new Map());
+    return;
+  }
   dndStore.headerStripDropIndexChanged(null);
   const targetAtPoint = compatibleCanvasTarget(
     source,
@@ -603,9 +612,7 @@ function updateTileStripPreview(
   if (groupId === drag.groupId) {
     const contentOriginX = readTileStripContentOriginX(groupId);
     if (contentOriginX === null) return false;
-    const currentOffsets =
-      dndStore.tileStripOffsets.get(groupId) ?? new Map<string, number>();
-    const slots = readTileStripSlots(groupId, currentOffsets);
+    const slots = readTileStripSlots(groupId);
     const geometry = remapGeometryToSlots(drag.geometry, slots);
     if (geometry === null) return false;
     activeTileDrag = { ...drag, geometry };
@@ -721,7 +728,12 @@ function publishHeaderStripDragState(input: {
 }): number | null {
   const dndStore = useEpicDndStore.getState();
   const contentOriginX = readHeaderStripContentOriginX();
-  const { geometry, headerTab } = input;
+  const { headerTab } = input;
+  const geometry =
+    input.geometry === null
+      ? null
+      : remapGeometryToSlots(input.geometry, readHeaderStripSlots());
+  activeHeaderStripGeometry = geometry;
   if (geometry === null || contentOriginX === null) {
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
@@ -1030,18 +1042,16 @@ function resolveTearOff(input: {
   // pointer has left every target, unlike collision coordinates. Used for
   // tear-off detection only - drop math still reads the collision point.
   const point =
-    event.activatorEvent instanceof MouseEvent
-      ? {
-          x: event.activatorEvent.clientX + event.delta.x,
-          y: event.activatorEvent.clientY + event.delta.y,
-        }
-      : getLastCollisionPointerPoint();
+    latestPointerX === null || latestPointerY === null
+      ? getLastCollisionPointerPoint()
+      : { x: latestPointerX, y: latestPointerY };
   const outsideViewport = pointIsOutsideViewport(point, {
     width: window.innerWidth,
     height: window.innerHeight,
   });
   const headerTab = readHeaderTabDragData(event.active.data.current);
   if (headerTab !== null) {
+    if (hasValidTopLevelDrop(event, headerTab)) return null;
     const pulledBelowStrip =
       point !== null &&
       stripBottom !== null &&
@@ -1063,6 +1073,30 @@ function resolveTearOff(input: {
       (tab) => tab.kind === "epic" && tab.id === source.viewTabId,
     ) ?? null
   );
+}
+
+function hasValidTopLevelDrop(
+  event: DragEndEvent,
+  headerTab: HeaderTabDragData,
+): boolean {
+  const target =
+    event.over === null
+      ? null
+      : readTopLevelTabDropTarget(event.over.data.current);
+  return target !== null && resolveLiveTopLevelDrop(headerTab, target) !== null;
+}
+
+function armTileHandoffForDrop(
+  source: EpicCanvasDragSourceData,
+  drop: ResolvedEpicCanvasDrop,
+): void {
+  if (
+    source.kind === ARTIFACT_TAB_DND_TYPE &&
+    drop.preview?.kind === "artifact-tab-strip" &&
+    drop.preview.groupId === source.sourceGroupId
+  ) {
+    armTileStripCommitHandoff(source.sourceGroupId);
+  }
 }
 
 /** Within a few px of any viewport edge - a canvas tile dragged off-window. */
@@ -1164,6 +1198,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         capture: true,
       });
       latestPointerX = null;
+      latestPointerY = null;
       lastPointerDownX = null;
     };
   }, []);
@@ -1370,6 +1405,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
     lastHeaderDrag = null;
     promotedPreviewOnDrag = null;
     latestPointerX = null;
+    latestPointerY = null;
     lastPointerDownX = null;
     // Cleared here rather than only on unmount: the latch that consumes it is
     // reset above, so a replay left armed can only ever re-run a dead gesture's
@@ -1379,7 +1415,22 @@ export function RootDndProvider(props: RootDndProviderProps) {
     useEpicDndStore.getState().dragEnded();
   }, [clearMergeDwellTimer, edgeDwell]);
 
-  useEffect(() => () => endGesture(), [endGesture]);
+  useEffect(
+    () => () => {
+      const promoted = promotedPreviewOnDrag;
+      if (promoted !== null) {
+        useEpicCanvasStore
+          .getState()
+          .restorePreviewInTab(
+            promoted.viewTabId,
+            promoted.groupId,
+            promoted.tileId,
+          );
+      }
+      endGesture();
+    },
+    [endGesture],
+  );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -1445,6 +1496,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         } else {
           const drop = lastResolvedDropRef.current;
           if (drop !== null) {
+            armTileHandoffForDrop(source, drop);
             commitResolvedCanvasDrop(drop, navigateNested);
           }
         }
