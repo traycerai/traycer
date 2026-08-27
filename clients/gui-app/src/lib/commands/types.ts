@@ -106,6 +106,43 @@ export interface CommandItem {
    * Prevent selection in cmdk while retaining the row as contextual feedback.
    */
   readonly disabled?: boolean;
+  /** Agent-tree presentation metadata used by the unified Agents opener. */
+  readonly agentTreeRow?: {
+    readonly nodeId: string;
+    readonly depth: number;
+    readonly ancestorIds: ReadonlyArray<string>;
+    readonly hasChildren: boolean;
+    readonly interface: "chat" | "terminal";
+    readonly activity: "turn" | "background" | "idle";
+  };
+  /** Artifact-tree presentation metadata used by the Artifacts opener. */
+  readonly artifactTreeRow?: {
+    readonly nodeId: string;
+    readonly depth: number;
+    readonly ancestorIds: ReadonlyArray<string>;
+    readonly hasChildren: boolean;
+    readonly kind: "spec" | "ticket" | "story" | "review";
+    readonly status: number | null;
+  };
+  /** Directory/file presentation metadata for Files and Git Diff results. */
+  readonly pathTreeRow?: {
+    readonly treeId: string;
+    readonly nodeId: string;
+    readonly depth: number;
+    readonly ancestorIds: ReadonlyArray<string>;
+    readonly hasChildren: boolean;
+    readonly kind: "directory" | "file";
+    readonly path: string;
+    readonly displayPath: string;
+    readonly gitStatus?:
+      | "modified"
+      | "added"
+      | "deleted"
+      | "renamed"
+      | "copied"
+      | "untracked"
+      | "conflicted";
+  };
 }
 
 /**

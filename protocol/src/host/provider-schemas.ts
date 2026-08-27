@@ -1333,39 +1333,17 @@ export const providerProfileActionSchema = z.discriminatedUnion("type", [
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
 /**
- * Tri-state enablement intent for a provider. `"on"` / `"off"` are sticky user
- * choices that ignore detection; `"auto"` (the default, and what an unset
- * provider means) derives enablement from whether the host passively detected
- * an account for it.
- *
- * Carried on `providers.list@7.1` rows, on `agent.gui.listHarnesses@7.1` rows,
- * and as the optional `mode` on `providers.setEnabled@2.2`. It never replaces
- * `enabled`, which stays the strict boolean EFFECTIVE value on every wire.
+ * Enablement is a plain STICKY BOOLEAN on every wire: `enabled` below is the
+ * whole story, and the only thing that changes it is the user's toggle
+ * (`providers.setEnabled`). An earlier revision of this line carried a
+ * tri-state `enablementMode` ("auto" derived enablement from passive
+ * detection) plus an `enablementSource` explanation; both were removed before
+ * either shipped, because a provider that silently flips itself on or off
+ * mid-session is the behaviour we are deliberately not shipping. The host
+ * still probes passively, but only to SEED a boolean once and to answer
+ * "is this account signed out" (`authStatus` on the GUI harness row) - never
+ * to re-derive `enabled`.
  */
-export const providerEnablementModeSchema = z.enum(["auto", "on", "off"]);
-export type ProviderEnablementMode = z.infer<
-  typeof providerEnablementModeSchema
->;
-
-/**
- * Why a provider in `"auto"` mode came out enabled or disabled, so the client
- * can render the derived outcome ("Auto · enabled — account detected") instead
- * of a bare toggle state.
- *
- * Deliberately COARSER than the host's own five-value source: the host's
- * `sticky-on`/`sticky-off` both collapse to `"sticky"` (the mode field already
- * says which), and its fail-open arm reports `"auto-detected"` - a fail-open
- * provider renders as enabled, and telling a user "no account detected" about
- * a provider Traycer just enabled would be a lie about a read error.
- */
-export const providerEnablementSourceSchema = z.enum([
-  "sticky",
-  "auto-detected",
-  "auto-undetected",
-]);
-export type ProviderEnablementSource = z.infer<
-  typeof providerEnablementSourceSchema
->;
 
 const providerCliStateBaseShape = {
   enabled: z.boolean(),
@@ -1495,34 +1473,6 @@ const providerCliStateBaseShape = {
   // Null when the host could not resolve any runnable binary, which is the
   // same condition `cliBinaryResolved: false` reports.
   nextRunBinary: providerNextRunBinarySchema.nullable().catch(null).optional(),
-  // ── v7.1 fields (auth-aware enablement) ────────────────────────────────
-  // The tri-state intent behind `enabled`, and why an `"auto"` provider came
-  // out the way it did. `enabled` above is untouched and stays the strict
-  // boolean EFFECTIVE value, so a client that ignores both fields behaves
-  // exactly as it does today - which is the whole reason they are additive
-  // rather than a reshaped `enabled`.
-  //
-  // No `.default()`: absent means "this host predates auto enablement", which
-  // the client must be able to tell from any concrete value (it falls back to
-  // the binary switch). A default would erase that.
-  //
-  // `.catch(undefined)` covers the DIFFERENT case a default would not: a value
-  // that is PRESENT but from a newer host's wider enum. Without it, one
-  // unrecognized member fails the whole `providers.list` response - nothing on
-  // the path to the array element catches, so the client empties its entire
-  // provider list over one field it could simply have ignored. Every sibling
-  // enum on this shape already carries a catch for that reason
-  // (`loginCapability`, `advisory`, `nextRunBinary`, `rateLimitStatus`).
-  //
-  // Version negotiation is supposed to make this unreachable - a newer host
-  // downgrades to the negotiated minor - so this is defense in depth against
-  // the bridge being wrong. That is not hypothetical: this very line's own
-  // v7.1 rollout shipped two such bugs (released rows pinned over a live body;
-  // `downgradeProviderCliStateToV10` missing these two fields, which made whole
-  // rows vanish). Degrading to `undefined` lands the client on the old-host
-  // path, which is a supported, tested state.
-  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
-  enablementSource: providerEnablementSourceSchema.optional().catch(undefined),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -1998,49 +1948,20 @@ export type ProvidersListResponseV70 = z.infer<
   typeof providersListResponseSchemaV70
 >;
 
-// ── Frozen `providers.list@7.1` provider state + list response (pre-Reasonix)
+// THERE IS NO `providers.list@7.1`. One was opened for the auth-aware
+// enablement pair (`enablementMode` / `enablementSource`) and removed with
+// them, before either reached a tag: those two optional fields were the
+// minor's ENTIRE delta over v7.0, so with enablement back to a plain sticky
+// boolean the line carried nothing v7.0 did not already carry. A minor that
+// adds no field is not a cheap compatibility cushion - it is a second name
+// for one shape, and every downgrade bridge in major 7 would have to keep
+// choosing between them. v8.0 (Reasonix + per-profile eligibility) therefore
+// upgrades straight from v7.0.
 //
-// v7.1 is where the auth-aware enablement fields formally enter the major-7
-// line. It is frozen here at the v7.0 PROVIDER ID SET even though no tag has
-// shipped 7.1 yet, and that is the load-bearing part: a minor may not GROW A
-// RESPONSE ENUM over its predecessor - `versioned-rpc.ts`'s
-// projection-feasibility check refuses it outright - and v7.0 IS released, so
-// no minor of major 7 can ever carry a provider id v7.0 lacks. Reasonix
-// therefore opens 8.0 rather than riding 7.1.
-//
-// The refusal is protecting a real failure, not a formality. A 7.0 peer
-// receives a 7.1 response through a within-major re-parse, which STRIPS
-// unknown keys but REJECTS an unknown enum value - so a Reasonix ROW on 7.1
-// would not degrade to "one provider missing", it would fail the whole
-// `providers.list` response and empty that peer's provider list. Only a
-// cross-major bridge can filter rows.
-//
-// Same key-set-only discipline as `providerCliStateBaseShapeV70` above: the
-// leaf schemas stay live references and the deep `frozen-catalog-lines`
-// snapshot is what catches growth inside them.
-const providerCliStateBaseShapeV71 = {
-  ...providerCliStateBaseShapeV70,
-  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
-  enablementSource: providerEnablementSourceSchema.optional().catch(undefined),
-};
-
-export const providerCliStateSchemaV71 = z.object({
-  providerId: providerIdSchemaV70,
-  ...providerCliStateBaseShapeV71,
-  auth: PROVIDER_AUTH_SCHEMA_V20,
-  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
-    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-  ),
-});
-export type ProviderCliStateV71 = z.infer<typeof providerCliStateSchemaV71>;
-
-export const providersListResponseSchemaV71 = z.object({
-  providers: z.array(providerCliStateSchemaV71),
-  native: nativeListResultSchema.nullable().default(null),
-});
-export type ProvidersListResponseV71 = z.infer<
-  typeof providersListResponseSchemaV71
->;
+// `agent.gui.listHarnesses@7.1` is a different story and DOES survive: its
+// delta was `authStatus`, which the picker still renders (an enabled provider
+// whose account is signed out dims rather than vanishing), so that minor has
+// real content.
 
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
 // `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
@@ -2248,39 +2169,11 @@ export type ProvidersSetEnabledRequestV21 = z.infer<
   typeof providersSetEnabledRequestSchemaV21
 >;
 
-/**
- * `providers.setEnabled@2.2` request - adds the optional tri-state `mode` the
- * three-way Auto/On/Off settings control sends. `enabled` stays REQUIRED for
- * the reason 2.1's comment gives (demoting it would emit payloads a released
- * peer cannot parse); a 2.2 caller sends both, and the host takes `mode` as
- * authoritative when present, mapping `enabled` to on/off otherwise. So a 2.1
- * caller keeps exact binary semantics and needs no bridge fill - the 2.1 -> 2.2
- * upgrade is identity, with `mode` simply absent.
- *
- * WHY A NEW MINOR RATHER THAN `providers.nativeMutate`: the doctrine above
- * froze 2.1 and routes additions onto that method, but that doctrine is about
- * provider-NATIVE config pass-through (mcp/plugins/skills mutations that have
- * nothing to do with enablement and were only ever folded here for lack of a
- * carrier). `mode` is Traycer's own enablement semantic on the very method
- * that already owns enablement, and it is an additive optional REQUEST field,
- * which is exactly what a minor is for. Routing it through `nativeMutate`
- * would put enablement behind a native-config verb and leave `setEnabled`
- * unable to express the state it names.
- */
-export const providersSetEnabledRequestSchemaV22 =
-  providersSetEnabledRequestSchemaV21.extend({
-    // Deliberately NO `.catch(undefined)`, unlike the response-side enablement
-    // fields. This is a REQUEST: the host parses it, and swallowing an
-    // unrecognized mode would silently rewrite what the user asked for -
-    // `mode` absent falls back to the legacy `enabled` boolean, so a caller
-    // that said "Auto" would be recorded as sticky on/off. Failing the call is
-    // both honest and recoverable; a response degrades to a read-only display,
-    // a request degrades to a WRONG WRITE. Fail loud here, fail soft there.
-    mode: providerEnablementModeSchema.optional(),
-  });
-export type ProvidersSetEnabledRequestV22 = z.infer<
-  typeof providersSetEnabledRequestSchemaV22
->;
+// THERE IS NO `providers.setEnabled@2.2`. One was opened to carry an optional
+// tri-state `mode` for a three-way Auto/On/Off settings control; that control
+// is gone, and `mode` was the minor's entire delta over 2.1. `enabled` - a
+// required boolean since 2.0 - is once again the whole request, which is what
+// the method's name has always promised.
 
 export const providersSetApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
@@ -3386,13 +3279,6 @@ export type DowngradableToV10ProviderState = (
   | ProviderMutationCliStateV20
   | ProviderMutationCliStateV21
 ) & {
-  // Widened the same way `profiles` is, and for the same reason: only the live
-  // and v7.1 shapes carry the enablement pair, but every arm reaches
-  // the strict v1.0 parse below, which strips them either way. Optional here so
-  // an arm without them still satisfies the type while the destructure can
-  // still name them.
-  enablementMode?: ProviderCliState["enablementMode"];
-  enablementSource?: ProviderCliState["enablementSource"];
   profiles?: ProviderCliState["profiles"] | ProviderCliStateV70["profiles"];
   // Widened to the pre-image capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
@@ -3446,12 +3332,11 @@ export function downgradeProviderCliStateToV10(
   //   time must be added to this destructure too. Forgetting one does not
   //   fail loudly - it empties the provider list for v1.0 clients, silently,
   //   because the row fails the parse and the caller filters it out.
-  // - `enablementMode` / `enablementSource` (v7.1) - the auth-aware enablement
-  //   pair. They were in fact forgotten on the first pass and caught by a
-  //   test, exactly as the paragraph above predicts: a row carrying either one
-  //   did not lose the two fields, it disappeared. `enabled` still travels, and
-  //   it already carries the EFFECTIVE value, so a v1.0 caller loses only the
-  //   explanation of a boolean it was always going to read on its own terms.
+  //
+  // That trap has already fired once here: the (since removed) auth-aware
+  // `enablementMode` / `enablementSource` pair was forgotten on its first pass
+  // and caught by a test, exactly as the paragraph above predicts - a row
+  // carrying either one did not lose the two fields, it disappeared.
   const {
     availabilityPending: _availabilityPending,
     profiles: _profiles,
@@ -3464,8 +3349,6 @@ export function downgradeProviderCliStateToV10(
     managedVersions: _managedVersions,
     managedVersionsUnavailable: _managedVersionsUnavailable,
     nextRunBinary: _nextRunBinary,
-    enablementMode: _enablementMode,
-    enablementSource: _enablementSource,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
@@ -3604,13 +3487,13 @@ function parseProviderStateWithEnabledProfiles(state: unknown) {
   };
 }
 
-export function downgradeProviderCliStateListToV71(
+export function downgradeProviderCliStateListToV70(
   states: readonly unknown[],
-): ProviderCliStateV71[] {
+): ProviderCliStateV70[] {
   return states.flatMap((state) => {
     const current = parseProviderStateWithEnabledProfiles(state);
     if (current === null) return [];
-    const parsed = providerCliStateSchemaV71.safeParse(current);
+    const parsed = providerCliStateSchemaV70.safeParse(current);
     return parsed.success ? [parsed.data] : [];
   });
 }

@@ -377,8 +377,11 @@ function providerOfferableInPalette(provider: HarnessOption): boolean {
  * takes the reading it can defend: say so, order accordingly, and leave the
  * verdict to the gate that has the profile in hand.
  *
- * That is also what the rail does with the identical signal - `railHarnessDegraded`
- * feeds a sort key, not a filter - so the two surfaces stay consistent.
+ * The rail reads the identical signal (`railHarnessDegraded`) and reaches the
+ * same conclusion by a different route: there it dims the row and leaves it
+ * exactly where it is, because the rail is a fixed strip of ⌘-digit positions
+ * a user learns. This is a searched list with no positional memory to break,
+ * so it may additionally group the unusable rows last.
  */
 function providerSignedOutInPalette(provider: HarnessOption): boolean {
   return isHarnessRowSignedOut(provider);
