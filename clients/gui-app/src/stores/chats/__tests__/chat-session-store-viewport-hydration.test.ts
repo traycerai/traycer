@@ -381,7 +381,7 @@ describe("chat session viewport hydration", () => {
       expect(harness.rangeRequests[0]).toMatchObject({
         epoch: 1,
         fromOrdinal: 20,
-        toOrdinal: 40,
+        toOrdinal: 39,
       });
     } finally {
       harness.handle.dispose();
@@ -399,8 +399,40 @@ describe("chat session viewport hydration", () => {
       expect(harness.rangeRequests).toHaveLength(1);
       expect(harness.rangeRequests[0]).toMatchObject({
         fromOrdinal: 10,
-        toOrdinal: 20,
+        toOrdinal: 19,
       });
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * Two `toOrdinal`s with two meanings, and the store is where they meet.
+   *
+   * `OrdinalRange.toOrdinal` (the viewport report, the planner, the gaps) is
+   * EXCLUSIVE. `ChatLoadRangeRequest.toOrdinal` (the wire, and the
+   * `sliceTranscriptRange` that serves it) is INCLUSIVE at both ends. Passing
+   * the planner's value straight through asks for one row more than the plan
+   * on every single request - which at a gap boundary is the first row of the
+   * span already held, so it also drags a body the client did not need across
+   * the wire.
+   *
+   * Asserted as an exact width rather than as `toOrdinal: 19`, because that is
+   * the property that matters and it survives the numbers changing.
+   */
+  it("converts the planner's exclusive bound to the wire's inclusive one", () => {
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+
+      expect(harness.rangeRequests).toHaveLength(1);
+      const request = harness.rangeRequests[0];
+      // Ten rows visible, so ten rows requested - inclusive of both bounds.
+      expect(request.toOrdinal - request.fromOrdinal + 1).toBe(10);
+      expect(request.fromOrdinal).toBe(10);
     } finally {
       harness.handle.dispose();
     }
@@ -434,7 +466,7 @@ describe("chat session viewport hydration", () => {
       expect(harness.rangeRequests).toHaveLength(2);
       expect(harness.rangeRequests[1]).toMatchObject({
         fromOrdinal: 15,
-        toOrdinal: 20,
+        toOrdinal: 19,
       });
       harness.handle.store.getState().reportVisibleTranscriptRange(report);
       expect(harness.rangeRequests).toHaveLength(2);
@@ -487,7 +519,7 @@ describe("chat session viewport hydration: review fixes", () => {
       expect(harness.rangeRequests).toHaveLength(1);
       expect(harness.rangeRequests[0]).toMatchObject({
         fromOrdinal: 5,
-        toOrdinal: 6,
+        toOrdinal: 5,
       });
 
       // A single row whose serialized body alone exceeds the whole window
@@ -723,7 +755,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
       expect(harness.rangeRequests).toHaveLength(2);
       expect(harness.rangeRequests[1]).toMatchObject({
         fromOrdinal: 10,
-        toOrdinal: 20,
+        toOrdinal: 19,
       });
     } finally {
       harness.handle.dispose();

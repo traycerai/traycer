@@ -354,8 +354,12 @@ describe("windowed snapshot whose tail arrived empty", () => {
       expect(harness.rangeRequests).toHaveLength(1);
       const request = harness.rangeRequests[0];
       expect(request.epoch).toBe(4);
-      expect(request.toOrdinal).toBe(40);
-      expect(request.fromOrdinal).toBeLessThan(40);
+      // 39, not 40: the wire's `toOrdinal` is INCLUSIVE, and with `rowCount`
+      // 40 the last row is ordinal 39. Asking for 40 asked for a row that does
+      // not exist - which is what forwarding the planner's exclusive bound
+      // unconverted did on every request.
+      expect(request.toOrdinal).toBe(39);
+      expect(request.fromOrdinal).toBeLessThan(39);
     } finally {
       harness.handle.dispose();
     }
@@ -559,6 +563,139 @@ describe("accumulated-change chunks", () => {
           .getState()
           .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
       ).toEqual(["z.ts"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * A chunk that starts PAST the assembled end is one whose predecessor was
+   * dropped. `slice(0, fromIndex)` cannot say so - on a shorter array it
+   * returns the whole thing and appends, so every entry from there on sits
+   * BELOW the index the host gave it and the panel attributes each row's
+   * digest and counts to the wrong file.
+   */
+  it("drops an accumulated chunk whose predecessor was lost, rather than misplacing it", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 4,
+        }),
+      );
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          summaries: [summary("a.ts")],
+          isFinal: false,
+        },
+      });
+      // fromIndex 3 against an assembled length of 1: chunk 2 never arrived.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 3,
+          summaries: [summary("d.ts")],
+          isFinal: true,
+        },
+      });
+
+      const state = harness.handle.store.getState();
+      // "d.ts" is NOT seated at index 1 wearing "b.ts"'s position.
+      expect(
+        state.accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts"]);
+      // And the shortfall stays visible, which is what holds "Review all" back.
+      expect(
+        state.accumulatedFileChangeCount -
+          state.accumulatedFileChangeSummaries.length,
+      ).toBe(3);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * An aux-only re-broadcast - a queue change, an approval - re-sends the
+   * snapshot against an unchanged skeleton, and the host emits accumulated
+   * chunks only while REBUILDING a subscriber's index. So a snapshot is not
+   * proof that a re-stream is coming, and clearing the assembled summaries on
+   * one empties the panel for the rest of the session while the header goes on
+   * counting files it can no longer list.
+   */
+  it("keeps the assembled summaries across an aux-only snapshot re-broadcast", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 1,
+        }),
+      );
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          summaries: [summary("a.ts")],
+          isFinal: true,
+        },
+      });
+      // Same epoch, same rows: nothing here re-streams the summaries.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 1,
+        }),
+      );
+
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts"]);
     } finally {
       harness.handle.dispose();
     }

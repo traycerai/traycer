@@ -339,6 +339,58 @@ export function streamWindowMessage(
 }
 
 /**
+ * Rewrite EVERY message the window holds, live and hydrated.
+ *
+ * For a projection whose subject is a property rather than an id - the
+ * steer-restart turn remap, which renames a `turnId` across however many rows
+ * carry it. {@link updateWindowMessage} cannot express that: the caller does
+ * not know which ids match until it has looked at each row.
+ *
+ * Returns the window unchanged, by reference, when `update` was identity for
+ * every record - so a caller that runs on a frequent path does not force a
+ * republish for a frame that changed nothing.
+ *
+ * Deliberately NOT for the streaming path. This re-measures every span it
+ * touches, which is the cost {@link streamWindowMessage}'s deferred charge
+ * exists to avoid; the callers here run at turn boundaries.
+ */
+export function mapWindowMessages(
+  window: TranscriptWindow,
+  update: (message: Message) => Message,
+): TranscriptWindow {
+  // "Did anything change" is COMPUTED by comparing identities, never
+  // accumulated into a flag inside the `map` callbacks - see
+  // {@link rewriteWindowMessage}, which pays for the same lesson: an
+  // assignment made inside a callback is invisible to control-flow narrowing,
+  // so a `let changed = false` read afterwards is typed `false` and the guard
+  // that reads it is dead code the type-aware lint rejects.
+  const changedFrom = (
+    before: readonly Message[],
+    after: readonly Message[],
+  ): boolean => after.some((message, index) => message !== before[index]);
+
+  const spans = window.spans.map((span) => {
+    const messages = span.messages.map(update);
+    // Unchanged spans keep their identity AND skip a re-measure, so a remap
+    // touching one span does not re-serialize every other span's records.
+    return changedFrom(span.messages, messages)
+      ? { ...span, messages, bytes: recordsByteLength(messages, span.events) }
+      : span;
+  });
+  const liveMessages = window.liveMessages.map(update);
+  const touched =
+    changedFrom(window.liveMessages, liveMessages) ||
+    spans.some((span, index) => span !== window.spans[index]);
+  if (!touched) return window;
+  return {
+    ...window,
+    spans,
+    liveMessages,
+    hydratedBytes: totalBytes(spans),
+  };
+}
+
+/**
  * Bring {@link TranscriptWindow.hydratedBytes} back in line with what the spans
  * actually hold.
  *
@@ -502,15 +554,50 @@ function dedupeEvents(
 }
 
 /**
+ * Concatenate overlapping spans' records, keeping each record id ONCE.
+ *
+ * POSITION comes from the first occurrence, because the groups arrive in
+ * ordinal order and that ordering is what makes the result transcript-ordered.
+ * The BODY comes from `preferred` wherever it holds that id.
+ *
+ * The two halves answer different questions and it matters that they are
+ * decided separately. A span is only ever merged with a response that arrived
+ * LATER under the same epoch, so where the two copies of a record disagree the
+ * incoming one is the host's current answer - the same rule the row ids
+ * already follow. Keeping the first BODY as well would let a span retained
+ * across a reconnect outrank the authoritative tail that just replaced it: the
+ * merge succeeds, the ids update, and the published transcript keeps rendering
+ * the stale text with nothing to indicate it.
+ */
+function dedupePreferringIncoming<T>(
+  groups: readonly (readonly T[])[],
+  preferred: readonly T[],
+  keyOf: (item: T) => string,
+): readonly T[] {
+  const override = new Map(preferred.map((item) => [keyOf(item), item]));
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const group of groups) {
+    for (const item of group) {
+      const key = keyOf(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(override.get(key) ?? item);
+    }
+  }
+  return out;
+}
+
+/**
  * Insert one span, merging it with every span it touches or overlaps.
  *
  * Merging matters for more than tidiness: a reader scrolling upward produces a
  * run of abutting ranges, and left unmerged they would each keep their own
- * copy of a turn that straddles their boundary. The dedupe is by record id and
- * keeps the FIRST occurrence, which preserves transcript order because the
- * spans are concatenated in ordinal order.
+ * copy of a turn that straddles their boundary. Records are concatenated in
+ * ordinal order and deduped by id, which is what preserves transcript order.
  *
- * Where two spans overlap, the INCOMING row ids win. They came from a later
+ * Where two spans overlap, the INCOMING copy wins - both the row ids and the
+ * record bodies (see {@link dedupePreferringIncoming}). They came from a later
  * response under the same epoch, so where the two disagree the newer one is
  * the host's current answer.
  */
@@ -562,8 +649,16 @@ function insertSpan(
       rowIds[span.fromOrdinal + index - fromOrdinal] = span.rowIds[index];
     }
   }
-  const messages = dedupeMessages(members.map((span) => span.messages));
-  const events = dedupeEvents(members.map((span) => span.events));
+  const messages = dedupePreferringIncoming(
+    members.map((span) => span.messages),
+    incoming.messages,
+    (message) => message.messageId,
+  );
+  const events = dedupePreferringIncoming(
+    members.map((span) => span.events),
+    incoming.events,
+    (event) => event.eventId,
+  );
   const merged: HydratedSpan = {
     fromOrdinal,
     rowIds,
@@ -615,7 +710,23 @@ export function applyWindowedSnapshot(
       };
 
   const tailRowIds = tailRowIdsFor(base, input);
-  if (tailRowIds === null) return base;
+  if (tailRowIds === null) {
+    // Two different "no tail" answers, and only one of them is inert.
+    //
+    // `fromOrdinal >= rowCount` is a transcript with no tail rows at all -
+    // nothing to seat and nothing held that could be stale.
+    //
+    // A tail that EXISTS and arrived empty is the other one: the snapshot
+    // legitimately omitted it because its last row exceeds the inline budget.
+    // A same-epoch reconnect gets here holding the PREVIOUS tail span, and
+    // keeping it is what makes `isTailHydrated()` answer true - so no range is
+    // ever planned and the client shows a pre-reconnect, possibly half-written
+    // row for as long as the session lives. Drop what overlaps the omitted
+    // region so the planner sees the gap and fetches the authoritative body.
+    return input.rowCount - input.tail.fromOrdinal > 0
+      ? dropSpansOverlappingFrom(base, input.tail.fromOrdinal)
+      : base;
+  }
   const tailSpan: HydratedSpan = {
     fromOrdinal: input.tail.fromOrdinal,
     rowIds: tailRowIds,
@@ -630,6 +741,25 @@ export function applyWindowedSnapshot(
     spans,
     hydratedBytes: totalBytes(spans),
   });
+}
+
+/**
+ * Drop every span reaching at or past `fromOrdinal`.
+ *
+ * Whole spans, including one that only PARTIALLY overlaps. A span is the
+ * smallest unit this module adds or reclaims - eviction drops whole spans, and
+ * so does the skeleton's contradiction check - and splitting one here would
+ * make this the only operation in the file that can produce a span the host
+ * never sent. The rows below the boundary are re-fetched, which costs a round
+ * trip; keeping a stale row costs a body that never corrects itself.
+ */
+function dropSpansOverlappingFrom(
+  window: TranscriptWindow,
+  fromOrdinal: number,
+): TranscriptWindow {
+  const kept = window.spans.filter((span) => spanEnd(span) <= fromOrdinal);
+  if (kept.length === window.spans.length) return window;
+  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
 }
 
 /**
@@ -667,10 +797,12 @@ function tailRowIdsFor(
 /**
  * Place one chunk of the skeleton.
  *
- * Also the DELAYED identity check for anything hydrated before the skeleton
- * reached it: a chunk that lands on an ordinal whose held body claims a
- * different row id drops that body. Without this the eager tail - which is
- * seated with no ids to check against - would be permanently unverified.
+ * Also the DELAYED identity resolution for anything hydrated before the
+ * skeleton reached it: a chunk that lands on an ordinal whose held body claims
+ * a different row id drops that body, and one that lands on a row seated with
+ * no id at all supplies it. Both halves exist for the eager tail, which rides
+ * the snapshot and is therefore always seated before any id is available to
+ * check it against - see {@link reconcileSpansWithSkeleton}.
  */
 export function applySkeletonChunk(
   window: TranscriptWindow,
@@ -699,7 +831,7 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  return dropSpansContradictedBySkeleton(next, chunk);
+  return reconcileSpansWithSkeleton(next, chunk);
 }
 
 /**
@@ -719,19 +851,69 @@ function coversEveryOrdinal(
   return true;
 }
 
-function dropSpansContradictedBySkeleton(
+/**
+ * Reconcile the spans a skeleton chunk now has authority over.
+ *
+ * Two things, because the chunk answers both at once for the same rows. A span
+ * whose held ids CONTRADICT the chunk is dropped - that body belongs to a
+ * different row. A span holding UNVERIFIED ids (the empty string, which only
+ * the inline tail produces) adopts them.
+ *
+ * The adopt half is not cosmetic. The tail is seated by the snapshot, which is
+ * emitted BEFORE the skeleton streams, so on a fresh session every tail row's
+ * id is empty; this chunk is the first authority to reach them. Left empty,
+ * `transcriptListRows` cannot match those ordinals to their rendered models,
+ * suppresses the ordinals, and re-emits the models as ordinal-less live rows -
+ * so the inline tail never participates in viewport reporting or row-height
+ * memory, on every windowed session, for exactly the rows the reader starts on.
+ */
+function reconcileSpansWithSkeleton(
   window: TranscriptWindow,
   chunk: ChatSkeletonChunk,
 ): TranscriptWindow {
   const chunkEnd = chunk.fromOrdinal + chunk.entries.length;
-  const kept = window.spans.filter((span) => {
+  let changed = false;
+  const kept: HydratedSpan[] = [];
+  for (const span of window.spans) {
     const disjoint =
       spanEnd(span) <= chunk.fromOrdinal || span.fromOrdinal >= chunkEnd;
-    if (disjoint) return true;
-    return !spanContradictsSkeleton(window, span);
-  });
-  if (kept.length === window.spans.length) return window;
+    if (disjoint) {
+      kept.push(span);
+      continue;
+    }
+    if (spanContradictsSkeleton(window, span)) {
+      changed = true;
+      continue;
+    }
+    const adopted = adoptSkeletonRowIds(window, span);
+    if (adopted !== span) changed = true;
+    kept.push(adopted);
+  }
+  if (!changed) return window;
   return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+}
+
+/**
+ * Fill a span's unverified row ids from the skeleton, or return it unchanged.
+ *
+ * Only the empty string is filled: a non-empty held id was checked against the
+ * skeleton by {@link spanContradictsSkeleton} before this runs, so it either
+ * agrees already or the span is gone.
+ */
+function adoptSkeletonRowIds(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+): HydratedSpan {
+  const rowIds = span.rowIds.map((held, index) =>
+    held === ""
+      ? (window.skeleton[span.fromOrdinal + index]?.rowId ?? held)
+      : held,
+  );
+  // Compared rather than flagged, for the narrowing reason in
+  // {@link mapWindowMessages}.
+  return rowIds.some((rowId, index) => rowId !== span.rowIds[index])
+    ? { ...span, rowIds }
+    : span;
 }
 
 function spanContradictsSkeleton(

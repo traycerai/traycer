@@ -82,7 +82,12 @@ describe("mergeCumulativeDiffs", () => {
         fetchable: [],
         fetches: [],
       }),
-    ).toEqual({ resolved: inline, isLoading: false, stale: false });
+    ).toEqual({
+      resolved: inline,
+      isLoading: false,
+      stale: false,
+      failed: false,
+    });
   });
 
   it("resolves a fetched body", () => {
@@ -94,6 +99,7 @@ describe("mergeCumulativeDiffs", () => {
         fetches: [
           {
             isLoading: false,
+            isError: false,
             data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
           },
         ],
@@ -104,6 +110,7 @@ describe("mergeCumulativeDiffs", () => {
       ],
       isLoading: false,
       stale: false,
+      failed: false,
     });
   });
 
@@ -113,7 +120,7 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline: [],
         fetchable,
-        fetches: [{ isLoading: true, data: undefined }],
+        fetches: [{ isLoading: true, isError: false, data: undefined }],
       }),
     ).toMatchObject({ resolved: [], isLoading: true });
   });
@@ -129,9 +136,9 @@ describe("mergeCumulativeDiffs", () => {
         filePaths: ["/a.ts"],
         inline: [],
         fetchable,
-        fetches: [{ isLoading: false, data: { stale: true } }],
+        fetches: [{ isLoading: false, isError: false, data: { stale: true } }],
       }),
-    ).toEqual({ resolved: [], isLoading: false, stale: true });
+    ).toEqual({ resolved: [], isLoading: false, stale: true, failed: false });
   });
 
   /**
@@ -152,10 +159,12 @@ describe("mergeCumulativeDiffs", () => {
       fetches: [
         {
           isLoading: false,
+          isError: false,
           data: { stale: false, beforeContent: "a1\n", afterContent: "a2\n" },
         },
         {
           isLoading: false,
+          isError: false,
           data: { stale: false, beforeContent: "b1\n", afterContent: "b2\n" },
         },
       ],
@@ -175,6 +184,7 @@ describe("mergeCumulativeDiffs", () => {
       fetches: [
         {
           isLoading: false,
+          isError: false,
           data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
         },
       ],

@@ -67,12 +67,26 @@ export function ChatAccumulatedChangesPanel(
     () => changes.map((change) => change.filePath),
     [changes],
   );
+  // Gated on the summary set being COMPLETE, not just on there being one.
+  // While chunks are still arriving `filePaths` is the delivered prefix, and
+  // this action captures it into a durable cumulative-bundle tile - so a click
+  // during ordinary initial loading produces a "review all changes" bundle
+  // that permanently omits the files that had not landed yet, with nothing on
+  // screen to say so. The header already counts the whole host set, which is
+  // what makes the shortfall invisible.
   const reviewAll = useMemo(
     () =>
-      opener === null || restore.activeTurnStatus !== null
+      opener === null ||
+      restore.activeTurnStatus !== null ||
+      restore.undeliveredChangeCount > 0
         ? null
         : opener.cumulativeBundle(filePaths),
-    [filePaths, opener, restore.activeTurnStatus],
+    [
+      filePaths,
+      opener,
+      restore.activeTurnStatus,
+      restore.undeliveredChangeCount,
+    ],
   );
   // Every row arrives carrying its own `+/-`: derived from contents on the
   // pre-windowed line, host-computed on the windowed one, and summed per-edit

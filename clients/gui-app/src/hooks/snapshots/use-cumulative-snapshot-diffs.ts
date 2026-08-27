@@ -120,6 +120,9 @@ export function useCumulativeSnapshotDiffs(args: {
         fetches: contentQueries.map((query) => ({
           isLoading: query.isLoading,
           data: query.data,
+          // Carried, not derived from the other two: a failed query and an
+          // idle one are the same `{isLoading: false, data: undefined}` pair.
+          isError: query.isError,
         })),
       }),
     [contentQueries, fetchable, filePaths, inline],

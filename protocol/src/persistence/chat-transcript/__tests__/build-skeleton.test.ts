@@ -9,6 +9,7 @@ import {
   type Message,
 } from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
 import {
   buildRowSkeleton,
   type TranscriptPreviewProjection,
@@ -119,6 +120,7 @@ function steeredTurn(fields: {
   messageId: string;
   timestamp: number;
   steeredMessageId: string;
+  sender: UserMessageSender | null;
 }): Message {
   const base = assistantMessage({
     messageId: fields.messageId,
@@ -139,7 +141,7 @@ function steeredTurn(fields: {
         messageId: fields.steeredMessageId,
         content: { type: "doc" },
         mode: "safe_point",
-        sender: null,
+        sender: fields.sender,
       },
     ],
   });
@@ -442,12 +444,14 @@ describe("buildRowSkeleton", () => {
       messageId: "m-turn",
       timestamp: 10,
       steeredMessageId: "m-steer",
+      sender: null,
     });
     const orphaned = steeredTurn({
       messageId: "m-turn-2",
       timestamp: 20,
       // No such record: the row is the steer block alone.
       steeredMessageId: "m-gone",
+      sender: null,
     });
 
     const withRecord = buildRowSkeleton(
@@ -539,5 +543,62 @@ describe("buildRowSkeleton", () => {
 
     expect(entries).toHaveLength(2);
     expect(entries.map((e) => e.rowId)).toEqual(["m-before", "m-after"]);
+  });
+  /**
+   * An orphaned steer's provenance lives on the BLOCK, because the record a
+   * checkpoint removed is where every other row reads it from. Getting this
+   * wrong is not a cosmetic mislabel: the minimap lists human turns, so an A2A
+   * steer shows up there as an "Untitled message" and then re-classifies and
+   * vanishes the moment the row hydrates - the list changing under the reader
+   * for a row they never touched.
+   */
+  it("classifies an ORPHANED steer from its block's sender", () => {
+    const agentOrphan = steeredTurn({
+      messageId: "m-a2a",
+      timestamp: 10,
+      steeredMessageId: "m-gone",
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-7",
+        displayName: "Bot",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+    });
+    const humanOrphan = steeredTurn({
+      messageId: "m-human",
+      timestamp: 20,
+      steeredMessageId: "m-also-gone",
+      sender: { type: "user", userId: "owner-1" },
+    });
+    const legacyOrphan = steeredTurn({
+      messageId: "m-legacy",
+      timestamp: 30,
+      // Persisted before the block carried a sender at all. The renderer reads
+      // that as a "you" row, so the skeleton must agree rather than guess.
+      steeredMessageId: "m-long-gone",
+      sender: null,
+    });
+
+    const entries = buildRowSkeleton(
+      {
+        messages: [agentOrphan, humanOrphan, legacyOrphan],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+
+    const steerRows = entries.filter((entry) =>
+      entry.rowId.startsWith("steer:"),
+    );
+    expect(steerRows).toHaveLength(3);
+    expect(steerRows.map((entry) => entry.sentByAgent ?? false)).toEqual([
+      true,
+      false,
+      false,
+    ]);
   });
 });

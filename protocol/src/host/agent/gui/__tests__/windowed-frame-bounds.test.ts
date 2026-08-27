@@ -5,6 +5,7 @@ import {
   INDEX_CHANGE_MAX_BYTES,
   SKELETON_CHUNK_MAX_BYTES,
   WINDOWED_SNAPSHOT_MAX_BYTES,
+  WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES,
   chunkByEncodedBytes,
   chunkRowSkeleton,
   indexChangeFits,
@@ -318,5 +319,41 @@ describe("the bounded snapshot is actually bounded", () => {
         64 * 1024 * 1024,
       ),
     ).toBe(false);
+  });
+
+  /**
+   * The ceiling and the relay's BULK threshold are the same 1 MiB, so a
+   * snapshot that measures just under the ceiling encodes - inside the frame's
+   * own `kind`/`epicId`/`chatId`, plus `encodeMuxMessageBody`'s five-byte
+   * header - to just over the threshold. It is then put on the BULK lane and
+   * can reorder against the interactive deltas this bound exists to keep it
+   * ordered with: the check passes and the invariant breaks.
+   */
+  it("reserves the frame envelope, so a just-under snapshot does not just-over the wire", () => {
+    // Sized to land in the reserve: over `ceiling - overhead`, under `ceiling`.
+    const insideTheReserve = {
+      padding: "x".repeat(
+        WINDOWED_SNAPSHOT_MAX_BYTES - WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES / 2,
+      ),
+    };
+    expect(
+      utf8ByteLength(JSON.stringify(insideTheReserve)),
+    ).toBeLessThan(WINDOWED_SNAPSHOT_MAX_BYTES);
+    expect(
+      windowedSnapshotFitsFrame(insideTheReserve, WINDOWED_SNAPSHOT_MAX_BYTES),
+    ).toBe(false);
+  });
+
+  it("still accepts a snapshot with the envelope's room to spare", () => {
+    // The other side of the boundary, so the reserve cannot be satisfied by a
+    // guard that simply rejects everything near the ceiling.
+    const clear = {
+      padding: "x".repeat(
+        WINDOWED_SNAPSHOT_MAX_BYTES - WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES * 2,
+      ),
+    };
+    expect(
+      windowedSnapshotFitsFrame(clear, WINDOWED_SNAPSHOT_MAX_BYTES),
+    ).toBe(true);
   });
 });

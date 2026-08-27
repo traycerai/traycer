@@ -45,6 +45,7 @@ import {
   evictTranscriptWindowToBudget,
   hydratedRecords,
   isTailHydrated,
+  mapWindowMessages,
   planTranscriptHydration,
   streamWindowMessage,
   touchTranscriptRange,
@@ -2311,7 +2312,17 @@ export function createChatSessionStoreWithNotificationDependencies(
         requestId,
         epoch: window.epoch,
         fromOrdinal: next.fromOrdinal,
-        toOrdinal: next.toOrdinal,
+        // The two bounds mean different things and the conversion is here.
+        // `OrdinalRange.toOrdinal` is EXCLUSIVE (see its declaration);
+        // `ChatLoadRangeRequest.toOrdinal` is inclusive at both ends, as is the
+        // `sliceTranscriptRange` that serves it. Forwarding it unchanged asked
+        // for one row more than the plan on every request - and at a gap
+        // boundary that extra row is the first row of the span already held,
+        // so it also pulled a body the client did not need across the wire.
+        //
+        // `planTranscriptHydration` never returns an empty range, so
+        // `toOrdinal - 1` cannot fall below `fromOrdinal`.
+        toOrdinal: next.toOrdinal - 1,
         // The host clamps this to its own ceiling regardless, so asking for the
         // full frame budget is asking for "as much as one frame holds" rather
         // than a number this side has to keep in step.
@@ -2345,12 +2356,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       // space the request was not framed against, and `applyIndexChange`
       // discards it for the same reason.
       if (input.epoch !== inFlight.epoch) return;
-      // Inclusive at the top: the wire's `loadRange` bounds are inclusive at
-      // both ends, so a response may legitimately reach `range.toOrdinal`.
+      // EXCLUSIVE at the top, because `inFlight.range` is the planner's
+      // `OrdinalRange` rather than the wire request built from it: the request
+      // converts to the wire's inclusive bound by sending `toOrdinal - 1`, so
+      // the highest ordinal a response can serve is `range.toOrdinal - 1`.
+      // Testing `<=` here would let a delta one row PAST the request supersede
+      // it, costing a discard and a re-fetch for a row it never asked for.
       const inside = invalidated.filter(
         (ordinal) =>
           ordinal >= inFlight.range.fromOrdinal &&
-          ordinal <= inFlight.range.toOrdinal,
+          ordinal < inFlight.range.toOrdinal,
       );
       if (inside.length === 0) return;
       inFlightHydrationRequest = {
@@ -2447,6 +2462,78 @@ export function createChatSessionStoreWithNotificationDependencies(
       publishWindowedTranscript(
         appendLiveRecords(get().transcriptWindow, input),
       );
+    };
+
+    /**
+     * Settle an interview, on whichever line this session is on.
+     *
+     * The shared path for `onInterviewAnswered` and `onInterviewErrored`, which
+     * differ only in the projection they build. Both used to write the
+     * lifecycle result to `state.messages` alone, and on the windowed line that
+     * array is DERIVED: the very next skeleton chunk, index delta, range or
+     * appended event rebuilds it from `transcriptWindow` and the interview
+     * block reverts to unresolved - with `pendingInterviews` already cleared,
+     * so nothing re-settles it and the row stays stuck showing a question the
+     * user has answered.
+     *
+     * A settlement that landed on the LIVE row needs no window write:
+     * `liveAssistantMessage` is not a window record and both lines hold it the
+     * same way.
+     */
+    const interviewLifecycleTranscript = (
+      state: ChatSessionState,
+      projection: InterviewLifecycleProjection,
+    ): {
+      readonly patch: Pick<
+        ChatSessionState,
+        "messages" | "liveAssistantMessage" | "transcriptWindow"
+      >;
+      readonly resolvedPendingOwner: boolean;
+      readonly matchedOwner: boolean;
+    } => {
+      const lifecycle = withInterviewLifecycleState(
+        state.messages,
+        state.liveAssistantMessage,
+        projection,
+      );
+      const rewrittenId = lifecycle.rewrittenMessageId;
+      const settled =
+        rewrittenId === null || !isWindowedTranscript(state)
+          ? undefined
+          : lifecycle.messages.find(
+              (message) => message.messageId === rewrittenId,
+            );
+      if (rewrittenId === null || settled === undefined) {
+        return {
+          patch: {
+            messages: lifecycle.messages,
+            liveAssistantMessage: lifecycle.liveAssistantMessage,
+            transcriptWindow: state.transcriptWindow,
+          },
+          resolvedPendingOwner: lifecycle.resolvedPendingOwner,
+          matchedOwner: lifecycle.matchedOwner,
+        };
+      }
+      const applied = updateWindowMessage(
+        state.transcriptWindow,
+        rewrittenId,
+        () => settled,
+      );
+      return {
+        patch: {
+          // `held: false` means the row left the window between the fold above
+          // and here. Publishing the fold's array anyway would reintroduce a
+          // record the window no longer holds; the host's emit-after-persist
+          // invariant means the eventual re-hydration serves it settled.
+          messages: applied.held
+            ? hydratedRecords(applied.window).messages
+            : state.messages,
+          liveAssistantMessage: lifecycle.liveAssistantMessage,
+          transcriptWindow: applied.window,
+        },
+        resolvedPendingOwner: lifecycle.resolvedPendingOwner,
+        matchedOwner: lifecycle.matchedOwner,
+      };
     };
 
     /**
@@ -2628,6 +2715,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           transcriptWindow: window,
           transcriptDerived: frame.snapshot.derived,
           accumulatedFileChangeCount: frame.snapshot.accumulatedFileChangeCount,
+          // Deliberately NOT resetting `accumulatedFileChangeSummaries` here.
+          //
+          // A re-stream already resets it: the host chunks the whole set from
+          // `fromIndex: 0`, and the splice below turns that first chunk into
+          // `slice(0, 0) + summaries`, so the assembled list ends at exactly
+          // the new total and no entry of a previous set can outlive it.
+          //
+          // And a snapshot is NOT proof that a re-stream is coming. The host
+          // emits the summaries only while rebuilding a subscriber's index;
+          // an aux-only re-broadcast - a queue change, an approval - re-sends
+          // the snapshot against an unchanged skeleton and sends no chunks at
+          // all. Clearing here would empty the panel on the next approval and
+          // leave it empty, with the header still counting the files it can no
+          // longer list.
         });
         requestPlannedHydration();
       },
@@ -2747,11 +2848,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // assembled. Splicing at `fromIndex` rather than appending makes a
         // re-sent chunk idempotent instead of duplicating its entries.
         set((state) => {
+          const assembled = state.accumulatedFileChangeSummaries;
+          // A chunk starting PAST the end is a chunk whose predecessor was
+          // dropped. `slice(0, fromIndex)` cannot express that - on a shorter
+          // array it silently returns the whole thing and appends, so every
+          // entry from here on sits at an index below the one the host gave
+          // it, and the panel's rows are then attributed to the wrong files.
+          //
+          // Dropped rather than seated at the wrong offset. The list stays
+          // short, `undeliveredChangeCount` stays positive, and the panel
+          // reports the shortfall it already knows how to report - including
+          // holding "Review all" back, since a bundle built from a
+          // misattributed prefix is worse than one that is unavailable.
+          if (frame.chunk.fromIndex > assembled.length) return {};
           const summaries = [
-            ...state.accumulatedFileChangeSummaries.slice(
-              0,
-              frame.chunk.fromIndex,
-            ),
+            ...assembled.slice(0, frame.chunk.fromIndex),
             ...frame.chunk.summaries,
           ];
           return { accumulatedFileChangeSummaries: summaries };
@@ -3056,7 +3167,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // branches in an updater already at the complexity budget.
           const previousTurnId = state.activeTurn?.turnId ?? null;
           const nextTurnId = frame.activeTurn?.turnId ?? null;
-          const baseMessages = messagesWithMaterializedLiveAssistant(
+          const materialized = materializedLiveAssistant(
             state.messages,
             state.liveAssistantMessage,
             {
@@ -3064,9 +3175,40 @@ export function createChatSessionStoreWithNotificationDependencies(
               nextActiveTurnId: nextTurnId,
             },
           );
-          const nextMessages = messagesForTurnStateChange(baseMessages, {
-            previousTurnId,
-            nextTurnId,
+          // The frozen row goes into the WINDOW on the windowed line, not into
+          // the published array. It has no ordinal yet - the host indexes it
+          // and tells us in a later `appended` index change - so it is a LIVE
+          // record, the same home `onEventAppended` uses. Written to
+          // `state.messages` instead it would survive only until the next
+          // windowed frame republished that array from `transcriptWindow`, and
+          // the turn that just finished would vanish from the transcript until
+          // some later snapshot or range happened to restore it.
+          const windowed = isWindowedTranscript(state);
+          const seated =
+            materialized === null || !windowed
+              ? state.transcriptWindow
+              : appendLiveRecords(state.transcriptWindow, {
+                  messages: [materialized],
+                  events: [],
+                });
+          // The steer-restart remap is the SAME rule one step on: it renames a
+          // `turnId` across every row carrying it, and on this line those rows
+          // live in the window too. Applied to the published array alone it
+          // would be undone by the next republish exactly as the frozen row
+          // above was, leaving the moved rows attributed to a turn that no
+          // longer exists.
+          const remap = turnRemapFor({ previousTurnId, nextTurnId });
+          const nextWindow =
+            remap === null || !windowed
+              ? seated
+              : mapWindowMessages(seated, remap);
+          const nextMessages = turnStateMessages({
+            windowed,
+            previousMessages: state.messages,
+            previousWindow: state.transcriptWindow,
+            nextWindow,
+            materialized,
+            turnIds: { previousTurnId, nextTurnId },
           });
           // Clear liveTurnUsage on any turn transition (turnId changes or
           // activeTurn settles to null). The new turn hasn't emitted its
@@ -3129,6 +3271,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               state.deliveredNoticeActionIds,
             ),
             messages: nextMessages,
+            // Same object when nothing above touched it, so the windowed
+            // subscribers that compare by identity see no change on the
+            // ordinary turn transition.
+            transcriptWindow: nextWindow,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
@@ -3297,32 +3443,27 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         const state = get();
-        const lifecycle = withInterviewLifecycleState(
-          state.messages,
-          state.liveAssistantMessage,
-          {
-            kind: "answered",
-            blockId: frame.blockId,
-            settlementId: frame.settlementId,
-            settlementSource: frame.settlementSource,
-            resolvedAt: frame.resolvedAt,
-            answers: frame.answers,
-            reason: null,
-            outcome: "answered",
-            draftAnswers: [],
-            delivery: frame.delivery,
-          },
-        );
+        const lifecycle = interviewLifecycleTranscript(state, {
+          kind: "answered",
+          blockId: frame.blockId,
+          settlementId: frame.settlementId,
+          settlementSource: frame.settlementSource,
+          resolvedAt: frame.resolvedAt,
+          answers: frame.answers,
+          reason: null,
+          outcome: "answered",
+          draftAnswers: [],
+          delivery: frame.delivery,
+        });
         const resolvedPendingOwner =
           lifecycle.resolvedPendingOwner ||
           (!lifecycle.matchedOwner &&
             state.pendingInterviews.some(
               (interview) => interview.blockId === frame.blockId,
             ));
-        const { messages, liveAssistantMessage } = lifecycle;
+        const { messages, liveAssistantMessage } = lifecycle.patch;
         set({
-          messages,
-          liveAssistantMessage,
+          ...lifecycle.patch,
           pendingInterviews: resolvedPendingOwner
             ? withoutPendingInterview(state.pendingInterviews, frame.blockId)
             : state.pendingInterviews,
@@ -3355,32 +3496,27 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         const state = get();
-        const lifecycle = withInterviewLifecycleState(
-          state.messages,
-          state.liveAssistantMessage,
-          {
-            kind: "errored",
-            blockId: frame.blockId,
-            settlementId: frame.settlementId,
-            settlementSource: frame.settlementSource,
-            resolvedAt: frame.resolvedAt,
-            answers: [],
-            reason: frame.reason,
-            outcome: frame.outcome,
-            draftAnswers: frame.draftAnswers,
-            delivery: frame.delivery,
-          },
-        );
+        const lifecycle = interviewLifecycleTranscript(state, {
+          kind: "errored",
+          blockId: frame.blockId,
+          settlementId: frame.settlementId,
+          settlementSource: frame.settlementSource,
+          resolvedAt: frame.resolvedAt,
+          answers: [],
+          reason: frame.reason,
+          outcome: frame.outcome,
+          draftAnswers: frame.draftAnswers,
+          delivery: frame.delivery,
+        });
         const resolvedPendingOwner =
           lifecycle.resolvedPendingOwner ||
           (!lifecycle.matchedOwner &&
             state.pendingInterviews.some(
               (interview) => interview.blockId === frame.blockId,
             ));
-        const { messages, liveAssistantMessage } = lifecycle;
+        const { messages, liveAssistantMessage } = lifecycle.patch;
         set({
-          messages,
-          liveAssistantMessage,
+          ...lifecycle.patch,
           pendingInterviews: resolvedPendingOwner
             ? withoutPendingInterview(state.pendingInterviews, frame.blockId)
             : state.pendingInterviews,
@@ -5775,6 +5911,15 @@ function withInterviewLifecycleProjectionPass(
 ): {
   readonly messages: ReadonlyArray<Message>;
   readonly matched: boolean;
+  /**
+   * The one row this pass rewrote, or `null` if it rewrote none.
+   *
+   * Reported rather than left to be recovered by diffing the two arrays,
+   * because the windowed line needs to write that row back into
+   * `transcriptWindow` and "whichever element changed identity" is a fact this
+   * function already knows and the caller would have to re-derive.
+   */
+  readonly rewrittenMessageId: string | null;
 } {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -5793,12 +5938,18 @@ function withInterviewLifecycleProjectionPass(
       projection,
       allowUnresolvedFallback,
     );
-    if (blocks === message.blocks) return { messages, matched: true };
+    if (blocks === message.blocks) {
+      return { messages, matched: true, rewrittenMessageId: null };
+    }
     const next = messages.slice();
     next[index] = { ...message, blocks: [...blocks] };
-    return { messages: next, matched: true };
+    return {
+      messages: next,
+      matched: true,
+      rewrittenMessageId: message.messageId,
+    };
   }
-  return { messages, matched: false };
+  return { messages, matched: false, rewrittenMessageId: null };
 }
 
 function withInterviewLifecycleState(
@@ -5810,6 +5961,8 @@ function withInterviewLifecycleState(
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly matchedOwner: boolean;
   readonly resolvedPendingOwner: boolean;
+  /** See {@link withInterviewLifecycleProjectionPass}'s field of this name. */
+  readonly rewrittenMessageId: string | null;
 } {
   if (projection.settlementId !== null) {
     const exactMessages = withInterviewLifecycleProjectionPass(
@@ -5823,6 +5976,7 @@ function withInterviewLifecycleState(
         liveAssistantMessage,
         matchedOwner: true,
         resolvedPendingOwner: false,
+        rewrittenMessageId: exactMessages.rewrittenMessageId,
       };
     }
     if (liveAssistantMessage !== null) {
@@ -5846,6 +6000,9 @@ function withInterviewLifecycleState(
               : { ...liveAssistantMessage, blocks: exactLiveBlocks },
           matchedOwner: true,
           resolvedPendingOwner: false,
+          // The live row is not a window record - it is `liveAssistantMessage`,
+          // which both lines hold the same way.
+          rewrittenMessageId: null,
         };
       }
     }
@@ -5871,6 +6028,7 @@ function withInterviewLifecycleState(
             : { ...liveAssistantMessage, blocks: liveBlocks },
         matchedOwner: true,
         resolvedPendingOwner: true,
+        rewrittenMessageId: null,
       };
     }
   }
@@ -5884,6 +6042,7 @@ function withInterviewLifecycleState(
     liveAssistantMessage,
     matchedOwner: unresolvedMessages.matched,
     resolvedPendingOwner: unresolvedMessages.matched,
+    rewrittenMessageId: unresolvedMessages.rewrittenMessageId,
   };
 }
 
@@ -6208,6 +6367,69 @@ function snapshotPreviousTurnId(
   return activeTurn?.turnId ?? liveAssistant?.turnId ?? null;
 }
 
+/**
+ * What `messages` becomes across a turn transition, on either line.
+ *
+ * The two lines differ in WHERE the records live, which is the whole reason
+ * this is one function rather than a conditional at the call site. On the
+ * windowed line both the frozen row and the steer remap have already been
+ * applied to the window, so the published array is simply re-derived from it -
+ * and re-derived only when the window actually moved, so an ordinary turn
+ * transition hands subscribers the same array identity they already had. On
+ * the legacy line there is no window, so the same two edits are made to the
+ * array directly.
+ */
+function turnStateMessages(input: {
+  readonly windowed: boolean;
+  readonly previousMessages: ReadonlyArray<Message>;
+  readonly previousWindow: TranscriptWindow;
+  readonly nextWindow: TranscriptWindow;
+  readonly materialized: Message | null;
+  readonly turnIds: {
+    readonly previousTurnId: string | null;
+    readonly nextTurnId: string | null;
+  };
+}): ReadonlyArray<Message> {
+  if (input.windowed) {
+    return input.nextWindow === input.previousWindow
+      ? input.previousMessages
+      : hydratedRecords(input.nextWindow).messages;
+  }
+  const base =
+    input.materialized === null
+      ? input.previousMessages
+      : [...input.previousMessages, input.materialized];
+  return messagesForTurnStateChange(base, input.turnIds);
+}
+
+/**
+ * The per-record rewrite a steer restart implies, or `null` when it is a no-op.
+ *
+ * ONE definition with two appliers, because the two transcript lines hold their
+ * records in different places: {@link messagesForTurnStateChange} maps the
+ * legacy line's published array with it, and `mapWindowMessages` maps the
+ * window with it. Stated once rather than twice - a second copy of a predicate
+ * this quiet is the kind that drifts without either copy looking wrong.
+ */
+function turnRemapFor(turnIds: {
+  readonly previousTurnId: string | null;
+  readonly nextTurnId: string | null;
+}): ((message: Message) => Message) | null {
+  const previousTurnId = turnIds.previousTurnId;
+  const nextTurnId = turnIds.nextTurnId;
+  if (
+    previousTurnId === null ||
+    nextTurnId === null ||
+    previousTurnId === nextTurnId
+  ) {
+    return null;
+  }
+  return (message: Message): Message =>
+    message.role === "assistant" && message.turnId === previousTurnId
+      ? { ...message, turnId: nextTurnId }
+      : message;
+}
+
 function messagesForTurnStateChange(
   messages: ReadonlyArray<Message>,
   turnIds: {
@@ -6215,42 +6437,43 @@ function messagesForTurnStateChange(
     readonly nextTurnId: string | null;
   },
 ): ReadonlyArray<Message> {
-  if (
-    turnIds.previousTurnId === null ||
-    turnIds.nextTurnId === null ||
-    turnIds.previousTurnId === turnIds.nextTurnId
-  ) {
-    return messages;
-  }
-  return messages.map((message) =>
-    message.role === "assistant" && message.turnId === turnIds.previousTurnId
-      ? { ...message, turnId: turnIds.nextTurnId }
-      : message,
-  );
+  const remap = turnRemapFor(turnIds);
+  return remap === null ? messages : messages.map(remap);
 }
 
-function messagesWithMaterializedLiveAssistant(
+/**
+ * The row a settling turn's live assistant must be frozen into, or `null`.
+ *
+ * Returns the RECORD rather than a rewritten array, because the two lines put
+ * it in different places and only the caller knows which one it is on: the
+ * legacy line appends it to `state.messages`, the windowed line appends it to
+ * the window's live records. Handing back an array here is what made the
+ * windowed line lose it - `state.messages` is derived from `transcriptWindow`
+ * there, so the append survived only until the next windowed frame of any kind
+ * republished the array from a window that never received the row.
+ */
+function materializedLiveAssistant(
   messages: ReadonlyArray<Message>,
   liveAssistant: LiveAssistantMessage | null,
   turnIds: {
     readonly previousActiveTurnId: string | null;
     readonly nextActiveTurnId: string | null;
   },
-): ReadonlyArray<Message> {
-  if (liveAssistant === null) return messages;
-  if (liveAssistantCoveredByMessages(liveAssistant, messages)) return messages;
+): Message | null {
+  if (liveAssistant === null) return null;
+  if (liveAssistantCoveredByMessages(liveAssistant, messages)) return null;
   if (
     turnIds.nextActiveTurnId !== null &&
     liveAssistant.turnId === turnIds.nextActiveTurnId
   ) {
-    return messages;
+    return null;
   }
   if (
     turnIds.previousActiveTurnId !== null &&
     liveAssistant.turnId === turnIds.previousActiveTurnId &&
     turnIds.nextActiveTurnId !== null
   ) {
-    return messages;
+    return null;
   }
   // Invariant: a frozen (materialized) assistant row can never contain a
   // `streaming` action block. The terminal `blockDelta` normally finalizes the
@@ -6261,10 +6484,7 @@ function messagesWithMaterializedLiveAssistant(
   // guard above returns early), so this path cannot reliably distinguish
   // "superseded" from "interrupted" and uses the generic cut-off status. The
   // authoritative status (and any "superseded") arrives with the next snapshot.
-  return [
-    ...messages,
-    assistantMessageFromLiveAssistant(liveAssistant, "interrupted"),
-  ];
+  return assistantMessageFromLiveAssistant(liveAssistant, "interrupted");
 }
 
 function assistantMessageFromLiveAssistant(

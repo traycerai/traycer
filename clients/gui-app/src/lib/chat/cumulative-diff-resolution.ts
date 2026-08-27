@@ -57,12 +57,32 @@ export function fetchableAccumulatedChanges(
 export interface AccumulatedChangeFetchState {
   readonly isLoading: boolean;
   readonly data: ChatReadAccumulatedFileChangeResponse | undefined;
+  /**
+   * Whether this fetch FAILED, as distinct from not having answered yet.
+   *
+   * Carried because the two are indistinguishable from the other two fields: a
+   * failed query reports `isLoading: false` and `data: undefined`, which is
+   * byte-for-byte the shape of a query that has not started. Without this the
+   * merge silently drops the file and the tile renders the remaining ones as a
+   * complete bundle.
+   */
+  readonly isError: boolean;
 }
 
 export interface CumulativeDiffResolution {
   readonly resolved: ReadonlyArray<ResolvedSnapshotDiff>;
   readonly isLoading: boolean;
   readonly stale: boolean;
+  /**
+   * At least one file in the bundle could not be fetched.
+   *
+   * Separate from `stale`, because the two have opposite prognoses: a stale
+   * result repairs itself when the replacement summary re-keys the fetch, and a
+   * failed one does not repair itself at all. Both mean the same thing to a
+   * caller deciding whether to render, which is that `resolved` is a SUBSET -
+   * so both have to reach it.
+   */
+  readonly failed: boolean;
 }
 
 /**
@@ -86,11 +106,12 @@ export function mergeCumulativeDiffs(input: {
 }): CumulativeDiffResolution {
   const { fetchable, fetches, filePaths, inline } = input;
   if (fetchable.length === 0) {
-    return { resolved: inline, isLoading: false, stale: false };
+    return { resolved: inline, isLoading: false, stale: false, failed: false };
   }
   const fetched = new Map<string, ResolvedSnapshotDiff>();
   let isLoading = false;
   let stale = false;
+  let failed = false;
   // The two arrays are paired by position and the caller builds them that way,
   // so the bound is the shorter of them: a short `fetches` resolves fewer
   // files, which is the same state as one still in flight.
@@ -102,7 +123,17 @@ export function mergeCumulativeDiffs(input: {
       isLoading = true;
       continue;
     }
-    if (fetch.data === undefined) continue;
+    if (fetch.isError) {
+      failed = true;
+      continue;
+    }
+    // Neither loading, nor errored, nor answered: a query that has not been
+    // enabled yet. Counted as outstanding rather than skipped, so the bundle
+    // reads as incomplete instead of as complete-minus-a-file.
+    if (fetch.data === undefined) {
+      isLoading = true;
+      continue;
+    }
     if (fetch.data.stale) {
       // The summary that named this version has been superseded. The chunk
       // frame carrying its replacement re-keys the fetch, so this repairs
@@ -121,5 +152,5 @@ export function mergeCumulativeDiffs(input: {
     const entry = inlineByPath.get(filePath) ?? fetched.get(filePath);
     return entry === undefined ? [] : [entry];
   });
-  return { resolved, isLoading, stale };
+  return { resolved, isLoading, stale, failed };
 }

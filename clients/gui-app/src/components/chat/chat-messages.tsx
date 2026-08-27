@@ -22,6 +22,7 @@ import {
   type ChatTimelineNavigationLocation,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import {
+  isUnplacedRowKey,
   transcriptListRows,
   visibleOrdinalRange,
   type TranscriptListRow,
@@ -1622,11 +1623,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             },
             listRowsRef.current,
           );
-    const anchorMessageId =
+    const resolvedAnchorMessageId =
       mode === "free-scrolling"
         ? (liveViewportAnchorMessageId ??
           scrolledActiveUserMessageIdRef.current)
         : null;
+    // A placeholder the skeleton has not described yet has a SYNTHESIZED key -
+    // an ordinal, with no row identity and no epoch (`isUnplacedRowKey`). It is
+    // fine to scroll by and useless to persist: reindex the transcript before
+    // the tab is reopened and that same key names a different row, which
+    // `restoreChatTabState` accepts as an exact match and restores to. Saving
+    // no anchor at all is the better answer - restore falls back to the offset
+    // and to its pending-hydration correction, both of which are built for
+    // "the anchor is not resolvable yet".
+    const anchorMessageId =
+      resolvedAnchorMessageId !== null &&
+      isUnplacedRowKey(resolvedAnchorMessageId)
+        ? null
+        : resolvedAnchorMessageId;
     const anchorIndex =
       anchorMessageId === null
         ? undefined

@@ -291,8 +291,22 @@ function SnapshotDiffTileResolved(props: {
         },
       ];
     }
+    // A bundle that could not be fully resolved resolves to NOTHING, so the
+    // tile falls through to its source-unavailable state rather than
+    // presenting a subset as the complete review. `stale` and `failed` differ
+    // in prognosis - the first is repaired by the summary chunk that re-keys
+    // the fetch, the second is not - but both mean `resolved` is missing a
+    // file the bundle was opened to show, and rendering the rest silently is
+    // the reading that has to be prevented in either case.
+    if (cumulative.stale || cumulative.failed) return [];
     return cumulative.resolved;
-  }, [cumulative.resolved, segmentHashes, segmentQuery.data]);
+  }, [
+    cumulative.failed,
+    cumulative.resolved,
+    cumulative.stale,
+    segmentHashes,
+    segmentQuery.data,
+  ]);
 
   // A hash-backed tile whose content is actively in-flight shows the skeleton.
   // Use isLoading (isPending && isFetching), NOT isPending: a content-less edit

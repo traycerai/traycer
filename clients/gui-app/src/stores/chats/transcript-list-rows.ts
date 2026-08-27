@@ -86,9 +86,25 @@ export type TranscriptListRow =
       readonly entry: RowSkeletonEntry | null;
     };
 
+const UNPLACED_ROW_KEY_PREFIX = "unplaced-row:";
+
 /** The key a placeholder takes before any skeleton entry describes it. */
 export function unplacedRowKey(ordinal: number): string {
-  return `unplaced-row:${ordinal}`;
+  return `${UNPLACED_ROW_KEY_PREFIX}${ordinal}`;
+}
+
+/**
+ * Is this key a synthesized position rather than a row IDENTITY?
+ *
+ * The distinction matters to anything that PERSISTS a key. A real row key is
+ * the row's id and names the same row forever; this one is an ordinal under an
+ * epoch it does not carry, so after a reindex `unplaced-row:400` names whatever
+ * row now sits at 400. A restore that treats it as an exact match therefore
+ * lands on unrelated content and, because it believes it matched, never runs
+ * the pending-hydration correction that would have noticed.
+ */
+export function isUnplacedRowKey(key: string): boolean {
+  return key.startsWith(UNPLACED_ROW_KEY_PREFIX);
 }
 
 /**

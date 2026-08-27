@@ -571,6 +571,28 @@ export const INDEX_CHANGE_MAX_BYTES = 256 * 1024;
  */
 export const WINDOWED_SNAPSHOT_MAX_BYTES = 1024 * 1024;
 
+/**
+ * What the frame costs on top of the snapshot payload itself.
+ *
+ * {@link windowedSnapshotFitsFrame} is handed the SNAPSHOT, but what the relay
+ * classifies is the encoded BODY: the frame's own `kind`, `epicId` and `chatId`
+ * around it, plus the five-byte body header `encodeMuxMessageBody` prepends
+ * before `BULK_QOS_BODY_THRESHOLD_BYTES` is applied. That threshold is 1 MiB -
+ * the SAME value as the ceiling above - so without a reserve a snapshot
+ * measuring just under the ceiling encodes to just over the threshold and is
+ * put on the BULK lane, where it can reorder against the interactive deltas
+ * this bound exists to stay ordered with. The check would pass and the
+ * invariant it enforces would be the thing that broke.
+ *
+ * A RESERVE, not a measurement: the exact envelope is a few hundred bytes
+ * (two uuids, a discriminator, the mux header), and this is rounded far above
+ * it so that adding an envelope field later cannot silently consume the
+ * margin. The cost of over-reserving is one more tail row shed on a snapshot
+ * within 4 KiB of a 1 MiB ceiling; the cost of under-reserving is a
+ * reordered transcript.
+ */
+export const WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES = 4 * 1024;
+
 /** A contiguous run of items small enough to ship as one frame. */
 export interface EncodedChunk<Item> {
   readonly fromIndex: number;
@@ -749,13 +771,18 @@ export type ChatAccumulatedChangeChunk = z.infer<
  * is something a renderer reads unconditionally. It must shed a `tail` row and
  * re-measure - the tail is the one inline field with a refetch path
  * (`loadRange`), which is why it is the one that yields.
+ *
+ * What is measured is the snapshot; what has to FIT is the encoded frame around
+ * it, so the envelope is reserved rather than assumed away - see
+ * {@link WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES}.
  */
 export function windowedSnapshotFitsFrame(
   snapshot: unknown,
   maxBytes: number,
 ): boolean {
   return (
-    utf8ByteLength(JSON.stringify(snapshot)) <
+    utf8ByteLength(JSON.stringify(snapshot)) +
+      WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES <
     Math.min(maxBytes, WINDOWED_SNAPSHOT_MAX_BYTES)
   );
 }

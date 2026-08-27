@@ -1285,6 +1285,153 @@ describe("holdsEveryRecordFrom", () => {
   });
 });
 
+/**
+ * What a merge, a re-seat and a skeleton chunk do to bodies they already hold.
+ *
+ * All three are cases where the window holds TWO answers for one row and has
+ * to pick. Picking wrong is silent in the same way the rest of this file is
+ * about: the transcript renders, it is just not the transcript the host has.
+ */
+describe("what an overlap keeps", () => {
+  it("takes the incoming body where a merge overlaps a held span", () => {
+    const stale = applyRangeResponse(windowWithSkeleton(10), {
+      ...rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [
+          messageWithText(userMessage("row-0", 1), "stale"),
+          userMessage("row-1", 2),
+        ],
+      }),
+    });
+    // A later response under the same epoch, overlapping ordinal 0 with an
+    // updated body - the shape a reconnect's authoritative tail produces.
+    const merged = applyRangeResponse(stale, {
+      ...rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [
+          messageWithText(userMessage("row-0", 1), "fresh"),
+          userMessage("row-1", 2),
+        ],
+      }),
+    });
+    const held = hydratedRecords(merged).messages.find(
+      (message) => message.messageId === "row-0",
+    );
+    expect(held).toBeDefined();
+    expect(JSON.stringify(held)).toContain("fresh");
+    // Order is still the ordinal order, not "incoming first".
+    expect(hydratedRecords(merged).messages.map((m) => m.messageId)).toEqual([
+      "row-0",
+      "row-1",
+    ]);
+  });
+
+  it("drops a retained tail the new snapshot could not serve", () => {
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 3,
+      tail: {
+        fromOrdinal: 2,
+        messages: [messageWithText(userMessage("row-2", 3), "half-written")],
+        events: [],
+      },
+    });
+    expect(seeded.spans).toHaveLength(1);
+    // Same epoch, and the last row has since grown past the inline budget - so
+    // the host legitimately ships an EMPTY tail. Keeping the old span would
+    // leave `isTailHydrated` true and nothing would ever fetch the real body.
+    const reconnected = applyWindowedSnapshot(seeded, {
+      epoch: 1,
+      rowCount: 3,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+    expect(reconnected.spans).toHaveLength(0);
+    expect(
+      planTranscriptHydration(reconnected, { fromOrdinal: 0, toOrdinal: 3 }),
+    ).not.toBeNull();
+  });
+
+  it("leaves a transcript with no tail rows alone", () => {
+    // The other `null` from the same helper, which must NOT drop anything:
+    // `fromOrdinal === rowCount` is "there is no tail", not "the tail was
+    // withheld". Without this the positive control above passes for the wrong
+    // reason and every aux re-broadcast would wipe the scrollback.
+    const seeded = applyRangeResponse(windowWithSkeleton(3), {
+      ...rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("row-0", 1)],
+      }),
+    });
+    expect(seeded.spans).toHaveLength(1);
+    const rebroadcast = applyWindowedSnapshot(seeded, {
+      epoch: 1,
+      rowCount: 3,
+      tail: { fromOrdinal: 3, messages: [], events: [] },
+    });
+    expect(rebroadcast.spans).toHaveLength(1);
+  });
+
+  it("fills the inline tail's empty ids from the skeleton that names them", () => {
+    // The snapshot precedes the skeleton, so the tail is always seated with no
+    // ids to carry. Until the chunk backfills them the row merge cannot match
+    // these ordinals to their models at all.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 3,
+      tail: {
+        fromOrdinal: 2,
+        messages: [userMessage("row-2", 3)],
+        events: [],
+      },
+    });
+    expect(seeded.spans[0].rowIds).toEqual([""]);
+    const described = applySkeletonChunk(seeded, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 3),
+      isFinal: true,
+    });
+    expect(described.spans[0].rowIds).toEqual(["row-2"]);
+    // And the span survives - adopting is not the same as contradicting.
+    expect(hydratedRecords(described).messages.map((m) => m.messageId)).toEqual(
+      ["row-2"],
+    );
+  });
+
+  it("still drops a tail whose id the skeleton contradicts", () => {
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 3,
+      tail: {
+        fromOrdinal: 2,
+        messages: [userMessage("row-2", 3)],
+        events: [],
+      },
+    });
+    const contradicted = applyRangeResponse(seeded, {
+      ...rangeResponse({
+        epoch: 1,
+        fromOrdinal: 2,
+        rowIds: ["someone-else"],
+        messages: [userMessage("someone-else", 3)],
+      }),
+    });
+    const described = applySkeletonChunk(contradicted, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 3),
+      isFinal: true,
+    });
+    expect(described.spans).toHaveLength(0);
+  });
+});
+
 function messageWithText(message: Message, text: string): Message {
   if (message.role !== "user") return message;
   return {

@@ -105,8 +105,14 @@ const CALIBRATION_MAX_FACTOR = 10;
 interface RememberedRow {
   /** The row's last measured height in px. */
   height: number;
-  /** Whether this row has already contributed to the scale factor. */
-  sampled: boolean;
+  /**
+   * The role bucket this row contributed to, or `null` if it never has.
+   *
+   * The ROLE rather than a boolean, because a remeasurement has to find the
+   * bucket again to correct it - and the skeleton entry that named the role is
+   * not necessarily still at that ordinal by then.
+   */
+  sampledRole: RowSkeletonEntry["role"] | null;
 }
 
 interface RoleCalibration {
@@ -164,8 +170,8 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
   let tallestMeasured = 0;
 
   const sample = (entry: RowSkeletonEntry, remembered: RememberedRow): void => {
-    if (remembered.sampled) return;
-    remembered.sampled = true;
+    if (remembered.sampledRole !== null) return;
+    remembered.sampledRole = entry.role;
     const bucket = byRole.get(entry.role) ?? {
       estimated: 0,
       measured: 0,
@@ -230,7 +236,7 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       if (height > tallestMeasured) tallestMeasured = height;
       const existing = rows.get(rowId);
       if (existing === undefined) {
-        const remembered: RememberedRow = { height, sampled: false };
+        const remembered: RememberedRow = { height, sampledRole: null };
         rows.set(rowId, remembered);
         heightTotal += height;
         evictOldest();
@@ -242,8 +248,23 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
           sample(entry, remembered);
         return;
       }
-      heightTotal += height - existing.height;
+      const delta = height - existing.height;
+      heightTotal += delta;
       existing.height = height;
+      // Keep the role bucket in step with the row's CURRENT height, not the
+      // first one it ever reported. A streaming assistant row is remeasured
+      // continuously, and rows grow again when images and tool output finish
+      // loading - so with only `MIN_CALIBRATION_SAMPLES` rows behind a factor,
+      // a handful of rows sampled at their initial height can hold the whole
+      // role's scale far below reality and undersize every unseen placeholder,
+      // while this memory already holds the correct final numbers.
+      //
+      // `estimated` and `count` are untouched: the byte-derived estimate for
+      // this row has not changed and it is still exactly one sample.
+      if (existing.sampledRole === null) return;
+      const bucket = byRole.get(existing.sampledRole);
+      if (bucket === undefined) return;
+      bucket.measured += delta;
     },
 
     placeholderHeight(entry): number {

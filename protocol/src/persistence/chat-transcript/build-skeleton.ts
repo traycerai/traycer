@@ -1,6 +1,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
+import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { extractPlainTextFromComposerJSONContent } from "@traycer/protocol/common/composer-plain-text";
@@ -163,7 +164,7 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
 function rowByteLength(
   source: TranscriptRowSource,
   lookup: TranscriptRecordLookup,
-  blocksById: ReadonlyMap<string, unknown>,
+  blocksById: ReadonlyMap<string, ContentBlock>,
 ): number {
   switch (source.kind) {
     case "user": {
@@ -200,7 +201,7 @@ function rowByteLength(
 
 function blockBytes(
   blockIds: readonly string[],
-  blocksById: ReadonlyMap<string, unknown>,
+  blocksById: ReadonlyMap<string, ContentBlock>,
 ): number {
   return blockIds.reduce((total, blockId) => {
     const block = blocksById.get(blockId);
@@ -212,8 +213,8 @@ function blockBytes(
 
 function blocksByIdFrom(
   messages: readonly Message[],
-): ReadonlyMap<string, unknown> {
-  const blocks = new Map<string, unknown>();
+): ReadonlyMap<string, ContentBlock> {
+  const blocks = new Map<string, ContentBlock>();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const block of message.blocks) blocks.set(block.blockId, block);
@@ -242,9 +243,25 @@ function rowUsage(
   return undefined;
 }
 
+/**
+ * Who authored the row, and the user record to preview it from.
+ *
+ * An ORPHANED steer - a steer block whose steered user record a checkpoint
+ * removed - has no user record to read either answer from, and the block
+ * itself is the fallback authority for both. `steerBlockSchema.sender` exists
+ * precisely for this case (see its own comment: without it "an agent-to-agent
+ * message would render as a plain user-authored bubble"), and the hydrated
+ * renderer already falls back to it. The skeleton has to make the SAME call,
+ * or the unhydrated row is listed in the human-turn minimap as an "Untitled
+ * message" and then re-classifies and disappears the moment it hydrates.
+ *
+ * A `null` sender is a block persisted before that field existed, which the
+ * renderer treats as a "you" row - so it stays human here too.
+ */
 function isHumanUserRecord(
   source: TranscriptRowSource,
   lookup: TranscriptRecordLookup,
+  blocksById: ReadonlyMap<string, ContentBlock>,
 ): { readonly message: Message | undefined; readonly sentByAgent: boolean } {
   const messageId =
     source.kind === "user"
@@ -252,12 +269,35 @@ function isHumanUserRecord(
       : source.kind === "steer"
         ? source.steeredMessageId
         : null;
-  if (messageId === null) return { message: undefined, sentByAgent: false };
+  if (messageId === null) {
+    return source.kind === "steer"
+      ? {
+          message: undefined,
+          sentByAgent: steerBlockSentByAgent(source.blockId, blocksById),
+        }
+      : { message: undefined, sentByAgent: false };
+  }
   const message = lookup.messagesById.get(messageId);
   if (message === undefined || message.role !== "user") {
     return { message: undefined, sentByAgent: false };
   }
   return { message, sentByAgent: message.sender.type === "agent" };
+}
+
+/**
+ * Read an orphaned steer's provenance off its own block.
+ *
+ * The blocks map is typed rather than `unknown`, so this is an ordinary
+ * discriminated narrowing - no cast, and no zod parse on the skeleton's
+ * per-row path to recover one nullable enum.
+ */
+function steerBlockSentByAgent(
+  blockId: string,
+  blocksById: ReadonlyMap<string, ContentBlock>,
+): boolean {
+  const block = blocksById.get(blockId);
+  if (block === undefined || block.type !== "steer") return false;
+  return block.sender !== null && block.sender.type === "agent";
 }
 
 /**
@@ -278,7 +318,7 @@ export function buildRowSkeleton(
 
   return rows.map((row, index) => {
     const { source } = row;
-    const human = isHumanUserRecord(source, lookup);
+    const human = isHumanUserRecord(source, lookup, blocksById);
     const preview =
       human.message === undefined || human.sentByAgent
         ? undefined
