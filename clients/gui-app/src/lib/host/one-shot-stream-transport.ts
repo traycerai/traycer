@@ -46,6 +46,10 @@ export function openOneShotStreamTransport(params: {
     authnBaseUrl: params.authnBaseUrl,
     auth: null,
     userId: params.userId,
+    // The whole point of this transport: a swept reconnect would replay the
+    // side-effecting subscribe (see the doc above), so the process-wide wake
+    // sweep must never poke or force-drop this session.
+    proactiveWakeEligible: false,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
   });

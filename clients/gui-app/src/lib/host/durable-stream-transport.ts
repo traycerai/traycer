@@ -93,6 +93,9 @@ export function openDurableStreamTransport(params: {
     authnBaseUrl: params.runnerHost.authnBaseUrl,
     auth: params.auth,
     userId: params.userId,
+    // Durable warm session: its streams re-snapshot on replay, so the
+    // process-wide sweep may probe or force-drop it freely.
+    proactiveWakeEligible: true,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
   });
@@ -184,7 +187,10 @@ function subscribeEndpointRedial(
       // The host moved to a new address: the current socket points somewhere
       // that no longer serves this host, so it must be dropped whether or not
       // it still answers. Not a wake - no probe.
-      client.reconnectAll("host-endpoint-change", { probeFirst: false });
+      client.reconnectAll("host-endpoint-change", {
+        probeFirst: false,
+        wakeProbe: null,
+      });
     }
   });
 }

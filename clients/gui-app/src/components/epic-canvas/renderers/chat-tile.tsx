@@ -61,6 +61,24 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
+import {
+  droppedRunDirectoriesFromDraft,
+  teardownHolderSetDrifted,
+} from "@/lib/worktree/owner-teardown-snapshot";
+import {
+  takeArmedTeardownSubmit,
+  worktreeCommitCaptureIsStale,
+  type ArmedTeardownSubmit,
+  type WorktreeCommitCapture,
+} from "@/lib/worktree/worktree-commit-capture";
+import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
+import {
+  readStagedWorktreeIntent,
+  stagedWorktreeIntentRevision,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
@@ -1192,6 +1210,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               onRestart={view.steerRestart.onRestart}
               changed={view.steerRestart.changed}
             />
+            <TeardownCommitDialog
+              open={view.teardownCommit.open}
+              choice={view.teardownCommit.choice}
+              holders={view.teardownCommit.holders}
+              immediateDisabled={view.teardownCommit.immediateDisabled}
+              refusalReason={view.teardownCommit.refusalReason}
+              onImmediate={view.teardownCommit.onImmediate}
+              onDefer={view.teardownCommit.onDismiss}
+              onDismiss={view.teardownCommit.onDismiss}
+            />
             <ChatForkDialog
               open={view.fork.open}
               target={view.fork.target}
@@ -1209,6 +1237,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
 // Aggregates the full chat-tile view model (session handle, ui reducer, derived
 // run/permission/handoff state). The branch count reflects the number of
 // independent UI concerns surfaced for one tile, not reducible nesting.
+// eslint-disable-next-line complexity
+function teardownSendRefusalReason(
+  canAct: boolean,
+  signedIn: boolean,
+): string | undefined {
+  if (!canAct) return "You don't have permission to send.";
+  if (!signedIn) return "Sign in to send this message.";
+  return undefined;
+}
+
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, isActive, currentEpicId } = props;
@@ -1916,7 +1954,30 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [composerActiveTurnStatus, forkAtAssistantMessage, latestForkBoundaryId],
   );
 
-  const submitMessage = useCallback(
+  const snapshotTeardownHolders = useOwnerTeardownSnapshot({
+    epicId: currentEpicId,
+    hostId: activeHostId,
+    ownerKind: "chat",
+    ownerId: node.id,
+    ownerLabel: node.name,
+    hasActiveTurn: composerActiveTurnStatus !== null,
+    ptyLive: false,
+  });
+  const [teardownDialog, setTeardownDialog] = useState<{
+    readonly holders: readonly WorktreeBusyHolder[];
+  } | null>(null);
+  const pendingSubmitRef =
+    useRef<ArmedTeardownSubmit<ChatComposerSubmitInput> | null>(null);
+  const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
+  if (node.id !== teardownOwnerId) {
+    setTeardownOwnerId(node.id);
+    setTeardownDialog(null);
+  }
+  useEffect(() => {
+    pendingSubmitRef.current = null;
+  }, [node.id]);
+
+  const dispatchUserSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
       if (!canAct) return false;
       if (profile === null) return false;
@@ -1924,6 +1985,45 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         type: "user",
         userId: profile.userId,
       };
+      const expectedTitle = state.chat?.title ?? node.name;
+      const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
+        {
+          chat: state.chat,
+          messages: state.messages,
+          pendingUserMessages: state.pendingUserMessages,
+          content: input.content,
+        },
+      );
+      const sent = chatActions.sendMessage(
+        input.content,
+        sender,
+        input.settings,
+        input.deliveryPolicy,
+      );
+      if (sent === null) return false;
+      if (shouldMarkTitlePending) {
+        useEpicCanvasStore
+          .getState()
+          .markChatTitlePending(node.id, expectedTitle);
+      }
+      return true;
+    },
+    [
+      canAct,
+      chatActions,
+      node.id,
+      node.name,
+      profile,
+      state.chat,
+      state.messages,
+      state.pendingUserMessages,
+    ],
+  );
+
+  const submitMessage = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
+      if (!canAct) return false;
+      if (profile === null) return false;
       if (activeEditingQueueItemId !== null) {
         const actionId = chatActions.queueEdit(
           activeEditingQueueItemId,
@@ -1954,40 +2054,50 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
-      const expectedTitle = state.chat?.title ?? node.name;
-      const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
-        {
-          chat: state.chat,
-          messages: state.messages,
-          pendingUserMessages: state.pendingUserMessages,
-          content: input.content,
-        },
+      const stagedKey: WorktreeStagingKey = {
+        surface: "owner",
+        hostId: activeHostId,
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      const snapshot = snapshotTeardownHolders(
+        droppedRunDirectoriesFromDraft({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        }),
       );
-      const sent = chatActions.sendMessage(
-        input.content,
-        sender,
-        input.settings,
-        input.deliveryPolicy,
-      );
-      if (sent === null) return false;
-      if (shouldMarkTitlePending) {
-        useEpicCanvasStore
-          .getState()
-          .markChatTitlePending(node.id, expectedTitle);
+      const capture: WorktreeCommitCapture = {
+        draft: readStagedWorktreeIntent(stagedKey),
+        revision: stagedWorktreeIntentRevision(stagedKey),
+        binding: state.worktreeBinding,
+        removedWorkspacePaths: [],
+        stopTargets: snapshot.stopTargets,
+      };
+      if (snapshot.holders.length > 0) {
+        pendingSubmitRef.current = {
+          input,
+          capture,
+          ownerId: node.id,
+        };
+        setTeardownDialog({ holders: snapshot.holders });
+        return false;
       }
-      return true;
+      return dispatchUserSend(input);
     },
     [
       activeEditingQueueItemId,
+      activeHostId,
       canAct,
       chatActions,
+      currentEpicId,
       dispatchUi,
+      dispatchUserSend,
       node.id,
-      node.name,
       profile,
-      state.chat,
-      state.messages,
-      state.pendingUserMessages,
+      snapshotTeardownHolders,
+      state.worktreeBinding,
     ],
   );
   const canSendNextStep =
@@ -2205,6 +2315,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           // because of visible background work, not a turn the "stop" wording
           // would make sense for.
           hasActiveTurn: composerActiveTurnStatus !== null,
+          ownerLabel: node.name,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -2216,6 +2327,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       activeHostId,
       currentEpicId,
       node.id,
+      node.name,
       state.worktreeBinding,
       effectiveMissingPaths,
       state.snapshotLoaded,
@@ -2504,6 +2616,69 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     todo: pinnedTodoRenderState.todo,
     revertOnEdit,
     steerRestart,
+    teardownCommit: {
+      open: teardownDialog !== null,
+      choice: "submit" as const,
+      holders: teardownDialog?.holders ?? [],
+      immediateDisabled: !canAct || profile === null,
+      refusalReason: teardownSendRefusalReason(canAct, profile !== null),
+      onImmediate: () => {
+        if (!canAct) {
+          toast("You don't have permission to send.");
+          return;
+        }
+        if (profile === null) {
+          toast("Sign in to send this message.");
+          return;
+        }
+        const armed = takeArmedTeardownSubmit(pendingSubmitRef);
+        if (armed === null) return;
+        if (armed.ownerId !== node.id) {
+          setTeardownDialog(null);
+          return;
+        }
+        const stagedKey: WorktreeStagingKey = {
+          surface: "owner",
+          hostId: activeHostId,
+          epicId: currentEpicId,
+          ownerKind: "chat",
+          ownerId: node.id,
+        };
+        const liveSnapshot = snapshotTeardownHolders(
+          droppedRunDirectoriesFromDraft({
+            binding: state.worktreeBinding,
+            draft: readStagedWorktreeIntent(stagedKey),
+            removedWorkspacePaths: [],
+          }),
+        );
+        const live: WorktreeCommitCapture = {
+          draft: readStagedWorktreeIntent(stagedKey),
+          revision: stagedWorktreeIntentRevision(stagedKey),
+          binding: state.worktreeBinding,
+          removedWorkspacePaths: [],
+          stopTargets: liveSnapshot.stopTargets,
+        };
+        const disclosedHolders = teardownDialog?.holders ?? [];
+        const drifted =
+          worktreeCommitCaptureIsStale(armed.capture, live) ||
+          teardownHolderSetDrifted(disclosedHolders, liveSnapshot.holders);
+        if (drifted && liveSnapshot.holders.length > 0) {
+          pendingSubmitRef.current = {
+            input: armed.input,
+            capture: live,
+            ownerId: node.id,
+          };
+          setTeardownDialog({ holders: liveSnapshot.holders });
+          return;
+        }
+        setTeardownDialog(null);
+        dispatchUserSend(armed.input);
+      },
+      onDismiss: () => {
+        pendingSubmitRef.current = null;
+        setTeardownDialog(null);
+      },
+    },
     fork: {
       open: forkTarget !== null,
       target: forkTarget,

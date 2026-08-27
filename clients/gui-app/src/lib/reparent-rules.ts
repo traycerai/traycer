@@ -1,7 +1,4 @@
 import * as Y from "yjs";
-import { CrossFamilyParentError } from "@/lib/errors/cross-family-parent-error";
-import { MissingNodeError } from "@/lib/errors/missing-node-error";
-import { ReparentCycleError } from "@/lib/errors/reparent-cycle-error";
 import {
   getArtifactsMap,
   getChatsMap,
@@ -21,22 +18,28 @@ export interface ReparentNode {
   readonly entry: Y.Map<unknown>;
 }
 
-export type ReparentEvaluation =
-  | {
-      readonly ok: true;
-      readonly node: ReparentNode;
-      readonly parent: ReparentNode | null;
-    }
-  | {
-      readonly ok: false;
-      readonly reason: ReparentRejectionReason;
-    };
-
 /**
- * The three epic node maps resolved ONCE. `evaluateReparent` and the descendant
- * walk probe a node across all three maps per ancestor on every DnD hover tick;
- * caching the sub-maps here avoids re-reading `doc.getMap("epic").get(<map>)`
- * for every probe of every node on the chain.
+ * Where a node's parent pointer LIVES in the epic Y.Doc.
+ *
+ * This module used to own a doc-based reparent EVALUATOR too, and task 4.3
+ * retired it. Resolving nodes out of the doc's `artifacts` / `chats` /
+ * `tuiAgents` maps was the whole truth once; it stopped being true at
+ * chats-off-YJS and again at the TUI eviction, because a registry-backed chat
+ * or terminal agent has no doc entry at all - so the doc evaluator answered
+ * `missing-node` for a row the user was plainly dragging, and threw.
+ *
+ * Every reparent decision - DnD preview, DnD commit, and the store's write
+ * path - is now judged by `@/lib/reparent-projection-rules` against the
+ * PROJECTED tree, which is the union the sidebar actually renders. Its matrix
+ * lives in `lib/__tests__/reparent-projection-rules.test.ts`, ported from this
+ * module's suite when the evaluator was removed.
+ *
+ * What survives here is the one question a projection cannot answer: given a
+ * node id, which `Y.Map` entry does a local write go to? A node with no entry
+ * is registry-backed, and `epic.reparentChat` owns its pointer instead.
+ *
+ * `NodeFamily` and `ReparentRejectionReason` stay because both surfaces share
+ * that vocabulary.
  */
 interface EpicNodeMaps {
   readonly artifacts: Y.Map<unknown> | null;
@@ -86,92 +89,4 @@ export function resolveReparentNode(
   nodeId: string,
 ): ReparentNode | null {
   return resolveNodeInMaps(resolveEpicNodeMaps(doc), nodeId);
-}
-
-export function evaluateReparent(
-  doc: Y.Doc,
-  nodeId: string,
-  newParentId: string | null,
-): ReparentEvaluation {
-  const maps = resolveEpicNodeMaps(doc);
-  const node = resolveNodeInMaps(maps, nodeId);
-  if (node === null) return { ok: false, reason: "missing-node" };
-
-  // Validate the proposed parent BEFORE the same-parent short-circuit so that
-  // re-dropping a node onto a corrupt cross-family / missing `currentParentId`
-  // surfaces the real reason instead of being masked as a silent same-parent
-  // no-op.
-  let parent: ReparentNode | null = null;
-  if (newParentId !== null) {
-    if (newParentId === nodeId) return { ok: false, reason: "cycle" };
-    parent = resolveNodeInMaps(maps, newParentId);
-    if (parent === null) return { ok: false, reason: "missing-node" };
-    if (parent.family !== node.family) {
-      return { ok: false, reason: "cross-panel" };
-    }
-    if (isDescendantOf(maps, parent.id, nodeId)) {
-      return { ok: false, reason: "cycle" };
-    }
-  }
-
-  if (readParentId(node.entry) === newParentId) {
-    return { ok: false, reason: "same-parent" };
-  }
-  return { ok: true, node, parent };
-}
-
-export function reparentRejectionError(
-  doc: Y.Doc,
-  reason: ReparentRejectionReason,
-  nodeId: string,
-  newParentId: string | null,
-): Error {
-  if (reason === "missing-node") {
-    const missingRole =
-      resolveReparentNode(doc, nodeId) === null ? "node" : "parent";
-    return new MissingNodeError(
-      missingRole === "node" ? nodeId : (newParentId ?? ""),
-      missingRole,
-    );
-  }
-  if (reason === "cycle") {
-    return new ReparentCycleError(nodeId, newParentId ?? nodeId);
-  }
-  if (reason === "cross-panel") {
-    return new CrossFamilyParentError(nodeId, newParentId ?? "");
-  }
-  return new Error(`Cannot reparent ${nodeId}: node already has that parent.`);
-}
-
-/**
- * True when `ancestorId` lies on `candidateId`'s parent chain (i.e. nesting a
- * node under `candidateId` would form a cycle). A revisit means the chain loops
- * WITHOUT reaching `ancestorId`, so it returns false - which keeps a node
- * trapped in a pre-existing `parentId` cycle reparentable OUT of it, and never
- * falsely flags an unrelated move whose chain merely passes through a cycle.
- */
-function isDescendantOf(
-  maps: EpicNodeMaps,
-  candidateId: string,
-  ancestorId: string,
-): boolean {
-  let currentId: string | null = candidateId;
-  const visitedIds = new Set<string>();
-
-  while (currentId !== null) {
-    if (currentId === ancestorId) return true;
-    if (visitedIds.has(currentId)) return false;
-    visitedIds.add(currentId);
-
-    const currentNode = resolveNodeInMaps(maps, currentId);
-    if (currentNode === null) return false;
-    currentId = readParentId(currentNode.entry);
-  }
-
-  return false;
-}
-
-function readParentId(entry: Y.Map<unknown>): string | null {
-  const value = entry.get("parentId");
-  return typeof value === "string" ? value : null;
 }

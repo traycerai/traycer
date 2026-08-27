@@ -130,7 +130,7 @@ describe("xterm host fleet identity", () => {
       makeEntry(SHARED_ID, HOST_A),
     );
     releaseXtermHost("inst-a", true);
-    registry.release("inst-a", ownedA.handle);
+    registry.release("inst-a", ownedA.handle, true);
 
     adoptWarmSessionInstance(
       { hostId: HOST_B, sessionId: SHARED_ID },
@@ -141,7 +141,9 @@ describe("xterm host fleet identity", () => {
     expect(registry.get("inst-b")).toBeNull();
     expect(__getXtermHostEntryForTests("inst-a")).toBe(engineA);
     expect(__getXtermHostEntryForTests("inst-b")).toBeNull();
-    expect(ownedA.closeCount()).toBe(0);
+    // Release retagged the linger subscribe as cache (stream reopened); the
+    // handle itself is still retained.
+    expect(ownedA.closeCount()).toBe(1);
   });
 
   it("keeps host A's retained stream and engine after host B opens the same id", () => {
@@ -152,7 +154,7 @@ describe("xterm host fleet identity", () => {
       makeEntry(SHARED_ID, HOST_A),
     );
     releaseXtermHost("inst-a", true);
-    registry.release("inst-a", ownedA.handle);
+    registry.release("inst-a", ownedA.handle, true);
 
     const ownedB = createOwnedHandle(SHARED_ID);
     registry.acquire("inst-b", () => ownedB.handle, HOST_B);
@@ -163,7 +165,7 @@ describe("xterm host fleet identity", () => {
     expect(__getXtermHostEntryForTests("inst-a")).toBe(engineA);
     expect(__getXtermHostEntryForTests("inst-b")).toBe(engineB);
     expect(engineB).not.toBe(engineA);
-    expect(ownedA.closeCount()).toBe(0);
+    expect(ownedA.closeCount()).toBe(1);
     expect(registry.get("inst-a")).toBe(ownedA.handle);
   });
 
@@ -223,7 +225,7 @@ describe("xterm host fleet identity", () => {
       makeEntry(SHARED_ID, HOST_A),
     );
     releaseXtermHost("inst-a", true);
-    registry.release("inst-a", ownedA.handle);
+    registry.release("inst-a", ownedA.handle, true);
 
     adoptWarmSessionInstance(
       { hostId: HOST_A, sessionId: SHARED_ID },
@@ -233,7 +235,7 @@ describe("xterm host fleet identity", () => {
     expect(registry.get("inst-a")).toBeNull();
     expect(registry.get("inst-reopen")).toBe(ownedA.handle);
     expect(__getXtermHostEntryForTests("inst-reopen")).toBe(engineA);
-    expect(ownedA.closeCount()).toBe(0);
+    expect(ownedA.closeCount()).toBe(1);
 
     const revived = registry.acquire(
       "inst-reopen",
@@ -243,8 +245,8 @@ describe("xterm host fleet identity", () => {
       HOST_A,
     );
     expect(revived).toBe(ownedA.handle);
-    registry.release("inst-reopen", ownedA.handle);
+    registry.release("inst-reopen", ownedA.handle, true);
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    expect(ownedA.closeCount()).toBe(1);
+    expect(ownedA.closeCount()).toBe(4);
   });
 });

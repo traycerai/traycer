@@ -118,6 +118,21 @@ export interface ChatsSlice {
  */
 export interface TuiAgentProjection {
   readonly id: string;
+  /**
+   * Whether this agent's parent pointer still lives in the epic Y.Doc rather
+   * than on the host's record plane - the routing fact `isDocOnlyTerminalAgent`
+   * needs, carried on the agent instead of inferred from which slice produced
+   * it.
+   *
+   * Inference used to be sound: the doc arm meant doc, the record arm meant
+   * registry. `epic.listTuiAgents@1.1` broke that by serving the doc-resident
+   * remainder AS records (an agent bound to an un-upgraded peer host), and
+   * `epic.subscribe@2` finishes the job by removing the doc arm entirely - at
+   * which point "which slice was it in" has no answer at all and every agent
+   * looks registry-backed. Routing one of these to `epic.reparentChat` names
+   * no registry chat and fails host-side.
+   */
+  readonly docResident: boolean;
   readonly harnessId: TuiHarnessId;
   readonly title: string;
   readonly parentId: string | null;
@@ -187,7 +202,6 @@ export interface TreeSlice {
 export interface EpicHeader {
   readonly title: string;
   readonly updatedAt: number;
-  readonly isTitleEditedByUser: boolean;
 }
 
 /**
@@ -236,7 +250,6 @@ export interface EpicProjectedSlices {
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
-  readonly contentRevByArtifactId: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_ARRAY: readonly string[] = Object.freeze([]);
@@ -284,7 +297,6 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   epic: Object.freeze({
     title: "",
     updatedAt: 0,
-    isTitleEditedByUser: false,
   }),
   artifacts: Object.freeze({
     byId: Object.freeze({} as Record<string, ArtifactProjection>),
@@ -304,5 +316,4 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),
     nodeById: Object.freeze({} as Record<string, TreeNode>),
   }),
-  contentRevByArtifactId: Object.freeze({} as Record<string, number>),
 });

@@ -9,7 +9,7 @@ import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
  *
  * That is not a hypothetical: `EpicSessionProvider` renders its children BEFORE
  * it holds a handle (desktop ownership claim, then acquire), and the PR list
- * arrives on a host stream that does not wait for the epic's Y.Doc session - so
+ * arrives on its own host stream, which waits for no epic session - so
  * fully-populated rows paint while the context is still null. Every owner chip
  * reads the projection, so the whole subtree has to be session-gated; ungated
  * it took the route's error boundary down and the window showed "Something went

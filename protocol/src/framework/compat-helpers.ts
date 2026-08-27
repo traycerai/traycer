@@ -4,6 +4,7 @@ import type {
   IncompatibilityUpgradeGuidance,
   IncompatibleMethodBlocking,
   IncompatibleMethodDetails,
+  ManifestMethodEntry,
 } from "./ws-protocol";
 
 /**
@@ -56,6 +57,32 @@ export function canonicalForMethodVersionLine(
 }
 
 /**
+ * Every installed major a peer advertised for one method. A missing
+ * `supportedMajors` is the one legacy-wire form, and means only its canonical
+ * major was installed.
+ */
+export function advertisedMajors(
+  entry: ManifestMethodEntry,
+): readonly number[] {
+  return entry.supportedMajors ?? [entry.major];
+}
+
+/** Returns the newest major both manifest entries advertise, if any. */
+export function highestSharedMajor(
+  mine: ManifestMethodEntry,
+  theirs: ManifestMethodEntry,
+): number | null {
+  const theirMajors = new Set(advertisedMajors(theirs));
+  let highest: number | null = null;
+  for (const major of advertisedMajors(mine)) {
+    if (theirMajors.has(major) && (highest === null || major > highest)) {
+      highest = major;
+    }
+  }
+  return highest;
+}
+
+/**
  * Sorted union of method names across both manifests - the domain
  * checked for compatibility. Sorting keeps the resulting
  * `IncompatibleMethodDetails[]` stable so fatal error frames are
@@ -78,7 +105,7 @@ export function collectManifestMethods(
 export function readManifestVersion(
   manifest: ConnectionManifest,
   method: string,
-): SchemaVersion | null {
+): ManifestMethodEntry | null {
   if (!Object.prototype.hasOwnProperty.call(manifest, method)) {
     return null;
   }
