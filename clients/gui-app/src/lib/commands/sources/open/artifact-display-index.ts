@@ -22,6 +22,10 @@ export interface ArtifactPathEntry {
   readonly kind: EpicArtifactKind;
   /** Display title of the leaf artifact (host-independent, user-renamed). */
   readonly title: string;
+  /** Structured ancestor-to-leaf titles; separators inside titles stay data. */
+  readonly titleSegments: ReadonlyArray<string>;
+  /** Stable ancestor-to-leaf artifact IDs parallel to `titleSegments`. */
+  readonly idSegments: ReadonlyArray<string>;
   /**
    * Ancestor-to-leaf display titles joined by " / ". Distinguishes duplicate
    * leaf titles by their parent context and reads better than the folder slug
@@ -37,22 +41,46 @@ export function buildArtifactDisplayPathIndex(
   const resolution = buildArtifactPathIndex(tree, artifacts);
   const index = new Map<string, ArtifactPathEntry>();
   for (const [logicalPath, resolved] of resolution) {
+    const titleSegments = artifactTitleSegments(tree, artifacts, resolved.id);
+    const idSegments = artifactIdSegments(tree, artifacts, resolved.id);
     index.set(logicalPath, {
       id: resolved.id,
       kind: resolved.kind,
       title: displayTitle(resolved.title, resolved.kind),
-      titlePath: artifactTitlePath(tree, artifacts, resolved.id),
+      titleSegments,
+      idSegments,
+      titlePath: titleSegments.join(" / "),
     });
   }
   return index;
 }
 
-/** Root-to-leaf display titles for `artifactId`, joined by " / ". */
-function artifactTitlePath(
+/** Root-to-leaf artifact IDs parallel to the display-title segments. */
+function artifactIdSegments(
   tree: TreeSlice,
   artifacts: ArtifactsSlice,
   artifactId: string,
-): string {
+): ReadonlyArray<string> {
+  const ids: string[] = [];
+  const visited = new Set<string>();
+  let current: string | null = artifactId;
+  while (current !== null) {
+    if (visited.has(current)) break;
+    visited.add(current);
+    if (Object.hasOwn(artifacts.byId, current)) ids.unshift(current);
+    current = Object.hasOwn(tree.nodeById, current)
+      ? tree.nodeById[current].parentId
+      : null;
+  }
+  return ids;
+}
+
+/** Root-to-leaf display titles for `artifactId`, kept as structured segments. */
+function artifactTitleSegments(
+  tree: TreeSlice,
+  artifacts: ArtifactsSlice,
+  artifactId: string,
+): ReadonlyArray<string> {
   const titles: string[] = [];
   const visited = new Set<string>();
   let current: string | null = artifactId;
@@ -67,7 +95,7 @@ function artifactTitlePath(
       ? tree.nodeById[current].parentId
       : null;
   }
-  return titles.join(" / ");
+  return titles;
 }
 
 /** Strip leading/trailing slashes so client + host path forms compare equal. */

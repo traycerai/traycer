@@ -14,7 +14,10 @@ const ENVELOPE_KIND = "notificationActivation";
 const ENVELOPE_VERSION = 1;
 
 export type NotificationActivationEnvelopeFeedSource =
-  "host" | "cloud" | "app-local" | "global";
+  | "host"
+  | "cloud"
+  | "app-local"
+  | "global";
 
 export interface NotificationActivationEnvelopeFeed {
   readonly source: NotificationActivationEnvelopeFeedSource;

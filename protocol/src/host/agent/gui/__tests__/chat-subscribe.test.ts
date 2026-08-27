@@ -1954,9 +1954,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     messages: [userMessage, assistantWithImages],
   };
 
-  function snapshotFrameWithChat(
-    chatPayload: Chat,
-  ): Record<string, unknown> {
+  function snapshotFrameWithChat(chatPayload: Chat): Record<string, unknown> {
     return {
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -1978,7 +1976,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     };
   }
 
-  function blockDeltaFrame(event: Record<string, unknown>): Record<string, unknown> {
+  function blockDeltaFrame(
+    event: Record<string, unknown>,
+  ): Record<string, unknown> {
     return {
       kind: "blockDelta",
       hasBinaryPayload: false,
@@ -2173,7 +2173,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       throw new Error("expected assistant message");
     }
     expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
-    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    const toolCall = assistant.blocks.find(
+      (block) => block.type === "tool_call",
+    );
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }
@@ -2253,7 +2255,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       throw new Error("expected assistant message");
     }
     expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
-    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    const toolCall = assistant.blocks.find(
+      (block) => block.type === "tool_call",
+    );
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }
@@ -2740,12 +2744,16 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     [
       "snapshot chat.messages[].sender",
       (h: string) =>
-        snapshotWith({ chat: { ...chat, messages: [assistantRow(h)] } as Chat }),
+        snapshotWith({
+          chat: { ...chat, messages: [assistantRow(h)] } as Chat,
+        }),
     ],
     [
       "snapshot chat.activeSessionChain",
       (h: string) =>
-        snapshotWith({ chat: { ...chat, activeSessionChain: sessionChain(h) } as Chat }),
+        snapshotWith({
+          chat: { ...chat, activeSessionChain: sessionChain(h) } as Chat,
+        }),
     ],
     [
       "snapshot chat.messages[].blocks[plan]",
@@ -2780,7 +2788,9 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     [
       "snapshot chat.events[].actor",
       (h: string) =>
-        snapshotWith({ chat: { ...chat, events: [eventWithActor(h)] } as Chat }),
+        snapshotWith({
+          chat: { ...chat, events: [eventWithActor(h)] } as Chat,
+        }),
     ],
     [
       "messageAccepted message.sender",
@@ -2889,26 +2899,26 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
         ([version, contract]) => [path, version, contract, build] as const,
       ),
     ),
-  )(
-    "keeps %s off released %s frames",
-    (path, version, contract, build) => {
-      expect(contract.serverFrameSchema.safeParse(build("reasonix")).success).toBe(
-        false,
-      );
-      if ((CONTROL_NOT_APPLICABLE[path] ?? []).includes(version)) return;
-      // Paired control: the identical frame naming a shipped harness parses,
-      // so the negative above cannot be passing for a structural reason.
-      expect(contract.serverFrameSchema.safeParse(build("claude")).success).toBe(
-        true,
-      );
+  )("keeps %s off released %s frames", (path, version, contract, build) => {
+    expect(
+      contract.serverFrameSchema.safeParse(build("reasonix")).success,
+    ).toBe(false);
+    if ((CONTROL_NOT_APPLICABLE[path] ?? []).includes(version)) return;
+    // Paired control: the identical frame naming a shipped harness parses,
+    // so the negative above cannot be passing for a structural reason.
+    expect(contract.serverFrameSchema.safeParse(build("claude")).success).toBe(
+      true,
+    );
+  });
+
+  it.each(perPathFrames)(
+    "carries %s on the unreleased 1.7 line",
+    (_path, build) => {
+      expect(
+        chatSubscribeV17.serverFrameSchema.safeParse(build("reasonix")).success,
+      ).toBe(true);
     },
   );
-
-  it.each(perPathFrames)("carries %s on the unreleased 1.7 line", (_path, build) => {
-    expect(
-      chatSubscribeV17.serverFrameSchema.safeParse(build("reasonix")).success,
-    ).toBe(true);
-  });
 
   // ...and ≤1.4 must still strip it, exactly as before the enum pin.
   it("still strips the steering-capability field on the 1.4 active turn", () => {
@@ -2966,7 +2976,10 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
   });
 
   it("points the live-line constant at `1.7`", () => {
-    expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({ major: 1, minor: 7 });
+    expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({
+      major: 1,
+      minor: 7,
+    });
   });
 });
 

@@ -228,7 +228,7 @@ export const resolveCloudChatHeadResponseSchema = z
         path: ["chat"],
         message: chatMustBeNull
           ? 'A "missing" outcome carries no summary - `chat` must be null.'
-          : 'A resolved outcome must carry its summary - `chat` must not be null.',
+          : "A resolved outcome must carry its summary - `chat` must not be null.",
       });
     }
   });

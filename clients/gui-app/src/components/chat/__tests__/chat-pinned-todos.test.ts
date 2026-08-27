@@ -33,58 +33,65 @@ function toolInputFields(toolName: string, input: unknown) {
 describe("buildPinnedTodoRenderState", () => {
   describe("snapshot derivation", () => {
     it("pins the latest non-empty todo segment", () => {
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "turn-1",
-          [todoSegment("todo-old", [todoItem("old", "pending")])],
-          null,
-        ),
-        makeAssistantMessage(
-          "turn-2",
-          [
-            todoSegment("todo-mid", [todoItem("mid", "pending")]),
-            todoSegment("todo-new", [todoItem("new", "in_progress")]),
-          ],
-          null,
-        ),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "turn-1",
+            [todoSegment("todo-old", [todoItem("old", "pending")])],
+            null,
+          ),
+          makeAssistantMessage(
+            "turn-2",
+            [
+              todoSegment("todo-mid", [todoItem("mid", "pending")]),
+              todoSegment("todo-new", [todoItem("new", "in_progress")]),
+            ],
+            null,
+          ),
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("todo-new");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["new"]);
     });
 
     it("ignores empty todo segments", () => {
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage("turn-1", [todoSegment("todo-empty", [])], null),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [makeAssistantMessage("turn-1", [todoSegment("todo-empty", [])], null)],
+        { kind: "derive" },
+      );
 
       expect(state.todo).toBeNull();
     });
 
     it("builds a fallback pinned todo list from task tool calls", () => {
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "turn-1",
-          [
-            toolSegment("task-create-1", "TaskCreate", {
-              subject: "Add docstrings to PlatformRatings.jsx",
-              description: "Add JSDoc docstrings",
-              activeForm: "Adding docstrings to PlatformRatings.jsx",
-            }),
-          ],
-          null,
-        ),
-        makeAssistantMessage(
-          "turn-2",
-          [
-            toolSegment("task-create-2", "TaskCreate", {
-              subject: "Add structured error logging",
-              activeForm: "Adding structured error logging",
-            }),
-          ],
-          null,
-        ),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "turn-1",
+            [
+              toolSegment("task-create-1", "TaskCreate", {
+                subject: "Add docstrings to PlatformRatings.jsx",
+                description: "Add JSDoc docstrings",
+                activeForm: "Adding docstrings to PlatformRatings.jsx",
+              }),
+            ],
+            null,
+          ),
+          makeAssistantMessage(
+            "turn-2",
+            [
+              toolSegment("task-create-2", "TaskCreate", {
+                subject: "Add structured error logging",
+                activeForm: "Adding structured error logging",
+              }),
+            ],
+            null,
+          ),
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("task-create-2:task-todo");
       expect(state.todo?.items).toMatchObject([
@@ -101,22 +108,25 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("uses semantic todo state over task tools within the same turn", () => {
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "turn-1",
-          [
-            todoSegment("todo-1", [
-              todoItem("First task", "completed"),
-              todoItem("Second task", "pending"),
-            ]),
-            toolSegment("task-update-2", "TaskUpdate", {
-              taskId: "2",
-              status: "pending",
-            }),
-          ],
-          null,
-        ),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "turn-1",
+            [
+              todoSegment("todo-1", [
+                todoItem("First task", "completed"),
+                todoItem("Second task", "pending"),
+              ]),
+              toolSegment("task-update-2", "TaskUpdate", {
+                taskId: "2",
+                status: "pending",
+              }),
+            ],
+            null,
+          ),
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("todo-1");
       expect(state.todo?.items.map((item) => item.text)).toEqual([
@@ -126,24 +136,27 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("uses a newer task-tool snapshot over an older semantic todo", () => {
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "turn-1",
-          [todoSegment("todo-old", [todoItem("semantic", "completed")])],
-          null,
-        ),
-        makeUserMessage("user-2", "next"),
-        makeAssistantMessage(
-          "turn-2",
-          [
-            toolSegment("task-create-newer", "TaskCreate", {
-              subject: "Tool task",
-              activeForm: "Working on tool task",
-            }),
-          ],
-          null,
-        ),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "turn-1",
+            [todoSegment("todo-old", [todoItem("semantic", "completed")])],
+            null,
+          ),
+          makeUserMessage("user-2", "next"),
+          makeAssistantMessage(
+            "turn-2",
+            [
+              toolSegment("task-create-newer", "TaskCreate", {
+                subject: "Tool task",
+                activeForm: "Working on tool task",
+              }),
+            ],
+            null,
+          ),
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("task-create-newer:task-todo");
       expect(state.todo?.items).toMatchObject([
@@ -152,27 +165,30 @@ describe("buildPinnedTodoRenderState", () => {
     });
 
     it("starts a replacement fallback task list after a new user message", () => {
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "turn-1",
-          [
-            toolSegment("task-create-old", "TaskCreate", {
-              subject: "Old task",
-            }),
-          ],
-          null,
-        ),
-        makeUserMessage("user-2", "next"),
-        makeAssistantMessage(
-          "turn-2",
-          [
-            toolSegment("task-create-new", "TaskCreate", {
-              subject: "New task",
-            }),
-          ],
-          null,
-        ),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "turn-1",
+            [
+              toolSegment("task-create-old", "TaskCreate", {
+                subject: "Old task",
+              }),
+            ],
+            null,
+          ),
+          makeUserMessage("user-2", "next"),
+          makeAssistantMessage(
+            "turn-2",
+            [
+              toolSegment("task-create-new", "TaskCreate", {
+                subject: "New task",
+              }),
+            ],
+            null,
+          ),
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("task-create-new:task-todo");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["New task"]);
@@ -181,27 +197,30 @@ describe("buildPinnedTodoRenderState", () => {
     it("resets the fallback task list on steer rows (rendered as user rows)", () => {
       // A queue-steer interjection renders as a `role: "user"` row inside the
       // turn, so it triggers the same reset rule as a plain user send.
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "turn-1",
-          [
-            toolSegment("task-create-old", "TaskCreate", {
-              subject: "Old task",
-            }),
-          ],
-          null,
-        ),
-        makeUserMessage("steer:queue-1", "user-steer"),
-        makeAssistantMessage(
-          "turn-1:part:1",
-          [
-            toolSegment("task-create-new", "TaskCreate", {
-              subject: "New task",
-            }),
-          ],
-          null,
-        ),
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "turn-1",
+            [
+              toolSegment("task-create-old", "TaskCreate", {
+                subject: "Old task",
+              }),
+            ],
+            null,
+          ),
+          makeUserMessage("steer:queue-1", "user-steer"),
+          makeAssistantMessage(
+            "turn-1:part:1",
+            [
+              toolSegment("task-create-new", "TaskCreate", {
+                subject: "New task",
+              }),
+            ],
+            null,
+          ),
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("task-create-new:task-todo");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["New task"]);
@@ -234,12 +253,10 @@ describe("buildPinnedTodoRenderState", () => {
         "running",
       );
 
-      const state = buildPinnedTodoRenderState([
-        plain,
-        mixed,
-        todoOnly,
-        liveTodoOnly,
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [plain, mixed, todoOnly, liveTodoOnly],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("todo-live");
       expect(state.messages.map((message) => message.id)).toEqual([
@@ -336,14 +353,17 @@ describe("buildPinnedTodoRenderState", () => {
         [toolSegment("grep-1", "Grep", { pattern: "todo" })],
         null,
       );
-      const state = buildPinnedTodoRenderState([
-        makeAssistantMessage(
-          "assistant-1",
-          [todoSegment("todo-1", [todoItem("pinned", "in_progress")])],
-          null,
-        ),
-        grepOnly,
-      ], { kind: "derive" });
+      const state = buildPinnedTodoRenderState(
+        [
+          makeAssistantMessage(
+            "assistant-1",
+            [todoSegment("todo-1", [todoItem("pinned", "in_progress")])],
+            null,
+          ),
+          grepOnly,
+        ],
+        { kind: "derive" },
+      );
 
       expect(state.todo?.id).toBe("todo-1");
       expect(state.messages).toEqual([grepOnly]);
@@ -440,9 +460,7 @@ describe("buildPinnedTodoRenderState", () => {
       });
 
       expect(state.todo?.id).toBe("task-create-live:task-todo");
-      expect(state.todo?.items.map((item) => item.text)).toEqual([
-        "Live task",
-      ]);
+      expect(state.todo?.items.map((item) => item.text)).toEqual(["Live task"]);
       // Both task-tool segments are stripped (a todo is pinned). The completed
       // row (assistant-1) is left with no segments and is dropped entirely;
       // the still-streaming row (assistant-2) is kept even though it too ends

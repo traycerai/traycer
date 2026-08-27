@@ -266,9 +266,11 @@ describe("chat session viewport hydration", () => {
   it("requests an unhydrated tail when a snapshot has no tail bodies", () => {
     const harness = createViewportHarness();
     try {
-      harness.callbacks().onWindowedSnapshot(
-        snapshot({ rowCount: 40, tailFromOrdinal: 40, tailMessages: [] }),
-      );
+      harness
+        .callbacks()
+        .onWindowedSnapshot(
+          snapshot({ rowCount: 40, tailFromOrdinal: 40, tailMessages: [] }),
+        );
 
       expect(harness.rangeRequests).toHaveLength(1);
       expect(harness.rangeRequests[0]).toMatchObject({
@@ -382,7 +384,9 @@ describe("chat session viewport hydration: review fixes", () => {
       // first requested row whatever it costs).
       harness
         .callbacks()
-        .onRange(rangeWithMessages(5, ["row-5"], [hugeUserMessage("m-huge", 5)]));
+        .onRange(
+          rangeWithMessages(5, ["row-5"], [hugeUserMessage("m-huge", 5)]),
+        );
 
       const messages = harness.handle.store.getState().messages;
       expect(messages.some((message) => message.messageId === "m-huge")).toBe(
@@ -407,23 +411,25 @@ describe("chat session viewport hydration: review fixes", () => {
         40,
       );
 
-      harness.callbacks().onSnapshot(legacySnapshot([userMessage("legacy-1", 1)]));
+      harness
+        .callbacks()
+        .onSnapshot(legacySnapshot([userMessage("legacy-1", 1)]));
 
       const afterLegacy = harness.handle.store.getState();
       expect(afterLegacy.transcriptDerived).toBeNull();
       expect(afterLegacy.transcriptWindow.rowCount).toBe(0);
-      expect(afterLegacy.messages.map((message) => message.messageId)).toEqual(
-        ["legacy-1"],
-      );
+      expect(afterLegacy.messages.map((message) => message.messageId)).toEqual([
+        "legacy-1",
+      ]);
 
       // A straggler windowed frame for the abandoned epoch must be ignored
       // outright - it must not touch `messages` or rebuild windowed state.
       harness.callbacks().onRange(range(10, 15));
 
       const finalState = harness.handle.store.getState();
-      expect(finalState.messages.map((message) => message.messageId)).toEqual(
-        ["legacy-1"],
-      );
+      expect(finalState.messages.map((message) => message.messageId)).toEqual([
+        "legacy-1",
+      ]);
       expect(finalState.transcriptWindow.rowCount).toBe(0);
       expect(finalState.transcriptDerived).toBeNull();
     } finally {
@@ -438,8 +444,9 @@ describe("chat session viewport hydration: review fixes", () => {
       harness.callbacks().onRange(range(10, 15));
       const before = harness.handle.store
         .getState()
-        .transcriptWindow.spans.find((span) => span.fromOrdinal === 10)
-        ?.touchedAt;
+        .transcriptWindow.spans.find(
+          (span) => span.fromOrdinal === 10,
+        )?.touchedAt;
       expect(before).toBeDefined();
 
       // Already hydrated, so reporting it visible plans no new fetch...
@@ -452,8 +459,9 @@ describe("chat session viewport hydration: review fixes", () => {
       // reading as coldest the next time eviction runs.
       const after = harness.handle.store
         .getState()
-        .transcriptWindow.spans.find((span) => span.fromOrdinal === 10)
-        ?.touchedAt;
+        .transcriptWindow.spans.find(
+          (span) => span.fromOrdinal === 10,
+        )?.touchedAt;
       expect(after ?? -1).toBeGreaterThan(before ?? -1);
     } finally {
       harness.handle.dispose();

@@ -431,8 +431,7 @@ export function assistantTurnNeedsTrailingRow(input: {
    */
   readonly hasRunState: boolean;
 }): boolean {
-  const needs =
-    input.hasRunState || (input.turnComplete && input.stopped);
+  const needs = input.hasRunState || (input.turnComplete && input.stopped);
   if (!needs) return false;
   const last = input.plan.entries.at(-1);
   // Already ends on an assistant row: the marker (or run state) attaches to it
@@ -677,9 +676,8 @@ function describeTurnRows(input: {
   const turnComplete = input.activeTurnId !== turn.turnKey;
   const blocks = turn.blocks;
   const plan = planAssistantTurnRows(blocks);
-  const decoratingEventIds = input.decoratingEventIdsByTurnKey.get(
-    turn.turnKey,
-  ) ?? EMPTY_EVENT_IDS;
+  const decoratingEventIds =
+    input.decoratingEventIdsByTurnKey.get(turn.turnKey) ?? EMPTY_EVENT_IDS;
 
   const rows: TranscriptRowDescriptor[] = plan.entries.map((entry) => {
     if (entry.kind === "steer") {

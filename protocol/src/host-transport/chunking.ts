@@ -220,7 +220,9 @@ export function decodeMuxMessageBody(body: Uint8Array): DecodedMessageBody {
   }
   const hasBinary = (bodyFlags & BODY_FLAG_HAS_BINARY) !== 0;
   const json =
-    jsonLen === 0 ? null : parseBodyJson(body.subarray(BODY_HEADER_LEN, jsonEnd));
+    jsonLen === 0
+      ? null
+      : parseBodyJson(body.subarray(BODY_HEADER_LEN, jsonEnd));
   const binary = hasBinary ? body.subarray(jsonEnd) : null;
   return { json, binary };
 }
@@ -320,7 +322,9 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
   }
   const out = new Uint8Array(plainLength + 1);
   let written = 0;
-  const outputLimitExceeded = new Error("compressed frame output limit exceeded");
+  const outputLimitExceeded = new Error(
+    "compressed frame output limit exceeded",
+  );
   const inflater = new Inflate((chunk) => {
     if (chunk.length > plainLength - written) {
       throw outputLimitExceeded;
@@ -330,7 +334,7 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
   });
   const compressed = payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN);
   try {
-    for (let offset = 0; offset < compressed.length; ) {
+    for (let offset = 0; offset < compressed.length;) {
       // `Inflate` calls ondata after each push, not each decoded symbol. Keep
       // one push's possible expansion inside the remaining output budget so a
       // forged small prefix cannot turn into a renderer-thread-sized inflate.
@@ -339,7 +343,10 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
         Math.floor((plainLength - written) / DEFLATE_MAX_EXPANSION_RATIO),
       );
       const end = Math.min(offset + inputLength, compressed.length);
-      inflater.push(compressed.subarray(offset, end), end === compressed.length);
+      inflater.push(
+        compressed.subarray(offset, end),
+        end === compressed.length,
+      );
       offset = end;
     }
   } catch (error) {

@@ -315,22 +315,21 @@ export const terminalPlainEnsureRunningUpgradeV10ToV21 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
-export const terminalPlainEnsureRunningDowngradeV21ToV10 =
-  defineDowngradePath<
-    typeof terminalPlainEnsureRunningV21,
-    typeof terminalPlainEnsureRunningV10
-  >({
-    from: terminalPlainEnsureRunningV21.schemaVersion,
-    to: terminalPlainEnsureRunningV10.schemaVersion,
-    downgradeRequest: (request) => ({ ok: true, value: request }),
-    downgradeResponse: (response) => {
-      const parsed =
-        ensurePlainTerminalRunningResponseSchemaV10.safeParse(response);
-      return parsed.success
-        ? { ok: true, value: parsed.data }
-        : { ok: false, error: runtimeUnavailableDowngrade };
-    },
-  });
+export const terminalPlainEnsureRunningDowngradeV21ToV10 = defineDowngradePath<
+  typeof terminalPlainEnsureRunningV21,
+  typeof terminalPlainEnsureRunningV10
+>({
+  from: terminalPlainEnsureRunningV21.schemaVersion,
+  to: terminalPlainEnsureRunningV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      ensurePlainTerminalRunningResponseSchemaV10.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: runtimeUnavailableDowngrade };
+  },
+});
 export const terminalPlainCloseUpgradeV10ToV21 = defineUpgradePath<
   typeof terminalPlainCloseV10,
   typeof terminalPlainCloseV21
@@ -369,7 +368,8 @@ export const terminalPlainImportLegacyDowngradeV21ToV10 = defineDowngradePath<
     if (response.status === "deleted") {
       return { ok: true, value: response };
     }
-    const parsed = importLegacyPlainTerminalResponseSchemaV10.safeParse(response);
+    const parsed =
+      importLegacyPlainTerminalResponseSchemaV10.safeParse(response);
     return parsed.success
       ? { ok: true, value: parsed.data }
       : { ok: false, error: runtimeUnavailableDowngrade };

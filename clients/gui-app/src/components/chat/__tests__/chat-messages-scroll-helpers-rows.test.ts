@@ -124,8 +124,8 @@ describe("row-based chat scroll helpers", () => {
       placeholder("unhydrated-1", 1),
     ];
 
-    expect(
-      viewportActiveUserMessageId(state([0, 100], 0), rows, []),
-    ).toBe("unhydrated-0");
+    expect(viewportActiveUserMessageId(state([0, 100], 0), rows, [])).toBe(
+      "unhydrated-0",
+    );
   });
 });

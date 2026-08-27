@@ -7,7 +7,9 @@
  * the retry signal for app-local deliveries.
  */
 export type DesktopNotificationShowOutcome =
-  "presented" | "duplicate" | "undeliverable";
+  | "presented"
+  | "duplicate"
+  | "undeliverable";
 
 /**
  * IPC mirror of the shared `NotificationFeedSource`: which feed produced the
@@ -16,7 +18,10 @@ export type DesktopNotificationShowOutcome =
  * where the receive-side gates need it.
  */
 export type DesktopNotificationFeedSource =
-  "host" | "cloud" | "app-local" | "global";
+  | "host"
+  | "cloud"
+  | "app-local"
+  | "global";
 
 /** Plain-data notification projection relayed main -> focused renderer. */
 export interface DesktopNotificationForegroundAppLocal {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { chatEventSchema, type ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  chatEventSchema,
+  type ChatEvent,
+} from "@traycer/protocol/persistence/epic/chat-events";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 
 /**

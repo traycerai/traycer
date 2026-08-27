@@ -218,7 +218,9 @@ function classifyProfileAwaitResult(
  * covers the near-instant relay leg.
  */
 export type ProviderProfileLoginFlowCodePastePhase =
-  "idle" | "submitting" | "verifying";
+  | "idle"
+  | "submitting"
+  | "verifying";
 
 export interface ProviderProfileLoginFlowCodePaste {
   /** `false` when the provider has no `codePaste` capability - callers

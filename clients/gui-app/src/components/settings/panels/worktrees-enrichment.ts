@@ -378,7 +378,8 @@ function foldEnrichedWorktrees(
   >();
   for (const query of queries) {
     const data = query.state.data as
-      WorktreeListAllForHostResponseV14 | undefined;
+      | WorktreeListAllForHostResponseV14
+      | undefined;
     if (data === undefined) continue;
     for (const entry of data.worktrees) {
       const prior = freshness.get(entry.worktreePath);

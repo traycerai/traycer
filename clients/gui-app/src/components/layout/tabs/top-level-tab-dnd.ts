@@ -41,11 +41,14 @@ export interface TopLevelStripPairTarget {
 }
 
 export type TopLevelTabDropTarget =
-  TopLevelEdgeSplitTarget | TopLevelFillableTarget | TopLevelStripPairTarget;
+  | TopLevelEdgeSplitTarget
+  | TopLevelFillableTarget
+  | TopLevelStripPairTarget;
 
 /** The targets that arm the dwell timer before they may commit. */
 export type TopLevelDwellTarget =
-  TopLevelEdgeSplitTarget | TopLevelStripPairTarget;
+  | TopLevelEdgeSplitTarget
+  | TopLevelStripPairTarget;
 
 export function dwellTargetKey(target: TopLevelDwellTarget): string {
   const ref = `${target.targetRef.kind}:${target.targetRef.id}`;

@@ -1401,7 +1401,9 @@ describe("chat-event metadata projection", () => {
       ).toBe(JSON.stringify({ source: "traycer_a2a" }));
       expect(
         JSON.stringify(eventFromProjected(projectedErrored).metadata),
-      ).toBe(JSON.stringify({ reason: "adapter cleanup", code: "E_INTERVIEW" }));
+      ).toBe(
+        JSON.stringify({ reason: "adapter cleanup", code: "E_INTERVIEW" }),
+      );
       expectProjectedEventParses(projectedRequested);
       expectProjectedEventParses(projectedErrored);
     }
@@ -1444,12 +1446,7 @@ describe("chat-event metadata projection", () => {
       [INTERVIEW_SETTLEMENT_METADATA_KEY]: nestedSettlementFacts(),
     };
     const turnStarted = chatEventWith("e-turn", 1, "turn.started", metadata);
-    const sendAccepted = chatEventWith(
-      "e-send",
-      2,
-      "send.accepted",
-      metadata,
-    );
+    const sendAccepted = chatEventWith("e-send", 2, "send.accepted", metadata);
     const turnFrame = eventAppendedFrame(turnStarted);
     const sendFrame = eventAppendedFrame(sendAccepted);
 
@@ -1467,12 +1464,11 @@ describe("chat-event metadata projection", () => {
 
   it("leaves interview events with null or non-record metadata referentially identical", () => {
     const nullMeta = chatEventWith("e-null", 10, "interview.resolved", null);
-    const arrayMeta = chatEventWith(
-      "e-array",
-      11,
-      "interview.resolved",
-      ["not", "a", "record"],
-    );
+    const arrayMeta = chatEventWith("e-array", 11, "interview.resolved", [
+      "not",
+      "a",
+      "record",
+    ]);
     const stringMeta = chatEventWith(
       "e-string",
       12,

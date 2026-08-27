@@ -168,7 +168,8 @@ describe("chat-head document strips the envelope before parsing", () => {
     const result = decodeChatHeadDocument(
       serializeChatHeadDocument(graduated.head),
     );
-    if (result.status !== "ok") throw new Error("expected a decodable document");
+    if (result.status !== "ok")
+      throw new Error("expected a decodable document");
 
     expect(Object.keys(result.record.residual)).not.toContain(
       CHAT_HEAD_PARTS_KEY,
@@ -189,7 +190,8 @@ describe("chat-head document strips the envelope before parsing", () => {
     });
 
     const result = decodeChatHeadDocument(withFutureField);
-    if (result.status !== "ok") throw new Error("expected a decodable document");
+    if (result.status !== "ok")
+      throw new Error("expected a decodable document");
 
     expect(result.record.residual).toEqual({
       futureTopLevel: { added: "by a newer minor" },
@@ -271,7 +273,11 @@ describe("chat-head document fails closed", () => {
   it("refuses a reordered envelope", () => {
     const derived = [...listChatHeadParts(graduated.head)];
     const result = decodeChatHeadDocument(
-      withEnvelope(graduated.head, [derived[1], derived[0], ...derived.slice(2)]),
+      withEnvelope(graduated.head, [
+        derived[1],
+        derived[0],
+        ...derived.slice(2),
+      ]),
     );
 
     expect(result.status).toBe("corrupt");

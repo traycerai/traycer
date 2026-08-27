@@ -8,7 +8,10 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /** The renameable kinds a mobile surface can address, and how they rename. */
 export type SwitcherRowKind =
-  "chat" | "terminal-agent" | "artifact" | "terminal";
+  | "chat"
+  | "terminal-agent"
+  | "artifact"
+  | "terminal";
 
 /**
  * The renameable kind behind a canvas tile, or null for a tile that carries no

@@ -36,7 +36,8 @@ export interface HealthProbeOptions {
   // `null` uses the real local pid-liveness / loopback-TCP checks.
   readonly checkProcessAlive: ((pid: number) => boolean) | null;
   readonly checkTcpReachable:
-    ((host: string, port: number) => Promise<boolean>) | null;
+    | ((host: string, port: number) => Promise<boolean>)
+    | null;
   // Total wall-clock budget across all retries. `null` uses the default
   // (45s, inside the ticket's suggested 30-60s window).
   readonly totalBudgetMs: number | null;

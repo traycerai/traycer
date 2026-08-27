@@ -180,8 +180,9 @@ describe("assistantTurnKey", () => {
 
 describe("latestForkableAssistantMessageId", () => {
   it("returns null for an empty transcript", () => {
-    expect(latestForkableAssistantMessageId(rowsFor([], NO_EVENTS, null), null))
-      .toBe(null);
+    expect(
+      latestForkableAssistantMessageId(rowsFor([], NO_EVENTS, null), null),
+    ).toBe(null);
   });
 
   it("returns null when the transcript has only user messages", () => {
@@ -191,7 +192,10 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe(null);
   });
 
@@ -208,7 +212,10 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-1");
   });
 
@@ -276,7 +283,10 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-1-second");
   });
 
@@ -299,7 +309,10 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-legacy-2");
   });
 
@@ -322,7 +335,10 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-1");
   });
 
@@ -364,7 +380,10 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-1");
   });
 
@@ -404,7 +423,10 @@ describe("latestForkableAssistantMessageId", () => {
     // Display order still ends on turn-2, so turn-2 is the boundary. Scanning
     // the RECORDS backwards would answer `a-1-restored`.
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-2");
   });
 
@@ -431,7 +453,10 @@ describe("latestForkableAssistantMessageId", () => {
     // boundary is `a-1-early`. Sorting the records by timestamp first would
     // answer `a-1-late`.
     expect(
-      latestForkableAssistantMessageId(rowsFor(messages, NO_EVENTS, null), null),
+      latestForkableAssistantMessageId(
+        rowsFor(messages, NO_EVENTS, null),
+        null,
+      ),
     ).toBe("a-1-early");
   });
 });

@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import { readMetadataNumber, readMetadataString } from "@traycer/protocol/persistence/chat-transcript/event-metadata";
+import {
+  readMetadataNumber,
+  readMetadataString,
+} from "@traycer/protocol/persistence/chat-transcript/event-metadata";
 
 /**
  * # The setup interruption the composer restores a draft from

@@ -104,17 +104,11 @@ describe("stable transcript list rows", () => {
   it("updates only a hydrated row whose message content changed", () => {
     const unchanged = model("b", "same");
     const previous = computeStableTranscriptListRows(
-      [
-        hydrated("a", 0, model("a", "old")),
-        hydrated("b", 1, unchanged),
-      ],
+      [hydrated("a", 0, model("a", "old")), hydrated("b", 1, unchanged)],
       EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
     );
     const next = computeStableTranscriptListRows(
-      [
-        hydrated("a", 0, model("a", "new")),
-        hydrated("b", 1, unchanged),
-      ],
+      [hydrated("a", 0, model("a", "new")), hydrated("b", 1, unchanged)],
       previous,
     );
 
@@ -135,9 +129,7 @@ describe("transcript list key sequence", () => {
 
   it("detects reorder but not in-place content changes", () => {
     expect(didTranscriptListKeySequenceChange(["a", "b"], rows)).toBe(false);
-    expect(
-      didTranscriptListKeySequenceChange(["b", "a"], rows),
-    ).toBe(true);
+    expect(didTranscriptListKeySequenceChange(["b", "a"], rows)).toBe(true);
     expect(
       didTranscriptListKeySequenceChange(
         ["a", "b"],

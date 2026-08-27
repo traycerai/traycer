@@ -44,7 +44,10 @@ export function isTransientProviderRateLimitFailure(
 }
 
 export type ProviderRateLimitSeverity =
-  "healthy" | "running_low" | "limited" | "unknown";
+  | "healthy"
+  | "running_low"
+  | "limited"
+  | "unknown";
 
 export type LiveProviderRateLimitSeverity = Exclude<
   ProviderRateLimitSeverity,

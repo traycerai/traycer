@@ -489,7 +489,10 @@ describe("the frame ceiling", () => {
 function tailBudgetFor(
   rows: ReadonlyArray<{ rowId: string; records: readonly Message[] }>,
 ): number {
-  return rows.reduce((total, row) => total + rowCost(row.rowId, row.records), 0);
+  return rows.reduce(
+    (total, row) => total + rowCost(row.rowId, row.records),
+    0,
+  );
 }
 
 function tail(
@@ -516,10 +519,15 @@ function tail(
  */
 describe("sliceTranscriptTail", () => {
   it("takes the last rows that fit, not the first", () => {
-    const result = tail(THREE_ROWS, THREE, [], tailBudgetFor([
-      { rowId: "m-1", records: [M1] },
-      { rowId: "m-2", records: [M2] },
-    ]));
+    const result = tail(
+      THREE_ROWS,
+      THREE,
+      [],
+      tailBudgetFor([
+        { rowId: "m-1", records: [M1] },
+        { rowId: "m-2", records: [M2] },
+      ]),
+    );
 
     expect(result.rowIds).toEqual(["m-1", "m-2"]);
     expect(result.fromOrdinal).toBe(1);
@@ -602,10 +610,15 @@ describe("sliceTranscriptTail", () => {
   it("charges a shared record set once across the rows that share it", () => {
     const rows = sliceRows("turn-1", [M0.messageId], 10);
 
-    const result = tail(rows, [M0], [], tailBudgetFor([
-      { rowId: rows[0].rowId, records: [M0] },
-      { rowId: rows[1].rowId, records: [] },
-    ]));
+    const result = tail(
+      rows,
+      [M0],
+      [],
+      tailBudgetFor([
+        { rowId: rows[0].rowId, records: [M0] },
+        { rowId: rows[1].rowId, records: [] },
+      ]),
+    );
 
     expect(result.rowIds).toEqual([rows[0].rowId, rows[1].rowId]);
     expect(result.messages).toEqual([M0]);
@@ -670,7 +683,8 @@ describe("assistant rows carry the events that decorate them", () => {
 
   function decoratedRows(): readonly TranscriptRowDescriptor[] {
     return sliceRows(TURN_KEY, [M0.messageId], 10).map((row) => {
-      if (row.source.kind !== "assistant-slice") throw new Error("expected slice");
+      if (row.source.kind !== "assistant-slice")
+        throw new Error("expected slice");
       return {
         ...row,
         source: {
@@ -694,7 +708,9 @@ describe("assistant rows carry the events that decorate them", () => {
       "e-started",
       "e-checkpoint",
     ]);
-    expect(result.messages.map((message) => message.messageId)).toEqual(["m-0"]);
+    expect(result.messages.map((message) => message.messageId)).toEqual([
+      "m-0",
+    ]);
   });
 
   it("does not leak another turn's events into the span", () => {
@@ -706,7 +722,9 @@ describe("assistant rows carry the events that decorate them", () => {
       maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
     });
 
-    expect(result.events.map((event) => event.eventId)).not.toContain("e-other");
+    expect(result.events.map((event) => event.eventId)).not.toContain(
+      "e-other",
+    );
   });
 
   it("charges a turn's decorating events once across its slices", () => {
@@ -727,7 +745,12 @@ describe("assistant rows carry the events that decorate them", () => {
   it("carries them in the snapshot tail too, not only in a range", () => {
     const rows = decoratedRows();
 
-    const result = tail(rows, [M0], [STARTED, CHECKPOINT], TRANSCRIPT_TAIL_MAX_BYTES);
+    const result = tail(
+      rows,
+      [M0],
+      [STARTED, CHECKPOINT],
+      TRANSCRIPT_TAIL_MAX_BYTES,
+    );
 
     expect(result.events.map((event) => event.eventId)).toEqual([
       "e-started",

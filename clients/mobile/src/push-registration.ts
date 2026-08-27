@@ -46,7 +46,10 @@ import type {
 
 /** Capacitor's PermissionState, spelled out (no type dep on the plugin). */
 export type CapacitorPushPermissionState =
-  "prompt" | "prompt-with-rationale" | "granted" | "denied";
+  | "prompt"
+  | "prompt-with-rationale"
+  | "granted"
+  | "denied";
 
 /**
  * Capacitor's four states down to the three the shared contract speaks

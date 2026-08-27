@@ -83,7 +83,9 @@ describe("chunkRowSkeleton keeps every chunk under the frame budget", () => {
     );
 
     expect(finals.at(-1)).toBe(true);
-    expect(finals.slice(0, -1).every((isFinal) => isFinal === false)).toBe(true);
+    expect(finals.slice(0, -1).every((isFinal) => isFinal === false)).toBe(
+      true,
+    );
   });
 
   it("yields one empty FINAL chunk for an empty skeleton", () => {
@@ -105,9 +107,9 @@ describe("chunkRowSkeleton keeps every chunk under the frame budget", () => {
 
     const chunks = chunkRowSkeleton(entries, 8);
 
-    expect(chunks.map((chunk) => chunk.entries.map((each) => each.rowId))).toEqual(
-      [["row-0"], ["row-1"]],
-    );
+    expect(
+      chunks.map((chunk) => chunk.entries.map((each) => each.rowId)),
+    ).toEqual([["row-0"], ["row-1"]]);
     expect(chunks.at(-1)?.isFinal).toBe(true);
   });
 

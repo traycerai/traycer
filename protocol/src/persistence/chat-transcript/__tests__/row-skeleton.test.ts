@@ -51,7 +51,9 @@ describe("row role", () => {
     // rejected it on the grounds that no persisted record has that role - true
     // of records, false of rows, which is the distinction this schema carries.
     for (const role of ["user", "assistant", "system"] as const) {
-      expect(rowSkeletonEntrySchema.parse({ ...MINIMAL, role }).role).toBe(role);
+      expect(rowSkeletonEntrySchema.parse({ ...MINIMAL, role }).role).toBe(
+        role,
+      );
     }
   });
 

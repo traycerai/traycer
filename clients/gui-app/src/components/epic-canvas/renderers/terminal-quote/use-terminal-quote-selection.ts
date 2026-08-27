@@ -33,7 +33,8 @@ export interface TerminalSelectionSource {
   hasSelection(): boolean;
   getSelection(): string;
   getSelectionPosition():
-    { readonly start: { readonly x: number; readonly y: number } } | undefined;
+    | { readonly start: { readonly x: number; readonly y: number } }
+    | undefined;
   onSelectionChange(listener: () => void): IDisposable;
   onScroll(listener: (yDisp: number) => void): IDisposable;
 }

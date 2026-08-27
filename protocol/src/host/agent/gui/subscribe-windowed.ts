@@ -263,15 +263,17 @@ export type ChatReadAccumulatedFileChangeRequest = z.infer<
  * whose metadata describes a different edit. Modelled as a normal response
  * rather than an error because it is an ordinary race, not a fault.
  */
-export const chatReadAccumulatedFileChangeResponseSchema =
-  z.discriminatedUnion("stale", [
+export const chatReadAccumulatedFileChangeResponseSchema = z.discriminatedUnion(
+  "stale",
+  [
     z.object({
       stale: z.literal(false),
       beforeContent: z.string().nullable(),
       afterContent: z.string().nullable(),
     }),
     z.object({ stale: z.literal(true) }),
-  ]);
+  ],
+);
 export type ChatReadAccumulatedFileChangeResponse = z.infer<
   typeof chatReadAccumulatedFileChangeResponseSchema
 >;

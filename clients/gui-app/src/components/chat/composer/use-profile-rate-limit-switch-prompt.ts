@@ -64,7 +64,8 @@ interface VisibleProfileRateLimitPrompt {
 }
 
 export type ProfileRateLimitSwitchPrompt =
-  HiddenProfileRateLimitPrompt | VisibleProfileRateLimitPrompt;
+  | HiddenProfileRateLimitPrompt
+  | VisibleProfileRateLimitPrompt;
 
 interface ProfileRateLimitWarningProjection {
   readonly warningKey: string;

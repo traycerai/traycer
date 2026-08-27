@@ -77,7 +77,10 @@ export type ArrayJsonSchema = {
  * cases when a new shape is added.
  */
 export type JsonSchemaFingerprint =
-  ObjectJsonSchema | EnumJsonSchema | AnyOfJsonSchema | ArrayJsonSchema;
+  | ObjectJsonSchema
+  | EnumJsonSchema
+  | AnyOfJsonSchema
+  | ArrayJsonSchema;
 
 /**
  * Converts a Zod schema to its normalized fingerprint. Throws when

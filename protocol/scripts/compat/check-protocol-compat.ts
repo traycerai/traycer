@@ -58,9 +58,7 @@ function parseArgs(argv: readonly string[]): {
       index += 1;
       const separator = value.indexOf("=");
       if (separator <= 0) {
-        throw new Error(
-          `--baseline expects <label>=<path>, got '${value}'`,
-        );
+        throw new Error(`--baseline expects <label>=<path>, got '${value}'`);
       }
       baselines.push({
         label: value.slice(0, separator),
@@ -118,7 +116,9 @@ if (json) {
       exceptions,
     }),
   }));
-  process.stdout.write(`${JSON.stringify({ results: perBaseline }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ results: perBaseline }, null, 2)}\n`,
+  );
   // Setting exitCode (rather than calling exit()) lets the process end
   // naturally once stdout has actually flushed - exit() can truncate a
   // pending write when stdout is a pipe, as it is in CI.
@@ -169,6 +169,8 @@ if (json) {
     );
     process.exitCode = 1;
   } else {
-    console.log("\nProtocol surface is compatible with every checked baseline.");
+    console.log(
+      "\nProtocol surface is compatible with every checked baseline.",
+    );
   }
 }

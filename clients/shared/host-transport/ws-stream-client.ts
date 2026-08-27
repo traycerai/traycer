@@ -115,7 +115,8 @@ export interface WsStreamClientOptions<
    * short-lived provisioning probe (CLI `host install`) is who needs it.
    */
   readonly onHostCredentialState:
-    ((hostId: string, state: HostCredentialState) => void) | null;
+    | ((hostId: string, state: HostCredentialState) => void)
+    | null;
   /**
    * Where this transport's observations reach the selection authority.
    *
@@ -1139,7 +1140,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
    * this build cannot subscribe to. `null` when nobody is watching.
    */
   readonly onHostCredentialState:
-    ((hostId: string, state: HostCredentialState) => void) | null;
+    | ((hostId: string, state: HostCredentialState) => void)
+    | null;
   /**
    * Reports positive host-recovery evidence to the owning client - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission

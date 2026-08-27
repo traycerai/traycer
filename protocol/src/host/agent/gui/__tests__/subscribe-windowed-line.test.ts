@@ -357,9 +357,9 @@ describe("the 1.6 server union does not admit windowed-only frame kinds", () => 
       },
     };
 
-    expect(chatSubscribeV16.serverFrameSchema.safeParse(rangeFrame).success).toBe(
-      false,
-    );
+    expect(
+      chatSubscribeV16.serverFrameSchema.safeParse(rangeFrame).success,
+    ).toBe(false);
   });
 
   it("rejects skeletonChunk and indexChanged frames at parse time too", () => {
@@ -584,8 +584,7 @@ describe("chatIndexChangeSchema", () => {
 
   it("rejects an unknown type", () => {
     expect(
-      chatIndexChangeSchema.safeParse({ type: "removed", entries: [] })
-        .success,
+      chatIndexChangeSchema.safeParse({ type: "removed", entries: [] }).success,
     ).toBe(false);
   });
 

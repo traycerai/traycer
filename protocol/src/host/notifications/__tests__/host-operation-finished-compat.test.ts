@@ -225,12 +225,36 @@ describe("negotiated-version visibility projection", () => {
       readonly version: { major: number; minor: number };
       readonly sees: boolean;
     }> = [
-      { surface: { method: "host.notifications.list" }, version: { major: 1, minor: 0 }, sees: false },
-      { surface: { method: "host.notifications.list" }, version: { major: 2, minor: 0 }, sees: false },
-      { surface: { method: "host.notifications.list" }, version: { major: 2, minor: 1 }, sees: true },
-      { surface: { method: "host.notifications.feed.subscribe" }, version: { major: 1, minor: 0 }, sees: false },
-      { surface: { method: "host.notifications.feed.subscribe" }, version: { major: 1, minor: 1 }, sees: true },
-      { surface: { method: "host.notifications.subscribe" }, version: { major: 1, minor: 0 }, sees: false },
+      {
+        surface: { method: "host.notifications.list" },
+        version: { major: 1, minor: 0 },
+        sees: false,
+      },
+      {
+        surface: { method: "host.notifications.list" },
+        version: { major: 2, minor: 0 },
+        sees: false,
+      },
+      {
+        surface: { method: "host.notifications.list" },
+        version: { major: 2, minor: 1 },
+        sees: true,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        version: { major: 1, minor: 0 },
+        sees: false,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        version: { major: 1, minor: 1 },
+        sees: true,
+      },
+      {
+        surface: { method: "host.notifications.subscribe" },
+        version: { major: 1, minor: 0 },
+        sees: false,
+      },
     ];
     for (const { surface, version, sees } of cases) {
       const visible = visibleHostNotificationKinds(surface, version);
@@ -302,19 +326,19 @@ describe("channel-emission capability", () => {
   it("is declared by every installed stream version and closed for the rest", () => {
     const feed = { method: "host.notifications.feed.subscribe" } as const;
     const legacy = { method: "host.notifications.subscribe" } as const;
-    expect(streamCarriesChannelEmissionFrame(feed, { major: 1, minor: 0 })).toBe(
-      true,
-    );
-    expect(streamCarriesChannelEmissionFrame(feed, { major: 1, minor: 1 })).toBe(
-      true,
-    );
+    expect(
+      streamCarriesChannelEmissionFrame(feed, { major: 1, minor: 0 }),
+    ).toBe(true);
+    expect(
+      streamCarriesChannelEmissionFrame(feed, { major: 1, minor: 1 }),
+    ).toBe(true);
     expect(
       streamCarriesChannelEmissionFrame(legacy, { major: 1, minor: 0 }),
     ).toBe(true);
     // Unknown lines, and a unary method that has no frames at all.
-    expect(streamCarriesChannelEmissionFrame(feed, { major: 2, minor: 0 })).toBe(
-      false,
-    );
+    expect(
+      streamCarriesChannelEmissionFrame(feed, { major: 2, minor: 0 }),
+    ).toBe(false);
     expect(
       streamCarriesChannelEmissionFrame(legacy, { major: 1, minor: 1 }),
     ).toBe(false);
@@ -409,12 +433,60 @@ describe("three-tier presentation", () => {
     // strictly worse than the tier-2 copy the same row shows today. Every arm
     // that exists is chat-scoped and must decline, so the chain falls through.
     const armPayloads: readonly Record<string, unknown>[] = [
-      { kind: "chat", epicId: "e", chatId: "c", agentName: "a", taskTitle: "t", outcome: "completed" },
-      { kind: "epic", epicId: "e", tuiAgentId: "t", agentName: "a", taskTitle: "t", outcome: "completed" },
-      { kind: "agent_stalled", epicId: "e", chatId: "c", agentId: "a", agentName: "a", taskTitle: "t", reason: "r", title: "x", outcome: "errored" },
-      { kind: "approval", epicId: "e", chatId: "c", chatTitle: "c", taskTitle: "t", approvalId: "a" },
-      { kind: "interview", epicId: "e", chatId: "c", chatTitle: "c", taskTitle: "t", interviewBlockId: "i" },
-      { kind: "workspace_operation_failed", epicId: "e", chatId: "c", chatTitle: "c", taskTitle: "t", operation: "setup", title: "x", message: "m", outcome: "errored" },
+      {
+        kind: "chat",
+        epicId: "e",
+        chatId: "c",
+        agentName: "a",
+        taskTitle: "t",
+        outcome: "completed",
+      },
+      {
+        kind: "epic",
+        epicId: "e",
+        tuiAgentId: "t",
+        agentName: "a",
+        taskTitle: "t",
+        outcome: "completed",
+      },
+      {
+        kind: "agent_stalled",
+        epicId: "e",
+        chatId: "c",
+        agentId: "a",
+        agentName: "a",
+        taskTitle: "t",
+        reason: "r",
+        title: "x",
+        outcome: "errored",
+      },
+      {
+        kind: "approval",
+        epicId: "e",
+        chatId: "c",
+        chatTitle: "c",
+        taskTitle: "t",
+        approvalId: "a",
+      },
+      {
+        kind: "interview",
+        epicId: "e",
+        chatId: "c",
+        chatTitle: "c",
+        taskTitle: "t",
+        interviewBlockId: "i",
+      },
+      {
+        kind: "workspace_operation_failed",
+        epicId: "e",
+        chatId: "c",
+        chatTitle: "c",
+        taskTitle: "t",
+        operation: "setup",
+        title: "x",
+        message: "m",
+        outcome: "errored",
+      },
     ];
     for (const armPayload of armPayloads) {
       const known = parseKnownHostNotificationPayload(armPayload);

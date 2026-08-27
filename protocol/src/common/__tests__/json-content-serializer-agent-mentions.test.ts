@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { JsonContent } from "../registry";
-import {
-  ContextType,
-  jsonContentToMarkdown,
-} from "../json-content-serializer";
+import { ContextType, jsonContentToMarkdown } from "../json-content-serializer";
 
 /**
  * Regression tests for Agent mention serialization across both interfaces.

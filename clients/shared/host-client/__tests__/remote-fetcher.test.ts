@@ -558,7 +558,10 @@ type MatrixRow = {
   readonly connectivity: HostStatusDTO["connectivity"];
   readonly dialability: "dialable" | "not-dialable";
   readonly unavailability:
-    "offline" | "plan-restricted" | "indeterminate" | null;
+    | "offline"
+    | "plan-restricted"
+    | "indeterminate"
+    | null;
   readonly lastSeenAt: string;
   readonly why: string;
 };

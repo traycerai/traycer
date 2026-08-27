@@ -87,11 +87,13 @@ describe("compareCanonicalRowOrder", () => {
 
 describe("sortIntoCanonicalRowOrder", () => {
   it("does not mutate its input array", () => {
-    const rows: ReadonlyArray<{ readonly id: string; readonly createdAt: number }> =
-      [
-        { id: "b", createdAt: 2 },
-        { id: "a", createdAt: 1 },
-      ];
+    const rows: ReadonlyArray<{
+      readonly id: string;
+      readonly createdAt: number;
+    }> = [
+      { id: "b", createdAt: 2 },
+      { id: "a", createdAt: 1 },
+    ];
     const original = [...rows];
 
     const sorted = sortIntoCanonicalRowOrder(rows, (row) => ({
@@ -219,7 +221,11 @@ describe("eventMaterializesTranscriptRow", () => {
       type: "turn.started",
       timestamp: 1,
       message: "some message",
-      metadata: { notificationAnchor: true, sourceChatId: "x", sourceHostId: "y" },
+      metadata: {
+        notificationAnchor: true,
+        sourceChatId: "x",
+        sourceHostId: "y",
+      },
     });
 
     expect(eventMaterializesTranscriptRow(event)).toBe(false);

@@ -3418,7 +3418,12 @@ describe("ChatMessages scroll policy", () => {
       // geometry is not a reader decision and must not become last-writer-wins.
       bootstrap.unmount();
 
-      expect(restoreChatTabState(identity, messages.map((message) => message.id))).toEqual(expected);
+      expect(
+        restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        ),
+      ).toEqual(expected);
     });
 
     it(
@@ -3501,7 +3506,10 @@ describe("ChatMessages scroll policy", () => {
 
       // restoreChatTabState keeps mode, drops the stale anchor.
       expect(
-        restoreChatTabState(makeDefaultTestIdentity(scrollStateKey), messages.map((message) => message.id)),
+        restoreChatTabState(
+          makeDefaultTestIdentity(scrollStateKey),
+          messages.map((message) => message.id),
+        ),
       ).toEqual({
         mode: "free-scrolling",
         anchorMessageId: null,
@@ -3525,7 +3533,10 @@ describe("ChatMessages scroll policy", () => {
         offset: 12,
       });
       expect(
-        restoreChatTabState(makeDefaultTestIdentity(followKey), messages.map((message) => message.id)),
+        restoreChatTabState(
+          makeDefaultTestIdentity(followKey),
+          messages.map((message) => message.id),
+        ),
       ).toEqual({
         mode: "following-end",
         anchorMessageId: null,
@@ -3571,9 +3582,12 @@ describe("ChatMessages scroll policy", () => {
       // (a liveness guard that fully skips saving on close was the original
       // bug - it left reopens with either nothing, or a stale earlier
       // durable entry).
-      expect(restoreChatTabState(identity, messages.map((message) => message.id)).mode).toBe(
-        "free-scrolling",
-      );
+      expect(
+        restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        ).mode,
+      ).toBe("free-scrolling");
 
       // What the guard must still prevent: resurrecting the TAB-key entry.
       // Proof: dropping ONLY the durable entry must make the saved state
@@ -3993,7 +4007,10 @@ describe("ChatMessages scroll policy", () => {
       // "free-scrolling"`. Assert the full triple is internally coherent -
       // a real, non-null anchor with an index the offset was actually
       // captured relative to.
-      const restoredTriple = restoreChatTabState(reopenedIdentity, messages.map((message) => message.id));
+      const restoredTriple = restoreChatTabState(
+        reopenedIdentity,
+        messages.map((message) => message.id),
+      );
       expect(restoredTriple.mode).toBe("free-scrolling");
       expect(restoredTriple.anchorMessageId).not.toBeNull();
       expect(restoredTriple.anchorIndex).not.toBeNull();
@@ -4013,9 +4030,12 @@ describe("ChatMessages scroll policy", () => {
       second.unmount();
 
       // Sanity: the closed tab-key alone is not what restored us.
-      expect(restoreChatTabState(closedIdentity, messages.map((message) => message.id)).mode).toBe(
-        "free-scrolling",
-      ); // durable still answers for same chat
+      expect(
+        restoreChatTabState(
+          closedIdentity,
+          messages.map((message) => message.id),
+        ).mode,
+      ).toBe("free-scrolling"); // durable still answers for same chat
     });
 
     // Ticket 15 review (live pass S5 round 3): a small (16-row) transcript
@@ -4071,7 +4091,10 @@ describe("ChatMessages scroll policy", () => {
       // whatever row `scrolledActiveUserMessageIdRef` last held (row 0,
       // pre-scroll) combined with an offset computed against the live
       // scrollTop, clamping the reopen far from row 50.
-      const restoredTriple = restoreChatTabState(reopenedIdentity, messages.map((message) => message.id));
+      const restoredTriple = restoreChatTabState(
+        reopenedIdentity,
+        messages.map((message) => message.id),
+      );
       expect(restoredTriple.mode).toBe("free-scrolling");
       expect(restoredTriple.anchorMessageId).not.toBeNull();
       expect(restoredTriple.anchorIndex).toBeGreaterThan(RACE_TARGET_ROW - 2);
@@ -4120,7 +4143,10 @@ describe("ChatMessages scroll policy", () => {
       tileLiveness.live = false;
       first.unmount();
 
-      const restoredTriple = restoreChatTabState(reopenedIdentity, messages.map((message) => message.id));
+      const restoredTriple = restoreChatTabState(
+        reopenedIdentity,
+        messages.map((message) => message.id),
+      );
       expect(restoredTriple.mode).toBe("free-scrolling");
       expect(restoredTriple.anchorMessageId).not.toBeNull();
       expect(restoredTriple.anchorIndex).toBeGreaterThan(RACE_TARGET_ROW - 2);
@@ -4471,7 +4497,10 @@ describe("ChatMessages scroll policy", () => {
         // that is still the harness/cache-miss default following-end seed,
         // not the live 360px position currently on screen - the audit's own
         // `initialize:stale` probe finding, reproduced directly.
-        const staleRestore = restoreChatTabState(identity, messages.map((message) => message.id));
+        const staleRestore = restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        );
         expect(staleRestore.mode).toBe("following-end");
 
         // The fix: a structural-mutation action creator (drag/split-wrap/
@@ -4479,7 +4508,10 @@ describe("ChatMessages scroll policy", () => {
         // BEFORE its own `set()` - simulated here immediately before the
         // type-swap rerender that stands in for that `set()`.
         flushChatTabViewportHandoff([instanceId]);
-        const freshRestore = restoreChatTabState(identity, messages.map((message) => message.id));
+        const freshRestore = restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        );
         expect(freshRestore.mode).toBe("free-scrolling");
         expect(freshRestore.anchorMessageId).not.toBeNull();
 
@@ -4548,7 +4580,10 @@ describe("ChatMessages scroll policy", () => {
         // this into an ordinary unmount-capture check that stays green
         // either way.
         flushChatTabViewportHandoff([instanceId]);
-        const saved = restoreChatTabState(identity, messages.map((message) => message.id));
+        const saved = restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        );
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
         // The stale mirror (unserviced since before this scroll) points at
@@ -6270,7 +6305,10 @@ describe("ChatMessages scroll policy", () => {
       rerenderWith({ visible: false });
       await settleLegendList();
 
-      const persisted = restoreChatTabState(identity, messages.map((message) => message.id));
+      const persisted = restoreChatTabState(
+        identity,
+        messages.map((message) => message.id),
+      );
       expect(persisted.mode).toBe("free-scrolling");
       // With the gate stuck, the capture no-ops and the second hide republishes
       // the stale anchor-20 snapshot; a released gate persists the real move.
@@ -6522,7 +6560,10 @@ describe("ChatMessages scroll policy", () => {
       // Same clamp math remount uses: pin to the neighbor at clamped index,
       // offset resets to 0 (the substituted row's prior pixel offset is
       // meaningless for a different anchor).
-      const expectedReplay = restoreChatTabState(identity, remaining.map((message) => message.id));
+      const expectedReplay = restoreChatTabState(
+        identity,
+        remaining.map((message) => message.id),
+      );
       expect(expectedReplay).toEqual({
         mode: "free-scrolling",
         anchorMessageId: remaining[anchorIndex]?.id ?? null,

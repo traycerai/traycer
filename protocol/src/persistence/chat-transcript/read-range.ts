@@ -206,7 +206,9 @@ export function buildTranscriptRecordLookup(
   events: readonly ChatEvent[],
 ): TranscriptRecordLookup {
   return {
-    messagesById: new Map(messages.map((message) => [message.messageId, message])),
+    messagesById: new Map(
+      messages.map((message) => [message.messageId, message]),
+    ),
     eventsById: new Map(events.map((event) => [event.eventId, event])),
   };
 }

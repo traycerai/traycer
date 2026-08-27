@@ -56,7 +56,12 @@ import { githubMentionTokenReference } from "./github-mention-identity";
 export type PathKind = "file" | "folder";
 
 export type EntityMentionContextType =
-  "epic" | "chat" | "terminal-agent" | "terminal" | EpicArtifactKind | "user";
+  | "epic"
+  | "chat"
+  | "terminal-agent"
+  | "terminal"
+  | EpicArtifactKind
+  | "user";
 
 /**
  * Wire spelling, not a local one: these strings ARE `ContextType` members in

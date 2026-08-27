@@ -2,7 +2,9 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { TerminalLifecycleStatus } from "@/stores/terminals/terminal-session-store";
 
 export type TerminalConnectionOverlayState =
-  "reconnecting" | "recovering" | "lost";
+  | "reconnecting"
+  | "recovering"
+  | "lost";
 
 /**
  * Resolve which connection overlay (if any) a terminal/TUI tile should show from

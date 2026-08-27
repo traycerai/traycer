@@ -125,9 +125,9 @@ describe("released chat.subscribe lines never lose a field they shipped", () => 
       Object.keys(missingByMinor).length === 0
         ? undefined
         : "A released chat.subscribe line lost a field it shipped. Transcribe " +
-          "the frozen schema from the BASELINE, not from the minor below it - " +
-          "a dropped field is silently stripped on parse, with no error " +
-          `anywhere. Missing: ${JSON.stringify(missingByMinor, null, 2)}`,
+            "the frozen schema from the BASELINE, not from the minor below it - " +
+            "a dropped field is silently stripped on parse, with no error " +
+            `anywhere. Missing: ${JSON.stringify(missingByMinor, null, 2)}`,
     ).toEqual({});
   });
 });

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { chatEventSchema, type ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import { messageSchema, type Message } from "@traycer/protocol/persistence/epic/messages";
+import {
+  chatEventSchema,
+  type ChatEvent,
+} from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  messageSchema,
+  type Message,
+} from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   buildRowSkeleton,
@@ -38,7 +44,10 @@ function humanUserMessage(fields: {
   });
 }
 
-function a2aUserMessage(fields: { messageId: string; timestamp: number }): Message {
+function a2aUserMessage(fields: {
+  messageId: string;
+  timestamp: number;
+}): Message {
   return messageSchema.parse({
     role: "user",
     messageId: fields.messageId,
@@ -67,7 +76,11 @@ function assistantMessage(fields: {
   messageId: string;
   timestamp: number;
   text: string;
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  } | null;
 }): Message {
   return messageSchema.parse({
     role: "assistant",
@@ -100,7 +113,10 @@ function assistantMessage(fields: {
   });
 }
 
-function forkedChatEvent(fields: { eventId: string; timestamp: number }): ChatEvent {
+function forkedChatEvent(fields: {
+  eventId: string;
+  timestamp: number;
+}): ChatEvent {
   return chatEventSchema.parse({
     eventId: fields.eventId,
     type: "chat.forked",
@@ -118,7 +134,10 @@ function forkedChatEvent(fields: { eventId: string; timestamp: number }): ChatEv
   });
 }
 
-function nonMaterializingEvent(fields: { eventId: string; timestamp: number }): ChatEvent {
+function nonMaterializingEvent(fields: {
+  eventId: string;
+  timestamp: number;
+}): ChatEvent {
   return chatEventSchema.parse({
     eventId: fields.eventId,
     type: "turn.started",
@@ -138,7 +157,11 @@ function nonMaterializingEvent(fields: { eventId: string; timestamp: number }): 
 
 describe("buildRowSkeleton", () => {
   it("produces one entry per row in canonical order, interleaving messages with row-materializing events and dropping non-materializing ones", () => {
-    const human = humanUserMessage({ messageId: "m-human", timestamp: 1, text: "hi" });
+    const human = humanUserMessage({
+      messageId: "m-human",
+      timestamp: 1,
+      text: "hi",
+    });
     const a2a = a2aUserMessage({ messageId: "m-a2a", timestamp: 2 });
     const dropped = nonMaterializingEvent({ eventId: "e-drop", timestamp: 3 });
     const assistantWithUsage = assistantMessage({
@@ -190,7 +213,11 @@ describe("buildRowSkeleton", () => {
   });
 
   it("gives a human user row a preview and no sentByAgent", () => {
-    const human = humanUserMessage({ messageId: "m-1", timestamp: 1, text: "hello world" });
+    const human = humanUserMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      text: "hello world",
+    });
 
     const [entry] = buildRowSkeleton(
       {
@@ -244,7 +271,11 @@ describe("buildRowSkeleton", () => {
     );
 
     if (entry === undefined) throw new Error("expected an entry");
-    expect(entry.usage).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 30 });
+    expect(entry.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 20,
+      totalTokens: 30,
+    });
   });
 
   it("omits usage from an assistant row whose record has none", () => {
@@ -291,7 +322,11 @@ describe("buildRowSkeleton", () => {
   });
 
   it("omits preview entirely for an all-whitespace human message, rather than an empty string", () => {
-    const human = humanUserMessage({ messageId: "m-1", timestamp: 1, text: "   " });
+    const human = humanUserMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      text: "   ",
+    });
 
     const [entry] = buildRowSkeleton(
       {
@@ -330,7 +365,12 @@ describe("buildRowSkeleton", () => {
   });
 
   it("gives every entry a positive byteLength that grows with record size", () => {
-    const small = assistantMessage({ messageId: "m-1", timestamp: 1, text: "hi", usage: null });
+    const small = assistantMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      text: "hi",
+      usage: null,
+    });
     const large = assistantMessage({
       messageId: "m-2",
       timestamp: 2,
@@ -350,11 +390,17 @@ describe("buildRowSkeleton", () => {
 
     expect(smallEntry?.byteLength).toBeGreaterThan(0);
     expect(largeEntry?.byteLength).toBeGreaterThan(0);
-    expect(largeEntry?.byteLength ?? 0).toBeGreaterThan(smallEntry?.byteLength ?? 0);
+    expect(largeEntry?.byteLength ?? 0).toBeGreaterThan(
+      smallEntry?.byteLength ?? 0,
+    );
   });
 
   it("produces entries that all parse against rowSkeletonEntrySchema", () => {
-    const human = humanUserMessage({ messageId: "m-1", timestamp: 1, text: "hi" });
+    const human = humanUserMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      text: "hi",
+    });
     const a2a = a2aUserMessage({ messageId: "m-2", timestamp: 2 });
     const assistant = assistantMessage({
       messageId: "m-3",
@@ -380,9 +426,17 @@ describe("buildRowSkeleton", () => {
   });
 
   it("an event that materializes no row occupies no ordinal", () => {
-    const before = humanUserMessage({ messageId: "m-before", timestamp: 1, text: "before" });
+    const before = humanUserMessage({
+      messageId: "m-before",
+      timestamp: 1,
+      text: "before",
+    });
     const dropped = nonMaterializingEvent({ eventId: "e-drop", timestamp: 2 });
-    const after = humanUserMessage({ messageId: "m-after", timestamp: 3, text: "after" });
+    const after = humanUserMessage({
+      messageId: "m-after",
+      timestamp: 3,
+      text: "after",
+    });
 
     const entries = buildRowSkeleton(
       {

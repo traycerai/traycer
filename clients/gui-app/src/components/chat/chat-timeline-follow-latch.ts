@@ -70,7 +70,9 @@ export interface ChatTimelineFollowLatch {
 }
 
 export type ChatTimelineReaderScrollDirection =
-  "away-from-end" | "toward-end" | "indeterminate";
+  | "away-from-end"
+  | "toward-end"
+  | "indeterminate";
 
 export interface ChatTimelineReaderGestureIntent {
   readonly direction: ChatTimelineReaderScrollDirection;
@@ -109,7 +111,8 @@ export const CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS = 5;
 interface ChatTimelineFollowLatchOptions {
   readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
   readonly onReaderGesture:
-    ((intent: ChatTimelineReaderGestureIntent) => void) | undefined;
+    | ((intent: ChatTimelineReaderGestureIntent) => void)
+    | undefined;
   readonly isCorrectionSuppressed: (() => boolean) | undefined;
   readonly resolveSuppressedEndLanding: (() => boolean) | undefined;
 }

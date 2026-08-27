@@ -43,7 +43,9 @@ const DEV_VERSION_SENTINEL = "0.0.0-dev";
 function rewriteEnvironment(source, target, sourcePath) {
   const re = /(\benvironment:\s*")(?:dev|production)(")/;
   if (!re.test(source)) {
-    console.error(`${PREFIX} could not find 'environment' literal in ${sourcePath}`);
+    console.error(
+      `${PREFIX} could not find 'environment' literal in ${sourcePath}`,
+    );
     process.exit(3);
   }
   return source.replace(re, `$1${target}$2`);
@@ -52,7 +54,9 @@ function rewriteEnvironment(source, target, sourcePath) {
 function rewriteStringField(source, field, value, sourcePath) {
   const re = new RegExp(`(\\b${field}:\\s*")[^"]*(")`);
   if (!re.test(source)) {
-    console.error(`${PREFIX} could not find '${field}' literal in ${sourcePath}`);
+    console.error(
+      `${PREFIX} could not find '${field}' literal in ${sourcePath}`,
+    );
     process.exit(3);
   }
   return source.replace(re, `$1${value}$2`);
@@ -63,7 +67,9 @@ function rewriteNullableStringField(source, field, value, sourcePath) {
     `(\\b${field}:\\s*)(?:"[^"]*"|null)(\\s+as\\s+string\\s*\\|\\s*null)`,
   );
   if (!re.test(source)) {
-    console.error(`${PREFIX} could not find nullable '${field}' literal in ${sourcePath}`);
+    console.error(
+      `${PREFIX} could not find nullable '${field}' literal in ${sourcePath}`,
+    );
     process.exit(3);
   }
   const rendered = value === null ? "null" : JSON.stringify(value);
@@ -73,7 +79,9 @@ function rewriteNullableStringField(source, field, value, sourcePath) {
 function rewriteArrayField(source, field, values, sourcePath) {
   const re = new RegExp(`(\\b${field}:\\s*)\\[[^\\]]*\\]`);
   if (!re.test(source)) {
-    console.error(`${PREFIX} could not find '${field}' array literal in ${sourcePath}`);
+    console.error(
+      `${PREFIX} could not find '${field}' array literal in ${sourcePath}`,
+    );
     process.exit(3);
   }
   const rendered = values.map((v) => JSON.stringify(v)).join(", ");
@@ -104,7 +112,9 @@ function applyTarget(spec, target, version) {
   for (const [field, byEnv] of Object.entries(spec.stringFields ?? {})) {
     source = rewriteStringField(source, field, byEnv[target], spec.sourcePath);
   }
-  for (const [field, byEnv] of Object.entries(spec.nullableStringFields ?? {})) {
+  for (const [field, byEnv] of Object.entries(
+    spec.nullableStringFields ?? {},
+  )) {
     source = rewriteNullableStringField(
       source,
       field,
@@ -128,7 +138,8 @@ function parseArgs(argv) {
   let emptyVersion = false;
   for (const arg of argv) {
     if (arg === "--restore") restore = true;
-    else if (arg.startsWith("--target=")) target = arg.slice("--target=".length);
+    else if (arg.startsWith("--target="))
+      target = arg.slice("--target=".length);
     else if (arg.startsWith("--version=")) {
       version = arg.slice("--version=".length);
       emptyVersion = version.length === 0;

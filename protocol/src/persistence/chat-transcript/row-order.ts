@@ -89,9 +89,7 @@ export function sortIntoCanonicalRowOrder<T>(
   rows: readonly T[],
   keyOf: (row: T) => CanonicalRowOrderKey,
 ): readonly T[] {
-  return [...rows].sort((a, b) =>
-    compareCanonicalRowOrder(keyOf(a), keyOf(b)),
-  );
+  return [...rows].sort((a, b) => compareCanonicalRowOrder(keyOf(a), keyOf(b)));
 }
 
 /**

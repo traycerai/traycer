@@ -17,7 +17,8 @@ import { foldGithubIdentitySegment } from "@traycer/protocol/common/github-menti
  */
 
 export type GithubMentionFilter =
-  GithubPullRequestMentionFilter | GithubIssueMentionFilter;
+  | GithubPullRequestMentionFilter
+  | GithubIssueMentionFilter;
 
 const EMPTY_ROWS: ReadonlyArray<GithubMentionRow> = [];
 

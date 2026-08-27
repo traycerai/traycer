@@ -1,26 +1,82 @@
 {
   "name": "traycer",
   "version": "0.0.0",
-  "scripts": {
-    "dev-desktop": "bun scripts/dev-desktop.js",
-    "compile": "nx run-many --target=compile --all --parallel=${NX_COMPILE_PARALLEL:-3} --tui=false",
-    "build": "nx run-many --target=build --all --exclude=@traycer-clients/desktop --parallel=${NX_COMPILE_PARALLEL:-3} --tui=false",
-    "format": "nx run-many --target=format --all --tui=false",
-    "lint": "nx run-many --target=lint --all --tui=false",
-    "test": "nx run-many --target=test --all --tui=false",
-    "test:affected": "nx affected --target=test --head=HEAD --tui=false",
-    "test:project": "nx run-many --target=test --tui=false"
-  },
-  "packageManager": "bun@1.3.12",
-  "engines": {
-    "node": ">=24.0.0",
-    "bun": "1.3.12"
-  },
   "private": true,
   "workspaces": [
     "protocol",
     "clients/*"
   ],
+  "scripts": {
+    "dev-desktop": "bun scripts/dev-desktop.js",
+    "compile": "nx run-many --target=compile --all --parallel=${NX_COMPILE_PARALLEL:-3} --tui=false",
+    "build": "nx run-many --target=build --all --exclude=@traycer-clients/desktop --parallel=${NX_COMPILE_PARALLEL:-3} --tui=false",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "nx run-many --target=lint --all --tui=false",
+    "test": "nx run-many --target=test --all --tui=false",
+    "test:affected": "nx affected --target=test --head=HEAD --tui=false",
+    "test:project": "nx run-many --target=test --tui=false"
+  },
+  "dependencies": {
+    "@tanstack/react-form": "^1.33.5",
+    "@tiptap/extension-image": "3.30.1",
+    "inversify": "^8.2.3",
+    "jsdom": "^29.1.1",
+    "typescript": "^6.0.3",
+    "vaul": "^1.1.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@tanstack/eslint-plugin-query": "catalog:",
+    "@tanstack/eslint-plugin-router": "catalog:",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "concurrently": "^10.0.5",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-jsx-a11y": "catalog:",
+    "eslint-plugin-oxlint": "1.80.0",
+    "eslint-plugin-react": "catalog:",
+    "eslint-plugin-react-hooks": "catalog:",
+    "eslint-plugin-react-refresh": "catalog:",
+    "globals": "catalog:",
+    "nx": "^22.7.8",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "postject": "^1.0.0-alpha.6",
+    "typescript-eslint": "catalog:",
+    "vitest": "^4.1.11",
+    "wait-on": "^9.1.0"
+  },
+  "overrides": {
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@hono/node-server": "^2.0.4",
+    "@radix-ui/react-dialog": "1.1.22",
+    "@radix-ui/react-dismissable-layer": "1.1.18",
+    "axios": "^1.17.0",
+    "diff": "^9.0.0",
+    "fast-uri": "^4.0.0",
+    "follow-redirects": "^1.16.0",
+    "hono": "^4.12.25",
+    "ip-address": "^10.2.0",
+    "lodash-es": "^4.18.1",
+    "prosemirror-model": "1.25.11",
+    "qs": "^6.15.2",
+    "tar": "^7.5.22",
+    "tmp": "^0.2.7",
+    "undici": "^7.29.0",
+    "uuid": "^14.0.2",
+    "yaml": "^2.9.0"
+  },
+  "engines": {
+    "bun": "1.3.12",
+    "node": ">=24.0.0"
+  },
+  "packageManager": "bun@1.3.12",
   "catalog": {
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.12.4",
@@ -168,63 +224,12 @@
     "zod": "^4.4.3",
     "zustand": "^5.0.15"
   },
-  "_comment": "TipTap v3 is still optimizing React 19 support. Core functionality should work, but some UI components may have compatibility issues. Monitor for updates to TipTap packages that improve React 19 support.",
-  "devDependencies": {
-    "@eslint/js": "catalog:",
-    "@tanstack/eslint-plugin-query": "catalog:",
-    "@tanstack/eslint-plugin-router": "catalog:",
-    "@types/jsonwebtoken": "^9.0.10",
-    "@typescript-eslint/eslint-plugin": "catalog:",
-    "@typescript-eslint/parser": "catalog:",
-    "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "concurrently": "^10.0.5",
-    "esbuild": "catalog:",
-    "eslint": "catalog:",
-    "eslint-plugin-jsx-a11y": "catalog:",
-    "eslint-plugin-react": "catalog:",
-    "eslint-plugin-react-hooks": "catalog:",
-    "eslint-plugin-react-refresh": "catalog:",
-    "globals": "catalog:",
-    "nx": "^22.7.8",
-    "postject": "^1.0.0-alpha.6",
-    "typescript-eslint": "catalog:",
-    "vitest": "^4.1.11",
-    "wait-on": "^9.1.0"
-  },
-  "overrides": {
-    "@radix-ui/react-dialog": "1.1.22",
-    "@radix-ui/react-dismissable-layer": "1.1.18",
-    "@codemirror/state": "^6.7.1",
-    "@codemirror/language": "^6.12.4",
-    "diff": "^9.0.0",
-    "tar": "^7.5.22",
-    "lodash-es": "^4.18.1",
-    "qs": "^6.15.2",
-    "@hono/node-server": "^2.0.4",
-    "hono": "^4.12.25",
-    "fast-uri": "^4.0.0",
-    "follow-redirects": "^1.16.0",
-    "prosemirror-model": "1.25.11",
-    "yaml": "^2.9.0",
-    "ip-address": "^10.2.0",
-    "axios": "^1.17.0",
-    "tmp": "^0.2.7",
-    "undici": "^7.29.0",
-    "uuid": "^14.0.2"
+  "patchedDependencies": {
+    "@legendapp/list@3.3.4": "patches/@legendapp%2Flist@3.3.4.patch",
+    "@pierre/diffs@1.3.1": "patches/@pierre%2Fdiffs@1.3.1.patch"
   },
   "trustedDependencies": [
     "electron"
   ],
-  "dependencies": {
-    "@tanstack/react-form": "^1.33.5",
-    "@tiptap/extension-image": "3.30.1",
-    "inversify": "^8.2.3",
-    "jsdom": "^29.1.1",
-    "typescript": "^6.0.3",
-    "vaul": "^1.1.2"
-  },
-  "patchedDependencies": {
-    "@legendapp/list@3.3.4": "patches/@legendapp%2Flist@3.3.4.patch",
-    "@pierre/diffs@1.3.1": "patches/@pierre%2Fdiffs@1.3.1.patch"
-  }
+  "_comment": "TipTap v3 is still optimizing React 19 support. Core functionality should work, but some UI components may have compatibility issues. Monitor for updates to TipTap packages that improve React 19 support."
 }

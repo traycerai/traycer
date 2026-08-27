@@ -189,10 +189,12 @@ export interface UnsupportedEpicTerminalRef extends EpicTerminalRefBase {
 }
 
 export type SupportedEpicTerminalRef =
-  LegacyEpicTerminalRef | HostEpicTerminalRef;
+  | LegacyEpicTerminalRef
+  | HostEpicTerminalRef;
 
 export type EpicTerminalRef =
-  SupportedEpicTerminalRef | UnsupportedEpicTerminalRef;
+  | SupportedEpicTerminalRef
+  | UnsupportedEpicTerminalRef;
 
 export function isHostEpicTerminalRef(
   ref: EpicTerminalRef,
@@ -405,7 +407,8 @@ export interface SnapshotHashDiffTilePayload {
 }
 
 export type GitDiffTilePayload =
-  GitDiffFileTilePayload | GitDiffBundleTilePayload;
+  | GitDiffFileTilePayload
+  | GitDiffBundleTilePayload;
 
 export type SnapshotDiffTilePayload =
   | SnapshotSegmentDiffTilePayload

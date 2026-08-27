@@ -122,7 +122,8 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * own JSON-array discipline for the identical reason).
  */
 type GitRevisionSideKey =
-  readonly ["oid", string] | readonly ["stats", string, string, string];
+  | readonly ["oid", string]
+  | readonly ["stats", string, string, string];
 
 function gitRevisionSideKey(
   oid: string | null,
