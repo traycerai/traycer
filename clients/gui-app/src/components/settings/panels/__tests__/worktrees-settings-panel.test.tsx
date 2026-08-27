@@ -2097,14 +2097,14 @@ describe("WorktreesList delete flow", () => {
       streamMock.callbacks?.onFailed("Worktree is in use", BUSY_HOLDERS);
     });
     expect(screen.queryByTestId("worktree-delete-error")).toBeNull();
-    screen.getByTestId("teardown-force-delete-dialog");
+    screen.getByRole("dialog", { name: "Delete worktree feat-clean?" });
     expect(
       screen.getByTestId("teardown-disclosure-working").textContent,
     ).toContain("Claude Code agent polite-ocelot is working");
     expect(screen.getByTestId("teardown-disclosure").textContent).not.toMatch(
       /\bbusy\b/i,
     );
-    fireEvent.click(screen.getByTestId("teardown-force-delete-confirm"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
     expect(streamMock.legacyPaths).toEqual(["/wt/clean"]);
     expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
   });
@@ -2118,7 +2118,9 @@ describe("WorktreesList delete flow", () => {
         undefined,
       );
     });
-    expect(screen.queryByTestId("teardown-force-delete-dialog")).toBeNull();
+    expect(
+      screen.queryByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeNull();
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
       "in use by an active agent session",
     );
@@ -2131,8 +2133,10 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.callbacks?.onFailed("Worktree is in use", BUSY_HOLDERS);
     });
-    fireEvent.click(screen.getByTestId("teardown-force-delete-cancel"));
-    expect(screen.queryByTestId("teardown-force-delete-dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeNull();
     expect(streamMock.legacyPaths).toEqual([]);
     expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBeUndefined();
     screen.getByRole("button", { name: "Delete worktree feat-clean" });
@@ -2745,6 +2749,32 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(selectAll);
     expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
     expect(selectAll.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("does not mark select-all checked when only an in-use row is selected", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/a", "feat-a"),
+        entry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        }),
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-busy" }),
+    );
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen.getByTestId("worktrees-select-all").getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
   it("prunes a dropped row from the selection bookkeeping after confirm", () => {

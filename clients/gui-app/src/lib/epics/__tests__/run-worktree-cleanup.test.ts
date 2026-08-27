@@ -488,4 +488,25 @@ describe("runWorktreeCleanup stopOwners paths", () => {
       uncertain: [],
     });
   });
+
+  it("reports a drop after a forced deleteByPath reached the host as unconfirmed", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+    });
+
+    expect(commandMock.commands).toHaveLength(0);
+    expect(legacyMock.paths).toEqual(["/wt/busy"]);
+    legacyCallbacksFor("/wt/busy").onConnectionStatus("open", null);
+    legacyCallbacksFor("/wt/busy").onConnectionStatus("reconnecting", null);
+
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: ["/wt/busy"],
+    });
+    expect(legacyMock.closeCount).toBe(1);
+  });
 });

@@ -1219,6 +1219,13 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
+  // Select-all's checked state is the intersection with its own eligible
+  // set, not the full selection: in-use rows are deliberately selectable
+  // but never select-all-eligible, so counting them would mark the toggle
+  // checked while idle rows stay unselected.
+  const selectAllSelectedCount = selectAllWorktreePaths.filter((path) =>
+    selectedPaths.has(path),
+  ).length;
   // Live-measured height of the floating selection action bar (see
   // `WorktreeSelectionActionBar` / `WORKTREE_ACTION_BAR_GAP_PX`), so the scroll
   // viewport's bottom clearance tracks the bar's REAL rendered height - including
@@ -1586,7 +1593,7 @@ export function WorktreesList(props: {
               <SelectAllToggle
                 accessibleLabel="Select all visible worktrees"
                 selectableCount={selectAllWorktreePaths.length}
-                selectedCount={selectedCount}
+                selectedCount={selectAllSelectedCount}
                 disabled={false}
                 testId="worktrees-select-all"
                 onToggle={toggleSelectAllVisible}

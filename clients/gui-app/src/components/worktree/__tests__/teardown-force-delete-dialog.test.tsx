@@ -41,8 +41,7 @@ describe("TeardownForceDeleteDialog", () => {
         onDismiss={vi.fn()}
       />,
     );
-    screen.getByTestId("teardown-force-delete-dialog");
-    screen.getByText("Delete worktree tidy-seal?");
+    screen.getByRole("dialog", { name: "Delete worktree tidy-seal?" });
     screen.getByText(
       "It's still held by the following. Deleting will stop them first.",
     );
@@ -53,7 +52,7 @@ describe("TeardownForceDeleteDialog", () => {
       screen.getByTestId("teardown-disclosure-idle").textContent,
     ).toContain("bun run dev");
     expect(screen.queryByText(/busy/i)).toBeNull();
-    screen.getByTestId("teardown-force-delete-confirm");
+    screen.getByRole("button", { name: "Stop all & delete" });
   });
 
   it("renders nothing in the shared disclosure for an empty holder list", () => {
@@ -67,7 +66,7 @@ describe("TeardownForceDeleteDialog", () => {
       />,
     );
     expect(screen.queryByTestId("teardown-disclosure")).toBeNull();
-    screen.getByTestId("teardown-force-delete-dialog");
+    screen.getByRole("dialog", { name: "Delete worktree tidy-seal?" });
   });
 
   it("confirms and dismisses without forking the holder list", () => {
@@ -82,9 +81,9 @@ describe("TeardownForceDeleteDialog", () => {
         onDismiss={onDismiss}
       />,
     );
-    fireEvent.click(screen.getByTestId("teardown-force-delete-confirm"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByTestId("teardown-force-delete-cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
