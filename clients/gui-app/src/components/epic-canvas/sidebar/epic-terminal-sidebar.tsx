@@ -349,11 +349,16 @@ function TerminalRow(props: TerminalRowProps) {
   };
 
   const commitRename = () => {
-    actions.submitRename(renameValue, () => setIsRenaming(false));
+    // Settle the editor on COMMIT, not on the ack - the same contract as the
+    // two epic sidebar trees and `useInlineRename`. The optimistic cache patch
+    // is the feedback. Waiting to be called back held this editor open for the
+    // whole round trip, and open FOREVER on a failure or a refusal, neither of
+    // which called anything back.
+    setIsRenaming(false);
+    actions.submitRename(renameValue);
   };
 
   const handleRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (actions.renamePending) return;
     if (event.key === "Enter") {
       event.preventDefault();
       commitRename();
@@ -401,7 +406,6 @@ function TerminalRow(props: TerminalRowProps) {
                   ref={renameInputRef}
                   data-testid={`epic-terminal-sidebar-rename-input-${session.sessionId}`}
                   value={renameValue}
-                  disabled={actions.renamePending}
                   onChange={(event) => setRenameValue(event.target.value)}
                   onBlur={commitRename}
                   onKeyDown={handleRenameKeyDown}

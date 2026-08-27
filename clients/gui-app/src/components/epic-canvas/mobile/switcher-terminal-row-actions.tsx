@@ -93,9 +93,13 @@ export function SwitcherTerminalRowActions(props: {
         title="Rename terminal"
         initialValue={actions.label}
         nodeId={session.sessionId}
-        onSubmit={(value) =>
-          actions.submitRename(value, () => setRenameOpen(false))
-        }
+        // Close on COMMIT, like the chat/artifact row above and the two epic
+        // sidebar trees. Waiting on the mutation kept this dialog up for the
+        // whole round trip, and up forever when the rename failed.
+        onSubmit={(value) => {
+          setRenameOpen(false);
+          actions.submitRename(value);
+        }}
       />
     </>
   );

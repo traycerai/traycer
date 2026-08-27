@@ -70,7 +70,6 @@ export interface EpicTerminalRowAuthority {
     hostId: string,
     terminalId: string,
     manualTitle: string,
-    onSuccess: () => void,
   ) => void;
 }
 
@@ -194,14 +193,14 @@ export function useEpicTerminalsPanel(args: {
   );
 
   const onDurableRename = useCallback(
-    (
-      hostId: string,
-      terminalId: string,
-      manualTitle: string,
-      onSuccess: () => void,
-    ) => {
+    (hostId: string, terminalId: string, manualTitle: string) => {
       if (!closeCanMutate || renameMutation.isPending) return;
-      renameMutation.mutate({ hostId, terminalId, manualTitle }, { onSuccess });
+      // Deliberately no `mutate`-scoped `onSuccess`: the caller's editor is
+      // already closed by the time this runs, and a per-call callback is the
+      // wrong thing to hang an editor on anyway - TanStack drops it when the
+      // observer unmounts or is superseded, so a rename that SUCCEEDED could
+      // leave its editor open. The mutation's own handlers own cache and toast.
+      renameMutation.mutate({ hostId, terminalId, manualTitle });
     },
     [closeCanMutate, renameMutation],
   );
@@ -348,13 +347,16 @@ export interface EpicTerminalRowActions {
   /** What the session is called on screen, from the one shared definition. */
   readonly label: string;
   readonly canRename: boolean;
-  readonly renamePending: boolean;
   /**
-   * Commits a rename through whichever authority owns this row. A blank or
-   * unchanged title is a no-op that still reports done, so a surface can close
-   * its editor on the same call either way.
+   * Commits a rename through whichever authority owns this row.
+   *
+   * Fire-and-forget by contract: the caller closes its editor on the SAME
+   * gesture rather than waiting to be called back, so a blank, unchanged or
+   * refused title needs no signal in return. Both rename paths patch their
+   * cached `terminal.list` row optimistically (rolling back on error), so the
+   * new title is on screen before the host answers.
    */
-  readonly submitRename: (next: string, onDone: () => void) => void;
+  readonly submitRename: (next: string) => void;
   /**
    * Not a pending flag: it also encodes "not permitted" (unsupported future
    * ref, unknown capability, no mutation authority).
@@ -418,24 +420,26 @@ export function useEpicTerminalRowActions(args: {
   const canRename = renameMode !== "disabled" && !renamePending;
   const label = terminalSessionLabel(session);
 
-  const submitRename = (next: string, onDone: () => void): void => {
+  const submitRename = (next: string): void => {
+    // `canRename` folds in `renamePending`, and that is the ONE gate: an editor
+    // can only be opened while it is true, and every surface closes on commit,
+    // so no editor outlives the pending transition and this branch is not
+    // reachable from the UI. It stays as the boundary check for a non-UI
+    // caller. Note the asymmetry with the two epic sidebar trees, which DID
+    // drop their pending guard: those chain renames through the overlay
+    // store's stamp/tombstone, whereas both terminal paths share one mutation
+    // observer that cannot carry two renames at once.
     if (!canRename) return;
     const trimmed = next.trim();
-    if (trimmed.length === 0 || trimmed === label) {
-      onDone();
-      return;
-    }
+    if (trimmed.length === 0 || trimmed === label) return;
     // The mutation optimistically patches the cached `terminal.list` rows,
     // so this row AND any open canvas tab for the session update before the
     // host round-trip (with rollback on error).
     if (renameMode === "capable") {
-      authority.onDurableRename(hostId, session.sessionId, trimmed, onDone);
+      authority.onDurableRename(hostId, session.sessionId, trimmed);
       return;
     }
-    legacyRename.mutate(
-      { sessionId: session.sessionId, title: trimmed },
-      { onSuccess: onDone },
-    );
+    legacyRename.mutate({ sessionId: session.sessionId, title: trimmed });
   };
 
   // "Close" terminates the PTY AND closes its open canvas tab. Killing alone
@@ -478,7 +482,6 @@ export function useEpicTerminalRowActions(args: {
   return {
     label,
     canRename,
-    renamePending,
     submitRename,
     closeDisabled:
       hasUnsupportedFutureRef ||

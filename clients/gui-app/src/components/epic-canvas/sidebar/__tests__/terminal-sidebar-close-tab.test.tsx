@@ -17,9 +17,6 @@ const SESSION_ID = "term-1";
 const TAB_ID = "tab-1";
 
 const killMutate = vi.fn();
-interface DurableRenameOptions {
-  readonly onSuccess: () => void;
-}
 const durableCloseMutateAsync =
   vi.fn<
     (request: {
@@ -27,16 +24,17 @@ const durableCloseMutateAsync =
       readonly terminalId: string;
     }) => Promise<void>
   >();
-const durableRenameMutate = vi.fn<
-  (
-    request: {
+// Never invokes any settle callback - and no longer takes one. `submitRename`
+// is fire-and-forget: the editor closes on the commit gesture, so a rename that
+// stays on the wire for the whole test is exactly the state under assertion.
+const durableRenameMutate =
+  vi.fn<
+    (request: {
       readonly hostId: string;
       readonly terminalId: string;
       readonly manualTitle: string;
-    },
-    options: DurableRenameOptions,
-  ) => void
->();
+    }) => void
+  >();
 const legacyRenameMutate = vi.fn();
 const durableAuthority = vi.hoisted<{
   capability: "unknown" | "legacy" | "capable";
@@ -713,6 +711,78 @@ describe("terminal sidebar Close", () => {
       manualTitle: "Durable title",
     });
     expect(legacyRenameMutate).not.toHaveBeenCalled();
+  });
+
+  // --- rename settles the editor on COMMIT, not on the ack -----------------
+
+  it.each([
+    {
+      name: "durable",
+      capability: "capable" as const,
+      canMutate: true,
+      includesSession: true,
+      mutateSpy: () => durableRenameMutate,
+    },
+    {
+      name: "legacy",
+      capability: "legacy" as const,
+      canMutate: false,
+      includesSession: false,
+      mutateSpy: () => legacyRenameMutate,
+    },
+  ])(
+    "closes the $name rename editor on commit while the rename is still in flight",
+    ({ capability, canMutate, includesSession, mutateSpy }) => {
+      durableAuthority.capability = capability;
+      durableAuthority.canMutate = canMutate;
+      durableAuthority.collectionIncludesSession = includesSession;
+      const { getByTestId, queryByTestId } = render(
+        wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+      );
+
+      fireEvent.doubleClick(
+        getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+      );
+      const input = getByTestId(
+        `epic-terminal-sidebar-rename-input-${SESSION_ID}`,
+      );
+      fireEvent.change(input, { target: { value: "Committed title" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      // Neither rename mock ever calls a settle callback, so the request is
+      // still outstanding here. Both paths used to close only from a
+      // `mutate`-scoped `onSuccess`, which meant this editor stayed mounted for
+      // the whole round trip - and, because no arm called back on rejection,
+      // stayed mounted indefinitely after a failed rename.
+      expect(mutateSpy()).toHaveBeenCalledTimes(1);
+      expect(
+        queryByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
+      ).toBeNull();
+    },
+  );
+
+  it("keeps a terminal rename editor from opening while one is pending", () => {
+    // The counterpart to closing on commit: `canRename` folds in the pending
+    // flag, so the editor cannot be OPENED mid-flight. That is what makes
+    // `submitRename`'s own `!canRename` refusal unreachable from the UI -
+    // without it, closing on commit would silently drop the second rename,
+    // since both paths share one mutation observer.
+    durableAuthority.capability = "capable";
+    durableAuthority.canMutate = true;
+    durableAuthority.collectionIncludesSession = true;
+    durableAuthority.renamePending = true;
+    const { getByTestId, queryByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    fireEvent.doubleClick(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    );
+
+    expect(
+      queryByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
+    ).toBeNull();
+    expect(durableRenameMutate).not.toHaveBeenCalled();
   });
 
   it("disables sidebar rename for a capable host compatibility row while canMutate is false", () => {
