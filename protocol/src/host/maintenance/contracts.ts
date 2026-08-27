@@ -8,6 +8,7 @@ import {
   hostDoctorResponseSchema,
   hostGetInstallationInfoRequestSchema,
   hostGetInstallationInfoResponseSchema,
+  hostGetInstallationInfoResponseV11Schema,
   hostServiceDeregisterRequestSchema,
   hostServiceDeregisterResponseSchema,
   hostServiceRegisterRequestSchema,
@@ -157,6 +158,54 @@ export const hostGetInstallationInfoV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostGetInstallationInfoRequestSchema,
   responseSchema: hostGetInstallationInfoResponseSchema,
+});
+
+/**
+ * `@1.1` — the same records, additionally attesting the extracted executable
+ * with `executableSha256`.
+ *
+ * v1.2.0 froze `@1.0` before that field existed, so serving it there is a
+ * host→client divergence at a released version. A MINOR is the right shape:
+ * the field is additive, host→client, and absent-tolerant on every consumer
+ * (old hosts never sent it, and both record schemas normalize a missing value
+ * to `null`). A major would demand downgrade bridges for a case the fleet
+ * already handles.
+ */
+export const hostGetInstallationInfoV11 = defineRpcContract({
+  method: "host.getInstallationInfo",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostGetInstallationInfoRequestSchema,
+  responseSchema: hostGetInstallationInfoResponseV11Schema,
+});
+
+/**
+ * A `@1.0` peer never reported the attestation, so the upgrade fills `null` —
+ * the same "did not report" convention `host.update.install`'s upgrade uses,
+ * and for the same reason: an upgrade must not put an affirmative claim in an
+ * old peer's mouth. `null` is already the value both record readers produce for
+ * a legacy record with no attestation, so no consumer sees a novel shape.
+ */
+export const hostGetInstallationInfoUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostGetInstallationInfoV10,
+  typeof hostGetInstallationInfoV11
+>({
+  from: hostGetInstallationInfoV10.schemaVersion,
+  to: hostGetInstallationInfoV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    response.status === "managed"
+      ? {
+          ...response,
+          installRecord: {
+            ...response.installRecord,
+            executableSha256: null,
+          },
+          stagedRecord:
+            response.stagedRecord === null
+              ? null
+              : { ...response.stagedRecord, executableSha256: null },
+        }
+      : response,
 });
 
 /** Reads the OS service registration + run state for this host's environment. */

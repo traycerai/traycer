@@ -1,6 +1,8 @@
 import {
   hostInstallRecordSchema,
+  hostInstallRecordWireV10Schema,
   hostStagedRecordSchema,
+  hostStagedRecordWireV10Schema,
   storedCliInstallManifestSchema,
   // The browser-safe half deliberately: this module is on the RPC registry the
   // renderer imports, and `./installation` also carries the Node-only readers.
@@ -415,7 +417,47 @@ export type HostGetInstallationInfoRequest = z.infer<
   typeof hostGetInstallationInfoRequestSchema
 >;
 
+/**
+ * `@1.0` — the FROZEN released line, and it must stay byte-shaped as shipped.
+ *
+ * v1.2.0 released this method before `executableSha256` existed on either
+ * record, so a released peer's payload never carries that key. T3 then added it
+ * to the on-disk records, which is additive and harmless on disk but is a
+ * host→client divergence at a negotiated `1.0` — the exact finding
+ * `released-baseline-compat` raises.
+ *
+ * The `@1.0` slot is therefore served from the frozen WIRE projections. It is
+ * not a filter applied after building a richer response: the dispatcher parses
+ * against the CALLER's schema, so declaring the field absent here is what makes
+ * it structurally unreachable for that peer.
+ */
 export const hostGetInstallationInfoResponseSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("unmanaged") }),
+    z.object({
+      status: z.literal("managed"),
+      installRecord: hostInstallRecordWireV10Schema,
+      stagedRecord: hostStagedRecordWireV10Schema.nullable(),
+      cliManifest: storedCliInstallManifestSchema.nullable(),
+    }),
+  ],
+);
+export type HostGetInstallationInfoResponse = z.infer<
+  typeof hostGetInstallationInfoResponseSchema
+>;
+
+/**
+ * `@1.1` — the same call, additionally carrying `executableSha256` on both
+ * records.
+ *
+ * A MINOR, not a major: the growth is additive, host→client, and every consumer
+ * already tolerates absence because old hosts never sent it (the record schemas
+ * normalize a missing value to `null` by construction). A major would force
+ * downgrade bridges for a field whose absent case is already the shipped
+ * reality.
+ */
+export const hostGetInstallationInfoResponseV11Schema = z.discriminatedUnion(
   "status",
   [
     z.object({ status: z.literal("unmanaged") }),
@@ -427,8 +469,8 @@ export const hostGetInstallationInfoResponseSchema = z.discriminatedUnion(
     }),
   ],
 );
-export type HostGetInstallationInfoResponse = z.infer<
-  typeof hostGetInstallationInfoResponseSchema
+export type HostGetInstallationInfoResponseV11 = z.infer<
+  typeof hostGetInstallationInfoResponseV11Schema
 >;
 
 /**

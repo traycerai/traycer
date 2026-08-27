@@ -98,30 +98,69 @@ export function isValidHostStagedVersion(value: string): boolean {
   );
 }
 
+// The pre-transform object, split out so the frozen `@1.0` WIRE projection can
+// `.omit()` a field from it. `.omit()` does not exist on the transformed schema
+// (a `ZodEffects`), and reconstructing the field list by hand would be a second
+// copy of this record free to drift from the first.
+const hostStagedRecordObjectSchema = z.object({
+  schemaVersion: z.literal(HOST_STAGED_RECORD_SCHEMA_VERSION),
+  // Absent is the pre-fingerprint legacy form; explicit null is corrupt.
+  stageId: z.string().min(1).optional(),
+  version: z.string().refine(isValidHostStagedVersion, "must be valid SemVer"),
+  runtimeVersion: z.string().nullable(),
+  archiveSha256: z.string().nullable(),
+  sizeBytes: z.number().finite(),
+  source: hostInstallSourceSchema,
+  signatureKeyId: z.string(),
+  signatureVerifiedAt: z.string(),
+  executablePath: z.string().min(1),
+  platform: hostInstallPlatformSchema,
+  arch: hostInstallArchSchema,
+  // Mirrors the install-side attestation. A stage without it can still be
+  // cleaned/replaced by legacy reconciliation but is never recovery proof.
+  executableSha256: tolerantOptionalSha256Schema,
+});
+
 /** A verified staged host tree, ready for the CLI to apply. */
-export const hostStagedRecordSchema = z
-  .object({
-    schemaVersion: z.literal(HOST_STAGED_RECORD_SCHEMA_VERSION),
-    // Absent is the pre-fingerprint legacy form; explicit null is corrupt.
-    stageId: z.string().min(1).optional(),
-    version: z
-      .string()
-      .refine(isValidHostStagedVersion, "must be valid SemVer"),
-    runtimeVersion: z.string().nullable(),
-    archiveSha256: z.string().nullable(),
-    sizeBytes: z.number().finite(),
-    source: hostInstallSourceSchema,
-    signatureKeyId: z.string(),
-    signatureVerifiedAt: z.string(),
-    executablePath: z.string().min(1),
-    platform: hostInstallPlatformSchema,
-    arch: hostInstallArchSchema,
-    // Mirrors the install-side attestation. A stage without it can still be
-    // cleaned/replaced by legacy reconciliation but is never recovery proof.
-    executableSha256: tolerantOptionalSha256Schema,
-  })
-  .transform((record) => ({ ...record, stageId: record.stageId ?? null }));
+export const hostStagedRecordSchema = hostStagedRecordObjectSchema.transform(
+  (record) => ({ ...record, stageId: record.stageId ?? null }),
+);
 export type HostStagedRecord = z.infer<typeof hostStagedRecordSchema>;
+
+// ---- Frozen `@1.0` WIRE projections -----------------------------------------
+//
+// `host.getInstallationInfo@1.0` shipped in v1.2.0 BEFORE `executableSha256`
+// existed, so the released line's payload never carries that key. These two
+// schemas are that released shape, and they exist so the `@1.0` slot can be
+// served from its own contract rather than by filtering the richer record after
+// the fact.
+//
+// Why omission is the whole mechanism: the dispatcher parses a resolver's
+// canonical result against the CALLER's schema and ships the parsed value, and
+// a non-strict `z.object` DROPS keys it does not declare. So a `@1.0` peer
+// structurally cannot receive `executableSha256` — the guarantee comes from the
+// negotiated contract, not from a post-hoc filter someone must remember to
+// apply. Same mechanism the `host.update.install@1.0` gate already relies on.
+//
+// These are WIRE-only. The on-disk readers keep `executableSha256`: T3's
+// crash-recovery attestation depends on it, and narrowing persistence to match
+// an old wire version would delete the field's actual purpose.
+
+/** `installRecord` exactly as the released `@1.0` line carries it. */
+export const hostInstallRecordWireV10Schema = hostInstallRecordSchema.omit({
+  executableSha256: true,
+});
+export type HostInstallRecordWireV10 = z.infer<
+  typeof hostInstallRecordWireV10Schema
+>;
+
+/** `stagedRecord` exactly as the released `@1.0` line carries it. */
+export const hostStagedRecordWireV10Schema = hostStagedRecordObjectSchema
+  .omit({ executableSha256: true })
+  .transform((record) => ({ ...record, stageId: record.stageId ?? null }));
+export type HostStagedRecordWireV10 = z.infer<
+  typeof hostStagedRecordWireV10Schema
+>;
 
 export const cliInstallSourceSchema = z.enum([
   "desktop",

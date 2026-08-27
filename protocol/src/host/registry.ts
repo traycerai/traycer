@@ -260,7 +260,9 @@ import {
 } from "@traycer/protocol/host/identity/contracts";
 import {
   hostDoctorV10,
+  hostGetInstallationInfoUpgradeV10ToV11,
   hostGetInstallationInfoV10,
+  hostGetInstallationInfoV11,
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
@@ -4272,11 +4274,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.getInstallationInfo": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetInstallationInfoV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostGetInstallationInfoV11,
+          upgradeFromPreviousVersion: hostGetInstallationInfoUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
