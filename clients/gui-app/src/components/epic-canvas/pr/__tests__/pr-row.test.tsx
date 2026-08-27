@@ -25,11 +25,21 @@ import {
   LIGHT_THEME_SURFACES,
 } from "../../../../../__tests__/contrast";
 
-// The owner badges read the per-Epic Y.doc projection and the tile-navigation
-// stack, which need a live `OpenEpicStoreHandle` this presentational test has
-// no use for. Stubbed to a minimal badge per owner so the row's OWN wiring
-// (which owners it passes down, and to which epic) stays observable.
-vi.mock("@/components/epic-canvas/pr/pr-owner-label", () => ({
+// The owner badges read the per-Epic projection (chat/terminal-agent titles off
+// `OpenEpicState.chats` - the host's record plane unioned with the doc's
+// not-yet-swept residue) and the tile-navigation stack, both of which need a
+// live `OpenEpicStoreHandle` this presentational test has no use for. Stubbed
+// to a minimal badge per owner so the row's OWN wiring (which owners it passes
+// down, and to which epic) stays observable.
+//
+// Spread from the ACTUAL module rather than replaced wholesale: the row's hover
+// card (`pr-owner-hover.tsx`, deliberately not mocked - it must return the row
+// untouched here) imports this module's owner list and noun helper, and a
+// factory that lists only `PrOwnerBadges` hands those back as `undefined`.
+vi.mock("@/components/epic-canvas/pr/pr-owner-label", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/components/epic-canvas/pr/pr-owner-label")
+  >()),
   PrOwnerBadges: (props: {
     readonly owners: readonly { readonly ownerId: string }[];
     readonly epicId: string;
