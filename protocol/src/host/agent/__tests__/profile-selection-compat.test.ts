@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   downgradeRequestAcrossMajors,
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
   upgradeRequestToVersion,
 } from "@traycer/protocol/framework/index";
 import {
@@ -567,6 +568,7 @@ describe("optional-method capability negotiation", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.manifest["agent.listProviderProfiles"]).toBeUndefined();
     expect(
@@ -578,16 +580,22 @@ describe("optional-method capability negotiation", () => {
     // ("since 4 has never shipped") stopped being true, and with it the reason
     // these three could keep absorbing ids in place. `reasonix` opened major 5
     // on each, with fail-closed v5->v4 bridges.
+    // `supportedMajors` is every major the line INSTALLS, so opening major 5
+    // widens it to [1..5] on all three. It is not a restatement of `major`:
+    // `major` is the canonical one a peer picks by default, `supportedMajors`
+    // is the set it can still be talked down to.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 5,
       minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5],
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 5, minor: 0 });
+    ).toEqual({ major: 5, minor: 0, supportedMajors: [1, 2, 3, 4, 5] });
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 5,
       minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5],
     });
   });
 

@@ -13,6 +13,12 @@ import {
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  AMBIENT_AUTH_PENDING_REPOLL_CAP,
+  AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
+  isAmbientAuthVerdictPending,
+  isDefinitiveProviderAuthStatus,
+} from "@/lib/providers/provider-ambient-auth";
+import {
   Analytics,
   AnalyticsEvent,
   analyticsBlockerFromError,
@@ -97,30 +103,6 @@ const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<CodePasteRestartCause, string> =
 const CODE_PASTE_TOUCH_THROTTLE_MS = 45_000;
 const CODE_PASTE_KEEPALIVE_INTERVAL_MS = 60_000;
 
-/**
- * Bounded re-poll for the ambient row's `authPending` window: the host's
- * `providers.awaitLogin` response can carry a non-definitive ambient auth
- * reading (the login runner evicts the ambient auth cache when the login
- * child closes, and older hosts assemble the response from a non-blocking
- * probe), so a not-yet-authenticated ambient verdict with `authPending` set
- * means "the probe is still running", not "sign-in failed". Re-awaiting is
- * cheap - with no login job in flight the host resolves immediately with a
- * re-probed state - so a few short re-polls let the background probe land
- * instead of misreporting a successful switch as a failure. Definitive
- * verdicts (`authenticated`/`unauthenticated`) are never re-polled.
- */
-export const AMBIENT_AUTH_PENDING_REPOLL_CAP = 3;
-// Exported so tests can drive the re-poll deterministically with fake timers
-// instead of hardcoding a duplicate magic number that could silently drift
-// from this value.
-export const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
-
-function isDefinitiveAuthStatus(
-  status: ProviderProfile["auth"]["status"],
-): boolean {
-  return status === "authenticated" || status === "unauthenticated";
-}
-
 type AwaitLoginResult = ResponseOfMethod<
   HostRpcRegistry,
   "providers.awaitLogin"
@@ -157,11 +139,7 @@ function classifyAmbientAwaitResult(
     return { kind: "authenticated", payload: null };
   }
   if (result.codeRejected) return { kind: "codeRejected" };
-  if (
-    result.state !== null &&
-    result.state.authPending &&
-    !isDefinitiveAuthStatus(result.state.auth.status)
-  ) {
+  if (result.state !== null && isAmbientAuthVerdictPending(result.state)) {
     return { kind: "authPending" };
   }
   return { kind: "notAuthenticated" };
@@ -197,7 +175,7 @@ function classifyProfileAwaitResult(
   if (
     profile !== null &&
     profile.kind === "ambient" &&
-    !isDefinitiveAuthStatus(profile.auth.status) &&
+    !isDefinitiveProviderAuthStatus(profile.auth.status) &&
     (result.state?.authPending ?? false)
   ) {
     return { kind: "authPending" };
