@@ -32,7 +32,7 @@ const PATCH = createTwoFilesPatch(
   NEW_CONTENT,
   "",
   "",
-  { context: 80 },
+  { context: 3 },
 );
 const DIFF: GitGetFileDiffResponse = {
   filePath: FILE_NAME,
@@ -266,6 +266,7 @@ export function DiffEditFocusFixture() {
             backgrounds
             lineNumbers
             indicatorStyle="bars"
+            loadDiffFiles={editing.loadDiffFiles}
             onLoadFull={() => undefined}
             sizing="fill"
             scrollContainerRef={null}
