@@ -1,18 +1,40 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
+import { Archive, MessagesSquare, SearchX } from "lucide-react";
 import { SwitcherAgentIcon } from "@/components/epic-canvas/mobile/switcher-agent-icon";
 import {
-  SwitcherListEmpty,
+  SwitcherListHeader,
   SwitcherListRow,
 } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
-import { SwitcherNewChatRow } from "@/components/epic-canvas/mobile/switcher-create-actions";
+import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
-import { useOrderedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
+import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
+import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
+import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
+import {
+  chatFilterEmptyStateDescription,
+  FILTERED_EMPTY_TITLE,
+  useChatFilterMatchIds,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
+import {
+  chatSearchMatchIds,
+  intersectMatchIds,
+} from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
+import { CHATS_TREE_FILTER } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
+import { useChatArchiveHiddenIds } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
+import {
+  isChatFilterActive,
+  useChatFilter,
+  useChatSort,
+  type ChatFilter,
+} from "@/stores/epics/left-panel-store";
+import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import {
   useEpicArtifactRecords,
   useEpicNodeHostId,
   useEpicPermissionRole,
+  useEpicTreeIndex,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -51,7 +73,33 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
       ),
     [records],
   );
-  const agents = useOrderedSwitcherRecords(filtered);
+  const chatFilter = useChatFilter(epicId);
+  // Query state is the sheet's, not the store's. The sidebar persists its query
+  // per tab because its panel stays on screen across everything the user does;
+  // this sheet is dismissed the moment a row is tapped, so a query outliving it
+  // would greet the next open with a narrowed list and no memory of why.
+  const [searchQuery, setSearchQuery] = useState("");
+  const tree = useEpicTreeIndex();
+  const searchMatchIds = useMemo(
+    () =>
+      chatSearchMatchIds({
+        query: searchQuery,
+        nodeById: tree.nodeById,
+        treeFilter: CHATS_TREE_FILTER,
+      }),
+    [searchQuery, tree],
+  );
+  // Intersect the two narrowings as MATCHES. Neither is ancestor-expanded here
+  // and neither needs to be: the list is flat.
+  const narrowedMatchIds = intersectMatchIds(
+    useChatFilterMatchIds(epicId),
+    searchMatchIds,
+  );
+  const ordered = useNarrowedSwitcherRecords(
+    filtered,
+    narrowedMatchIds,
+    useChatSort(epicId),
+  );
   const canMutate = isEditableRole(useEpicPermissionRole());
   // Sorted for a stable query key: the list itself re-sorts by recency on every
   // turn, and an order-sensitive key would refetch each time without the set
@@ -73,32 +121,137 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
     chatIds: indicatorChatIds,
     enabled: indicatorChatIds.length > 0,
   });
-
+  // Archive hiding rides the sidebar's own paired rule, not a bare flag: in the
+  // default view an archived agent that is open, working, or unread stays
+  // visible, because hiding the row someone is looking at loses the thing it is
+  // asking about. Indicators are handed over rather than re-fetched so the
+  // reveal reads exactly what the rows read.
+  const archiveHiddenIds = useChatArchiveHiddenIds({
+    epicId,
+    tabId,
+    chatIds: indicatorChatIds,
+    notificationIndicators: indicators,
+  });
+  const agents = useMemo(
+    () =>
+      archiveHiddenIds.size === 0
+        ? ordered
+        : ordered.filter((record) => !archiveHiddenIds.has(record.id)),
+    [ordered, archiveHiddenIds],
+  );
+  // Told apart from a filter emptying the list: an all-archived epic is not the
+  // filters' doing, and the sidebar says so with its own state.
+  const archiveHidEverything = ordered.length > 0 && agents.length === 0;
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-        {/* Editor-gated: a viewer's create is server-rejected, so an ungated row
-            would only lead to a dead end. Inside the scroll region and above the
-            items, so it is the first thing in the list either way. */}
-        {canMutate ? (
-          <SwitcherNewChatRow epicId={epicId} tabId={tabId} onClose={onClose} />
-        ) : null}
-        {agents.length === 0 ? (
-          <SwitcherListEmpty message="No agents yet." />
-        ) : (
-          agents.map((record) => (
-            <SwitcherAgentRow
-              key={record.id}
-              record={record}
-              records={records}
-              epicId={epicId}
-              tabId={tabId}
-              onClose={onClose}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/* One header shape across both tabs: search, then create, then the
+            view menu. Creating used to be a row in the list here, which taught
+            two different places to look for the same action. */}
+        <SwitcherListHeader
+          search={
+            <SwitcherSearchField
+              value={searchQuery}
+              onValueChange={setSearchQuery}
+              placeholder="Search agents…"
+              label="Search agents"
+              clearLabel="Clear agent search"
+              testIdPrefix="switcher-agents-search"
             />
-          ))
-        )}
+          }
+          action={
+            canMutate ? (
+              <SwitcherNewChatAction
+                epicId={epicId}
+                tabId={tabId}
+                onClose={onClose}
+              />
+            ) : null
+          }
+          viewMenu={<SwitcherAgentsViewMenu epicId={epicId} />}
+        />
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+          {agents.length === 0 ? (
+            <SwitcherAgentsEmpty
+              hasAnyAgents={filtered.length > 0}
+              archiveHidEverything={archiveHidEverything}
+              searchActive={searchQuery.trim().length > 0}
+              filter={chatFilter}
+            />
+          ) : (
+            agents.map((record) => (
+              <SwitcherAgentRow
+                key={record.id}
+                record={record}
+                records={records}
+                epicId={epicId}
+                tabId={tabId}
+                onClose={onClose}
+              />
+            ))
+          )}
+        </div>
       </div>
     </NotificationIndicatorsProvider>
+  );
+}
+
+/**
+ * Desktop's own empty states, mounted here rather than restated.
+ *
+ * Same component, icons, wording and test ids as the sidebar's agent panel, and
+ * the same precedence: a query that matches nothing owns the empty state even
+ * when a filter is also on, because blaming the filter for an unmatched query
+ * would send the user to the wrong control. An epic with no agents at all is
+ * reported as that first, whatever narrowing happens to be set.
+ */
+function SwitcherAgentsEmpty(props: {
+  readonly hasAnyAgents: boolean;
+  readonly archiveHidEverything: boolean;
+  readonly searchActive: boolean;
+  readonly filter: ChatFilter;
+}) {
+  if (props.archiveHidEverything) {
+    return (
+      <SidebarPanelEmptyState
+        icon={Archive}
+        title="No unarchived agents."
+        description="Change Show in the view menu to see archived agents."
+        testId="epic-chat-sidebar-archived-empty"
+      />
+    );
+  }
+  if (!props.hasAnyAgents) {
+    return (
+      <SidebarPanelEmptyState
+        icon={MessagesSquare}
+        title="No agents yet."
+        description="Add an agent and choose a Chat or Terminal interface."
+        testId="epic-chat-sidebar-empty"
+      />
+    );
+  }
+  if (props.searchActive) {
+    return (
+      <SidebarPanelEmptyState
+        icon={SearchX}
+        title="No agents match your search."
+        description={
+          isChatFilterActive(props.filter)
+            ? "The current filters may also be hiding matches."
+            : null
+        }
+        testId="epic-chat-sidebar-search-empty"
+      />
+    );
+  }
+  return (
+    <SidebarPanelEmptyState
+      icon={MessagesSquare}
+      title={FILTERED_EMPTY_TITLE}
+      description={chatFilterEmptyStateDescription(props.filter)}
+      testId="epic-chat-sidebar-filter-empty"
+    />
   );
 }
 

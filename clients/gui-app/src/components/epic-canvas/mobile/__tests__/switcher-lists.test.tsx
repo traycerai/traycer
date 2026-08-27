@@ -11,6 +11,7 @@ import type { ReactElement, ReactNode } from "react";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { STATUS_DOT_CLASSES } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   createOpenEpicStore,
@@ -54,6 +55,7 @@ interface Holder {
   /** What `useEpicNodeHostId` answers - the row's OWN owner host. */
   ownerHostIdByNodeId: Record<string, string>;
   indicators: IndicatorFixture;
+  search: ArtifactSearchResults;
 }
 
 interface IndicatorFlags {
@@ -81,12 +83,23 @@ const holder = vi.hoisted((): Holder => ({
   indicatorChatIdCalls: [],
   ownerHostIdByNodeId: {},
   indicators: { epics: {}, chats: {} },
+  search: {
+    searchActive: false,
+    results: [],
+    response: null,
+    isUnsupported: false,
+    isError: false,
+    isFetching: false,
+    refetch: () => {},
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => holder.records,
   useEpicActiveAgentIds: () => holder.workingAgentIds,
   useEpicAgentActivityTiers: () => holder.activityTiers,
+  // Read by the archive rule the Show facet brings with it.
+  useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
   useEpicChatHarnessId: () => null,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useEpicPermissionRole: () => holder.role,
@@ -112,11 +125,32 @@ vi.mock("@/lib/epic-selectors", () => ({
     ),
   }),
 }));
+// The archive rule asks which tiles are open, so an archived-but-open row is
+// never hidden. Partial mock: everything else in the canvas store stays real.
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useOpenTileContentIds: () => new Set<string>(),
+}));
 vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
   useIsActiveEpicArtifact: (_tabId: string, id: string) =>
     holder.activeId === id,
   findOpenArtifactInTab: () => null,
 }));
+// The artifact search RPC needs a QueryClient this suite has no reason to
+// provide; the request logic is covered where it lives. Keep the real status
+// message so any surface wording stays under test.
+//
+// `useEpicStore` is deliberately NOT mocked: this suite now renders inside a
+// real `EpicSessionContext`, so the artifact map the list filters against is
+// the genuine projection. Stubbing it here would answer a question the harness
+// already answers, and answer it differently.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-artifact-search-results",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    useArtifactSearchResults: () => holder.search,
+  }),
+);
 vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
   // The row hands over the REF alone; the content id it names is the ref's own
   // `id`, which is also what the canvas dedups against.
@@ -175,7 +209,7 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
 // artifact-kind dropdown) doesn't need to mount here - this file exercises
 // each list's editor gating and row positioning in isolation.
 vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
-  SwitcherNewChatRow: () => (
+  SwitcherNewChatAction: () => (
     <button type="button" data-testid="switcher-new-chat" />
   ),
   SwitcherNewTerminalRow: () => (

@@ -262,6 +262,66 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("uses the cloud task title as the header with the chat title as fallback", () => {
+    const cloudRow: HostNotificationsCloudFeedRow = {
+      entryId: "entry-completed",
+      originHostId: "host-a",
+      coalesceKey: "agent.stopped:chat-1",
+      entry: {
+        id: "agent.stopped:chat-1",
+        updatedAt: 10,
+        readAt: null,
+        kind: "agent.stopped",
+        sourceRef: "chat-1",
+        severity: "done",
+        outcome: "completed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        payload: {
+          kind: "chat",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          agentName: "Test Code Execution",
+          taskTitle: "Stale task title",
+          outcome: "completed",
+        },
+      },
+      presentation: {
+        epicTitle: "Notification improvements",
+        chatTitle: "Test Code Execution",
+      },
+    };
+
+    expect(rowFromCloudFeedRow(cloudRow)).toMatchObject({
+      title: "Notification improvements",
+      body: "Test Code Execution • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...cloudRow,
+        presentation: {
+          ...cloudRow.presentation,
+          epicTitle: "",
+        },
+      }),
+    ).toMatchObject({
+      title: "Test Code Execution",
+      body: "Test Code Execution • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...cloudRow,
+        presentation: {
+          epicTitle: "",
+          chatTitle: "",
+        },
+      }),
+    ).toMatchObject({
+      title: "Stale task title",
+      body: "Test Code Execution • Done",
+    });
+  });
+
   it("splits global notification titles from their collaboration context", () => {
     expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
       title: "Alice invited you to an epic",

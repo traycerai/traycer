@@ -1,4 +1,5 @@
 import type { ComponentProps, ReactNode, UIEvent } from "react";
+import type { FileDiffContentsLoader } from "@pierre/diffs";
 import type { GitGetFileDiffResponse } from "@traycer/protocol/host";
 import {
   DiffContentFrame,
@@ -18,6 +19,7 @@ interface FileDiffContentProps {
   readonly backgrounds: boolean;
   readonly lineNumbers: boolean;
   readonly indicatorStyle: "bars" | "classic" | "none";
+  readonly loadDiffFiles?: FileDiffContentsLoader;
   readonly onLoadFull: () => void;
   readonly sizing: "fill" | "content";
   readonly scrollContainerRef:
@@ -71,6 +73,7 @@ export function FileDiffContent(props: FileDiffContentProps) {
           lineNumbers={props.lineNumbers}
           indicatorStyle={props.indicatorStyle}
           fileHeaders={false}
+          loadDiffFiles={props.loadDiffFiles}
           editAdapter={props.editAdapter}
           editSession={props.editSession}
           isEmptyFile={props.isEmptyFile}
