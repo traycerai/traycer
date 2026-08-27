@@ -257,7 +257,9 @@ describe("whoami runner migration", () => {
   it.each([
     ["none", ""],
     ["profile-refreshed", "Updated the stored profile from Traycer."],
+    ["profile-refresh-unconfirmed", "did not confirm"],
     ["token-rotated", "Refreshed the stored access token."],
+    ["token-rotation-unconfirmed", "may be stale"],
   ] as const)(
     "reports credentialUpdate=%s and the matching human suffix",
     async (effect, suffix) => {
@@ -267,6 +269,10 @@ describe("whoami runner migration", () => {
       const { whoamiCommand } = await import("../whoami");
 
       const jsonOut = await runJsonCommand(whoamiCommand);
+      // Every credentialUpdate value, including the two "-unconfirmed" ones,
+      // is still exit 0: the identity question WAS answered, truthfully - the
+      // warning is advisory, not a failure.
+      expect(jsonOut.exitCode).toBe(0);
       expect(jsonOut.terminal).toMatchObject({
         status: "ok",
         data: { validated: true, credentialUpdate: effect },

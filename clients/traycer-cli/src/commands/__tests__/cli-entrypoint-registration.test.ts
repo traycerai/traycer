@@ -400,6 +400,34 @@ describe("traycer CLI entrypoint registration", () => {
         .join("");
       expect(printedHelp).toContain("SPENDING");
       expect(printedHelp).toContain("credentialUpdate");
+      // Describes the pair of "-unconfirmed" values rather than enumerating a
+      // stale one; regression guard below pins that the old, since-corrected
+      // 'token-rotation-unsaved' spelling is gone.
+      expect(printedHelp).toContain("-unconfirmed");
+      expect(printedHelp).not.toContain("token-rotation-unsaved");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("whoami's --help states exit-code meaning per mode, not a single flat claim that 0 means signed in", () => {
+    // Regression guard for the "flat exit-codes line contradicts the --local
+    // paragraph above it" fix: exit 0 means something weaker under --local
+    // (a credential is merely stored, not validated) than under the default
+    // mode, and the help text has to say so rather than claim one meaning
+    // for both.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["whoami"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).not.toContain("0 signed in");
+      expect(printedHelp).toContain("NOT proof");
     } finally {
       write.mockRestore();
     }
@@ -417,6 +445,28 @@ describe("traycer CLI entrypoint registration", () => {
         .map(([chunk]) => String(chunk))
         .join("");
       expect(printedHelp).toContain("published-chat cache");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("logout's --help discloses that a failed cache clear now exits 1", () => {
+    // Regression guard for the exit-code flip: logout used to exit 0 on a
+    // partial cleanup, and the help text said so explicitly ("Partial cleanup
+    // is still a successful sign-out ... exits 0"). It must not still claim
+    // that.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["logout"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("1 signed out");
+      expect(printedHelp).not.toContain("exits 0");
     } finally {
       write.mockRestore();
     }

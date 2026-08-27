@@ -14,14 +14,40 @@ import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
  * by spending the refresh token. `whoami` reports this so the command that looks
  * observational can say what it actually changed (CLI-018).
  *
- *   - `none`              -> the file on disk is byte-identical to before.
- *   - `profile-refreshed` -> the cached `user` block was updated from the
- *                            server; the token pair is untouched.
- *   - `token-rotated`     -> the refresh token was SPENT and a fresh pair
- *                            minted. Reported even when the commit failed:
- *                            the spend is what left the file's old pair dead.
+ *   - `none`                        -> nothing was written. Every outcome
+ *                                      mapped here is a guard that returned
+ *                                      BEFORE the write, so this is a
+ *                                      certainty, not an assumption.
+ *   - `profile-refreshed`           -> the cached `user` block was updated
+ *                                      from the server; the token pair is
+ *                                      untouched.
+ *   - `profile-refresh-unconfirmed` -> the profile write was attempted and the
+ *                                      commit did not confirm.
+ *   - `token-rotated`               -> the refresh token was SPENT and the
+ *                                      stored pair is now the fresh one.
+ *   - `token-rotation-unconfirmed`  -> the refresh token was SPENT and the
+ *                                      commit did not confirm.
+ *
+ * ## Why two of these say "unconfirmed" rather than "failed"
+ *
+ * A `commit-failed` from the store does NOT mean the bytes never landed.
+ * `commitMutation` writes the credentials file at its apply step and only then
+ * finalizes the sidecar; a fault in the finalize (or in the recovery that a
+ * later mutation would run) surfaces as `commit-failed` with the new pair
+ * already on disk. So after a failed commit the file holds either the old
+ * value or the new one, and this process cannot tell which.
+ *
+ * Naming it `unsaved` would be a guess dressed as a fact - in a field whose
+ * only job is to stop this command from overstating what it did. The user's
+ * next move is the same under either branch (re-authenticate if the next
+ * command fails), so the honest label loses nothing.
  */
-export type ValidationEffect = "none" | "profile-refreshed" | "token-rotated";
+export type ValidationEffect =
+  | "none"
+  | "profile-refreshed"
+  | "profile-refresh-unconfirmed"
+  | "token-rotated"
+  | "token-rotation-unconfirmed";
 
 export type ValidationOutcome =
   | { readonly kind: "no-credentials" }
@@ -109,22 +135,34 @@ async function reconcileValidProfile(
   const persisted = result.outcome === "applied";
   // The stored access token validated to `nextUser`, so pair them in the
   // reported credentials whether or not the advisory persist landed (a sibling
-  // rotate/logout can supersede it). `whoami` reads only `user`.
+  // rotate/logout can supersede it). `whoami` reads `user` and `savedAt`.
+  //
+  // `savedAt` KEEPS the file's own stamp when the write did not confirm. It
+  // means "when the credentials on disk were last written", so minting a fresh
+  // timestamp here would report a save this process cannot vouch for - and
+  // `whoami` now surfaces this field.
   const next: StoredCredentials =
     persisted && result.credentials !== null
       ? result.credentials
-      : { ...stored, user: nextUser, savedAt: new Date().toISOString() };
+      : { ...stored, user: nextUser, savedAt: stored.savedAt };
   logger.debug("Stored credential validation succeeded", {
     environment: config.environment,
     userChanged: true,
     credentialsPersisted: persisted,
   });
-  // Only a landed write is an effect. A superseded/failed advisory persist left
-  // the file exactly as it was, so reporting a refresh would overstate it.
+  // `commit-failed` is the one outcome that cannot claim either way: the write
+  // may have landed and only the finalize faulted. Every OTHER non-applied
+  // outcome (deleted / tombstoned / superseded / lock-busy) is a guard that
+  // returned before the write, so `none` there is a fact.
   return {
     kind: "valid",
     credentials: next,
-    effect: persisted ? "profile-refreshed" : "none",
+    effect:
+      result.outcome === "applied"
+        ? "profile-refreshed"
+        : result.outcome === "commit-failed"
+          ? "profile-refresh-unconfirmed"
+          : "none",
   };
 }
 
@@ -137,17 +175,32 @@ async function rotateStaleCredentials(
   stored: StoredCredentials,
   logger: ILogger,
 ): Promise<ValidationOutcome> {
+  // The FINAL outcome cannot tell you what this invocation did, because
+  // `withCommitRetry` re-drives `rotate` after a `commit-failed` and a landed
+  // continuation resurfaces as `superseded` (see its docstring) - the same
+  // outcome a process that spent NOTHING gets when a sibling rotated first.
+  // So the spend is recorded as it happens, from inside the retried op.
+  let spentRefreshToken = false;
   const result = await runWithCliStore((store) =>
-    withCommitRetry(
-      () =>
-        store.rotate({
-          expectedUserId: stored.user.id,
-          expectedToken: stored.token,
-          refreshTokenOverride: null,
-          signal: null,
-        }),
-      null,
-    ),
+    withCommitRetry(async () => {
+      const attempt = await store.rotate({
+        expectedUserId: stored.user.id,
+        expectedToken: stored.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      // The only two outcomes reachable AFTER the refresh token leaves this
+      // process: `applied` (minted and committed) and `commit-failed` (minted,
+      // commit lost). Everything else is a guard that returns before the spend,
+      // or a refusal by the server.
+      if (
+        attempt.outcome === "applied" ||
+        attempt.outcome === "commit-failed"
+      ) {
+        spentRefreshToken = true;
+      }
+      return attempt;
+    }, null),
   );
   switch (result.outcome) {
     case "applied":
@@ -156,19 +209,15 @@ async function rotateStaleCredentials(
       logger.debug("Stored credential validation refreshed via rotate", {
         environment: config.environment,
         outcome: result.outcome,
+        spentRefreshToken,
       });
       // applied/superseded/commit-failed always carry the pair; the null guard
       // is defensive.
-      //
-      // `superseded` adopted a SIBLING's already-committed pair: this process
-      // spent nothing and wrote nothing, so it is not an effect of this
-      // command. `commit-failed` is - the spend happened and killed the pair
-      // the file still names, which is precisely what the caller must know.
       return result.credentials !== null
         ? {
             kind: "valid",
             credentials: result.credentials,
-            effect: result.outcome === "superseded" ? "none" : "token-rotated",
+            effect: rotateEffect(result.outcome, spentRefreshToken),
           }
         : { kind: "rejected" };
     case "refresh-network":
@@ -189,4 +238,28 @@ async function rotateStaleCredentials(
       });
       return { kind: "rejected" };
   }
+}
+
+/**
+ * What a settled `rotate` did to the credentials on disk.
+ *
+ *   - `applied`       -> spent and committed here.
+ *   - `commit-failed` -> spent, retries exhausted, and the commit never
+ *                        confirmed. The file now holds either the dead pair or
+ *                        the fresh one (see `ValidationEffect`) and this
+ *                        process cannot tell which, so the report says exactly
+ *                        that.
+ *   - `superseded`    -> the file already holds a different, live pair. Whether
+ *                        that is a rotation depends entirely on whether WE
+ *                        spent to produce it: our own retried continuation
+ *                        landing looks identical to a sibling that rotated
+ *                        while we were only reading.
+ */
+function rotateEffect(
+  outcome: "applied" | "superseded" | "commit-failed",
+  spentRefreshToken: boolean,
+): ValidationEffect {
+  if (outcome === "commit-failed") return "token-rotation-unconfirmed";
+  if (outcome === "applied") return "token-rotated";
+  return spentRefreshToken ? "token-rotated" : "none";
 }

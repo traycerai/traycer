@@ -162,13 +162,24 @@ function identityOf(user: StoredCredentials["user"]): string {
 // Names a write the user did not ask for, on the line reporting the read they
 // did ask for. Silent when nothing changed, which is the overwhelmingly common
 // case - a valid access token and an unchanged profile.
+//
+// `token-rotation-unconfirmed` is the one that matters: the refresh token was
+// spent and the save did not confirm, so the pair on disk may be the dead one -
+// this command can answer "signed in" from a session the next command cannot
+// use. Exit stays 0 - the identity question WAS answered, truthfully, and this
+// command persists nothing itself - but the line has to name the state the next
+// command may trip over, or exit 0 becomes the lie.
 function humanEffectSuffix(effect: ValidationEffect): string {
   switch (effect) {
     case "none":
       return "";
     case "profile-refreshed":
       return " Updated the stored profile from Traycer.";
+    case "profile-refresh-unconfirmed":
+      return " Tried to update the stored profile from Traycer; the local write did not confirm.";
     case "token-rotated":
       return " Refreshed the stored access token.";
+    case "token-rotation-unconfirmed":
+      return " WARNING: the access token was refreshed but the local save did not confirm - the stored credentials may be stale. Run `traycer login` if the next command fails to authenticate.";
   }
 }

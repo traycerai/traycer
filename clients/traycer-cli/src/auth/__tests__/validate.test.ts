@@ -60,10 +60,29 @@ vi.mock("../../store/credentials", async (importOriginal) => {
   return { ...actual, readCredentials: vi.fn() };
 });
 
+// Mirrors the real `withCommitRetry`'s retry-on-`commit-failed` shape (see
+// `store/credentials-store.ts`) closely enough to exercise it: re-drive `op`
+// while the outcome is `commit-failed`, capped, no artificial delay. A flat
+// `(op) => op()` would call `store.rotate` at most once per test and could
+// never reproduce "a retried continuation lands and resurfaces as
+// `superseded`" - exactly the case the fix under test depends on.
+const RETRY_CAP = 3;
 vi.mock("../../store/credentials-store", () => ({
   createCliCredentialsStore: () => fakeStore,
   runWithCliStore: (fn: (store: unknown) => unknown) => fn(fakeStore),
-  withCommitRetry: (op: () => unknown) => op(),
+  withCommitRetry: async (
+    op: () => Promise<{ outcome: string }>,
+  ): Promise<{ outcome: string }> => {
+    let result = await op();
+    for (
+      let attempt = 0;
+      attempt < RETRY_CAP && result.outcome === "commit-failed";
+      attempt += 1
+    ) {
+      result = await op();
+    }
+    return result;
+  },
 }));
 
 const identityMock = vi.mocked(validateAuthTokenIdentityAccessOnly);
@@ -143,7 +162,7 @@ describe("validateStoredCredentials", () => {
     });
   });
 
-  it("reports effect='none' when the profile write did not land", async () => {
+  it("reports effect='none' and keeps the file's own savedAt when the advisory write is superseded (never attempted, not merely unconfirmed)", async () => {
     identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
     updateProfileMock.mockResolvedValue({
       outcome: "superseded",
@@ -153,6 +172,32 @@ describe("validateStoredCredentials", () => {
     const outcome = await validateStoredCredentials();
 
     expect(outcome).toMatchObject({ kind: "valid", effect: "none" });
+    // A write that never landed must not report a save that did not happen -
+    // the timestamp has to stay the file's own, not a freshly minted one.
+    if (outcome.kind === "valid") {
+      expect(outcome.credentials.savedAt).toBe(storedCreds.savedAt);
+    }
+  });
+
+  it("reports effect='profile-refresh-unconfirmed' (not 'none') when the advisory write's commit does not confirm - the bytes may already be on disk", async () => {
+    identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
+    updateProfileMock.mockResolvedValue({
+      outcome: "commit-failed",
+      credentials: null,
+    });
+
+    const outcome = await validateStoredCredentials();
+
+    // This is the distinction the fix exists for: `superseded` above is a
+    // certainty (`none`) because the write never ran; `commit-failed` here
+    // cannot claim either way, so it must NOT collapse to the same `none`.
+    expect(outcome).toMatchObject({
+      kind: "valid",
+      effect: "profile-refresh-unconfirmed",
+    });
+    if (outcome.kind === "valid") {
+      expect(outcome.credentials.savedAt).toBe(storedCreds.savedAt);
+    }
   });
 
   it("validates against the configured authn URL outside a run slot too (the file carries no URL)", async () => {
@@ -287,8 +332,13 @@ describe("validateStoredCredentials", () => {
     });
   });
 
-  it("reports effect='token-rotated' on commit-failed - the refresh spend still happened", async () => {
+  it("reports effect='token-rotation-unconfirmed' on a terminal commit-failed - the spend happened but whether it landed is unknowable, not false", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
+    // Retries are exhausted (every attempt keeps failing the commit), so this
+    // is the terminal case: `withCommitRetry` gives up still holding
+    // `commit-failed`. `commitMutation` writes the file at its apply step and
+    // only then finalizes the sidecar, so a `commit-failed` here does NOT mean
+    // the pair never reached disk - it means this process cannot tell.
     rotateMock.mockResolvedValue({
       outcome: "commit-failed",
       credentials: {
@@ -301,6 +351,36 @@ describe("validateStoredCredentials", () => {
     expect(await validateStoredCredentials()).toMatchObject({
       kind: "valid",
       credentials: { token: "orphaned-token" },
+      effect: "token-rotation-unconfirmed",
+    });
+  });
+
+  it("reports effect='token-rotated' when a retried continuation lands and resurfaces as superseded", async () => {
+    // The bug Codex caught: `withCommitRetry` re-drives `rotate` after a
+    // `commit-failed`, and a landed continuation resurfaces as `superseded` -
+    // identical to the outcome a process that spent NOTHING gets when a
+    // sibling rotated first. The effect must come from whether THIS process
+    // spent (tracked across the retried attempts), not from the final
+    // outcome alone.
+    identityMock.mockResolvedValue({ kind: "rejected" });
+    rotateMock
+      .mockResolvedValueOnce({ outcome: "commit-failed", credentials: null })
+      .mockResolvedValueOnce({
+        outcome: "superseded",
+        credentials: {
+          token: "landed-continuation-token",
+          refreshToken: "landed-continuation-refresh",
+          savedAt: "2026-02-01T00:00:00.000Z",
+          user: storedCreds.user,
+        },
+      });
+
+    const outcome = await validateStoredCredentials();
+
+    expect(rotateMock).toHaveBeenCalledTimes(2);
+    expect(outcome).toMatchObject({
+      kind: "valid",
+      credentials: { token: "landed-continuation-token" },
       effect: "token-rotated",
     });
   });

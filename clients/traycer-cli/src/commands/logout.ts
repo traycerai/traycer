@@ -51,17 +51,20 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   // process left to finish the work, so a fire-and-forget clear here would race
   // the command's own exit.
   //
-  // A clear that FAILS does not fail the logout, and that is a decision rather
-  // than an oversight (CLI-017): the credential delete has already landed, so
-  // the session IS over, and no amount of re-running logout can improve on a
-  // filesystem that refuses the delete. Reporting exit 1 would tell every
-  // caller "you are still signed in", which is false and the more dangerous of
-  // the two errors.
+  // A clear that FAILS does not undo the sign-out - the credential delete has
+  // already landed, and no amount of re-running logout improves on a filesystem
+  // that refuses the delete - but it IS reported as a failure (exit 1), because
+  // this command now advertises two deletions and only one of them happened.
   //
-  // But it must not be silent either: the bytes it names are exactly what the
-  // clear exists to remove. So the partial outcome is MODELLED - `chatCache`
-  // carries the path, whether it went, and the reason it did not - and the
-  // human line names the directory the user has to delete by hand.
+  // The exit code is the only part of the result an unattended caller reads.
+  // `traycer logout && hand-over-the-machine` must not proceed with the user's
+  // published-chat content still on disk, and the two errors are not
+  // symmetric: a false alarm stops a script that can be re-run, while a false
+  // all-clear leaves content behind on a machine somebody is walking away from.
+  // The runner supports exactly this (`runner.ts`: a non-zero exit on an `ok`
+  // result, as `whoami` uses for "not signed in"), so nothing here claims the
+  // sign-out failed - `data.loggedOut` still reports it landed, and the human
+  // line still leads with "Logged out."
   const cachePath = cliChatPartCacheDir();
   const cacheClearError = await clearDiskChatPartCache(cachePath);
   const loggedOutLine = hadSession ? "Logged out." : "Not logged in.";
@@ -73,6 +76,10 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
         cleared: cacheClearError === null,
         error: cacheClearError === null ? null : cacheClearError.message,
       },
+      // Deprecated alias for `chatCache.cleared`, kept because `--json` is a
+      // documented automation surface and this CLI ships to machines whose
+      // scripts we cannot grep. Remove on the next intentional break.
+      chatCacheCleared: cacheClearError === null,
     },
     human: ctx.runtime.json
       ? null
@@ -82,6 +89,6 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
           // that case too.
           `${loggedOutLine} Cleared the local published-chat cache at ${cachePath}.`
         : `${loggedOutLine} The cached published-chat content at ${cachePath} could not be removed (${cacheClearError.message}); delete that directory manually to finish clearing local data.`,
-    exitCode: 0,
+    exitCode: cacheClearError === null ? 0 : 1,
   };
 };

@@ -258,7 +258,7 @@ describe("logoutCommand runner contract", () => {
     });
   });
 
-  it("JSON mode: data.chatCache carries the path, cleared=true, error=null on a successful cache clear", async () => {
+  it("JSON mode: data.chatCache carries the path, cleared=true, error=null on a successful cache clear, and the deprecated chatCacheCleared alias agrees", async () => {
     mockLogoutStore({ hadSession: true, signOut: DELETED });
     const { cliChatPartCacheDir } = await import("../../store/paths");
     const { logoutCommand } = await import("../logout");
@@ -269,6 +269,10 @@ describe("logoutCommand runner contract", () => {
       status: "ok",
       data: {
         chatCache: { path: cliChatPartCacheDir(), cleared: true, error: null },
+        // Deprecated alias, kept for scripts written against the old shape -
+        // it must stay in lockstep with `chatCache.cleared` rather than drift
+        // or get dropped silently.
+        chatCacheCleared: true,
       },
     });
   });
@@ -284,7 +288,7 @@ describe("logoutCommand runner contract", () => {
     expect(out.exitCode).toBe(0);
   });
 
-  it("JSON mode: a failed cache clear still exits 0, and data.chatCache reports cleared=false with the error message", async () => {
+  it("JSON mode: a failed cache clear now exits 1 (not signed-in failure), data.loggedOut still true, chatCache reports cleared=false with the error, and the alias agrees", async () => {
     mockLogoutStore({ hadSession: true, signOut: DELETED });
     vi.doMock("../../store/chat-part-cache", () => ({
       clearDiskChatPartCache: async () =>
@@ -294,9 +298,11 @@ describe("logoutCommand runner contract", () => {
     const { logoutCommand } = await import("../logout");
     const out = await runJsonCommand(logoutCommand);
     assertSingleTerminalResult(out);
-    // A failed cache clear does not fail the logout - the credential delete
-    // already landed.
-    expect(out.exitCode).toBe(0);
+    // The sign-out itself landed - only the cache cleanup did not - so this is
+    // still `status: "ok"` with `data.loggedOut: true`, not an error envelope.
+    // But the exit code flips to 1: an unattended `logout && hand-over` must
+    // not treat "content still on disk" as a clean hand-off.
+    expect(out.exitCode).toBe(1);
     expect(out.terminal).toMatchObject({
       status: "ok",
       data: {
@@ -306,12 +312,13 @@ describe("logoutCommand runner contract", () => {
           cleared: false,
           error: "EACCES: permission denied",
         },
+        chatCacheCleared: false,
       },
     });
     vi.doUnmock("../../store/chat-part-cache");
   });
 
-  it("human mode: names the directory to delete by hand when the cache clear fails", async () => {
+  it("human mode: names the directory to delete by hand when the cache clear fails, exits 1, and still leads with 'Logged out.'", async () => {
     mockLogoutStore({ hadSession: true, signOut: DELETED });
     vi.doMock("../../store/chat-part-cache", () => ({
       clearDiskChatPartCache: async () =>
@@ -323,9 +330,10 @@ describe("logoutCommand runner contract", () => {
     const out = await runHumanCommand(logoutCommand);
     expect(out.terminal).toBeNull();
     const line = joined(stdoutChunks);
+    expect(line).toContain("Logged out.");
     expect(line).toContain(cacheDir);
     expect(line).toContain("could not be removed");
-    expect(out.exitCode).toBe(0);
+    expect(out.exitCode).toBe(1);
     vi.doUnmock("../../store/chat-part-cache");
   });
 
