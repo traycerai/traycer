@@ -247,6 +247,7 @@ function SwitcherArtifactSearchBody(props: {
       <SwitcherListEmpty
         message="Search isn't available on this host."
         description="Update this device's Traycer host to search artifacts."
+        action={null}
       />
     );
   }
@@ -292,6 +293,7 @@ function SwitcherArtifactSearchBody(props: {
       <SwitcherListEmpty
         message="Artifact search isn't ready yet."
         description="This epic's artifacts are still being prepared on the host."
+        action={null}
       />
     );
   }
@@ -304,6 +306,7 @@ function SwitcherArtifactSearchBody(props: {
             ? "More results exist beyond the search limit."
             : null
         }
+        action={null}
       />
     );
   }
@@ -334,10 +337,17 @@ function SwitcherArtifactsEmpty(props: { readonly filter: ArtifactFilter }) {
       <SwitcherListEmpty
         message={FILTERED_EMPTY_TITLE}
         description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
+        action={null}
       />
     );
   }
-  return <SwitcherListEmpty message="No artifacts yet." description={null} />;
+  return (
+    <SwitcherListEmpty
+      message="No artifacts yet."
+      description={null}
+      action={null}
+    />
+  );
 }
 
 function SwitcherArtifactRow(props: {

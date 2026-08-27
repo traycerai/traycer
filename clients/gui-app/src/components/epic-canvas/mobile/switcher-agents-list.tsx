@@ -23,11 +23,15 @@ import {
 } from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
 import { CHATS_TREE_FILTER } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import {
+  CHAT_ORIGIN,
+  CHAT_OWNERSHIP,
   isChatFilterActive,
   useChatFilter,
   useChatSort,
+  useLeftPanelStore,
   type ChatFilter,
 } from "@/stores/epics/left-panel-store";
+import { Button } from "@/components/ui/button";
 import {
   useEpicArtifactRecords,
   useEpicNodeHostId,
@@ -155,6 +159,7 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
             <SwitcherAgentsEmpty
               searchActive={searchQuery.trim().length > 0}
               filter={chatFilter}
+              epicId={epicId}
             />
           ) : (
             agents.map((record) => (
@@ -186,6 +191,7 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
 function SwitcherAgentsEmpty(props: {
   readonly searchActive: boolean;
   readonly filter: ChatFilter;
+  readonly epicId: string;
 }) {
   const filterActive = isChatFilterActive(props.filter);
   if (props.searchActive) {
@@ -197,6 +203,10 @@ function SwitcherAgentsEmpty(props: {
             ? "The current filters may also be hiding matches."
             : null
         }
+        // The query is the narrowing the user can undo here, and the field is
+        // right above with its own clear; a filter reset would aim them at the
+        // wrong one.
+        action={null}
       />
     );
   }
@@ -205,10 +215,50 @@ function SwitcherAgentsEmpty(props: {
       <SwitcherListEmpty
         message={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(props.filter)}
+        action={<SwitcherClearAgentFilters epicId={props.epicId} />}
       />
     );
   }
-  return <SwitcherListEmpty message="No agents yet." description={null} />;
+  return (
+    <SwitcherListEmpty
+      message="No agents yet."
+      description={null}
+      action={null}
+    />
+  );
+}
+
+/**
+ * The way out of a filter this surface cannot show.
+ *
+ * The Agents menu exposes Interface only - Ownership is degenerate here, since
+ * every local agent is the viewer's own - but both facets are stored per epic
+ * and both narrow this list, so an Ownership filter set on a desktop can empty
+ * the phone completely. Naming the cause is not enough when the user has no
+ * desktop to hand: an empty list with no control to restore it is a dead end,
+ * and this surface must not be able to reach one.
+ *
+ * It clears the two FILTER axes only, deliberately not `resetChatView`, which
+ * would also reset archive visibility - a facet the user cannot see here and
+ * did not ask to change.
+ */
+function SwitcherClearAgentFilters(props: { readonly epicId: string }) {
+  const setChatOrigin = useLeftPanelStore((state) => state.setChatOrigin);
+  const setChatOwnership = useLeftPanelStore((state) => state.setChatOwnership);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-testid="switcher-agents-clear-filters"
+      onClick={() => {
+        setChatOrigin(props.epicId, CHAT_ORIGIN.All);
+        setChatOwnership(props.epicId, CHAT_OWNERSHIP.All);
+      }}
+    >
+      Show all agents
+    </Button>
+  );
 }
 
 function SwitcherAgentRow(props: {

@@ -83,12 +83,16 @@ export function useArtifactSearchResults(args: {
   // gates the same-scope retention below so a prior Epic / host / filter result
   // can't linger on-screen after the scope changes (only the query string
   // changing keeps the retained results).
-  const scopeSignature = [
+  // `JSON.stringify`, not a delimiter join: the parts are ids and free-form
+  // filter values, and any separator they could themselves contain lets two
+  // different scopes produce one signature - which is exactly the collision
+  // this guard exists to prevent.
+  const scopeSignature = JSON.stringify([
     epicId,
     activeHostId ?? "",
-    kinds === null ? "" : kinds.join(","),
-    statuses === null ? "" : statuses.join(","),
-  ].join(" ");
+    kinds === null ? [] : kinds,
+    statuses === null ? [] : statuses,
+  ]);
 
   // `useEpicSearchArtifacts` intentionally omits `keepPreviousData`, so
   // `query.data` is only ever the current key's result. Retain the last

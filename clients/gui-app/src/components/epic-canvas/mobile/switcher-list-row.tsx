@@ -112,12 +112,21 @@ export function SwitcherNewItemRow(props: {
 export function SwitcherListEmpty(props: {
   readonly message: string;
   readonly description: string | null;
+  /**
+   * A way OUT of this state, for an empty list the user created and this
+   * surface would otherwise offer no control to undo. Null when the emptiness
+   * is not something the user can act on here.
+   */
+  readonly action: ReactNode;
 }) {
   return (
     <div className="flex min-h-24 flex-col items-center justify-center gap-1 p-6 text-center text-ui-sm text-muted-foreground">
       <span>{props.message}</span>
       {props.description === null ? null : (
         <span className="text-ui-xs">{props.description}</span>
+      )}
+      {props.action === null ? null : (
+        <span className="mt-2">{props.action}</span>
       )}
     </div>
   );

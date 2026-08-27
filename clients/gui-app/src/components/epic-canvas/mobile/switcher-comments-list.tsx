@@ -43,6 +43,7 @@ export function SwitcherCommentsList(props: SwitcherCommentsListProps) {
       <SwitcherListEmpty
         message="Open an artifact to see and add comments on it."
         description={null}
+        action={null}
       />
     );
   }

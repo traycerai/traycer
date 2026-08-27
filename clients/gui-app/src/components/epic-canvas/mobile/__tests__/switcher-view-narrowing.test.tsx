@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import {
+  CHAT_ARCHIVE_VISIBILITY,
   CHAT_ORIGIN,
   CHAT_OWNERSHIP,
   useLeftPanelStore,
@@ -194,6 +195,7 @@ beforeEach(() => {
     artifactFilterByEpicId: {},
     chatSortByEpicId: {},
     artifactSortByEpicId: {},
+    chatArchiveVisibilityByEpicId: {},
   });
 });
 
@@ -321,6 +323,39 @@ describe("switcher Agents narrowing", () => {
     expect(
       screen.getByText("The current filters may also be hiding matches."),
     ).toBeDefined();
+  });
+
+  it("offers a way out of a filter this surface cannot show", () => {
+    // Ownership has no control here, but it still narrows this list - so a
+    // value set on a desktop can empty the phone. Naming the cause is not
+    // enough when the user has no desktop to hand; without this the list is a
+    // dead end.
+    holder.records = [agentRecord("a-1", "Alpha", "chat")];
+    useLeftPanelStore
+      .getState()
+      .setChatOwnership(EPIC_ID, CHAT_OWNERSHIP.Others);
+    // Set a NON-default archive visibility too, so the "only the filter axes"
+    // claim below has something to discriminate against - asserting an
+    // untouched default would pass whatever the button did.
+    useLeftPanelStore
+      .getState()
+      .setChatArchiveVisibility(EPIC_ID, CHAT_ARCHIVE_VISIBILITY.Archived);
+    const view = render(<SwitcherAgentsList {...PROPS} />);
+    expect(renderedAgentNames()).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all agents" }));
+    view.rerender(<SwitcherAgentsList {...PROPS} />);
+    expect(renderedAgentNames()).toEqual(["Alpha"]);
+    // The store drops the entry entirely once neither axis narrows - an
+    // inactive filter is absence, not a record of two "all"s.
+    expect(
+      useLeftPanelStore.getState().chatFilterByEpicId[EPIC_ID],
+    ).toBeUndefined();
+    // Archive visibility survives: a facet this surface never showed is not
+    // one the user asked to change.
+    expect(
+      useLeftPanelStore.getState().chatArchiveVisibilityByEpicId[EPIC_ID],
+    ).toBe(CHAT_ARCHIVE_VISIBILITY.Archived);
   });
 
   it("still applies an Ownership filter set from the sidebar, and explains it", () => {
