@@ -11,6 +11,8 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 import {
   createChatSessionStore,
   HYDRATION_REQUEST_TIMEOUT_MS,
+  MAX_WATCHDOG_RESTREAMS_PER_EPOCH,
+  STREAM_COMPLETION_TIMEOUT_MS,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -361,6 +363,28 @@ function accumulatedChanges(
   };
 }
 
+/** A skeleton chunk covering `[fromOrdinal, toOrdinal)`. */
+function skeletonChunk(
+  fromOrdinal: number,
+  toOrdinal: number,
+  isFinal: boolean,
+): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
+  return {
+    kind: "skeletonChunk",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    chunk: {
+      epoch: 1,
+      fromOrdinal,
+      entries: Array.from({ length: toOrdinal - fromOrdinal }, (_u, index) =>
+        skeletonEntry(fromOrdinal + index),
+      ),
+      isFinal,
+    },
+  };
+}
+
 function hydrateTail(harness: ViewportHarness): void {
   harness.callbacks().onWindowedSnapshot(
     snapshot({
@@ -642,6 +666,85 @@ describe("chat session viewport hydration: review fixes", () => {
       expect(
         harness.rangeRequests.length + harness.resnapshotCount(),
       ).toBeGreaterThan(requestsBefore);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("restreams when a skeleton stops before its final chunk", () => {
+    // The class: a chunked delivery closes its loop only when the final chunk
+    // ARRIVES. `applySkeletonChunk` reads completeness off `chunk.isFinal`, so
+    // losing exactly the last frame leaves `skeletonComplete` false forever -
+    // and the module's own comment says what that is worth: "`skeletonComplete`
+    // merely goes false, which requests no repair."
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      const before = harness.resnapshotCount();
+
+      // Two chunks arrive; the third, carrying `isFinal`, never does.
+      harness.callbacks().onSkeletonChunk(skeletonChunk(0, 10, false));
+      harness.callbacks().onSkeletonChunk(skeletonChunk(10, 20, false));
+
+      // Still within the idle window: a stream that is merely slow must not be
+      // torn down and re-sent, which is the whole reason this is an IDLE
+      // timeout re-armed per chunk rather than one deadline for the stream.
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS - 1);
+      expect(harness.resnapshotCount()).toBe(before);
+
+      vi.advanceTimersByTime(2);
+      expect(harness.resnapshotCount()).toBe(before + 1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops restreaming a skeleton that keeps stalling", () => {
+    // The bound. A resnapshot restarts the very stream whose stall triggered
+    // it, so without a cap a link that keeps dropping the last frame gets an
+    // unbounded restream loop - the same shape as the range-request loop this
+    // store shipped once, and the reason that fix needed a bounding test too.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      const before = harness.resnapshotCount();
+
+      // Each round: a chunk arrives, the stream stalls, the watchdog fires.
+      for (
+        let round = 0;
+        round < MAX_WATCHDOG_RESTREAMS_PER_EPOCH + 3;
+        round += 1
+      ) {
+        harness.callbacks().onSkeletonChunk(skeletonChunk(0, 10, false));
+        vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
+      }
+
+      expect(harness.resnapshotCount() - before).toBe(
+        MAX_WATCHDOG_RESTREAMS_PER_EPOCH,
+      );
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restream a skeleton that completed", () => {
+    // The negative that keeps the watchdog from firing on every healthy chat.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      const before = harness.resnapshotCount();
+
+      harness.callbacks().onSkeletonChunk(skeletonChunk(0, 20, false));
+      harness.callbacks().onSkeletonChunk(skeletonChunk(20, 40, true));
+
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS * 3);
+      expect(harness.resnapshotCount()).toBe(before);
     } finally {
       harness.handle.dispose();
       vi.useRealTimers();

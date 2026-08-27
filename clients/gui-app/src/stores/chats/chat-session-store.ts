@@ -1083,6 +1083,28 @@ export const HYDRATION_REQUEST_TIMEOUT_MS = 30_000;
  */
 const MAX_OUTSTANDING_HYDRATION_REQUESTS = 8;
 
+/**
+ * How long a chunked delivery may go quiet before it is treated as stalled
+ * rather than slow.
+ *
+ * Longer than {@link HYDRATION_REQUEST_TIMEOUT_MS} on purpose. That deadline
+ * governs a single round trip the client asked for; this one governs the gap
+ * BETWEEN chunks of a stream the host is pushing, and firing it early costs a
+ * whole-transcript resnapshot rather than one re-request.
+ */
+export const STREAM_COMPLETION_TIMEOUT_MS = 45_000;
+
+/**
+ * How many times a stalled stream may be restarted within one epoch.
+ *
+ * The recovery restarts the very stream that stalled, so an unbounded retry is
+ * a self-sustaining loop against a link that keeps dropping the last frame.
+ * Past the cap the client keeps its partial state rather than asking again -
+ * which is exactly the behaviour that existed before the watchdog, so the cap
+ * degrades to the status quo instead of to something worse.
+ */
+export const MAX_WATCHDOG_RESTREAMS_PER_EPOCH = 3;
+
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
 function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
@@ -2441,6 +2463,94 @@ export function createChatSessionStoreWithNotificationDependencies(
       requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
     };
 
+    let streamCompletionTimer: number | null = null;
+    let watchdogRestreamsForEpoch: { epoch: number; count: number } | null =
+      null;
+
+    const clearStreamCompletionWatchdog = (): void => {
+      if (streamCompletionTimer === null) return;
+      window.clearTimeout(streamCompletionTimer);
+      streamCompletionTimer = null;
+    };
+
+    /**
+     * Is a chunked delivery still missing part of what it promised?
+     *
+     * Both streams state their own total, which is what makes this answerable
+     * without tracking chunk counts: the skeleton's is `rowCount` (and
+     * `skeletonComplete` is only set by a chunk carrying `isFinal`, once its
+     * coverage agrees), and the summaries' is `accumulatedFileChangeCount`
+     * from the snapshot.
+     */
+    const chunkedDeliveryIncomplete = (): boolean => {
+      const state = get();
+      if (state.transcriptWindow.rowCount > 0) {
+        if (!state.transcriptWindow.skeletonComplete) return true;
+      }
+      return (
+        state.accumulatedFileChangeSummaries.length <
+        state.accumulatedFileChangeCount
+      );
+    };
+
+    /**
+     * Notice a chunked delivery that STOPPED rather than finished.
+     *
+     * Both of these streams close their loop only when the final chunk
+     * arrives - `applySkeletonChunk` reads completeness off `chunk.isFinal`,
+     * and the summaries' gap check only runs when a LATER chunk exposes the
+     * hole. Losing exactly the last frame is therefore silent: the skeleton
+     * suffix keeps no metadata and `userRowPresence` answers `"unknown"`
+     * forever, the file rows stay missing with `Review all` held back by a
+     * nonzero undelivered count, and neither repairs before a reconnect. The
+     * window's own doc already says what that state is worth: "`skeletonComplete`
+     * merely goes false, which requests no repair."
+     *
+     * An IDLE timeout, re-armed by every chunk, rather than one deadline for
+     * the whole stream. The failure being detected is a STALL, so a stream
+     * that is merely slow but still arriving must not be restarted - it would
+     * be torn down and re-sent precisely when the link is least able to afford
+     * it. Re-arming makes the question "has anything arrived lately", which is
+     * the question that actually distinguishes the two.
+     *
+     * Bounded by {@link MAX_WATCHDOG_RESTREAMS_PER_EPOCH}. A resnapshot
+     * restarts the very stream whose stall triggered it, so an unbounded
+     * version is a self-sustaining loop against a link that keeps dropping the
+     * last frame - the same shape as the range-request loop this store already
+     * shipped once. Past the cap it stops asking and leaves the partial state,
+     * which is no worse than the behaviour this replaces.
+     */
+    const armStreamCompletionWatchdog = (armWithoutReading: boolean): void => {
+      clearStreamCompletionWatchdog();
+      if (disposed || !windowedLine) return;
+      // `armWithoutReading` skips the pre-check for a caller whose state has
+      // not landed yet - a snapshot can be DEFERRED, so reading completeness
+      // here would read the window the snapshot is about to replace. Arming
+      // costs one idle timer; the fire-time check below is the authoritative
+      // one either way, and a missed arm is the failure that matters.
+      if (!armWithoutReading && !chunkedDeliveryIncomplete()) {
+        // Completed: the next stall starts from a clean budget.
+        watchdogRestreamsForEpoch = null;
+        return;
+      }
+      const epoch = get().transcriptWindow.epoch;
+      streamCompletionTimer = window.setTimeout(() => {
+        streamCompletionTimer = null;
+        if (disposed || !windowedLine) return;
+        // A stream belonging to a coordinate space this client has left says
+        // nothing about the one it is in now.
+        if (get().transcriptWindow.epoch !== epoch) return;
+        if (!chunkedDeliveryIncomplete()) return;
+        const spent =
+          watchdogRestreamsForEpoch?.epoch === epoch
+            ? watchdogRestreamsForEpoch.count
+            : 0;
+        if (spent >= MAX_WATCHDOG_RESTREAMS_PER_EPOCH) return;
+        watchdogRestreamsForEpoch = { epoch, count: spent + 1 };
+        requestResnapshotOnceForEpoch(epoch);
+      }, STREAM_COMPLETION_TIMEOUT_MS);
+    };
+
     let hydrationRequestTimer: number | null = null;
 
     /**
@@ -2918,6 +3028,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // discriminator now reports.
         windowedLine = false;
         clearInFlightHydration();
+        clearStreamCompletionWatchdog();
         // Not merely unawaited: this line no longer HAS ordinals, so an answer
         // still in the air describes a coordinate space nothing here can read.
         forgetOutstandingHydration();
@@ -3024,6 +3135,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           // leave it empty, with the header still counting the files it can no
           // longer list.
         });
+        // An aux-only re-broadcast - a queue change, an approval - clears the
+        // resnapshot latch and `invalidated` while sending no chunks at all
+        // (see the comment just above). If the re-stream this client asked for
+        // was itself dropped, nothing else would ever ask again: the partial
+        // index would simply read as valid. `true` because the apply above may
+        // have DEFERRED, so completeness cannot be read here yet.
+        armStreamCompletionWatchdog(true);
         requestPlannedHydration();
       },
       onSkeletonChunk: (frame) => {
@@ -3042,6 +3160,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // with no ids to check against finally meets the rows it claimed.
         const window = applySkeletonChunk(get().transcriptWindow, frame.chunk);
         publishWindowedTranscript(window, null);
+        // Re-arms while the skeleton is still short, disarms once it covers
+        // `rowCount`. A stream that simply stops after a non-final chunk is
+        // otherwise indistinguishable from one still in progress.
+        armStreamCompletionWatchdog(false);
         requestPlannedHydration();
       },
       onIndexChanged: (frame) => {
@@ -3175,6 +3297,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           ];
           return { accumulatedFileChangeSummaries: summaries };
         });
+        // The gap check above only fires when a LATER chunk exposes the hole,
+        // so it cannot see the stream simply stopping. Armed after the `set`
+        // so the watchdog reads the assembled length this chunk produced.
+        armStreamCompletionWatchdog(false);
       },
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -5263,6 +5389,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearInFlightHydration();
         forgetOutstandingHydration();
         clearResnapshotRequest();
+        clearStreamCompletionWatchdog();
         closeStreamClient();
       },
     };
