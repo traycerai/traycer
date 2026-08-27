@@ -15,9 +15,24 @@
  * `onClose` is null for a RESTING field - one that is always present rather
  * than a mode entered and left. Such a field has nothing to close, so it shows
  * no `esc` affordance and claims no keyboard the surface may not have.
+ * `onClear` is null for a field that offers no clear affordance at all.
+ *
+ * On a phone every one of these renders the SAME box, regardless of which panel
+ * it belongs to: a filter that looks like one thing in one category and another
+ * thing in the next reads as two different controls. The treatment is the
+ * git-diff repo switcher's, which is also the only one of them that was safe
+ * there - the others filled with `bg-muted`, and every preset dark theme
+ * collapses `--muted` into the sheet's own `--popover`, rendering the box
+ * invisible. `--input` does not collapse.
+ *
+ * It keys on the VIEWPORT rather than a prop because the file-tree and git-diff
+ * panels are the same components on both surfaces - they mount inside the
+ * switcher's embeds - so a caller could not tell the phone from the desktop.
+ * That is also what keeps this one variant instead of five skins.
  */
 import { Search, X } from "lucide-react";
 import type { KeyboardEvent, RefObject } from "react";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   InputGroup,
   InputGroupAddon,
@@ -31,6 +46,16 @@ import { cn } from "@/lib/utils";
  * drives. `null` when results are not a popup the field owns - the switcher's
  * hits are ordinary rows in the list below it, not an overlay it controls.
  */
+/**
+ * The one phone treatment. `h-11` rather than the reference box's `h-8`: that
+ * height is a pointer-sized control, and this is the only surface where the
+ * touch-target guideline binds. The `!` modifiers are not decoration - the
+ * `InputGroup` primitive sets its own height and shadow, and a bare utility
+ * would tie rather than win.
+ */
+const MOBILE_FIELD_CLASS =
+  "h-11! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!";
+
 export interface PanelSearchFieldCombobox {
   readonly listboxRendered: boolean;
   readonly listboxId: string;
@@ -46,7 +71,7 @@ export function PanelSearchField(props: {
    * focus to the input so typing continues, which a resting field has no reason
    * to do (and on a phone would summon the keyboard the user just dismissed).
    */
-  readonly onClear: () => void;
+  readonly onClear: (() => void) | null;
   /** `null` for a resting field: no mode to leave, so no `esc` button. */
   readonly onClose: (() => void) | null;
   readonly onKeyDown: ((event: KeyboardEvent<HTMLInputElement>) => void) | null;
@@ -62,7 +87,10 @@ export function PanelSearchField(props: {
   readonly clearLabel: string;
   readonly closeLabel: string;
   readonly testIdPrefix: string;
-  /** Mount-specific sizing only; the field's own look is not a caller concern. */
+  /**
+   * The DESKTOP look for this mount. Ignored on a phone, where every panel
+   * search renders the one shared box.
+   */
   readonly className: string;
 }) {
   const {
@@ -80,8 +108,14 @@ export function PanelSearchField(props: {
     testIdPrefix,
     className,
   } = props;
+  const isMobileViewport = useIsMobileViewport();
   return (
-    <InputGroup className={cn("w-full", className)}>
+    <InputGroup
+      className={cn(
+        "w-full",
+        isMobileViewport ? MOBILE_FIELD_CLASS : className,
+      )}
+    >
       <InputGroupAddon align="inline-start">
         <Search className="size-3.5" aria-hidden />
       </InputGroupAddon>
@@ -112,7 +146,7 @@ export function PanelSearchField(props: {
         data-testid={`${testIdPrefix}-input`}
       />
       <InputGroupAddon align="inline-end">
-        {value.length > 0 ? (
+        {onClear !== null && value.length > 0 ? (
           <InputGroupButton
             type="button"
             size="icon-xs"
