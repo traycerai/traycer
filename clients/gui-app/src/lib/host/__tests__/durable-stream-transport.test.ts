@@ -249,6 +249,7 @@ describe("openDurableStreamTransport", () => {
     // this host, so an answer from it would not mean it is still the right one.
     expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change", {
       probeFirst: false,
+      wakeProbe: null,
     });
 
     // Endpoint goes away (host down), then returns on a new url: re-dial again -
