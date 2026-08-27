@@ -2264,6 +2264,79 @@ describe("canonical status: activation-state derivation", () => {
   });
 });
 
+// Ticket 07 §5.2.7 / retention (`isTerminalRetentionExpired`): `getStatus()`'s
+// `localAttempt` is the host-DOWN window's only observation, so an aged-out
+// terminal record must not resurface a week-old failure as the freshest
+// available fact. Direct JSON writes, mirroring `attemptRecordFields` /
+// `writeAttemptRecord` in the "F3: routeForceRestartContinuation via respawn"
+// describe block below - a terminal record's shape, not the legal
+// claim/commit path, is what `readLocalAttemptFacts` reads.
+describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
+  function writeTerminalAttemptRecord(overrides: {
+    readonly updatedAt: string;
+  }): void {
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      updateAttemptRecordPath(layout.rootDir),
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: "local-attempt-1",
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "failed",
+        execution: "terminal",
+        continuation: null,
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: overrides.updatedAt,
+        completedAt: null,
+        error: null,
+      }),
+    );
+  }
+
+  it("suppresses a terminal `failed` record older than the 7-day retention bound", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const eightDaysAgo = new Date(
+      Date.now() - 8 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    writeTerminalAttemptRecord({ updatedAt: eightDaysAgo });
+
+    const status = await newController("production").getStatus();
+
+    expect(status.localAttempt).toBeNull();
+  });
+
+  it("still surfaces a terminal `failed` record stamped recently", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    writeTerminalAttemptRecord({ updatedAt: oneHourAgo });
+
+    const status = await newController("production").getStatus();
+
+    expect(status.localAttempt).toEqual({
+      attemptId: "local-attempt-1",
+      generation: 1,
+      sequence: 1,
+      targetVersion: "2.0.0",
+      phase: "failed",
+      continuation: null,
+      updatedAt: oneHourAgo,
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Yank/apply ordering edge: `applyStaged` awaits any in-flight-or-due
 // eligibility reconcile for the staged version before re-reading

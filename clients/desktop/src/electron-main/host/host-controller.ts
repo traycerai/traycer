@@ -35,6 +35,7 @@ import {
 import {
   readUpdateAttemptRecord,
   commitAttemptMutationWithCapability,
+  isTerminalRetentionExpired,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
@@ -965,6 +966,16 @@ export class HostController {
     const read = await readUpdateAttemptRecord(this.layout.rootDir);
     if (read.kind !== "valid") return null;
     const record = read.value;
+    // The renderer's host-down memorial promises "a failure stays
+    // discoverable until it is superseded or ages out", and the store-open
+    // prune alone cannot keep the second half: pruning is handle-bound, a
+    // handle exists only at a lock acquisition, and a stable host may not
+    // acquire one for months. Retention is therefore also enforced at this
+    // read seam — an aged-out terminal record answers `null` ("cannot say",
+    // same as absent) rather than resurfacing a week-old failure as the
+    // freshest available fact. The record file itself is left for the next
+    // contender's prune; a facts read must not grow a write path.
+    if (isTerminalRetentionExpired(record, Date.now())) return null;
     return {
       attemptId: record.attemptId,
       generation: record.generation,

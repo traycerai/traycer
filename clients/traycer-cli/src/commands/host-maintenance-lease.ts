@@ -282,6 +282,52 @@ async function superviseRootMaintenanceExecutor(
     throw new Error("maintenance executor did not expose a process identity");
   }
   const supervisorPid = child.pid;
+  // Terminal evidence is recorded from the instant of spawn. `error` and
+  // `close` are emitted once and never replayed: with the first subscription
+  // sitting after the liveness rebind below — a filesystem round trip — an
+  // executor that failed to exec or died immediately emitted into no
+  // listener. The `error` became an uncaught event that killed this process
+  // mid-lease; the exit left the supervision promise pending forever with the
+  // attempt lock held. Record the first terminal event here, synchronously
+  // (Node cannot deliver either event while this setup runs), and let the
+  // supervision promise reconcile it AFTER the rebind lands — reconciling
+  // earlier would let `restoreHolder` race the very publication it restores
+  // from.
+  //
+  // `close`, not `exit`, deliberately: `exit` can be delivered while the
+  // final stdout chunk — the one carrying the executor's `complete` frame —
+  // is still in the pipe. Classifying there reads `completed === null` for an
+  // executor that did complete, and reports failure over root platform work
+  // that already finished. `close` fires only after the stdout stream has
+  // ended, and a stream's events are ordered, so every `data` callback (and
+  // therefore `finish`) has run before classification.
+  type ExecutorTermination =
+    | { readonly kind: "spawn-error"; readonly error: Error }
+    | {
+        readonly kind: "closed";
+        readonly code: number | null;
+        readonly signal: NodeJS.Signals | null;
+      };
+  let termination: ExecutorTermination | null = null;
+  let onTermination: (() => void) | null = null;
+  const recordTermination = (event: ExecutorTermination): void => {
+    // First evidence wins: a failed spawn emits `error` and then `close`, and
+    // the error names the cause while that close carries only a null code.
+    if (termination !== null) return;
+    termination = event;
+    onTermination?.();
+  };
+  child.once("error", (error) => {
+    recordTermination({ kind: "spawn-error", error });
+  });
+  child.once("close", (code, signal) => {
+    recordTermination({ kind: "closed", code, signal });
+  });
+  // A refusal or acknowledgement can land on an executor that just died, and
+  // stdin reports that EPIPE asynchronously on its own emitter — an unhandled
+  // stream `error` is a throw. Deliberately inert: the `close` above carries
+  // the exit evidence an EPIPE does not.
+  child.stdin.on("error", () => undefined);
   // C is only a liveness publisher, not a capability recipient. Until it
   // obtains D's detached group and receives B's acknowledgement, D is held
   // at its start gate and cannot run a raw actuator. The later group-bound
@@ -335,13 +381,16 @@ async function superviseRootMaintenanceExecutor(
       await restoreHolder();
       reject(error);
     };
-    child.once("error", (error) => {
-      void settleFailure(error).catch(reject);
-    });
-    child.once("exit", (code, signal) => {
+    onTermination = (): void => {
       if (settled) return;
+      const event = termination;
+      if (event === null) return;
+      if (event.kind === "spawn-error") {
+        void settleFailure(event.error).catch(reject);
+        return;
+      }
       const completion: { readonly value: unknown } | null = completed;
-      if (completion !== null && code === 0) {
+      if (completion !== null && event.code === 0) {
         settled = true;
         void (async () => {
           if (actuatorGroupId !== null && process.platform !== "win32") {
@@ -354,10 +403,10 @@ async function superviseRootMaintenanceExecutor(
       }
       void settleFailure(
         new Error(
-          `maintenance executor exited (${code ?? "null"}, ${signal ?? "none"})`,
+          `maintenance executor exited (${event.code ?? "null"}, ${event.signal ?? "none"})`,
         ),
       ).catch(reject);
-    });
+    };
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       buffer += chunk;
@@ -389,6 +438,10 @@ async function superviseRootMaintenanceExecutor(
         );
       }
     });
+    // The executor can have terminated while the liveness rebind above was in
+    // flight; the recorded evidence is reconciled here, once the supervision
+    // promise owns settlement.
+    if (termination !== null) onTermination();
   });
 }
 

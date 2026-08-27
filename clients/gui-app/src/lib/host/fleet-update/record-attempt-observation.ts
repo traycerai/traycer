@@ -46,11 +46,15 @@ import type { FleetUpdateRecordObservation } from "@/lib/host/fleet-update/fleet
  * this function only stops suppressing the observation, and the existing
  * retained-phase projection does the rest.
  *
- * The memorial is BOUNDED, which is what makes it honest. A terminal record is
- * pruned once it passes `TERMINAL_ATTEMPT_RETENTION_MS` (seven days), enforced
- * at attempt-store open, so "a failure stays discoverable until it is
- * superseded or ages out" is a real guarantee rather than "forever" — which is
- * what the unconditional drop was implicitly defending against.
+ * The memorial is BOUNDED, which is what makes it honest. A terminal record
+ * past `TERMINAL_ATTEMPT_RETENTION_MS` (seven days) is pruned at attempt-store
+ * open — and, because a stable host may not open the store for months, the
+ * read seams enforce the same bound without waiting for a contender: Desktop's
+ * `readLocalAttemptFacts` answers `null` for an expired record, and the host's
+ * `projectUpdateOperation` projects it as `none`. So "a failure stays
+ * discoverable until it is superseded or ages out" is a real guarantee rather
+ * than "forever" — which is what the unconditional drop was implicitly
+ * defending against.
  */
 export function recordObservationFromLocalAttempt(input: {
   readonly hostId: string;

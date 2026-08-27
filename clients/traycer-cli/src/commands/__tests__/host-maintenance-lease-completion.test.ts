@@ -31,7 +31,7 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
   it("slices a non-empty supervisor body (guards both indexOf anchors)", () => {
     expect(supervisor.length).toBeGreaterThan(500);
     expect(supervisor).toContain("const finish =");
-    expect(supervisor).toContain('child.once("exit"');
+    expect(supervisor).toContain('child.once("close"');
   });
 
   it("never uses `undefined` to mean 'no completion frame arrived'", () => {
@@ -48,11 +48,54 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
       /let completed: \{ readonly value: unknown \} \| null = null;/,
     );
     expect(supervisor).toMatch(/completed = \{ value \};/);
-    expect(supervisor).toMatch(/completion !== null && code === 0/);
+    expect(supervisor).toMatch(/completion !== null && event\.code === 0/);
     // Resolving `completion.value` rather than the box is what keeps an
     // actuator's own `null` — the Linux platform install's "left for the
     // developer to install by hand" — reaching the caller intact.
     expect(supervisor).toMatch(/resolve\(completion\.value\)/);
+  });
+
+  it("subscribes to close/error before the first await — Node emits them once, never replayed", () => {
+    // The defect this guards: with the first subscription sitting AFTER the
+    // liveness rebind (a filesystem round trip), an executor that failed to
+    // exec, or died immediately, could emit `error`/`close` into no listener
+    // at all before the subscription landed — the `error` became an uncaught
+    // event that killed this process mid-lease.
+    const errorIdx = supervisor.indexOf('child.once("error"');
+    const closeIdx = supervisor.indexOf('child.once("close"');
+    const stdinErrorIdx = supervisor.indexOf('child.stdin.on("error"');
+    const firstAwaitIdx = supervisor.indexOf(
+      "await rebindUpdateMutationCapabilityLiveness",
+    );
+    expect(errorIdx).toBeGreaterThan(-1);
+    expect(closeIdx).toBeGreaterThan(-1);
+    expect(stdinErrorIdx).toBeGreaterThan(-1);
+    expect(firstAwaitIdx).toBeGreaterThan(-1);
+    expect(errorIdx).toBeLessThan(firstAwaitIdx);
+    expect(closeIdx).toBeLessThan(firstAwaitIdx);
+    expect(stdinErrorIdx).toBeLessThan(firstAwaitIdx);
+  });
+
+  it("reconciles an early death once the promise body owns settlement", () => {
+    // The executor can have terminated while the liveness rebind above was in
+    // flight; nothing between the subscriptions and this point could act on
+    // that evidence, so the promise body re-checks it once it is the thing
+    // holding `onTermination`.
+    expect(supervisor).toContain("if (termination !== null) onTermination();");
+  });
+
+  it("recordTermination keeps only the first evidence", () => {
+    // A failed spawn emits `error` and then `close`; the error names the
+    // cause while that close would otherwise overwrite it with a bare null
+    // code. Guard must live INSIDE `recordTermination`, not merely somewhere
+    // in the file.
+    const recordIdx = supervisor.indexOf("const recordTermination =");
+    const nextEventSubscriptionIdx = supervisor.indexOf('child.once("error"');
+    expect(recordIdx).toBeGreaterThan(-1);
+    expect(nextEventSubscriptionIdx).toBeGreaterThan(recordIdx);
+    const guardIdx = supervisor.indexOf("if (termination !== null) return;");
+    expect(guardIdx).toBeGreaterThan(recordIdx);
+    expect(guardIdx).toBeLessThan(nextEventSubscriptionIdx);
   });
 });
 

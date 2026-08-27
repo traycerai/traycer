@@ -170,6 +170,34 @@ describe("useActiveUpdatePollAccelerator - one timer per host, not per consumer"
     b.unmount();
   });
 
+  it("every interval-driven invalidateQueries call passes { cancelRefetch: false }", () => {
+    // Non-canceling, or the cadence eats its own reads: TanStack's default
+    // `cancelRefetch: true` would abort the in-flight `host.status` read on
+    // every tick, so on a link whose RTT exceeds this cadence no poll would
+    // ever complete. See the comment beside the `setInterval` callback in the
+    // hook itself.
+    vi.useFakeTimers();
+    const { client, wrapper } = harness();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const hook = renderHook(
+      () =>
+        useActiveUpdatePollAccelerator({ hostId: "host-a", view: ACTIVE_VIEW }),
+      { wrapper },
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(FLEET_ACTIVE_POLL_MS * 3);
+    });
+
+    expect(invalidate).toHaveBeenCalledTimes(3);
+    for (const call of invalidate.mock.calls) {
+      expect(call[1]).toEqual({ cancelRefetch: false });
+    }
+
+    hook.unmount();
+  });
+
   it("a view that does not warrant fast polling registers nothing", () => {
     // The positive control for the gate: if this registered, the accelerator
     // would be running during idle and every assertion above would be measuring
