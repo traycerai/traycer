@@ -209,8 +209,8 @@ describe("snapshotOwnerTeardownHolders", () => {
     ).toEqual([]);
   });
 
-  it("includes a live shell on a retained path when a chat-turn will call agent.stop", () => {
-    const holders = snapshotOwnerTeardownHolders(
+  it("discloses a retained-path shell under agent.stop without a shell stop target", () => {
+    const snapshot = snapshotOwnerTeardown(
       input({
         hasActiveTurn: true,
         droppedRunDirectories: ["/wt/old"],
@@ -225,9 +225,45 @@ describe("snapshotOwnerTeardownHolders", () => {
         ],
       }),
     );
-    expect(holders.map((holder) => holder.label)).toEqual([
+    expect(snapshot.holders.map((holder) => holder.label)).toEqual([
       "Planner is working. Stopping the agent also stops its background shells and clears queued messages",
       "sleep 1",
+    ]);
+    expect(snapshot.stopTargets).toEqual([
+      {
+        kind: "chat-turn",
+        holderKey:
+          "chat:chat-1:chat-turn:Planner is working. Stopping the agent also stops its background shells and clears queued messages",
+      },
+    ]);
+  });
+
+  it("does not attach a dropped-path shell stop target when agent.stop covers the owner", () => {
+    const snapshot = snapshotOwnerTeardown(
+      input({
+        hasActiveTurn: true,
+        droppedRunDirectories: ["/wt/old"],
+        shells: [
+          {
+            id: "sh-old",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "/wt/old",
+            live: true,
+          },
+        ],
+      }),
+    );
+    expect(snapshot.holders.map((holder) => holder.holdKind)).toEqual([
+      "chat-turn",
+      "supervised-shell",
+    ]);
+    expect(snapshot.stopTargets).toEqual([
+      {
+        kind: "chat-turn",
+        holderKey:
+          "chat:chat-1:chat-turn:Planner is working. Stopping the agent also stops its background shells and clears queued messages",
+      },
     ]);
   });
 

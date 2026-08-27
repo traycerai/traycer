@@ -1836,7 +1836,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     readonly restoreDraftOnDismiss: WorktreeFolderIntent | null;
   } | null>(null);
   const [teardownCommitPending, setTeardownCommitPending] = useState(false);
-  const teardownAbortRef = useRef(false);
+  const teardownRunIdRef = useRef(0);
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
   );
@@ -2269,9 +2269,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       requestStagedFolderCommit();
       return;
     }
-    teardownAbortRef.current = false;
+    const runId = ++teardownRunIdRef.current;
     setTeardownCommitPending(true);
-    const isCancelled = (): boolean => teardownAbortRef.current;
+    const isCancelled = (): boolean => teardownRunIdRef.current !== runId;
     const failures = await runGuiComposedTeardown({
       stopTargets: dialog.capture.stopTargets,
       stopShell: (commandId) =>
@@ -2289,7 +2289,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       isCancelled,
     });
     if (isCancelled()) {
-      setTeardownCommitPending(false);
       return;
     }
     setTeardownCommitPending(false);
@@ -3121,7 +3120,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           void confirmImmediateCommit();
         }}
         onDefer={() => {
-          teardownAbortRef.current = true;
+          teardownRunIdRef.current += 1;
           setTeardownCommitPending(false);
           const restore = teardownDialog?.restoreRemovalOnDismiss;
           if (restore !== null && restore !== undefined) {
@@ -3137,7 +3136,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           setTeardownDialog(null);
         }}
         onDismiss={() => {
-          teardownAbortRef.current = true;
+          teardownRunIdRef.current += 1;
           setTeardownCommitPending(false);
           const restore = teardownDialog?.restoreRemovalOnDismiss;
           if (restore !== null && restore !== undefined) {

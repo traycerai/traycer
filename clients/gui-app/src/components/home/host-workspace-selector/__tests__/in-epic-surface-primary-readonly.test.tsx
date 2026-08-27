@@ -567,6 +567,19 @@ function shellHolder(
   };
 }
 
+function chatTurnHolder(label: string): WorktreeBusyHolder {
+  return {
+    ownerRef: {
+      epicId: "epic-1",
+      ownerKind: "chat",
+      ownerId: "owner-1",
+    },
+    holdKind: "chat-turn",
+    activity: "working",
+    label,
+  };
+}
+
 function shellSnapshot(
   label: string,
   commandId = "sh-1",
@@ -871,6 +884,97 @@ it("keeps a newer TUI draft after an in-flight commit of an older capture", asyn
       ]?.entries[0],
     ).toMatchObject({ branch: { name: "feat-b" } });
   });
+});
+
+it("stops a chat turn once and does not re-stop expanded agent.stop-consequence shells", async () => {
+  seedResolvedBindingMetadata();
+  const turn = chatTurnHolder(
+    "Owner is working. Stopping the agent also stops its background shells and clears queued messages",
+  );
+  const shell = shellHolder("sleep 1", "chat");
+  teardownMocks.snapshot.mockImplementation(() => ({
+    holders: [turn, shell],
+    stopTargets: [
+      {
+        kind: "chat-turn",
+        holderKey: teardownHolderKey(turn),
+      },
+    ],
+  }));
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+    "sleep 1",
+  );
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  await waitFor(() => {
+    expect(teardownStopMocks.stopAgent).toHaveBeenCalledTimes(1);
+  });
+  expect(teardownStopMocks.stopShell).not.toHaveBeenCalled();
+  await waitFor(() => {
+    expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("does not apply a cancelled teardown after a newer confirm starts", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+  const stopResolvers: Array<(value: unknown) => void> = [];
+  teardownStopMocks.stopShell.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        stopResolvers.push(resolve);
+      }),
+  );
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+  await waitFor(() => {
+    expect(teardownStopMocks.stopShell).toHaveBeenCalledTimes(1);
+  });
+  fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+
+  act(() => {
+    useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+      entries: [newWorktreeIntent("/repo/alpha", "feat-b")],
+    });
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  await screen.findAllByTestId("folder-row");
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+  await waitFor(() => {
+    expect(teardownStopMocks.stopShell).toHaveBeenCalledTimes(2);
+  });
+
+  await act(async () => {
+    stopResolvers[0]?.({});
+    await Promise.resolve();
+  });
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+
+  act(() => {
+    stopResolvers[1]?.({});
+  });
+  await waitFor(() => {
+    expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
+  });
+  const createArg = mutationMocks.createWorktree.mock.calls[0]?.[0] as {
+    readonly entries: ReadonlyArray<{
+      readonly branch?: { readonly name?: string };
+    }>;
+  };
+  expect(createArg.entries[0]?.branch?.name).toBe("feat-b");
 });
 
 it("does not apply remove or create if the user cancels during in-flight teardown", async () => {

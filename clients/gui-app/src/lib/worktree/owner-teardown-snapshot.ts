@@ -173,11 +173,17 @@ export function snapshotOwnerTeardown(
       label: shellLabel(shell),
     };
     holders.push(holder);
-    stopTargets.push({
-      kind: "supervised-shell",
-      commandId: shell.id,
-      holderKey: teardownHolderKey(holder),
-    });
+    // agent.stop already awaits stopCommandsForAgent for every owner
+    // shell. Expanded consequence rows are disclosure-only so a
+    // follow-up managedCommand.stop cannot reject after teardown
+    // succeeded and block the binding commit.
+    if (!agentStopClearsOwner) {
+      stopTargets.push({
+        kind: "supervised-shell",
+        commandId: shell.id,
+        holderKey: teardownHolderKey(holder),
+      });
+    }
   }
   return { holders, stopTargets };
 }
