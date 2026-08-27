@@ -1062,14 +1062,26 @@ export function isChatRunInProgress(runStatus: ChatRunStatus): boolean {
  * dedup latch is released and the plan re-issued.
  *
  * Generous, because an oversized range rides the BULK lane behind whatever else
- * is queued there. Self-limiting rather than a retry counter: at most one
- * request of each kind is outstanding at a time, so a link that keeps dropping
- * them costs one round trip per timeout rather than a loop.
+ * is queued there. Releasing the latch does NOT cancel the request: the earlier
+ * answer stays eligible to seat (see `outstandingHydrationRequests`), so this
+ * deadline governs only how long a possibly-dropped request may suppress a
+ * re-ask. Timing it too tight therefore costs a redundant round trip, never a
+ * discarded answer - which is what makes a generous value safe on both sides.
  *
  * Module scope rather than the store closure so the helpers that arm it cannot
  * out-order its declaration.
  */
-const HYDRATION_REQUEST_TIMEOUT_MS = 30_000;
+export const HYDRATION_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * How many sent-and-unanswered range requests keep their staleness record.
+ *
+ * Reached only when the host answers nothing for several timeouts running, so
+ * the value just has to be comfortably above the number of re-asks a live
+ * connection can stack up. Small enough that the map cannot become a leak on a
+ * tab left open against a wedged host.
+ */
+const MAX_OUTSTANDING_HYDRATION_REQUESTS = 8;
 
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
@@ -2279,18 +2291,28 @@ export function createChatSessionStoreWithNotificationDependencies(
     let visibleTranscriptRange: OrdinalRange | null = null;
 
     /**
-     * The range request currently in flight, so a stream of identical
-     * viewport reports does not re-send the same ask while the host is
-     * answering it. Cleared when a range response arrives (whatever it held -
-     * a partial answer changes the next plan anyway), cleared on every
-     * windowed snapshot (a reconnect's request may have died with its
-     * connection, and the transcript epoch can survive one - without the
-     * clear, an identical re-plan would be suppressed forever), and
-     * superseded by any differently-planned request.
+     * What a request that has been SENT and not yet answered still promises.
      *
-     * `requestId` and `superseded` are what make a LATE answer safe, and they
-     * cover different halves of one hazard. An oversized `range` response is
-     * the one frame on this line the relay may reclassify to its BULK lane,
+     * Kept per request id rather than on the dedup slot below, because the two
+     * answer different questions and their lifetimes are not the same. The
+     * slot asks "is there an outstanding ask for this range, so I should not
+     * re-send it"; this ledger asks "is the answer that just arrived still
+     * describing rows this client can trust". Releasing the first must not
+     * forget the second: a request the timeout gave up waiting for is one
+     * whose answer is LATE, and late is not the same as wrong.
+     *
+     * That distinction is the whole fix for a loop this store shipped once. A
+     * range response is deliberately unbounded for a single folded row (see
+     * `read-range.ts`) and rides the relay's BULK lane, so exceeding any
+     * client-side deadline is an ordinary slow answer, not evidence of a drop.
+     * With one slot holding both roles, the timeout's re-issue replaced the id
+     * the original answer would be matched against, so that answer was
+     * discarded on arrival and its replacement re-armed the same deadline -
+     * every answer thrown away, every discard minting one more request.
+     *
+     * `superseded` is the other half of the hazard, and it is why an answer
+     * cannot simply be trusted because it parses. An oversized `range`
+     * response is the one frame on this line the relay may reclassify to BULK,
      * where it can be reordered behind INTERACTIVE deltas - so an
      * `indexChanged` naming a row that response is carrying can arrive FIRST.
      * An `updated` deliberately keeps both the epoch and the row id (see
@@ -2299,8 +2321,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * The pre-update body seats, passes every check, and nothing re-requests
      * it - a row frozen at a previous revision for the life of the epoch.
      */
-    let inFlightHydrationRequest: {
-      readonly requestId: string;
+    interface OutstandingHydrationRequest {
       readonly epoch: number;
       readonly range: OrdinalRange;
       /**
@@ -2310,6 +2331,41 @@ export function createChatSessionStoreWithNotificationDependencies(
        * can serve rather than by how long the request stays in flight.
        */
       readonly superseded: ReadonlySet<number> | "all";
+    }
+
+    /**
+     * Every sent-and-unanswered request, newest last.
+     *
+     * Bounded by {@link MAX_OUTSTANDING_HYDRATION_REQUESTS} rather than left
+     * to grow: entries leave on their answer, and a host that answers nothing
+     * would otherwise accumulate one per timeout for the life of the tab. The
+     * cap evicts the OLDEST, whose answer is the least likely to still be
+     * coming - and dropping a record only costs the round trip a re-plan
+     * already pays for, since an unrecorded response is discarded, never
+     * seated.
+     */
+    const outstandingHydrationRequests = new Map<
+      string,
+      OutstandingHydrationRequest
+    >();
+
+    /**
+     * The range request currently in flight, so a stream of identical
+     * viewport reports does not re-send the same ask while the host is
+     * answering it. Cleared when a range response arrives (whatever it held -
+     * a partial answer changes the next plan anyway), cleared on every
+     * windowed snapshot (a reconnect's request may have died with its
+     * connection, and the transcript epoch can survive one - without the
+     * clear, an identical re-plan would be suppressed forever), and
+     * superseded by any differently-planned request.
+     *
+     * Holds no staleness state of its own: that lives in
+     * {@link outstandingHydrationRequests}, keyed by the id this names.
+     */
+    let inFlightHydrationRequest: {
+      readonly requestId: string;
+      readonly epoch: number;
+      readonly range: OrdinalRange;
     } | null = null;
 
     /**
@@ -2401,14 +2457,32 @@ export function createChatSessionStoreWithNotificationDependencies(
      * need a reconnect.
      *
      * So the wait is bounded ({@link HYDRATION_REQUEST_TIMEOUT_MS}) and the
-     * plan is simply re-issued. A late answer to the abandoned request is
-     * discarded by `rangeResponseIsStale` on its request id.
+     * plan is simply re-issued.
+     *
+     * Releasing the slot says nothing about the request's ANSWER: its record
+     * in `outstandingHydrationRequests` survives, so an answer that merely
+     * took longer than the deadline still seats. Callers that mean "these
+     * ordinals no longer name anything I can use" - a snapshot, a downgrade -
+     * must additionally call {@link forgetOutstandingHydration}.
      */
     const clearInFlightHydration = (): void => {
       inFlightHydrationRequest = null;
       if (hydrationRequestTimer === null) return;
       window.clearTimeout(hydrationRequestTimer);
       hydrationRequestTimer = null;
+    };
+
+    /**
+     * Drop every outstanding request's staleness record, so any answer still
+     * on the wire is discarded rather than seated.
+     *
+     * For the coordinate-space resets only. A snapshot re-frames the window
+     * and a downgrade leaves the windowed line entirely; in both, an ordinal
+     * an outstanding request was framed against no longer denotes the row it
+     * did when the request was sent, and no per-response check can notice.
+     */
+    const forgetOutstandingHydration = (): void => {
+      outstandingHydrationRequests.clear();
     };
 
     const requestPlannedHydration = (): void => {
@@ -2439,14 +2513,28 @@ export function createChatSessionStoreWithNotificationDependencies(
       }
       const requestId = uuidv4();
       // Clears the previous request's timeout as well as its slot: replanning
-      // over an outstanding request abandons it, and its deadline with it.
+      // over an outstanding request abandons it, and its deadline with it. Its
+      // ledger entry deliberately stays - a differently-planned request does
+      // not make the earlier answer wrong, only unawaited.
       clearInFlightHydration();
       inFlightHydrationRequest = {
         requestId,
         epoch: transcriptWindow.epoch,
         range: next,
-        superseded: new Set<number>(),
       };
+      outstandingHydrationRequests.set(requestId, {
+        epoch: transcriptWindow.epoch,
+        range: next,
+        superseded: new Set<number>(),
+      });
+      while (
+        outstandingHydrationRequests.size > MAX_OUTSTANDING_HYDRATION_REQUESTS
+      ) {
+        // Map iterates in insertion order, so this is the oldest record.
+        const oldest = outstandingHydrationRequests.keys().next();
+        if (oldest.done === true) break;
+        outstandingHydrationRequests.delete(oldest.value);
+      }
       hydrationRequestTimer = window.setTimeout(() => {
         hydrationRequestTimer = null;
         // Only the request this timeout was armed for. Anything else already
@@ -2454,6 +2542,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || inFlightHydrationRequest?.requestId !== requestId) {
           return;
         }
+        // Releases the dedup slot so the plan can be re-asked. `requestId`
+        // keeps its ledger entry: this is a request that has waited too long,
+        // not one whose answer has been ruled out.
         inFlightHydrationRequest = null;
         requestPlannedHydration();
       }, HYDRATION_REQUEST_TIMEOUT_MS);
@@ -2493,34 +2584,45 @@ export function createChatSessionStoreWithNotificationDependencies(
       readonly epoch: number;
       readonly changes: readonly ChatIndexChange[];
     }): void => {
-      const inFlight = inFlightHydrationRequest;
-      if (inFlight === null || inFlight.superseded === "all") return;
+      if (outstandingHydrationRequests.size === 0) return;
       const invalidated = bodyInvalidatingOrdinals(input.changes);
-      if (invalidated === "all") {
-        inFlightHydrationRequest = { ...inFlight, superseded: "all" };
-        return;
+      // EVERY outstanding request, not just the one holding the dedup slot. A
+      // reindex invalidates whatever is in the air, and after a timeout the
+      // slot no longer names the request whose answer is most likely to land
+      // next - marking only that one would let an older answer seat a body
+      // this frame just superseded.
+      for (const [requestId, request] of outstandingHydrationRequests) {
+        if (request.superseded === "all") continue;
+        if (invalidated === "all") {
+          outstandingHydrationRequests.set(requestId, {
+            ...request,
+            superseded: "all",
+          });
+          continue;
+        }
+        // An `updated` from another epoch says nothing about whether THIS
+        // request's answer is still current: it describes rows in a coordinate
+        // space the request was not framed against, and `applyIndexChange`
+        // discards it for the same reason.
+        if (input.epoch !== request.epoch) continue;
+        // EXCLUSIVE at the top, because `request.range` is the planner's
+        // `OrdinalRange` rather than the wire request built from it: the
+        // request converts to the wire's inclusive bound by sending
+        // `toOrdinal - 1`, so the highest ordinal a response can serve is
+        // `range.toOrdinal - 1`. Testing `<=` here would let a delta one row
+        // PAST the request supersede it, costing a discard and a re-fetch for
+        // a row it never asked for.
+        const inside = invalidated.filter(
+          (ordinal) =>
+            ordinal >= request.range.fromOrdinal &&
+            ordinal < request.range.toOrdinal,
+        );
+        if (inside.length === 0) continue;
+        outstandingHydrationRequests.set(requestId, {
+          ...request,
+          superseded: new Set([...request.superseded, ...inside]),
+        });
       }
-      // An `updated` from another epoch says nothing about whether THIS
-      // request's answer is still current: it describes rows in a coordinate
-      // space the request was not framed against, and `applyIndexChange`
-      // discards it for the same reason.
-      if (input.epoch !== inFlight.epoch) return;
-      // EXCLUSIVE at the top, because `inFlight.range` is the planner's
-      // `OrdinalRange` rather than the wire request built from it: the request
-      // converts to the wire's inclusive bound by sending `toOrdinal - 1`, so
-      // the highest ordinal a response can serve is `range.toOrdinal - 1`.
-      // Testing `<=` here would let a delta one row PAST the request supersede
-      // it, costing a discard and a re-fetch for a row it never asked for.
-      const inside = invalidated.filter(
-        (ordinal) =>
-          ordinal >= inFlight.range.fromOrdinal &&
-          ordinal < inFlight.range.toOrdinal,
-      );
-      if (inside.length === 0) return;
-      inFlightHydrationRequest = {
-        ...inFlight,
-        superseded: new Set([...inFlight.superseded, ...inside]),
-      };
     };
 
     /**
@@ -2530,20 +2632,25 @@ export function createChatSessionStoreWithNotificationDependencies(
      * that stopped before the invalidated ordinal is still current, and
      * discarding it would cost a round trip for nothing.
      *
-     * An untracked response is discarded rather than trusted. The slot is
-     * `null` only because a windowed snapshot cleared it (see that field's own
-     * doc), and a cleared slot is precisely the state in which nothing
-     * recorded what happened to these ordinals while the answer was in the
-     * air. Costing a re-request there is the cheap side of the trade; the
-     * expensive side is a body that renders as current forever.
+     * An untracked response is discarded rather than trusted. A record is
+     * absent only because a snapshot or a downgrade dropped it (see
+     * {@link forgetOutstandingHydration}) or the cap evicted it, and that is
+     * precisely the state in which nothing recorded what happened to these
+     * ordinals while the answer was in the air. Costing a re-request there is
+     * the cheap side of the trade; the expensive side is a body that renders
+     * as current forever.
+     *
+     * Matched against the response's OWN request rather than whichever one
+     * currently holds the dedup slot. A slow answer is late, not wrong: the
+     * question is what happened to the ordinals THIS request asked for, and
+     * the request that replaced it in the slot cannot answer that.
      */
     const rangeResponseIsStale = (response: ChatRangeResponse): boolean => {
-      const inFlight = inFlightHydrationRequest;
-      if (inFlight === null) return true;
-      if (inFlight.requestId !== response.requestId) return true;
-      if (inFlight.superseded === "all") return true;
+      const request = outstandingHydrationRequests.get(response.requestId);
+      if (request === undefined) return true;
+      if (request.superseded === "all") return true;
       const servedEnd = response.fromOrdinal + response.rowIds.length;
-      for (const ordinal of inFlight.superseded) {
+      for (const ordinal of request.superseded) {
         if (ordinal >= response.fromOrdinal && ordinal < servedEnd) return true;
       }
       return false;
@@ -2811,6 +2918,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // discriminator now reports.
         windowedLine = false;
         clearInFlightHydration();
+        // Not merely unawaited: this line no longer HAS ordinals, so an answer
+        // still in the air describes a coordinate space nothing here can read.
+        forgetOutstandingHydration();
         clearResnapshotRequest();
         deferredWindowedSnapshot = null;
         applyAuthoritativeSnapshot(frame, {
@@ -2864,6 +2974,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // See the field's own doc: a snapshot means a (re)connection settled,
         // and any request the previous connection had in flight is gone.
         clearInFlightHydration();
+        // Its answer is gone with it - a response cannot cross onto the new
+        // connection - and the snapshot re-frames the window regardless, so
+        // the records would only be able to admit an answer framed against
+        // the window this one replaces.
+        forgetOutstandingHydration();
         // A fresh snapshot IS the answer an invalidated window was waiting
         // for, whether or not this one was sent in reply to that request.
         clearResnapshotRequest();
@@ -2965,6 +3080,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         const tracked = inFlightHydrationRequest;
         const stale = rangeResponseIsStale(frame.range);
+        // This request is answered: it can neither be superseded nor seat
+        // anything again, whichever way the staleness check just went.
+        outstandingHydrationRequests.delete(frame.range.requestId);
         // Clear the slot ONLY for the request this response actually answers.
         //
         // Clearing it unconditionally forgets a replacement that is still on
@@ -5143,6 +5261,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         lease.unregister();
         clearBufferedDeltas();
         clearInFlightHydration();
+        forgetOutstandingHydration();
         clearResnapshotRequest();
         closeStreamClient();
       },

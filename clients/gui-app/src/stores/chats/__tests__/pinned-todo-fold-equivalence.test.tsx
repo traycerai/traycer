@@ -220,8 +220,12 @@ function hostPinnedTodoTexts(input: RenderedMessagesInput): string[] {
     // `setup.*` fixture failing for a reason unrelated to the pinned-todo fold.
     chatId: input.ownerId,
   });
-  const todo = foldPinnedTodo(rows, contentBlocksById(input.messages));
-  return (todo?.items ?? []).map((item) => item.text);
+  // `.todo` is the SELECTED todo; the fold's other half (`taskItems`, the task
+  // accumulator) is what the windowed client resumes from and is compared by
+  // `chat-pinned-todos.test.ts` rather than here - this suite is about the two
+  // implementations agreeing on the SELECTION.
+  const folded = foldPinnedTodo(rows, contentBlocksById(input.messages));
+  return (folded.todo?.items ?? []).map((item) => item.text);
 }
 
 /**

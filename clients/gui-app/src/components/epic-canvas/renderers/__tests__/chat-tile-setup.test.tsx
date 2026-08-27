@@ -259,6 +259,7 @@ function emitWindowedSnapshot(
       derived: {
         latestAssistantUsage: null,
         pinnedTodo: null,
+        pinnedTaskTodoItems: [],
         latestForkableAssistantMessageId: null,
         restorableSetupInterruption,
       },

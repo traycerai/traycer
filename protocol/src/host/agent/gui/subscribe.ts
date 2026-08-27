@@ -2571,11 +2571,11 @@ export const chatSubscribeV17 = defineStreamRpcContract({
  *
  * Renamed from `chatSubscribeLiveSchemaVersion` when the windowed line opened,
  * because "live" had quietly come to mean two things: the newest negotiable
- * line, and the line whose shapes the shallow parse is exact for. They are the
- * same version TODAY only because `1.8` is not registered yet — and the old
- * name invited exactly the edit that would break it, since it was declared
- * "next to the live contract so a future line bump cannot miss it". A future
- * line bump MUST miss this one.
+ * line, and the line whose shapes the shallow parse is exact for. `1.8` is
+ * registered, so those have already come apart: the newest negotiable line is
+ * `1.8` and this stays at `1.7`. The old name invited exactly the edit that
+ * would have broken it, since it was declared "next to the live contract so a
+ * future line bump cannot miss it". A future line bump MUST miss this one.
  */
 export const chatSubscribeFullSnapshotSchemaVersion =
   chatSubscribeV17.schemaVersion;

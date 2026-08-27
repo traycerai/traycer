@@ -19,7 +19,7 @@ import {
   type SnapshotDiffSource,
 } from "@/lib/chat/resolve-snapshot-diff-content";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
-import { useCumulativeSnapshotDiffs } from "@/hooks/snapshots/use-cumulative-snapshot-diffs";
+import { useSnapshotResolveCumulativeDiffs } from "@/hooks/snapshots/use-snapshot-resolve-cumulative-diffs";
 import { hostAccumulatedChangeRows } from "@/lib/chat/accumulated-change-rows";
 import {
   isWindowedTranscript,
@@ -267,7 +267,7 @@ function SnapshotDiffTileResolved(props: {
     enabled: segmentHashes !== null,
   });
 
-  const cumulative = useCumulativeSnapshotDiffs({
+  const cumulative = useSnapshotResolveCumulativeDiffs({
     payload: node.diff,
     // Same host as the hash query above, and for the same reason: the chat and
     // its snapshot blobs live on the host this tile is bound to (D15).

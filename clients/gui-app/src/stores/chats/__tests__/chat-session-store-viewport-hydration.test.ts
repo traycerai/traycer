@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
@@ -10,6 +10,7 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
+  HYDRATION_REQUEST_TIMEOUT_MS,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -105,6 +106,7 @@ function snapshot(input: {
   const derived: ChatTranscriptDerived = {
     latestAssistantUsage: null,
     pinnedTodo: null,
+    pinnedTaskTodoItems: [],
     latestForkableAssistantMessageId: null,
     restorableSetupInterruption: null,
   };
@@ -553,6 +555,99 @@ describe("chat session viewport hydration: review fixes", () => {
     }
   });
 
+  it("seats an answer that arrived after its request timed out", () => {
+    // The failure this pins is a LOOP, not a dropped frame, so the assertion
+    // has to bound the retries rather than check one response.
+    //
+    // A range response is deliberately unbounded for a single folded row (see
+    // `read-range.ts`) and rides the relay's BULK lane, so taking longer than
+    // the client's deadline is an ordinary slow answer. When the timeout
+    // released the slot AND forgot the request, that answer was rejected on
+    // arrival for having an untracked id - and its replacement re-armed the
+    // same deadline, so a link that is merely slow discarded every answer it
+    // ever produced and minted one more request per discard. The gap never
+    // hydrated and nothing in the store noticed.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      const slowRequestId = harness.lastRangeRequestId();
+
+      // Long enough for the deadline to fire and the plan to be re-issued.
+      vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
+      expect(harness.rangeRequests).toHaveLength(2);
+      expect(harness.rangeRequests[1]?.requestId).not.toBe(slowRequestId);
+
+      // The FIRST request is answered - late, but describing exactly the rows
+      // that were asked for, in an epoch nothing has invalidated.
+      harness.callbacks().onRange(rangeAnswering(slowRequestId, 10, 20));
+
+      // Seated: a report fully inside the now-hydrated span asks for nothing.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 18 });
+      expect(harness.rangeRequests).toHaveLength(2);
+
+      // And the loop is closed at the other end too: letting the second
+      // request's own deadline elapse re-asks nothing, because the rows it
+      // covered are no longer a gap.
+      vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
+      expect(harness.rangeRequests).toHaveLength(2);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a late answer whose rows a reindex invalidated", () => {
+    // The other side of the same change. Keeping a timed-out request eligible
+    // must not make it eligible unconditionally: supersession is tracked per
+    // REQUEST, so a frame that invalidates the rows in the air still has to
+    // reject the answer when it lands - otherwise the fix for the loop would
+    // seat a body frozen at a previous revision, which is the hazard the
+    // request ledger exists to prevent in the first place.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      const slowRequestId = harness.lastRangeRequestId();
+
+      vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
+      const requestsBefore = harness.rangeRequests.length;
+
+      // A reindex lands while BOTH requests are outstanding. It supersedes the
+      // timed-out one as much as the current one.
+      harness.callbacks().onIndexChanged(
+        indexChanged({
+          epoch: 1,
+          rowCount: 40,
+          changes: [{ type: "reindexed" }],
+        }),
+      );
+
+      harness.callbacks().onRange(rangeAnswering(slowRequestId, 10, 20));
+
+      // Nothing seated, so the span is still a gap: a report inside it asks
+      // again rather than rendering a superseded body.
+      expect(harness.rangeRequests.length).toBeGreaterThan(requestsBefore - 1);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 18 });
+      expect(
+        harness.rangeRequests.length + harness.resnapshotCount(),
+      ).toBeGreaterThan(requestsBefore);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("a legacy snapshot after a windowed one resets the line", () => {
     const harness = createViewportHarness();
     try {
@@ -791,7 +886,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
     }
   });
 
-  it("discards an answer to a request it has already replaced", () => {
+  it("seats an answer to a request it has already replaced", () => {
     const harness = createViewportHarness();
     try {
       hydrateTail(harness);
@@ -800,7 +895,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
       const firstRequestId = harness.lastRangeRequestId();
       // The reader scrolls to the top before the first answer lands, so the
-      // slot now tracks a different ask.
+      // dedup slot now tracks a different ask.
       harness.handle.store
         .getState()
         .reportVisibleTranscriptRange({ fromOrdinal: 0, toOrdinal: 5 });
@@ -808,12 +903,20 @@ describe("chat session viewport hydration: a range answered out of order", () =>
 
       harness.callbacks().onRange(rangeAnswering(firstRequestId, 10, 20));
 
-      // Dropped, though its bodies may well be current: the client stopped
-      // tracking what happened to ordinals 10-19 the moment it replaced the
-      // request, so "still valid" is no longer a claim it can make. A
-      // re-request is the cheap side of that trade.
+      // Seated. This assertion used to read `false`, on the rationale that the
+      // client "stopped tracking what happened to ordinals 10-19 the moment it
+      // replaced the request" - and that was true while one slot held both the
+      // dedup key and the staleness record.
+      //
+      // It is not true now: supersession is recorded per REQUEST, and
+      // `supersedeInFlightHydration` marks every outstanding one, so the
+      // client can still say whether these rows went stale. Nothing did, so
+      // the bodies are current and already paid for on the wire - dropping
+      // them would buy a round trip and nothing else. `discards a late answer
+      // whose rows a reindex invalidated` is the case where the record earns
+      // its keep and the answer IS dropped.
       const window = harness.handle.store.getState().transcriptWindow;
-      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
     } finally {
       harness.handle.dispose();
     }

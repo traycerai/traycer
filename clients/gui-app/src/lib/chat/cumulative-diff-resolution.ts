@@ -6,7 +6,7 @@ import type { ResolvedSnapshotDiff } from "@/lib/chat/resolve-snapshot-diff-cont
  * The two decisions behind a cumulative diff tile's contents, as plain
  * functions.
  *
- * They live here rather than inside `useCumulativeSnapshotDiffs` because a
+ * They live here rather than inside `useSnapshotResolveCumulativeDiffs` because a
  * branch inside a hook is a branch with no cheap test: covering it means a
  * QueryClient, a host client, a zustand store and a renderer, all to assert
  * which of three states a file resolved to. The hook keeps the wiring; these

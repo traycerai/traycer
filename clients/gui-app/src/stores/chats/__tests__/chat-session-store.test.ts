@@ -10955,6 +10955,7 @@ describe("createChatSessionStore", () => {
         transcriptDerived: {
           latestAssistantUsage: null,
           pinnedTodo: null,
+          pinnedTaskTodoItems: [],
           latestForkableAssistantMessageId: null,
           restorableSetupInterruption: {
             eventType: "setup.failed",
@@ -10994,6 +10995,7 @@ describe("createChatSessionStore", () => {
         transcriptDerived: {
           latestAssistantUsage: null,
           pinnedTodo: null,
+          pinnedTaskTodoItems: [],
           latestForkableAssistantMessageId: null,
           restorableSetupInterruption: null,
         },

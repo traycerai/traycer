@@ -103,8 +103,34 @@ export function contentBlocksById(
 }
 
 /**
- * The live pinned todo, or `null` when the fold found none - which is the
- * ordinary state for most chats.
+ * What a whole-transcript pinned-todo fold ends holding.
+ *
+ * Two values, because the fold maintains two and the SELECTED one does not
+ * determine the other. `todo` is what the dock shows; `taskItems` is the
+ * task-tool accumulator, which keeps running underneath a semantic todo that
+ * outranks it and is still what a later `update`/`complete` applies to.
+ *
+ * Both are needed to resume the fold, and only the pair is sound. A resumer
+ * given `todo` alone has to guess: seeding the accumulator from a SEMANTIC
+ * todo's items either drops the delta (its id is not in there) or, worse,
+ * rewrites an unrelated semantic item that happens to collide - leaving the
+ * checklist wrong rather than merely stale.
+ */
+export interface PinnedTodoFoldResult {
+  /**
+   * The live pinned todo, or `null` when the fold found none - which is the
+   * ordinary state for most chats.
+   */
+  readonly todo: PinnedTodoSnapshot | null;
+  /**
+   * The task-tool accumulator as of the end of the fold, whether or not `todo`
+   * came from it. Empty when the transcript used no task tools.
+   */
+  readonly taskItems: readonly PinnedTodoItem[];
+}
+
+/**
+ * Fold a whole transcript to its pinned todo and its task accumulator.
  *
  * Latest-todo selection, matching the renderer's:
  *  - semantic `todo` blocks pin as-is (newest non-empty wins),
@@ -116,7 +142,7 @@ export function contentBlocksById(
 export function foldPinnedTodo(
   rows: readonly TranscriptRowDescriptor[],
   blocksById: ReadonlyMap<string, ContentBlock>,
-): PinnedTodoSnapshot | null {
+): PinnedTodoFoldResult {
   let taskTodoState = createTaskTodoState();
   let latestTodo: PinnedTodoSnapshot | null = null;
   let resetTaskItemsOnNextCreate = false;
@@ -171,5 +197,10 @@ export function foldPinnedTodo(
     latestTodo = latestSemanticTodo ?? latestTaskTodo ?? latestTodo;
   }
 
-  return latestTodo;
+  return {
+    todo: latestTodo,
+    // Read from the accumulator rather than from `latestTodo`, which is a
+    // different thing whenever a semantic todo won the selection.
+    taskItems: Array.from(taskTodoState.taskTodoItemsById.values()),
+  };
 }

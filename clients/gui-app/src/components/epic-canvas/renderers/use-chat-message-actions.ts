@@ -185,17 +185,22 @@ export function useChatMessageActions(
    * artifact count - because they are two halves of one prompt and must not be
    * able to disagree about its scope.
    */
+  // Keyed on the target id alone, NOT on `activeInlineEdit`: that object gets a
+  // fresh identity on every `updateInlineEditContent`, i.e. per keystroke,
+  // while the scope depends only on which message is being edited. Widening it
+  // back would re-run three transcript passes for each character typed.
+  const inlineEditTargetMessageId = activeInlineEdit?.targetMessageId ?? null;
   const revertScope = useMemo<RevertScope | null>(
     () =>
-      activeInlineEdit === null
+      inlineEditTargetMessageId === null
         ? null
         : resolveRevertScope({
             messages,
             events,
             transcriptWindow,
-            fromMessageId: activeInlineEdit.targetMessageId,
+            fromMessageId: inlineEditTargetMessageId,
           }),
-    [activeInlineEdit, events, messages, transcriptWindow],
+    [inlineEditTargetMessageId, events, messages, transcriptWindow],
   );
 
   const beginInlineEdit = useCallback(

@@ -929,21 +929,19 @@ describe("ChatStreamClient.sendAction interview projection", () => {
 });
 
 /**
- * # Driving the windowed line before it is negotiable
+ * # Driving the windowed line without a windowed peer
  *
  * These tests inject the session rather than handshaking through
  * `WsStreamClient`, and the reason is structural rather than convenience.
  *
- * `prepareStreamSubscribeRequest` declares MY canonical version whenever the
- * peer's is newer (`myCanonical.minor <= theirCanonical.minor` →
+ * Negotiation settles on the LOWER of the two canonical versions:
+ * `prepareStreamSubscribeRequest` declares my canonical only while the peer's
+ * is at least as new (`myCanonical.minor <= theirCanonical.minor` →
  * `onWireVersion: myCanonical`), and that value is what the session reports as
- * negotiated. `chatSubscribeV18` is deliberately not in the registry, so this
- * client's canonical `chat.subscribe` is `1.6` — which means a host advertising
- * `1.7` negotiates **1.6**, and no handshake this test can perform will ever
- * make `getNegotiatedSchemaVersion()` return `1.7`. That is correct negotiation
- * and it is exactly why the windowed producer is unreachable today; it also
- * means a handshake-driven test of this path is not merely awkward but
- * impossible until the switch is thrown.
+ * negotiated. So reaching `1.8` needs a peer that also advertises `1.8`, and
+ * the stubs in `WsStreamClient`'s own harness stand in for a `1.7` host — a
+ * handshake against one of those negotiates **1.7** no matter what this client
+ * supports, and `getNegotiatedSchemaVersion()` never returns `1.8`.
  *
  * `IStreamClient` is the documented seam for standing a different transport in
  * (`RemoteStreamClient` does), so a stub here tests the unit at a boundary that
@@ -1111,10 +1109,14 @@ function windowedSnapshotFrame(): StreamFrameEnvelope {
       tail: { fromOrdinal: 0, messages: [], events: [] },
       derived: {
         latestAssistantUsage: null,
-        // `pinnedTodo`, singular - the fold's single result, not a list. It is
-        // nullable but NOT optional, so a fixture that omits it fails the
+        // `pinnedTodo`, singular - the fold's SELECTED result, not a list. It
+        // is nullable but NOT optional, so a fixture that omits it fails the
         // parse, which is what caught the name here.
         pinnedTodo: null,
+        // The fold's other half, and neither optional nor nullable: the task
+        // accumulator is an array that is simply empty when the chat used no
+        // task tools. Omitting it fails the parse the same way.
+        pinnedTaskTodoItems: [],
         latestForkableAssistantMessageId: null,
         restorableSetupInterruption: null,
       },

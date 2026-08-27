@@ -77,6 +77,7 @@ function baseWindowedSnapshot(): Record<string, unknown> {
     derived: {
       latestAssistantUsage: null,
       pinnedTodo: null,
+      pinnedTaskTodoItems: [],
       latestForkableAssistantMessageId: null,
       restorableSetupInterruption: null,
     },
@@ -380,7 +381,13 @@ describe("the 1.6 server union does not admit windowed-only frame kinds", () => 
       chatId: "chat-1",
       epoch: 1,
       rowCount: 0,
-      change: { type: "reindexed" },
+      // The wire field is the ARRAY `changes` (see `chatIndexChangeSchema`'s
+      // frame). Spelling it `change` here would make this fixture malformed on
+      // its own terms, so the rejection below would prove only that - and it
+      // would keep proving it after someone added `indexChanged` to the frozen
+      // `1.6` union, which is the one regression this assertion exists to
+      // catch.
+      changes: [{ type: "reindexed" }],
     };
 
     expect(

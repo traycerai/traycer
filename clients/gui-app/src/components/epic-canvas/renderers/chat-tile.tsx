@@ -1836,7 +1836,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         displayedMessages,
         state.transcriptDerived === null
           ? { kind: "derive" }
-          : { kind: "host", todo: state.transcriptDerived.pinnedTodo },
+          : {
+              kind: "host",
+              todo: state.transcriptDerived.pinnedTodo,
+              taskItems: state.transcriptDerived.pinnedTaskTodoItems,
+            },
       ),
     [displayedMessages, state.transcriptDerived],
   );

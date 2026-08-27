@@ -36,7 +36,20 @@ interface PinnedTodoRenderState {
  */
 export type PinnedTodoAuthority =
   | { readonly kind: "derive" }
-  | { readonly kind: "host"; readonly todo: PinnedTodoSnapshot | null };
+  | {
+      readonly kind: "host";
+      readonly todo: PinnedTodoSnapshot | null;
+      /**
+       * The host fold's task accumulator - `ChatTranscriptDerived`'s
+       * `pinnedTaskTodoItems`, not `todo.items`.
+       *
+       * Separate because the fold keeps it separate: a semantic todo outranks
+       * the task list for DISPLAY without replacing it, so `todo` is regularly
+       * some other checklist entirely while this is the one the live turn's
+       * deltas address.
+       */
+      readonly taskItems: ReadonlyArray<SegmentTodoItem>;
+    };
 
 type TodoSegmentModel = Extract<MessageSegment, { kind: "todo" }>;
 type ToolSegmentModel = Extract<MessageSegment, { kind: "tool" }>;
@@ -75,7 +88,7 @@ export function buildPinnedTodoRenderState(
 ): PinnedTodoRenderState {
   const derived: DerivedPinnedTodo =
     authority.kind === "host"
-      ? hostAuthorityPinnedTodo(messages, authority.todo)
+      ? hostAuthorityPinnedTodo(messages, authority.todo, authority.taskItems)
       : derivePinnedTodo(messages, EMPTY_PINNED_TODO_SEED);
   const filtered = messages
     .map((message) => {
@@ -127,9 +140,19 @@ function filteredMessagesChanged(
  * prevent, and the legacy fold does not have it: running over the whole
  * history, it still holds the items those updates refer to.
  *
- * So the live fold starts from the host's items ({@link seedTaskTodoState}),
- * which is the same state the legacy fold would be carrying at this point in
- * the transcript.
+ * So the live fold starts from the host's TASK ACCUMULATOR
+ * ({@link seedTaskTodoState}), which is the same state the legacy fold would be
+ * carrying at this point in the transcript.
+ *
+ * That accumulator is `hostTaskItems`, and it is deliberately not
+ * `hostTodo.items`. The two coincide only when the host's selection happened
+ * to come from the task tools; a semantic `todo` block outranks the task list
+ * for display while the accumulator keeps running underneath it, so reading
+ * the selection as the accumulator seeds the fold with an unrelated checklist.
+ * An update-only turn then either drops its delta (that id is not in the
+ * semantic items) or renames a semantic item that collides - the dock shows
+ * the wrong checklist for the rest of the turn, which is worse than the freeze
+ * this overlay exists to prevent.
  *
  * `resetOnFirstCreate` starts ARMED for the same reason. The rule is "the first
  * `create` after a user row", and the user row that started this turn is
@@ -142,11 +165,12 @@ function filteredMessagesChanged(
 function hostAuthorityPinnedTodo(
   messages: ReadonlyArray<ChatMessageModel>,
   hostTodo: PinnedTodoSnapshot | null,
+  hostTaskItems: ReadonlyArray<SegmentTodoItem>,
 ): DerivedPinnedTodo {
   const live = derivePinnedTodo(
     messages.filter((message) => message.runState !== null),
     {
-      taskItems: hostTodo === null ? [] : hostTodo.items,
+      taskItems: hostTaskItems,
       resetOnFirstCreate: true,
     },
   );

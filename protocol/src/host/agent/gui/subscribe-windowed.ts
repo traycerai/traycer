@@ -337,6 +337,24 @@ export const chatTranscriptDerivedSchema = z.object({
    */
   pinnedTodo: pinnedTodoSnapshotSchema.nullable(),
   /**
+   * The task-tool accumulator behind {@link pinnedTodo}, as of the same fold.
+   *
+   * Carried SEPARATELY because the fold maintains it separately: the task
+   * tools are a delta protocol, and a semantic `todo` block outranks the task
+   * list without stopping it. So `pinnedTodo` is regularly a semantic todo
+   * while the accumulator holds an unrelated checklist that the live turn's
+   * next `update`/`complete` is going to address.
+   *
+   * The client resumes the fold from this to overlay the running turn. Seeding
+   * from `pinnedTodo.items` instead - the same field, read as if it were the
+   * accumulator - drops an update whose id is absent, or rewrites a semantic
+   * item on an id collision, and the dock then sits on the wrong checklist for
+   * the rest of the turn.
+   *
+   * Empty for a chat that used no task tools, which is most of them.
+   */
+  pinnedTaskTodoItems: z.array(pinnedTodoItemSchema),
+  /**
    * The message id a fork of this chat would cut at - what the composer's
    * switch-host gesture means by "fork the chat as it stands". `null` when the
    * chat has no boundary yet (the agent has never replied, or its only

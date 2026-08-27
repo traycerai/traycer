@@ -392,6 +392,10 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: hostTodo,
+        // The accumulator behind the host's selection. Here it IS that
+        // selection's items; `a semantic todo does not seed the task fold`
+        // below is the case where the two differ.
+        taskItems: hostTodo.items,
       });
 
       expect(state.todo).toBe(hostTodo);
@@ -418,6 +422,7 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: null,
+        taskItems: [],
       });
 
       expect(state.todo).toBeNull();
@@ -455,6 +460,10 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: hostTodo,
+        // The accumulator behind the host's selection. Here it IS that
+        // selection's items; `a semantic todo does not seed the task fold`
+        // below is the case where the two differ.
+        taskItems: hostTodo.items,
       });
 
       // The host's item, carried forward by id with the live status applied -
@@ -464,6 +473,57 @@ describe("buildPinnedTodoRenderState", () => {
         {
           id: "todo-host task",
           text: "host task",
+          status: "completed",
+          priority: null,
+          activeForm: null,
+        },
+      ]);
+    });
+
+    it("a semantic todo does not seed the task fold", () => {
+      // The two halves of the host's fold are genuinely different lists, and
+      // this is the case that proves the client must be told both.
+      //
+      // `foldPinnedTodo` lets a semantic `todo` block outrank the task list for
+      // DISPLAY while the accumulator keeps running underneath it. So the
+      // host's selected `pinnedTodo` here is the semantic checklist, and the
+      // task item the live turn is about to complete is only in
+      // `pinnedTaskTodoItems`.
+      //
+      // Seeding from the selection instead - the shape this store shipped
+      // once - fails in one of two ways depending on the ids: the delta names
+      // an item the seed does not hold and is dropped, or it collides with a
+      // semantic item and rewrites THAT. Both leave the dock on a checklist
+      // that is not the one the turn is advancing, which is worse than the
+      // freeze the seeding exists to prevent.
+      const messages = [
+        makeAssistantMessage(
+          "assistant-1",
+          [
+            toolSegment("task-complete-live", "TaskComplete", {
+              taskId: "todo-tracked task",
+            }),
+          ],
+          "running",
+        ),
+      ];
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        // What the dock was showing: a semantic todo, naming nothing the task
+        // tools know about.
+        todo: {
+          id: "semantic-1",
+          items: [todoItem("write the docs", "pending")],
+        },
+        // What the task deltas actually apply to.
+        taskItems: [todoItem("tracked task", "in_progress")],
+      });
+
+      expect(state.todo?.items).toEqual([
+        {
+          id: "todo-tracked task",
+          text: "tracked task",
           status: "completed",
           priority: null,
           activeForm: null,
@@ -496,6 +556,7 @@ describe("buildPinnedTodoRenderState", () => {
           id: "host-todo-1",
           items: [todoItem("host task", "in_progress")],
         },
+        taskItems: [todoItem("host task", "in_progress")],
       });
 
       expect(state.todo?.items.map((item) => item.text)).toEqual([
@@ -532,6 +593,10 @@ describe("buildPinnedTodoRenderState", () => {
       const state = buildPinnedTodoRenderState(messages, {
         kind: "host",
         todo: hostTodo,
+        // The accumulator behind the host's selection. Here it IS that
+        // selection's items; `a semantic todo does not seed the task fold`
+        // below is the case where the two differ.
+        taskItems: hostTodo.items,
       });
 
       expect(state.todo?.id).toBe("task-create-live:task-todo");

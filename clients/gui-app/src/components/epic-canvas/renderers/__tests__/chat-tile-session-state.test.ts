@@ -1093,6 +1093,7 @@ function windowedLine(input: {
     transcriptDerived: {
       latestAssistantUsage: null,
       pinnedTodo: null,
+      pinnedTaskTodoItems: [],
       latestForkableAssistantMessageId: null,
       restorableSetupInterruption: null,
     },
@@ -1375,6 +1376,7 @@ function derivedWith(
   return {
     latestAssistantUsage,
     pinnedTodo: null,
+    pinnedTaskTodoItems: [],
     latestForkableAssistantMessageId: null,
     restorableSetupInterruption: null,
   };

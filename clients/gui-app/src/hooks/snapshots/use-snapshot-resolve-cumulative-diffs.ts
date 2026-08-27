@@ -39,7 +39,7 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
  * the running turn created has no host version yet - is handled correctly by
  * construction rather than by a special case.
  */
-export function useCumulativeSnapshotDiffs(args: {
+export function useSnapshotResolveCumulativeDiffs(args: {
   readonly payload: SnapshotDiffTilePayload;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
