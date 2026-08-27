@@ -691,6 +691,11 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     // Selection mode: the keystroke would open a search whose input the header
     // has no room to render.
     if (searchOpen || selectionMode) return;
+    // A surface owning the query owns the input too, and this writes the PANEL
+    // store - which that surface never renders. Installing it there would
+    // swallow the keystroke and file it somewhere invisible, leaving stale
+    // state for the desktop panel to open with later.
+    if (surfaceSearchQuery !== null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (isTypeToFilterEditableTarget(event.target)) return;
       if (!isTypeToFilterKey(event)) return;
@@ -699,7 +704,14 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     };
     region.addEventListener("keydown", onKeyDown);
     return () => region.removeEventListener("keydown", onKeyDown);
-  }, [tabId, panelId, searchOpen, selectionMode, openSearch]);
+  }, [
+    tabId,
+    panelId,
+    searchOpen,
+    selectionMode,
+    openSearch,
+    surfaceSearchQuery,
+  ]);
   const archiveVisibility = useChatArchiveVisibility(epicId);
   // The filter's own value, for the cloud rows. The local tree consumes it as
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
@@ -1919,8 +1931,15 @@ function ChatNodeShellBody(
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
+  const childCreateSurface = useChatTreeSurface();
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
+    // Same dismiss the tap path makes, and for the same reason root create
+    // already makes it: the modal opens over the surface, and without this the
+    // sheet is still there when the modal closes. Root and child create must
+    // answer this identically - an asymmetry here is a divergence, not a
+    // feature.
+    if (childCreateSurface !== null) childCreateSurface.onRowActivated();
     openNewConversationModal({
       epicId,
       tabId,
@@ -1933,7 +1952,14 @@ function ChatNodeShellBody(
       // a child is not required to live on its parent's machine.
       hostId: null,
     });
-  }, [canMutate, epicId, nodeId, openNewConversationModal, tabId]);
+  }, [
+    canMutate,
+    childCreateSurface,
+    epicId,
+    nodeId,
+    openNewConversationModal,
+    tabId,
+  ]);
   const { decision } = props;
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
   const rowMenuEntries = chatRowMenuEntries({
@@ -2081,8 +2107,15 @@ function NodeChevron(props: NodeChevronProps) {
   return (
     <span
       // Same `aria-hidden` the glyph inside already carries: this wrapper adds
-      // hit area and nothing else, and expansion is reached from the row itself
-      // by keyboard, so exposing a second nameless control would be noise.
+      // hit area and nothing else, so exposing a second nameless control would
+      // be noise rather than access.
+      //
+      // It does NOT claim keyboard reachability. Expansion in this tree is
+      // pointer-only on BOTH form factors - desktop binds no ArrowRight/Left
+      // and neither does the row button - so a keyboard-only user cannot open
+      // a collapsed branch here. That gap is desktop's and predates this
+      // mount; what the mount changed is that a phone now inherits it, where
+      // the flat list it replaced had listed every descendant outright.
       aria-hidden="true"
       onClick={onToggle}
       className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"

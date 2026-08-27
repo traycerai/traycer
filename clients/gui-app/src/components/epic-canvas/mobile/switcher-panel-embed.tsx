@@ -6,10 +6,7 @@ import { FileTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar
 
 /** The switcher categories whose body is the desktop panel body, unmodified. */
 export type SwitcherEmbedCategory =
-  | "file-tree"
-  | "git-diff"
-  | "pull-requests"
-  | "sharing";
+  "file-tree" | "git-diff" | "pull-requests" | "sharing";
 
 interface SwitcherPanelEmbedProps {
   readonly category: SwitcherEmbedCategory;
@@ -29,7 +26,7 @@ const SWITCHER_EMBED_SURFACE_STYLE = {
 } as CSSProperties;
 
 /**
- * File-tree, Git-diff, Pull-requests and Sharing categories. Unlike the flat
+ * File-tree, Git-diff, Pull-requests and Sharing categories. Unlike the row
  * lists these are not row-per-item surfaces: they embed the EXACT desktop panel
  * bodies - already click-driven and Pierre-rendered - rather than being rebuilt.
  * All four mount cleanly here: the app-shell `RootDndProvider` supplies the
@@ -62,7 +59,7 @@ const SWITCHER_EMBED_SURFACE_STYLE = {
  *
  * This is the DOWNWARD-finger path specifically. An upward finger is
  * `isDraggingInDirection` for a bottom drawer and returns early, before the
- * walk - so that direction never depended on the marker. The flat lists need
+ * walk - so that direction never depended on the marker. The row lists need
  * none of this: their scrollers are ordinary light DOM, so the walk finds them.
  */
 export function SwitcherPanelEmbed(props: SwitcherPanelEmbedProps) {
