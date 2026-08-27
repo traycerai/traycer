@@ -85,9 +85,26 @@ export function resolveForegroundStartMode(
 /**
  * Is a TTY on this platform sufficient evidence that a PERSON is watching?
  *
- * Everywhere but Windows, yes. launchd runs the supervisor under `/bin/sh -c`
- * with its output bound to a file, and systemd binds it to the journal socket;
- * neither ever allocates a controlling terminal, so a TTY means a shell.
+ * Everywhere but Windows, yes - for the definitions this CLI emits, under
+ * default manager settings. launchd runs the supervisor under `/bin/sh -c`
+ * with its output bound to a file, and systemd binds it to the journal socket,
+ * so an ordinary start of either has no terminal to inherit.
+ *
+ * That is a statement about Traycer's own definitions, NOT a universal
+ * invariant, and the difference is worth naming. An operator can route a
+ * service's stdout to their terminal on purpose - `launchctl debug
+ * gui/$UID/<label> --stdout` with no path does exactly that for the next
+ * invocation, and a systemd drop-in can set `StandardOutput=tty`. A legacy
+ * bare-`host start` service started that way reaches this function with a TTY
+ * and no identity flag, and gets `mirror`.
+ *
+ * Deliberately left that way. Those are debugging affordances whose entire
+ * purpose is "show me this service's output on my terminal", so mirroring the
+ * host log there is the thing that was asked for rather than a leak - and the
+ * mirror is bounded (a capped read per poll, a capped drain on exit), so the
+ * cost is a bounded read loop for as long as the operator leaves it attached.
+ * What must not happen is a service reaching `mirror` when NOBODY asked, and
+ * that is what the Windows arm below is for.
  *
  * On Windows it is NOT sufficient, and this is a live case rather than a
  * theoretical one. Scheduled Tasks registered before the launcher was hidden

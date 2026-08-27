@@ -190,19 +190,30 @@ export async function runHostUninstall(
     hadInstallRecord: result.removedRecord !== null,
     retainedServiceState: retainedService?.state ?? null,
   });
-  // Tri-state, deliberately. `--all` leaves nothing retained (false), a probe
-  // that answered says what it saw, and a probe that THREW knows nothing -
-  // reporting `false` there would hand an automated caller a negative fact
-  // about a registration and a process this command never observed and never
-  // touched.
+  // Tri-state, deliberately, and the two fields do NOT share a rule.
+  //
+  // Registration is observed on both paths: `--all` deregisters and
+  // `controller.uninstall` returned, so nothing is retained; the default path
+  // reports what the probe saw, or null when it threw.
+  //
+  // Liveness is not. `--all` performs no probe, and its stop is cooperative
+  // and best-effort - `stopServiceBeforeRuntimePurge` returns false when the
+  // host denied or outlived the claim, and the removal proceeds anyway. Only
+  // a CONFIRMED stop (which is exactly what gates the runtime purge) proves
+  // the host is down; otherwise it may still be serving. Reporting `false`
+  // there would have the machine envelope contradict this command's own human
+  // summary, which already says the host may still be up.
   const serviceRegistrationRetained =
     args.all || retainedService !== null
       ? retainedService !== null && retainedService.state !== "not-installed"
       : null;
-  const hostStillRunning =
-    args.all || retainedService !== null
-      ? retainedService?.state === "running"
-      : null;
+  const hostStillRunning = args.all
+    ? purgeChannelRuntime
+      ? false
+      : null
+    : retainedService === null
+      ? null
+      : retainedService.state === "running";
   return {
     data: {
       removedRecord: result.removedRecord,

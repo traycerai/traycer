@@ -236,8 +236,36 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({
       serviceUninstalled: true,
       purgedRuntime: false,
+      // NULL, not false. `--all` runs no probe, and its stop is best-effort -
+      // an unconfirmed stop leaves a host that may still be serving. `false`
+      // here made the machine envelope contradict the human summary below,
+      // which already says so, and an automation reading it would proceed as
+      // though the host were down.
+      hostStillRunning: null,
+      serviceRegistrationRetained: false,
     });
     expect(result.human ?? "").toContain("did not confirm shutdown");
     expect(result.human ?? "").toContain("traycer host stop --force");
+  });
+
+  // The other half of the same rule: a CONFIRMED stop is what gates the
+  // runtime purge, so it is also the only evidence that justifies `false`.
+  it("reports hostStillRunning: false on --all only once the stop is confirmed", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => NOT_INSTALLED_STATUS,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      serviceUninstalled: true,
+      purgedRuntime: true,
+      hostStillRunning: false,
+      serviceRegistrationRetained: false,
+    });
   });
 });
