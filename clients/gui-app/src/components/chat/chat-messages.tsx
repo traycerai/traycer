@@ -31,6 +31,8 @@ import {
   createChatTranscriptRowHeightMemory,
   type ChatTranscriptRowHeightMemory,
 } from "@/components/chat/chat-transcript-row-height-memory";
+import { unhydratedRowCount } from "@/stores/chats/transcript-window";
+import { chatFindCoverageMessage } from "@/components/chat/chat-find";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -1051,6 +1053,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
+  // Read only by find's coverage supplier, and through a ref for the same
+  // reason `messages` is: the window changes identity on every hydration, and
+  // a value dependency would re-register the find adapter each time.
+  const transcriptWindowRef = useRef<TranscriptWindow | null>(transcriptWindow);
   // Ticket 5 / decision #18: LegendList's measured header size (the main
   // component of getTopOffsetAdjustment). Capture folds this into the saved
   // viewOffset so initialScrollIndex restore lands on the same pixel - bare
@@ -1523,7 +1529,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   useLayoutEffect(() => {
     messagesRef.current = messages;
-  }, [messages]);
+    transcriptWindowRef.current = transcriptWindow;
+  }, [messages, transcriptWindow]);
 
   useLayoutEffect(() => {
     listRowsRef.current = listRows;
@@ -2434,6 +2441,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     });
   }, [cancelTimelineLiveFollowForUserNavigation, identity]);
 
+  // Find scans the records the client HOLDS. On the windowed line that is a
+  // subset, so the bar has to say so - a count over a subset presented as a
+  // total is wrong in the one direction a reader cannot detect.
+  const getFindCoverageMessage = useCallback((): string | null => {
+    const window = transcriptWindowRef.current;
+    if (window === null) return null;
+    return chatFindCoverageMessage(unhydratedRowCount(window));
+  }, []);
+
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
     scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
@@ -2443,6 +2459,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
+    getFindCoverageMessage,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,

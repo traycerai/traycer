@@ -56,6 +56,15 @@ interface ChatFindControllerArgs {
   readonly backgroundToolBlockIds: ReadonlySet<string>;
   /** Latest promotion set, read lazily by the adapter's getRows supplier. */
   readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
+  /**
+   * Caveat describing the rows `messagesRef` does NOT contain, read lazily
+   * beside it.
+   *
+   * A ref-free supplier rather than a value, for the same reason the rows are:
+   * a closed find bar must not re-register its adapter every time the window
+   * hydrates.
+   */
+  readonly getFindCoverageMessage: () => string | null;
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
@@ -89,6 +98,7 @@ export function useChatFindController(
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
+    getFindCoverageMessage,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation,
@@ -426,6 +436,7 @@ export function useChatFindController(
           instanceId,
           backgroundToolBlockIdsRef.current,
         ),
+      getCoverageMessage: getFindCoverageMessage,
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -446,6 +457,7 @@ export function useChatFindController(
   }, [
     backgroundToolBlockIdsRef,
     clearFindReveal,
+    getFindCoverageMessage,
     getMountedMessageRoot,
     instanceId,
     messagesRef,

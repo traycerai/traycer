@@ -22,6 +22,7 @@ import {
   streamWindowMessage,
   touchTranscriptRange,
   transcriptHydrationGaps,
+  unhydratedRowCount,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type TranscriptWindow,
@@ -586,6 +587,26 @@ describe("gaps and what to request next", () => {
       { fromOrdinal: 0, toOrdinal: 4 },
       { fromOrdinal: 6, toOrdinal: 10 },
     ]);
+  });
+
+  it("counts every row no client-side scan can see", () => {
+    const window = applyRangeResponse(
+      windowWithSkeleton(10),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 4,
+        rowIds: ["row-4", "row-5"],
+        messages: [userMessage("m-4", 4)],
+      }),
+    );
+    // Two rows hydrated out of ten - the number find has to disclose.
+    expect(unhydratedRowCount(window)).toBe(8);
+  });
+
+  it("counts nothing unhydrated on the legacy line's inert window", () => {
+    // `rowCount` 0 with no spans is what the legacy line hands the renderer.
+    // A caveat there would fire on every non-windowed chat in the app.
+    expect(unhydratedRowCount(emptyTranscriptWindow())).toBe(0);
   });
 
   it("asks for the tail when the snapshot arrived with rows but no bodies", () => {

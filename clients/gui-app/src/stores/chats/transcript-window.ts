@@ -1130,6 +1130,29 @@ export function transcriptHydrationGaps(
 }
 
 /**
+ * How many rows no client-side scan can see.
+ *
+ * Find projects the records the window has HYDRATED, so on the windowed line
+ * every count it reports is a count over a subset. A subset that presents
+ * itself as a total is the failure this exists to make visible - the caller
+ * turns it into the find bar's coverage caveat.
+ *
+ * Reuses {@link transcriptHydrationGaps} over the whole ordinal space rather
+ * than summing span extents. Both would be correct today, and only one of them
+ * stays correct if the definition of "covered" ever changes; this module has
+ * already paid for a second implementation of a shared rule once.
+ *
+ * Zero on the legacy line, where the window is an inert empty value whose
+ * `rowCount` is 0 and where the full transcript is materialized anyway.
+ */
+export function unhydratedRowCount(window: TranscriptWindow): number {
+  return transcriptHydrationGaps(window, {
+    fromOrdinal: 0,
+    toOrdinal: window.rowCount,
+  }).reduce((total, gap) => total + (gap.toOrdinal - gap.fromOrdinal), 0);
+}
+
+/**
  * What to fetch next, or `null` when the window is already sufficient.
  *
  * Two obligations, in priority order:
