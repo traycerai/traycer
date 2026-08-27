@@ -60,16 +60,55 @@ const MAX_PARALLEL_CLEANUP_STREAMS = 2;
  * in-use after the dialog opened is declined and lands in `failed`, never
  * silently force-removed.
  */
+export interface WorktreeCleanupRequest {
+  readonly hostId: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly source: WorktreeDeletionSource;
+  readonly stopOwnersPaths: ReadonlySet<string>;
+}
+
 export function runWorktreeCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-  source: WorktreeDeletionSource,
+  request: WorktreeCleanupRequest,
 ): Promise<WorktreeCleanupOutcome> {
   // No approved paths is not a command. Opening one would burn a `commandId`
   // and ask the host for a "you deleted nothing" notification row.
-  if (paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
-  return runCleanupCommand(openStreamTransport, hostId, paths, source);
+  if (request.paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
+  const forcePaths = request.paths.filter((path) =>
+    request.stopOwnersPaths.has(path),
+  );
+  const normalPaths = request.paths.filter(
+    (path) => !request.stopOwnersPaths.has(path),
+  );
+  if (forcePaths.length === 0) {
+    return runCleanupCommand(
+      openStreamTransport,
+      request.hostId,
+      normalPaths,
+      request.source,
+    );
+  }
+  if (normalPaths.length === 0) {
+    return runFallbackCleanup(
+      openStreamTransport,
+      request.hostId,
+      forcePaths,
+      true,
+    );
+  }
+  return Promise.all([
+    runCleanupCommand(
+      openStreamTransport,
+      request.hostId,
+      normalPaths,
+      request.source,
+    ),
+    runFallbackCleanup(openStreamTransport, request.hostId, forcePaths, true),
+  ]).then(([normal, force]) => ({
+    removed: [...normal.removed, ...force.removed],
+    failed: [...normal.failed, ...force.failed],
+    uncertain: [...normal.uncertain, ...force.uncertain],
+  }));
 }
 
 /**
@@ -124,12 +163,17 @@ function runCleanupCommand(
       requestClose(holder);
       const remaining = [...pending];
       pending.clear();
-      void runFallbackCleanup(openStreamTransport, hostId, remaining).then(
+      void runFallbackCleanup(
+        openStreamTransport,
+        hostId,
+        remaining,
+        false,
+      ).then(
         (fallback) =>
           resolve({
             removed: [...removed, ...fallback.removed],
             failed: [...failed, ...fallback.failed],
-            uncertain: [],
+            uncertain: fallback.uncertain,
           }),
         (error: unknown) => {
           // `runFallbackCleanup` has no rejecting path today - every
@@ -245,15 +289,16 @@ function runCleanupCommand(
 }
 
 /**
- * Older-host fallback: one `worktree.deleteByPath@1.0` stream per path, bounded
- * to {@link MAX_PARALLEL_CLEANUP_STREAMS} in flight.
+ * Per-path `worktree.deleteByPath` fan-out, bounded to
+ * {@link MAX_PARALLEL_CLEANUP_STREAMS} in flight. Used for older hosts that
+ * cannot serve the batch command, and for current-host force paths that need
+ * `stopOwners`.
  *
- * Unchanged from the pre-command behaviour on purpose - it is what an older
- * host can serve, and its outcome shape has no `uncertain` bucket because
- * nothing on that path survives this client: a dropped single-target stream is
- * work that stopped, which is what `failed` already means there.
+ * A drop after the stream opened is `uncertain` — the host may still finish
+ * the delete — matching the batch command. A drop before open, an open
+ * failure, or an app terminal `failed`/`deleted: false` is `failed`.
  *
- * It is also expected never to reject - each path settles through
+ * Expected never to reject - each path settles through
  * {@link deleteOneWorktree}. The caller still handles rejection, because the
  * "always settles" invariant belongs to the caller's promise, not to this
  * function's present implementation.
@@ -262,22 +307,27 @@ async function runFallbackCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
   paths: ReadonlyArray<string>,
-): Promise<{ removed: string[]; failed: string[] }> {
+  stopOwners: boolean,
+): Promise<WorktreeCleanupOutcome> {
   const removed: string[] = [];
   const failed: string[] = [];
+  const uncertain: string[] = [];
   const queue = [...paths];
 
   const worker = async (): Promise<void> => {
     for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
-      const deleted = await deleteOneWorktree(
+      const outcome = await deleteOneWorktree(
         openStreamTransport,
         hostId,
         path,
+        stopOwners,
       );
-      if (deleted) {
+      if (outcome === "removed") {
         removed.push(path);
-      } else {
+      } else if (outcome === "failed") {
         failed.push(path);
+      } else {
+        uncertain.push(path);
       }
     }
   };
@@ -285,30 +335,37 @@ async function runFallbackCleanup(
   const workerCount = Math.min(MAX_PARALLEL_CLEANUP_STREAMS, paths.length);
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-  return { removed, failed };
+  return { removed, failed, uncertain };
 }
+
+type DeleteOneOutcome = "removed" | "failed" | "uncertain";
 
 /**
  * Every per-path delete settles: on an app terminal frame (`complete`/`failed`),
  * on the FIRST connection drop after start (`reconnecting`/`closed`), or on a
- * synchronous open failure. A drop is counted as `failed` and the session is
- * torn down immediately so the transport's reconnect loop can't re-issue the
- * `subscribe` frame (which would re-run the host delete pipeline) - so exactly
- * one subscribe is ever sent per path, and the overall promise always resolves.
+ * synchronous open failure. The session is torn down immediately so the
+ * transport's reconnect loop can't re-issue the `subscribe` frame (which would
+ * re-run the host delete pipeline) - so exactly one subscribe is ever sent per
+ * path, and the overall promise always resolves.
+ *
+ * A drop after `open` is `uncertain` (the host may still finish). A drop
+ * before the session opened, an open failure, or an app terminal failure is
+ * `failed`.
  */
 function deleteOneWorktree(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
   worktreePath: string,
-): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+  stopOwners: boolean,
+): Promise<DeleteOneOutcome> {
+  return new Promise<DeleteOneOutcome>((resolve) => {
     const holder = newCloseHolder();
-    const state = { settled: false };
-    const finish = (deleted: boolean): void => {
+    const state = { settled: false, reachedHost: false };
+    const finish = (outcome: DeleteOneOutcome): void => {
       if (state.settled) return;
       state.settled = true;
       requestClose(holder);
-      resolve(deleted);
+      resolve(outcome);
     };
 
     try {
@@ -320,33 +377,39 @@ function deleteOneWorktree(
             wsStreamClient,
             worktreePath,
             scripts: null,
+            stopOwners,
             callbacks: {
               onStarted: () => {},
               onPhase: () => {},
               onOutput: () => {},
-              onComplete: (deleted) => finish(deleted),
-              onFailed: () => finish(false),
+              onComplete: (deleted) => finish(deleted ? "removed" : "failed"),
+              onFailed: () => finish("failed"),
               onConnectionStatus: (status) => {
                 // Fail fast on the FIRST drop after start. The one-shot delete
                 // stream must not silently re-run, but WsStreamClient's own
                 // reconnect loop keeps rescheduling `reconnecting` (reason:
                 // null) drops - which would both re-issue the subscribe (re-run
                 // the host pipeline) AND leave this promise hanging (the summary
-                // toast + cache invalidation would never fire). Any
-                // `reconnecting`/`closed` before a terminal frame means the
-                // delete never confirmed: count it failed and let `finish`'s
-                // `close()` tear the session down. `connecting`/`open` are the
-                // normal startup and are ignored; a `closed` fired by our own
-                // teardown after a terminal frame is absorbed by the `settled`
-                // guard.
-                if (status !== "reconnecting" && status !== "closed") return;
-                if (!state.settled) {
-                  appLogger.warn(
-                    "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
-                    { worktreePath, status },
-                  );
+                // toast + cache invalidation would never fire).
+                // `connecting`/`open` are the normal startup; a `closed` fired
+                // by our own teardown after a terminal frame is absorbed by
+                // the `settled` guard.
+                if (status === "open") {
+                  state.reachedHost = true;
+                  return;
                 }
-                finish(false);
+                if (status !== "reconnecting" && status !== "closed") return;
+                if (state.reachedHost) {
+                  if (!state.settled) {
+                    appLogger.warn(
+                      "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
+                      { worktreePath, status },
+                    );
+                  }
+                  finish("uncertain");
+                  return;
+                }
+                finish("failed");
               },
             },
           }),
@@ -357,7 +420,7 @@ function deleteOneWorktree(
         worktreePath,
         error: error instanceof Error ? error.message : String(error),
       });
-      finish(false);
+      finish("failed");
     }
   });
 }

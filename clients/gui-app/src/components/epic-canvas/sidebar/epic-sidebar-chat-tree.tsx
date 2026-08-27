@@ -271,6 +271,10 @@ import { type IndicatorRunningKind } from "@/components/notifications/notificati
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  useChatTreeSurface,
+  useRevealRowControls,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -619,7 +623,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // keeps a half-typed query from narrowing a tree with no visible search box.
   const searchOpen = usePanelHeaderSearchOpen(tabId, panelId);
   const rawSearchQuery = usePanelHeaderSearchQuery(tabId, panelId);
-  const searchQuery = searchOpen && !selectionMode ? rawSearchQuery : "";
+  // A mounting surface may own the query instead - see `ChatTreeSurface`. It
+  // then owns the input too, so this panel's open/closed state says nothing
+  // about whether a query is live and must not gate it.
+  const surfaceSearchQuery = useChatTreeSurface()?.searchQuery ?? null;
+  const panelSearchQuery = searchOpen && !selectionMode ? rawSearchQuery : "";
+  const searchQuery = surfaceSearchQuery ?? panelSearchQuery;
   const searchActive = searchQuery.trim().length > 0;
   const searchMatchIds = useMemo(
     () =>
@@ -682,6 +691,11 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     // Selection mode: the keystroke would open a search whose input the header
     // has no room to render.
     if (searchOpen || selectionMode) return;
+    // A surface owning the query owns the input too, and this writes the PANEL
+    // store - which that surface never renders. Installing it there would
+    // swallow the keystroke and file it somewhere invisible, leaving stale
+    // state for the desktop panel to open with later.
+    if (surfaceSearchQuery !== null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (isTypeToFilterEditableTarget(event.target)) return;
       if (!isTypeToFilterKey(event)) return;
@@ -690,7 +704,14 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     };
     region.addEventListener("keydown", onKeyDown);
     return () => region.removeEventListener("keydown", onKeyDown);
-  }, [tabId, panelId, searchOpen, selectionMode, openSearch]);
+  }, [
+    tabId,
+    panelId,
+    searchOpen,
+    selectionMode,
+    openSearch,
+    surfaceSearchQuery,
+  ]);
   const archiveVisibility = useChatArchiveVisibility(epicId);
   // The filter's own value, for the cloud rows. The local tree consumes it as
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
@@ -1240,7 +1261,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           <SidebarViewerContext.Provider value={isViewer}>
             <SidebarSortContext.Provider value={comparator}>
               <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                {searchOpen && !selectionMode ? (
+                {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
                   <ChatSearchHeaderInput
                     tabId={tabId}
                     resultCount={searchResultCount}
@@ -1338,6 +1359,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const node = useEpicTreeNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
+  // Non-null only where this tree is mounted on a surface that cannot express
+  // the desktop open gestures - see `ChatTreeSurface`.
+  const surface = useChatTreeSurface();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
   );
@@ -1485,6 +1509,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         instanceId: uuidv4(),
       }),
     );
+    // The opening itself is the tree's, on every surface. A mounting surface
+    // only gets to append - the switcher sheet closes here.
+    if (surface !== null) surface.onRowActivated();
   }, [
     // No `nodeId` / `nodeName`: the tile ref is built inside `openRef`, which
     // closes over both and is itself a dependency.
@@ -1494,6 +1521,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     navigateNested,
     openableType,
     prepareOpenTilePreviewInTabFocusTarget,
+    surface,
     tabId,
   ]);
 
@@ -1903,8 +1931,15 @@ function ChatNodeShellBody(
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
+  const childCreateSurface = useChatTreeSurface();
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
+    // Same dismiss the tap path makes, and for the same reason root create
+    // already makes it: the modal opens over the surface, and without this the
+    // sheet is still there when the modal closes. Root and child create must
+    // answer this identically - an asymmetry here is a divergence, not a
+    // feature.
+    if (childCreateSurface !== null) childCreateSurface.onRowActivated();
     openNewConversationModal({
       epicId,
       tabId,
@@ -1917,7 +1952,14 @@ function ChatNodeShellBody(
       // a child is not required to live on its parent's machine.
       hostId: null,
     });
-  }, [canMutate, epicId, nodeId, openNewConversationModal, tabId]);
+  }, [
+    canMutate,
+    childCreateSurface,
+    epicId,
+    nodeId,
+    openNewConversationModal,
+    tabId,
+  ]);
   const { decision } = props;
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
   const rowMenuEntries = chatRowMenuEntries({
@@ -2049,8 +2091,38 @@ interface NodeChevronProps {
 
 function NodeChevron(props: NodeChevronProps) {
   const { hasChildren, expanded, onToggle } = props;
+  const surface = useChatTreeSurface();
   if (!hasChildren) return <TreeChevronSpacer />;
-  return <TreeChevron expanded={expanded} onToggle={onToggle} />;
+  if (surface === null) {
+    return <TreeChevron expanded={expanded} onToggle={onToggle} />;
+  }
+  // Desktop's chevron is an 11.25px glyph INSIDE the row button, which is fine
+  // for a cursor and not for a thumb: a near-miss lands on the row instead, and
+  // on a surface that closes itself on activation that miss dismisses the sheet
+  // rather than merely doing nothing. So the hit box grows and the glyph does
+  // not - an absolutely-positioned pseudo takes no space in flow, so the column
+  // stays desktop's exact width and the density ruling is untouched. `onToggle`
+  // moves to this wrapper so one handler owns the whole enlarged box; it
+  // already stops propagation, which is what keeps the row from opening.
+  return (
+    <span
+      // Same `aria-hidden` the glyph inside already carries: this wrapper adds
+      // hit area and nothing else, so exposing a second nameless control would
+      // be noise rather than access.
+      //
+      // It does NOT claim keyboard reachability. Expansion in this tree is
+      // pointer-only on BOTH form factors - desktop binds no ArrowRight/Left
+      // and neither does the row button - so a keyboard-only user cannot open
+      // a collapsed branch here. That gap is desktop's and predates this
+      // mount; what the mount changed is that a phone now inherits it, where
+      // the flat list it replaced had listed every descendant outright.
+      aria-hidden="true"
+      onClick={onToggle}
+      className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
+    >
+      <TreeChevron expanded={expanded} onToggle={undefined} />
+    </span>
+  );
 }
 
 interface ChatNodeChildrenProps {
@@ -2616,12 +2688,17 @@ function chatRowClassName(state: {
   readonly selectionMode: boolean;
   readonly isArchived: boolean;
   readonly isActive: boolean;
+  readonly revealRowControls: boolean;
 }): string {
   return cn(
     "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
     state.isDragging && "cursor-grabbing opacity-60",
-    nodePadRightClass(state.showRowControls, state.reserveArchiveSlot),
+    nodePadRightClass(
+      state.showRowControls,
+      state.reserveArchiveSlot,
+      state.revealRowControls,
+    ),
     state.selectionMode && "cursor-pointer",
     state.isArchived && ARCHIVED_ROW_CLASS,
     state.isActive
@@ -2716,6 +2793,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // that menu as "New child agent"), so the single-control pad-right reserve is
   // claimed whenever the row is editable and not bulk-selecting.
   const showRowControls = selectionMode ? false : canEdit;
+  const revealRowControls = useRevealRowControls();
   const rowClassName = chatRowClassName({
     isDragging,
     showRowControls,
@@ -2723,6 +2801,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     selectionMode,
     isArchived,
     isActive,
+    revealRowControls,
   });
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
   if (selectionMode) {
@@ -3576,6 +3655,7 @@ function ChatRowArchiveButton(props: {
   const label = props.isArchived
     ? `Unarchive ${props.nodeName}`
     : `Archive ${props.nodeName}`;
+  const revealed = useRevealRowControls();
   return (
     <TooltipWrapper
       label={label}
@@ -3590,7 +3670,12 @@ function ChatRowArchiveButton(props: {
         aria-label={label}
         disabled={props.pending}
         data-testid={`epic-sidebar-archive-${props.nodeId}`}
-        className="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100"
+        className={cn(
+          "absolute right-7 top-1/2 -translate-y-1/2 transition-opacity",
+          revealed
+            ? "opacity-100"
+            : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100",
+        )}
         onClick={(event) => {
           event.stopPropagation();
           props.onToggle();
@@ -3612,6 +3697,7 @@ function ChatMoreMenu(props: {
   readonly entries: ReadonlyArray<SidebarRowMenuEntry>;
 }) {
   const { nodeId, nodeName, entries } = props;
+  const revealed = useRevealRowControls();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -3621,7 +3707,12 @@ function ChatMoreMenu(props: {
           size="icon-xs"
           aria-label={`Agent actions for ${nodeName}`}
           data-testid={`epic-sidebar-more-${nodeId}`}
-          className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
+          className={cn(
+            "absolute right-1 top-1/2 -translate-y-1/2 transition-opacity",
+            revealed
+              ? "opacity-100"
+              : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100",
+          )}
           onClick={(event) => {
             event.stopPropagation();
           }}

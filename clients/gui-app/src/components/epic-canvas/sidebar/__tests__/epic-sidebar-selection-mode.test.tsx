@@ -24,6 +24,10 @@ import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import {
+  ChatTreeSurfaceContext,
+  type ChatTreeSurface,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
 } from "@/stores/epics/sidebar-node-reveal-store";
@@ -4818,3 +4822,139 @@ function recordFromNode(node: TestTreeNode): TestRecord {
     hostId: "host-1",
   };
 }
+
+/**
+ * The tree mounted on a non-desktop SURFACE - the mobile switcher's Agents tab.
+ *
+ * These live beside the desktop cases rather than in a switcher test file
+ * because the harness above is what standing this tree up costs: 45 module
+ * mocks, every one of them derived from a real producer. A second copy of that
+ * set would be fixtures chosen to go green, not fixtures that describe the
+ * system, so the surface's cases reuse this one.
+ */
+describe("chat tree on a mounting surface", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    // This describe drives the panel search store directly, and the outer
+    // suite's reset does not reach here - without this, the case that seeds a
+    // query leaks it into the case asserting the store stays untouched.
+    usePanelHeaderSearchStore.setState(
+      usePanelHeaderSearchStore.getInitialState(),
+      true,
+    );
+  });
+
+  function mountedSurface(
+    overrides: Partial<ChatTreeSurface>,
+  ): ChatTreeSurface {
+    return {
+      onRowActivated: () => undefined,
+      revealRowControls: true,
+      searchQuery: null,
+      ...overrides,
+    };
+  }
+
+  function renderOnSurface(surface: ChatTreeSurface | null) {
+    return render(
+      <ChatTreeSurfaceContext.Provider value={surface}>
+        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+      </ChatTreeSurfaceContext.Provider>,
+    );
+  }
+
+  it("dismisses the surface when a local row is tapped", () => {
+    seedChatTree();
+    let dismissed = 0;
+    renderOnSurface(mountedSurface({ onRowActivated: () => (dismissed += 1) }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(dismissed).toBe(1);
+  });
+
+  it("does not dismiss on the desktop sidebar, which mounts no surface", () => {
+    // The control arm. Without it a dismiss that fired unconditionally would
+    // pass the case above and still be wrong.
+    seedChatTree();
+    renderOnSurface(null);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    // Nothing to assert a count on - the point is that the desktop path takes
+    // no surface at all, so reaching this line without throwing IS the result.
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+  });
+
+  it("dismisses the surface when a row's child create is chosen", () => {
+    // Root create already dismissed. An action that dismisses from one control
+    // and not another is the asymmetry this case exists to catch.
+    seedChatTree();
+    let dismissed = 0;
+    renderOnSurface(mountedSurface({ onRowActivated: () => (dismissed += 1) }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-new-child-chat-root"));
+
+    expect(dismissed).toBe(1);
+  });
+
+  it("narrows by the SURFACE's query when it owns one", () => {
+    seedChatTree();
+    renderOnSurface(mountedSurface({ searchQuery: "Child" }));
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    // The TUI agent matches neither the query nor an ancestor of a match.
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("leaves the panel's own query authoritative when the surface owns none", () => {
+    // The other direction. `searchQuery: null` must read the store, or the
+    // desktop panel silently stops filtering the moment anything mounts a
+    // surface anywhere above it.
+    seedChatTree();
+    act(() => {
+      usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "Child");
+    });
+    renderOnSurface(mountedSurface({ searchQuery: null }));
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("does not write the invisible panel query from type-to-filter", () => {
+    // The surface renders its own field; this store's query would be edited by
+    // a control the user cannot see, and would still be there when the desktop
+    // panel next opened.
+    seedChatTree();
+    renderOnSurface(mountedSurface({ searchQuery: "" }));
+    // The two fields `openSearch` would have written. Asserting them by name
+    // rather than snapshotting the store, which holds live DOM nodes in
+    // `slotBySurfaceKey` and cannot be serialized.
+    const before = usePanelHeaderSearchStore.getState();
+    expect(before.openBySurfaceKey).toEqual({});
+    expect(before.queryBySurfaceKey).toEqual({});
+
+    fireEvent.keyDown(screen.getByTestId("epic-chat-tree-region"), {
+      key: "z",
+    });
+
+    const after = usePanelHeaderSearchStore.getState();
+    expect(after.openBySurfaceKey).toEqual({});
+    expect(after.queryBySurfaceKey).toEqual({});
+  });
+
+  it("gives the chevron a hit area only on a mounting surface", () => {
+    seedChatTree();
+    const onSurface = renderOnSurface(mountedSurface({}));
+    expect(
+      onSurface.container.querySelector('[class*="before:-inset-2"]'),
+    ).not.toBeNull();
+    onSurface.unmount();
+
+    const desktop = renderOnSurface(null);
+    expect(
+      desktop.container.querySelector('[class*="before:-inset-2"]'),
+    ).toBeNull();
+  });
+});

@@ -19,6 +19,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
         defaultChecked: true,
         disabled: false,
         note: null,
+        holders: [],
       },
     ],
     isPending: testState.isPending,

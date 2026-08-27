@@ -1,3 +1,4 @@
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
   worktreeDeleteBatchByPathServerFrameSchema,
   type WorktreeDeleteBatchByPathOpenRequest,
@@ -40,7 +41,11 @@ export interface WorktreeDeleteBatchStreamCallbacks {
   /** Terminal for one target; `deleted` is its outcome. */
   readonly onTargetComplete: (worktreePath: string, deleted: boolean) => void;
   /** Terminal for one target; the host declined or the removal threw. */
-  readonly onTargetFailed: (worktreePath: string, reason: string) => void;
+  readonly onTargetFailed: (
+    worktreePath: string,
+    reason: string,
+    holders: readonly WorktreeBusyHolder[] | undefined,
+  ) => void;
   /** Terminal for the COMMAND, after every target settled. */
   readonly onCommandComplete: (counts: {
     readonly requestedCount: number;
@@ -270,7 +275,11 @@ export class WorktreeDeleteBatchStreamClient {
         return;
       }
       case "target.failed": {
-        this.callbacks.onTargetFailed(frame.worktreePath, frame.reason);
+        this.callbacks.onTargetFailed(
+          frame.worktreePath,
+          frame.reason,
+          undefined,
+        );
         return;
       }
       case "command.complete": {
