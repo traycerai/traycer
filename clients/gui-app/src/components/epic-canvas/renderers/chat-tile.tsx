@@ -856,6 +856,55 @@ const TRANSCRIPT_JUMP_TTL_MS = 30_000;
  * live background item follows that item's card kind; anything else (a settled
  * tool card - the usual shape for a file-write anchor) opens as a tool card.
  */
+/**
+ * The ordinal a cold jump target sits at. `null` means "nothing to ask for":
+ * the legacy line, or a host-locatable target whose answer has not landed.
+ *
+ * Module scope rather than a closure over `hostLocatedOrdinal`, which is why
+ * that value is a parameter. A function declared in the render body is a new
+ * identity every render, so the effect that calls it would have to carry it as
+ * a dependency and would re-run on every frame - on the hot path this is
+ * deliberately not on.
+ */
+function coldJumpOrdinal(
+  transcriptWindow: TranscriptWindow | null,
+  target: ChatTranscriptJumpTarget,
+  hostLocatedOrdinal: number | null,
+): number | null {
+  if (transcriptWindow === null) return null;
+  switch (target.kind) {
+    // The two the host answers: their row id needs rendered models, which a
+    // cold row has none of.
+    case "block":
+    case "sent-message":
+      return hostLocatedOrdinal;
+    case "message":
+      return skeletonOrdinalOf(transcriptWindow, target.messageId);
+    case "event":
+      return skeletonOrdinalOf(
+        transcriptWindow,
+        chatTranscriptEventRowId(target.eventId),
+      );
+    // Ordinal 0 of the WHOLE transcript. The skeleton is whole-chat, so its
+    // first entry names the real first row rather than the top of the
+    // hydrated tail.
+    case "first-message":
+      return transcriptWindow.skeleton[0] === undefined ? null : 0;
+    case "end":
+      return null;
+  }
+}
+
+function skeletonOrdinalOf(
+  transcriptWindow: TranscriptWindow,
+  rowId: string,
+): number | null {
+  const ordinal = transcriptWindow.skeleton.findIndex(
+    (entry) => entry !== undefined && entry.rowId === rowId,
+  );
+  return ordinal < 0 ? null : ordinal;
+}
+
 function transcriptJumpCardKind(
   blockId: string,
   backgroundItems: ReadonlyArray<BackgroundItem>,
@@ -1040,30 +1089,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     chatId: view.node.id,
     target: hostLocatorTarget,
   });
-  // The ordinal a cold jump target sits at. `null` means "nothing to ask for":
-  // the legacy line, or a host-locatable target whose answer has not landed.
-  const coldJumpOrdinal = (
-    transcriptWindow: TranscriptWindow | null,
-    target: ChatTranscriptJumpTarget,
-  ): number | null => {
-    if (transcriptWindow === null) return null;
-    if (target.kind === "block" || target.kind === "sent-message") {
-      return hostLocatedOrdinal;
-    }
-    const rowId =
-      target.kind === "message"
-        ? target.messageId
-        : target.kind === "event"
-          ? chatTranscriptEventRowId(target.eventId)
-          : target.kind === "first-message"
-            ? (transcriptWindow.skeleton[0]?.rowId ?? null)
-            : null;
-    if (rowId === null) return null;
-    const ordinal = transcriptWindow.skeleton.findIndex(
-      (entry) => entry !== undefined && entry.rowId === rowId,
-    );
-    return ordinal < 0 ? null : ordinal;
-  };
   // HOLD UNTIL THE TARGET RESOLVES, not merely until the snapshot loaded. The
   // chat transcript streams independently of the graph stream, so a warm tile
   // routinely learns about a message from the timeline BEFORE its own stream
@@ -1130,7 +1155,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       // `chatTranscriptEventRowId`. A block or a sent-message anchor is
       // identified by walking rendered models, which a cold row has none of,
       // and resolving those needs the host to locate the row.
-      requestTranscriptOrdinal(coldJumpOrdinal(view.transcriptWindow, target));
+      requestTranscriptOrdinal(
+        coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
+      );
       return;
     }
     // Resolved, so nothing is owed on its behalf any more.

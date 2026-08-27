@@ -1113,6 +1113,10 @@ function windowedSnapshotFrame(): StreamFrameEnvelope {
       heldUpdates: [],
       transcriptEpoch: 3,
       rowCount: 0,
+      // Nullable but NOT optional, exactly like `pinnedTodo` below: `null` is
+      // the bootstrap value, and omitting it fails the parse - which drops the
+      // frame before routing and reads as a routing bug.
+      indexRevision: null,
       tail: { fromOrdinal: 0, messages: [], events: [] },
       derived: {
         latestAssistantUsage: null,
@@ -1128,6 +1132,8 @@ function windowedSnapshotFrame(): StreamFrameEnvelope {
         restorableSetupInterruption: null,
         interviewAnswerability: [],
         latestAssistantAuthFailureTurnKey: null,
+        // Neither optional nor nullable, same as `pinnedTaskTodoItems`.
+        setupCardWindows: [],
       },
     },
   };
@@ -1159,6 +1165,10 @@ describe("ChatStreamClient windowed line", () => {
       chatId: "chat-1",
       epoch: 3,
       rowCount: 41,
+      // Required and NOT nullable on an index-change frame - unlike the
+      // snapshot's, which may be `null` while a full skeleton is on its way.
+      // It is the number the client compares to notice a delta it never got.
+      indexRevision: 1,
       changes: [{ type: "reindexed" }],
     });
     session.deliver({
@@ -1182,7 +1192,16 @@ describe("ChatStreamClient windowed line", () => {
       hasBinaryPayload: false,
       epicId: "epic-1",
       chatId: "chat-1",
-      chunk: { epoch: 3, fromIndex: 5, summaries: [], isFinal: true },
+      // `generation` distinguishes a re-stream from an extension: without it a
+      // client's only gap test is `fromIndex > assembled.length`, measured
+      // against the PREVIOUS generation's array.
+      chunk: {
+        epoch: 3,
+        generation: 0,
+        fromIndex: 5,
+        summaries: [],
+        isFinal: true,
+      },
     });
     // A shared frame: same schema on both lines, so it must reach the callback
     // the legacy line already uses rather than needing a windowed twin.

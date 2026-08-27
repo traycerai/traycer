@@ -73,6 +73,10 @@ function baseWindowedSnapshot(): Record<string, unknown> {
     accumulatedFileChangeCount: 0,
     transcriptEpoch: 0,
     rowCount: 0,
+    // `null` is the bootstrap value - the host holds no index for this
+    // subscriber yet and a full skeleton follows - which is what a minimal
+    // frame with no rows is.
+    indexRevision: null,
     tail: { fromOrdinal: 0, messages: [], events: [] },
     derived: {
       latestAssistantUsage: null,
@@ -82,6 +86,7 @@ function baseWindowedSnapshot(): Record<string, unknown> {
       restorableSetupInterruption: null,
       interviewAnswerability: [],
       latestAssistantAuthFailureTurnKey: null,
+      setupCardWindows: [],
     },
   };
 }
@@ -561,6 +566,9 @@ describe("chatIndexChangeSchema", () => {
       createdAt: 1000,
       role: "user" as const,
       byteLength: 10,
+      // Required by the schema. These arms are about index-CHANGE routing, so
+      // the digest's value is incidental - nothing here asserts on it.
+      bodyDigest: "1x9k2mq0004zt7",
     };
   }
 

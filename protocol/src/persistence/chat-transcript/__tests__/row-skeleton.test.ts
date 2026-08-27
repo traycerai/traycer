@@ -17,6 +17,10 @@ const MINIMAL = {
   createdAt: 100,
   role: "assistant" as const,
   byteLength: 42,
+  // Required, and shaped like a real one: `finishContentFingerprint` emits two
+  // base36 halves. Incidental to every assertion below - none of them read it -
+  // but the schema will not parse an entry without it.
+  bodyDigest: "1x9k2mq0004zt7",
 };
 
 describe("rowSkeletonEntrySchema", () => {
@@ -125,7 +129,7 @@ describe("optional fields are genuinely omitted, not materialized as undefined",
     // reader; naming fields the schema does not have would be an assertion
     // that can never fail.
     expect(Object.keys(parsed).sort()).toEqual(
-      ["rowId", "createdAt", "role", "byteLength"].sort(),
+      ["rowId", "createdAt", "role", "byteLength", "bodyDigest"].sort(),
     );
     expect("preview" in parsed).toBe(false);
     expect("sentByAgent" in parsed).toBe(false);
