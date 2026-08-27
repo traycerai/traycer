@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
@@ -149,6 +149,65 @@ const legacySession = {
 };
 
 describe("TerminalStreamClient", () => {
+  it("opens terminal.subscribe with the given viewer intent", () => {
+    const { factory } = makeFactory();
+    const client = makeClient(factory);
+    const subscribe = vi.spyOn(client, "subscribe");
+    const stream = new TerminalStreamClient({
+      wsStreamClient: client,
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      viewer: "cache",
+      callbacks: {
+        onSnapshot: () => undefined,
+        onData: () => undefined,
+        onResized: () => undefined,
+        onExit: () => undefined,
+        onActionAck: () => undefined,
+        onSessionUpdated: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    expect(subscribe).toHaveBeenCalledWith("terminal.subscribe", {
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      viewer: "cache",
+    });
+    stream.close();
+  });
+
+  it("defaults omitted viewer intent to presentation", () => {
+    const { factory } = makeFactory();
+    const client = makeClient(factory);
+    const subscribe = vi.spyOn(client, "subscribe");
+    const stream = new TerminalStreamClient({
+      wsStreamClient: client,
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      callbacks: {
+        onSnapshot: () => undefined,
+        onData: () => undefined,
+        onResized: () => undefined,
+        onExit: () => undefined,
+        onActionAck: () => undefined,
+        onSessionUpdated: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    expect(subscribe).toHaveBeenCalledWith("terminal.subscribe", {
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      viewer: "presentation",
+    });
+    stream.close();
+  });
+
   it("parses scope-bearing frames when terminal.subscribe negotiated 1.4", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);

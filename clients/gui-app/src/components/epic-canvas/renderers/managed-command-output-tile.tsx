@@ -344,7 +344,6 @@ function ManagedCommandOutputTileBody(props: {
     [readingIdentity],
   );
   const viewRef = useRef<HTMLDivElement>(null);
-  const outputListRef = useRef<HTMLDivElement>(null);
   const lastReadingAnchorRef = useRef<ManagedCommandReadingAnchor | null>(
     restoredReadingAnchor,
   );
@@ -372,6 +371,13 @@ function ManagedCommandOutputTileBody(props: {
     getItemKey: getOutputRowKey,
     overscan: OUTPUT_VIRTUAL_OVERSCAN,
     initialRect: OUTPUT_VIRTUAL_INITIAL_RECT,
+    // The first snapshot scrolls to an estimated tail. Wrapped rows at that
+    // tail are measured after the scroll and can grow the virtual document;
+    // end anchoring carries that growth into scrollTop so the fresh window
+    // stays live. This does not turn every focus into "jump to live": TanStack
+    // applies the end correction only while the viewport is already at the
+    // end, so a restored reader parked in history keeps their position.
+    anchorTo: "end",
     // Row measurement can land while the follow/prepend layout effects are
     // committing. TanStack's synchronous default calls React `flushSync` from
     // that ResizeObserver path, which React rejects and which turns a burst of
@@ -382,23 +388,6 @@ function ManagedCommandOutputTileBody(props: {
   const virtualRows = outputVirtualizer.getVirtualItems();
   const outputVirtualizerRef = useRef(outputVirtualizer);
   outputVirtualizerRef.current = outputVirtualizer;
-  // What the timeline looked like at the last moment we could measure it:
-  // the oldest row's identity, and how tall the document was. A page of older
-  // lines prepends content ABOVE the viewport, which slides everything the
-  // human is reading down by exactly the height added.
-  const anchorRef = useRef<{
-    readonly firstSeq: number | null;
-    readonly lastSeq: number | null;
-    readonly scrollHeight: number;
-    readonly scrollTop: number;
-    readonly listOffsetTop: number;
-  }>({
-    firstSeq: null,
-    lastSeq: null,
-    scrollHeight: 0,
-    scrollTop: 0,
-    listOffsetTop: 0,
-  });
   const lastTimelineGenerationRef = useRef(timelineGeneration);
 
   const scrollToNewest = useCallback(() => {
@@ -503,53 +492,6 @@ function ManagedCommandOutputTileBody(props: {
     restoredReadingPositionRef.current = true;
   }, [captureReadingPosition, lines.length, readingIdentity, visible]);
 
-  // Runs before paint, so the correction is never a visible jump. Browsers do
-  // have native scroll anchoring, but the spec suppresses it at scrollTop 0 -
-  // precisely where a load-older fires - so the position has to be held here.
-  useLayoutEffect(() => {
-    const view = viewRef.current;
-    if (view === null) return;
-    const firstSeq = lines.length > 0 ? lines[0].seq : null;
-    const lastSeq = lines.length > 0 ? lines[lines.length - 1].seq : null;
-    const previous = anchorRef.current;
-    const listOffsetTop = outputListRef.current?.offsetTop ?? 0;
-    const prepended =
-      previous.firstSeq !== null &&
-      firstSeq !== null &&
-      firstSeq < previous.firstSeq;
-    if (prepended) {
-      const tailWasEvicted =
-        previous.lastSeq !== null && lastSeq !== previous.lastSeq;
-      const previousFirstIndex = lines.findIndex(
-        (line) => line.seq === previous.firstSeq,
-      );
-      const previousFirstOffset =
-        previousFirstIndex < 0
-          ? undefined
-          : outputVirtualizer.getOffsetForIndex(
-              previousFirstIndex,
-              "start",
-            )?.[0];
-      // Paging while detached can prepend old rows and evict stale tail rows
-      // in the same update, so total scroll-height delta is not the prepend
-      // height. Anchor to the row that used to begin the document instead.
-      view.scrollTop =
-        !tailWasEvicted || previousFirstOffset === undefined
-          ? view.scrollTop + view.scrollHeight - previous.scrollHeight
-          : previousFirstOffset +
-            previous.scrollTop +
-            listOffsetTop -
-            previous.listOffsetTop;
-    }
-    anchorRef.current = {
-      firstSeq,
-      lastSeq,
-      scrollHeight: view.scrollHeight,
-      scrollTop: view.scrollTop,
-      listOffsetTop,
-    };
-  }, [lines, outputVirtualizer]);
-
   // The first snapshot participates in reading-position restore. Every later
   // snapshot is a deliberate rebase (resnapshot or reconnect), so it restores
   // the live latch and pins the replacement tail before paint.
@@ -569,22 +511,12 @@ function ManagedCommandOutputTileBody(props: {
     scrollToNewest();
   }, [following, lines, resyncPending, scrollToNewest]);
 
-  // A Terminal typography change resizes every row at once, so the geometry
-  // both the follow latch and the prepend correction were measured against is
-  // wrong the moment it lands - and no line arrived to trigger the effects that
-  // normally re-measure. Re-pin before paint instead of leaving the reader
-  // somewhere they did not scroll to.
+  // A Terminal typography change resizes every row at once. Re-pin before
+  // paint instead of leaving a tailing reader somewhere they did not scroll to.
   useLayoutEffect(() => {
     const view = viewRef.current;
     if (view === null) return;
     if (following && !resyncPending) view.scrollTop = view.scrollHeight;
-    anchorRef.current = {
-      firstSeq: anchorRef.current.firstSeq,
-      lastSeq: anchorRef.current.lastSeq,
-      scrollHeight: view.scrollHeight,
-      scrollTop: view.scrollTop,
-      listOffsetTop: outputListRef.current?.offsetTop ?? 0,
-    };
   }, [
     following,
     resyncPending,
@@ -595,15 +527,6 @@ function ManagedCommandOutputTileBody(props: {
   const onScroll = useCallback(() => {
     const view = viewRef.current;
     if (view === null) return;
-    // Keep the anchor honest between renders: the human scrolling is the other
-    // way the measurable geometry changes.
-    anchorRef.current = {
-      firstSeq: anchorRef.current.firstSeq,
-      lastSeq: anchorRef.current.lastSeq,
-      scrollHeight: view.scrollHeight,
-      scrollTop: view.scrollTop,
-      listOffsetTop: outputListRef.current?.offsetTop ?? 0,
-    };
     if (resyncPending) return;
     const distanceFromBottom =
       view.scrollHeight - view.scrollTop - view.clientHeight;
@@ -794,7 +717,6 @@ function ManagedCommandOutputTileBody(props: {
           ) : null}
           {lines.length === 0 ? null : (
             <div
-              ref={outputListRef}
               data-testid="managed-command-output-virtual-list"
               className="relative w-full"
               style={{ height: `${outputVirtualizer.getTotalSize()}px` }}
