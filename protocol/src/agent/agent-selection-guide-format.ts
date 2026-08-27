@@ -11,9 +11,9 @@ const LAYERED_OPENER = `The instructions below are grouped by scope. Apply all o
 
 const WORKSPACE_SCOPE_PARAGRAPH = `Workspace instructions apply only to files under the workspace path shown in their section heading. Files outside that path follow the global instructions unless another workspace guide applies.`;
 
-const MULTI_WORKSPACE_PARAGRAPH = `When more than one workspace contains a file, the most specific workspace (the highest-priority workspace shown first) takes precedence and overrides broader workspace instructions.`;
+const MULTI_WORKSPACE_WITH_GLOBAL_PARAGRAPH = `Workspace instructions apply only to files under the workspace path shown in their section heading. Files outside that path follow the global instructions unless another workspace guide applies. If more than one workspace contains the file, use the most specific workspace.`;
 
-const WORKSPACES_ONLY_OPENER = `Each workspace's instructions apply to work on files under that workspace; multiple workspaces provide instructions below, labeled by path. Apply the instructions for the workspace that contains the files your task touches. If more than one workspace contains a file, the most specific workspace (the highest-priority workspace shown first) takes precedence and overrides broader workspace instructions.`;
+const MULTI_WORKSPACE_PARAGRAPH = `Multiple workspaces provide instructions below. For each file you touch, use the instructions for the workspace that contains it. If more than one workspace contains the file, use the most specific workspace.`;
 
 export const A2A_PERMISSION_MODE_INSTRUCTION =
   "Use `full_access` unless the user's agent selection guide explicitly instructs you to use `supervised` or `auto_accept_edits`; never infer a more restrictive permission mode from the task, the current or parent agent's mode, or a general safety preference.";
@@ -51,11 +51,6 @@ export function formatAgentSelectionGuideResponse(
 
   if (sources.length === 1) {
     const only = sources[0];
-    if (only.kind === "workspace") {
-      return withPermissionModeInstruction(
-        `${TITLE}\n\nThese workspace instructions apply only to files under ${only.workspacePath}. Do not apply them to files outside that workspace path.\n\n${sectionHeader(only)}\n${only.content.trimEnd()}`,
-      );
-    }
     return withPermissionModeInstruction(
       `Agent selection instructions from ${only.path}:\n\n${only.content.trimEnd()}`,
     );
@@ -71,13 +66,13 @@ export function formatAgentSelectionGuideResponse(
 
 function opener(sources: readonly AgentSelectionGuideResponseSource[]): string {
   const hasGlobal = sources.some((source) => source.kind === "global");
-  if (!hasGlobal) return WORKSPACES_ONLY_OPENER;
+  if (!hasGlobal) return MULTI_WORKSPACE_PARAGRAPH;
 
   const workspaceCount = sources.filter(
     (source) => source.kind === "workspace",
   ).length;
   return workspaceCount >= 2
-    ? `${LAYERED_OPENER}\n\n${WORKSPACE_SCOPE_PARAGRAPH}\n\n${MULTI_WORKSPACE_PARAGRAPH}`
+    ? `${LAYERED_OPENER}\n\n${MULTI_WORKSPACE_WITH_GLOBAL_PARAGRAPH}`
     : `${LAYERED_OPENER}\n\n${WORKSPACE_SCOPE_PARAGRAPH}`;
 }
 

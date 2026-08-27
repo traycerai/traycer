@@ -41,7 +41,7 @@ describe("formatAgentSelectionGuideResponse", () => {
     );
     expect(text).toContain("take precedence and override global");
     expect(text).toContain("apply only to files under the workspace path");
-    expect(text).not.toContain("When more than one workspace");
+    expect(text).not.toContain("Multiple workspaces provide instructions");
     expect(text.indexOf(`## Workspace instructions — ${APP_DIR}`)).toBeLessThan(
       text.indexOf("## Global instructions"),
     );
@@ -57,7 +57,12 @@ describe("formatAgentSelectionGuideResponse", () => {
         globalSource("global body", 1),
       ]),
     );
-    expect(text).toContain("When more than one workspace contains a file");
+    expect(text).toContain(
+      "Files outside that path follow the global instructions unless another workspace guide applies",
+    );
+    expect(text).toContain(
+      "If more than one workspace contains the file, use the most specific workspace",
+    );
     expect(text).toContain(`## Workspace instructions — ${APP_DIR}`);
     expect(text).toContain(`## Workspace instructions — ${LIB_DIR}`);
     expect(text).toContain("## Global instructions");
@@ -74,7 +79,9 @@ describe("formatAgentSelectionGuideResponse", () => {
     );
 
     expect(text).toContain("the most specific workspace");
-    expect(text).toContain("highest-priority workspace shown first");
+    expect(text).toContain(
+      "If more than one workspace contains the file, use the most specific workspace",
+    );
     const nestedHeading = `## Workspace instructions — ${nestedWorkspace} (`;
     const parentHeading = `## Workspace instructions — ${APP_DIR} (`;
     expect(text).toContain(nestedHeading);
@@ -91,19 +98,18 @@ describe("formatAgentSelectionGuideResponse", () => {
         workspaceSource(LIB_DIR, "lib body", 1),
       ]),
     );
-    expect(text).toContain("Each workspace's instructions apply");
+    expect(text).toContain("Multiple workspaces provide instructions below");
     expect(text).not.toContain("override global");
     expect(text).not.toContain("## Global");
   });
 
-  it("retains the path scope for a lone workspace guide", () => {
+  it("renders a lone workspace guide as plain attributed content", () => {
     const text = formatAgentSelectionGuideResponse(
       found([workspaceSource(APP_DIR, "app body", 2)]),
     );
-    expect(text).toContain(`apply only to files under ${APP_DIR}`);
-    expect(text).toContain("Do not apply them to files outside");
-    expect(text).toContain(`## Workspace instructions — ${APP_DIR}`);
-    expect(text).toContain("app body");
+    expect(text).toBe(
+      `Agent selection instructions from ${APP_DIR}/.traycer/agent-selection-guide.md:\n\napp body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+    );
   });
 
   it("forbids inferred permission-mode overrides", () => {
