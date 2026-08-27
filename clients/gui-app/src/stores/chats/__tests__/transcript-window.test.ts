@@ -553,7 +553,7 @@ describe("range responses", () => {
     expect(seated.invalidated).toBe(true);
     // And the planner now asks for a resnapshot rather than the same range.
     expect(
-      planTranscriptHydration(seated, { fromOrdinal: 0, toOrdinal: 4 }),
+      planTranscriptHydration(seated, { fromOrdinal: 0, toOrdinal: 4 }, []),
     ).toBeNull();
   });
 
@@ -686,7 +686,7 @@ describe("gaps and what to request next", () => {
       rowCount: 40,
       tail: { fromOrdinal: 40, messages: [], events: [] },
     });
-    expect(planTranscriptHydration(window, null)).toEqual({
+    expect(planTranscriptHydration(window, null, [])).toEqual({
       fromOrdinal: 20,
       toOrdinal: 40,
     });
@@ -706,9 +706,9 @@ describe("gaps and what to request next", () => {
         messages: [userMessage("m-20", 20)],
       }),
     );
-    expect(planTranscriptHydration(window, null)).toBeNull();
+    expect(planTranscriptHydration(window, null, [])).toBeNull();
     expect(
-      planTranscriptHydration(window, { fromOrdinal: 0, toOrdinal: 10 }),
+      planTranscriptHydration(window, { fromOrdinal: 0, toOrdinal: 10 }, []),
     ).toEqual({ fromOrdinal: 0, toOrdinal: 10 });
   });
 
@@ -719,8 +719,103 @@ describe("gaps and what to request next", () => {
       changes: [{ type: "reindexed" }],
     });
     expect(
-      planTranscriptHydration(window, { fromOrdinal: 0, toOrdinal: 5 }),
+      planTranscriptHydration(window, { fromOrdinal: 0, toOrdinal: 5 }, []),
     ).toBeNull();
+  });
+
+  /**
+   * The third obligation: rows something other than the viewport is blocked on.
+   *
+   * Today that is a pending interview's question, whose card renders in the
+   * COMPOSER - so no amount of scrolling will ever bring its row into view and
+   * viewport-driven hydration would never fetch it. Without this the client
+   * correctly stops offering to dismiss a cold question and then renders
+   * nothing at all, which is a chat blocked with no affordance.
+   */
+  describe("required ordinals", () => {
+    /** A 40-row window whose eager tail is hydrated and nothing else. */
+    function tailHydrated(): TranscriptWindow {
+      return applyRangeResponse(
+        applyWindowedSnapshot(emptyTranscriptWindow(), {
+          epoch: 1,
+          rowCount: 40,
+          tail: { fromOrdinal: 40, messages: [], events: [] },
+        }),
+        rangeResponse({
+          epoch: 1,
+          fromOrdinal: 20,
+          rowIds: Array.from({ length: 20 }, (_u, i) => `row-${20 + i}`),
+          messages: [userMessage("m-20", 20)],
+        }),
+      );
+    }
+
+    it("asks for a required row the window does not hold, one row wide", () => {
+      // One row, not the gap around it: the host always serves the first
+      // requested row whatever it costs, so a single-row ask cannot be
+      // squeezed out by scrollback nobody asked for.
+      expect(planTranscriptHydration(tailHydrated(), null, [4])).toEqual({
+        fromOrdinal: 4,
+        toOrdinal: 5,
+      });
+    });
+
+    it("outranks the visible span", () => {
+      // A reader scrolled elsewhere must not starve the row the chat is
+      // blocked on - the viewport keeps re-planning itself every frame.
+      expect(
+        planTranscriptHydration(
+          tailHydrated(),
+          { fromOrdinal: 0, toOrdinal: 3 },
+          [9],
+        ),
+      ).toEqual({ fromOrdinal: 9, toOrdinal: 10 });
+    });
+
+    it("yields to the missing tail, which is the cheaper way to the same row", () => {
+      const noTail = applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 40,
+        tail: { fromOrdinal: 40, messages: [], events: [] },
+      });
+      expect(planTranscriptHydration(noTail, null, [4])).toEqual({
+        fromOrdinal: 20,
+        toOrdinal: 40,
+      });
+    });
+
+    it("skips a required row the window already holds", () => {
+      // Ordinal 25 is inside the hydrated tail. Re-asking for it would put the
+      // planner in a loop that never reaches the viewport.
+      expect(
+        planTranscriptHydration(
+          tailHydrated(),
+          { fromOrdinal: 0, toOrdinal: 3 },
+          [25],
+        ),
+      ).toEqual({ fromOrdinal: 0, toOrdinal: 3 });
+    });
+
+    it("takes the lowest required ordinal first", () => {
+      expect(planTranscriptHydration(tailHydrated(), null, [12, 4, 9])).toEqual(
+        {
+          fromOrdinal: 4,
+          toOrdinal: 5,
+        },
+      );
+    });
+
+    it("ignores an ordinal outside the transcript", () => {
+      // A judgement carried across a `rowCount` change names a row that does
+      // not exist, and a range framed against it comes back empty forever - a
+      // hydration loop with nothing on the other end. There is no bounds check
+      // for this: `transcriptHydrationGaps` clamps, so an absent row reports
+      // itself hydrated. This pins the COMPOSED behaviour, which is what a
+      // second bound here would have restated.
+      expect(
+        planTranscriptHydration(tailHydrated(), null, [40, 99, -1]),
+      ).toBeNull();
+    });
   });
 });
 
@@ -760,6 +855,7 @@ describe("eviction", () => {
       window,
       window.hydratedBytes - 1,
       null,
+      [],
     );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([10, 28]);
   });
@@ -786,7 +882,7 @@ describe("eviction", () => {
         messages: [userMessage("warmer", 0)],
       }),
     );
-    const evicted = evictTranscriptWindowToBudget(window, 1, null);
+    const evicted = evictTranscriptWindowToBudget(window, 1, null, []);
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([18]);
   });
 
@@ -837,6 +933,7 @@ describe("eviction", () => {
       touched,
       touched.hydratedBytes - 1,
       null,
+      [],
     );
     // The now-untouched span at 10 is the coldest, so it goes instead of 0.
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 28]);
@@ -898,14 +995,46 @@ describe("eviction protects the visible span", () => {
     // row whatever it costs, so evicting the visible span here would only
     // re-request it and evict it again, forever - while the cold span (0),
     // which nothing is looking at, is fair game.
-    const evicted = evictTranscriptWindowToBudget(window, 1, {
-      fromOrdinal: 10,
-      toOrdinal: 12,
-    });
+    const evicted = evictTranscriptWindowToBudget(
+      window,
+      1,
+      { fromOrdinal: 10, toOrdinal: 12 },
+      [],
+    );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([10, 28]);
     // The budget is SOFT against the protected spans: the result stays over
     // budget rather than sacrificing them.
     expect(evicted.hydratedBytes).toBeGreaterThan(1);
+  });
+
+  it("never evicts a span holding a required row", () => {
+    // The same re-fetch loop as the visible span, in its purest form: a
+    // required ordinal is re-planned with no viewport to scroll away from, so
+    // evicting its span means fetching that one row forever.
+    let window = windowWithSkeleton(30);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("question", 0)],
+      }),
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10", "row-11"],
+        messages: [userMessage("cold", 10)],
+      }),
+    );
+
+    // Nothing visible, so only the tail rule and the required rule can save a
+    // span - and ordinal 0's span is the coldest by insertion order.
+    const evicted = evictTranscriptWindowToBudget(window, 1, null, [0]);
+    expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0]);
   });
 });
 
@@ -977,10 +1106,12 @@ describe("reading a long chat upward from the tail", () => {
     expect(window.hydratedBytes).toBeGreaterThan(budget);
 
     // The reader is at the tail; everything behind it is fair game.
-    const evicted = evictTranscriptWindowToBudget(window, budget, {
-      fromOrdinal: 18,
-      toOrdinal: 20,
-    });
+    const evicted = evictTranscriptWindowToBudget(
+      window,
+      budget,
+      { fromOrdinal: 18, toOrdinal: 20 },
+      [],
+    );
 
     expect(evicted.hydratedBytes).toBeLessThan(window.hydratedBytes);
     expect(evicted.spans.length).toBeLessThan(window.spans.length);
@@ -1213,7 +1344,7 @@ describe("the streaming row's byte charge", () => {
     // Under the STALE figure this window fits, so nothing would be dropped.
     expect(streamed.hydratedBytes).toBeLessThan(budget);
 
-    const evicted = evictTranscriptWindowToBudget(streamed, budget, null);
+    const evicted = evictTranscriptWindowToBudget(streamed, budget, null, []);
     // The tail is exempt, so the cold span is what has to go.
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([29]);
   });
@@ -1229,6 +1360,7 @@ describe("the streaming row's byte charge", () => {
       streamed,
       TRANSCRIPT_WINDOW_MAX_BYTES,
       null,
+      [],
     );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 29]);
     // Settled on the way through, so the next read costs nothing.
@@ -1382,7 +1514,11 @@ describe("what an overlap keeps", () => {
     });
     expect(reconnected.spans).toHaveLength(0);
     expect(
-      planTranscriptHydration(reconnected, { fromOrdinal: 0, toOrdinal: 3 }),
+      planTranscriptHydration(
+        reconnected,
+        { fromOrdinal: 0, toOrdinal: 3 },
+        [],
+      ),
     ).not.toBeNull();
   });
 

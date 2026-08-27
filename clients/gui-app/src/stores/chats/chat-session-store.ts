@@ -34,6 +34,7 @@ import type {
   ChatIndexChange,
   ChatRangeResponse,
   ChatTranscriptDerived,
+  InterviewAnswerability,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   applyIndexChange,
@@ -143,7 +144,6 @@ import type {
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
 import type {
-  AssistantMessage,
   Chat,
   ChatEvent,
   ContentBlock,
@@ -152,6 +152,7 @@ import type {
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { latestAssistantAuthFailureTurnKey } from "@traycer/protocol/persistence/chat-transcript/provider-auth-failure";
 import { v4 as uuidv4 } from "uuid";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
@@ -1912,20 +1913,24 @@ export function createChatSessionStoreWithNotificationDependencies(
     // harmless refetch either way (the gate is a pure predicate).
     let nudgedAuthErrorTurnId: string | null = null;
 
-    const nudgeProviderAuthFromPersistedError = (
-      messages: ReadonlyArray<Message>,
-    ): void => {
+    /**
+     * Act on the whole-transcript answer, whichever line produced it.
+     *
+     * The SELECTION moved to `provider-auth-failure.ts` and the two lines get
+     * it from different places - the legacy caller runs it over the snapshot's
+     * full record array, the windowed caller reads the host's scalar. What
+     * stays here is the dedupe, because the marker it compares against is also
+     * written by the live `blockDelta` path below and neither line can see
+     * that.
+     *
+     * `null` means "the latest turn did not fail on a credential", on both
+     * lines. It never means "could not tell": that ambiguity is precisely what
+     * the derived scalar exists to remove.
+     */
+    const nudgeProviderAuthFailure = (turnKey: string | null): void => {
       if (options.onProviderAuthError === null) return;
-      const lastAssistant = messages.findLast(
-        (message): message is AssistantMessage => message.role === "assistant",
-      );
-      if (lastAssistant === undefined) return;
-      const turnKey = lastAssistant.turnId ?? lastAssistant.messageId;
+      if (turnKey === null) return;
       if (nudgedAuthErrorTurnId === turnKey) return;
-      const hasAuthError = lastAssistant.blocks.some(
-        (block) => block.type === "error" && block.code === AUTH_ERROR_CODE,
-      );
-      if (!hasAuthError) return;
       nudgedAuthErrorTurnId = turnKey;
       options.onProviderAuthError();
     };
@@ -2009,15 +2014,24 @@ export function createChatSessionStoreWithNotificationDependencies(
      * that judgement about a legitimate new row. The legacy caller passes
      * either `null` or the windowed-state RESET (a downgrade is the same
      * atomicity argument in reverse).
+     *
+     * `authFailureTurnKey` is passed in rather than scanned from `frame`
+     * because THIS is the one question the adaptation cannot carry: the
+     * windowed caller's `frame.snapshot.chat.messages` is the hydrated subset,
+     * so a scan here would answer "no failure" for a failure that is merely
+     * cold. Each caller supplies the whole-transcript answer its own line has -
+     * the legacy scan, or the host's scalar - and the two agree by running the
+     * same selection.
      */
     const applyAuthoritativeSnapshot = (
       frame: ChatSnapshotFrame,
       extra: Partial<ChatSessionState> | null,
+      authFailureTurnKey: string | null,
     ): void => {
       if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
         return;
       }
-      nudgeProviderAuthFromPersistedError(frame.snapshot.chat.messages);
+      nudgeProviderAuthFailure(authFailureTurnKey);
       flushBlockDeltas();
       // Pendings dispatched on an earlier connection never see their ack, so
       // the snapshot drops them (below). Computed here, before the set, so a
@@ -2712,9 +2726,10 @@ export function createChatSessionStoreWithNotificationDependencies(
     const requestPlannedHydration = (): void => {
       const client = streamClient;
       if (client === null) return;
+      const state = get();
       // NOT named `window`: the timeout below is armed off the global one, and
       // a local of that name would shadow it.
-      const transcriptWindow = get().transcriptWindow;
+      const transcriptWindow = state.transcriptWindow;
       if (transcriptWindow.invalidated) {
         // A void index cannot be repaired by a range: every ordinal it would
         // name belongs to a coordinate space this client has left.
@@ -2724,6 +2739,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const next = planTranscriptHydration(
         transcriptWindow,
         visibleTranscriptRange,
+        pendingInterviewOrdinalsOf(state),
       );
       if (next === null) return;
       const inFlight = inFlightHydrationRequest;
@@ -3136,13 +3152,23 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...aux,
           transcriptRowContext: hydratedRowContext(window),
         },
+        // The HOST's answer, not a scan of the adapted frame: those records are
+        // the hydrated subset, and a failure several user rows back is exactly
+        // the shape that falls outside the inline tail.
+        frame.snapshot.derived.latestAssistantAuthFailureTurnKey,
       );
     };
 
     const callbacks: ChatStreamCallbacks = {
       onSnapshot: (frame) => {
         if (!windowedLine) {
-          applyAuthoritativeSnapshot(frame, null);
+          // The legacy line's `messages` IS the transcript, so the scan is the
+          // whole-transcript answer here and needs no host help.
+          applyAuthoritativeSnapshot(
+            frame,
+            null,
+            latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
+          );
           return;
         }
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3166,16 +3192,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         forgetOutstandingHydration();
         clearResnapshotRequest();
         forgetDeferredWindowedSnapshot();
-        applyAuthoritativeSnapshot(frame, {
-          transcriptWindow: emptyTranscriptWindow(),
-          transcriptDerived: null,
-          // The rest of the windowed line's aux state, back to its initial
-          // values: nothing reads either once `transcriptDerived` is null,
-          // but a LATER re-upgrade must start from the same blank state a
-          // fresh store does.
-          accumulatedFileChangeCount: 0,
-          accumulatedFileChangeSummaries: [],
-        });
+        applyAuthoritativeSnapshot(
+          frame,
+          {
+            transcriptWindow: emptyTranscriptWindow(),
+            transcriptDerived: null,
+            // The rest of the windowed line's aux state, back to its initial
+            // values: nothing reads either once `transcriptDerived` is null,
+            // but a LATER re-upgrade must start from the same blank state a
+            // fresh store does.
+            accumulatedFileChangeCount: 0,
+            accumulatedFileChangeSummaries: [],
+          },
+          // A downgrade frame is a LEGACY snapshot - full records - so the
+          // scan is again the whole-transcript answer.
+          latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
+        );
       },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3251,6 +3283,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           }),
           TRANSCRIPT_WINDOW_MAX_BYTES,
           visibleTranscriptRange,
+          // The FRAME's pair, not the store's: this runs before the snapshot's
+          // judgement and pending list are published, and protecting the rows
+          // the PREVIOUS snapshot was blocked on would protect the wrong ones
+          // for exactly the beat that matters.
+          pendingInterviewOrdinals(
+            frame.snapshot.derived.interviewAnswerability,
+            frame.snapshot.pendingInterviews,
+          ),
         );
         // The window and the snapshot's aux ride the fold's own `set` (or the
         // deferral's single `set`) rather than being published here first - a
@@ -3374,6 +3414,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           // function's own doc for the oversized-row re-fetch loop this
           // forecloses.
           visibleTranscriptRange,
+          // And the row a pending question lives on, which is re-planned with
+          // no viewport to scroll away from and would loop hardest of all.
+          pendingInterviewOrdinalsOf(get()),
         );
         // Rides the same `set` as the rows it describes, so no consumer can
         // observe the rows without the fact that a range delivered them.
@@ -6395,6 +6438,59 @@ export function isWindowedTranscript<
   state: T,
 ): state is T & { readonly transcriptDerived: ChatTranscriptDerived } {
   return state.transcriptDerived !== null;
+}
+
+/**
+ * Rows the chat is BLOCKED on - the hydration obligation the viewport cannot
+ * express.
+ *
+ * A pending interview's answer card renders in the composer slot, off a
+ * `streaming` interview block found by walking the rendered rows. Scrolling
+ * never brings it into view, so viewport-driven hydration will not fetch it,
+ * and a chat whose question sits outside the retained window has no affordance
+ * at all: the card cannot render, and the dismiss notice is (correctly) held
+ * back because the host says the question is answerable. Naming the ordinal is
+ * what closes that.
+ *
+ * Intersected with the store's OWN pending list rather than taken from the
+ * host's judgement wholesale. The two are the same set at the snapshot that
+ * produced them, and they diverge afterwards in exactly one direction that
+ * matters: an interview settled by a live frame is dropped from `state`
+ * immediately, and re-fetching a row for a question already answered would be
+ * work with nothing on the other end of it.
+ *
+ * Empty on the legacy line, where `transcriptDerived` is null and the whole
+ * transcript is materialized anyway.
+ */
+function pendingInterviewOrdinals(
+  answerability: ReadonlyArray<InterviewAnswerability> | null,
+  pendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+): ReadonlyArray<number> {
+  if (answerability === null) return [];
+  if (pendingInterviews.length === 0) return [];
+  const pending = new Set(
+    pendingInterviews.map((interview) => interview.blockId),
+  );
+  const ordinals: number[] = [];
+  for (const entry of answerability) {
+    // `null` is "no row renders it" - genuinely stuck, and nothing to fetch.
+    if (entry.ordinal === null) continue;
+    if (!pending.has(entry.blockId)) continue;
+    ordinals.push(entry.ordinal);
+  }
+  return ordinals;
+}
+
+/** The pair as the STORE currently holds it, for every caller but a snapshot. */
+function pendingInterviewOrdinalsOf(
+  state: ChatSessionState,
+): ReadonlyArray<number> {
+  return pendingInterviewOrdinals(
+    state.transcriptDerived === null
+      ? null
+      : state.transcriptDerived.interviewAnswerability,
+    state.pendingInterviews,
+  );
 }
 
 /**

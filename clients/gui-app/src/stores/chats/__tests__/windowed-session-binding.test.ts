@@ -4,6 +4,7 @@ import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatAccumulatedFileChangeSummary,
   ChatLoadRangeRequest,
+  InterviewAnswerability,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -12,7 +13,10 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
-import { isTailHydrated } from "@/stores/chats/transcript-window";
+import {
+  isTailHydrated,
+  TRANSCRIPT_WINDOW_MAX_BYTES,
+} from "@/stores/chats/transcript-window";
 
 /**
  * # The wait-for-tail rule
@@ -74,6 +78,40 @@ function userMessage(messageId: string, timestamp: number): Message {
     messageId,
     sender: { type: "user", userId: OWNER_ID },
     message: { kind: "user", content: CONTENT },
+    timestamp,
+    sessionAnchor: null,
+  };
+}
+
+/**
+ * One row larger than the whole window budget.
+ *
+ * A legal response: the host's range read always serves the FIRST requested row
+ * whatever it costs (`read-range.ts`), so a single oversized row is exactly how
+ * a window ends up over budget with nothing else to blame.
+ */
+function oversizedMessage(messageId: string, timestamp: number): Message {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: OWNER_ID },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "x".repeat(TRANSCRIPT_WINDOW_MAX_BYTES + 1),
+              },
+            ],
+          },
+        ],
+      },
+    },
     timestamp,
     sessionAnchor: null,
   };
@@ -186,11 +224,19 @@ interface WindowedHarness {
    * that is a frame the host has no reason to send.
    */
   lastRangeRequestId(): string;
+  /**
+   * How many times the store asked the app to refetch `providers.list`.
+   *
+   * The re-auth banner's only trigger on a snapshot path, and on this line it
+   * can no longer be read out of the published records.
+   */
+  providerAuthNudgeCount(): number;
 }
 
 function createWindowedHarness(): WindowedHarness {
   const rangeRequests: ChatLoadRangeRequest[] = [];
   let resnapshots = 0;
+  let providerAuthNudges = 0;
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
     hostId: "host-a",
@@ -198,7 +244,9 @@ function createWindowedHarness(): WindowedHarness {
     chatId: CHAT_ID,
     userId: OWNER_ID,
     onAuthError: null,
-    onProviderAuthError: null,
+    onProviderAuthError: () => {
+      providerAuthNudges += 1;
+    },
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -227,6 +275,62 @@ function createWindowedHarness(): WindowedHarness {
       const last = rangeRequests.at(-1);
       if (last === undefined) throw new Error("Expected an outstanding range");
       return last.requestId;
+    },
+    providerAuthNudgeCount: () => providerAuthNudges,
+  };
+}
+
+type WindowedSnapshotFrame = Parameters<
+  ChatStreamCallbacks["onWindowedSnapshot"]
+>[0];
+
+/**
+ * Overlay the two aux/derived fields the answers below travel on.
+ *
+ * A patch rather than more parameters on {@link windowedSnapshot}: these are
+ * read by two suites out of a dozen, and threading them through every call site
+ * would say they are part of what a snapshot IS rather than something a
+ * particular case sets.
+ */
+function withPendingQuestion(
+  frame: WindowedSnapshotFrame,
+  input: {
+    readonly pendingInterviews: ReadonlyArray<{
+      readonly blockId: string;
+      readonly requestedAt: number;
+    }>;
+    readonly interviewAnswerability: ReadonlyArray<InterviewAnswerability>;
+  },
+): WindowedSnapshotFrame {
+  return {
+    ...frame,
+    snapshot: {
+      ...frame.snapshot,
+      pendingInterviews: input.pendingInterviews.map((interview) => ({
+        ...interview,
+      })),
+      derived: {
+        ...frame.snapshot.derived,
+        interviewAnswerability: input.interviewAnswerability.map((entry) => ({
+          ...entry,
+        })),
+      },
+    },
+  };
+}
+
+function withAuthFailure(
+  frame: WindowedSnapshotFrame,
+  latestAssistantAuthFailureTurnKey: string | null,
+): WindowedSnapshotFrame {
+  return {
+    ...frame,
+    snapshot: {
+      ...frame.snapshot,
+      derived: {
+        ...frame.snapshot.derived,
+        latestAssistantAuthFailureTurnKey,
+      },
     },
   };
 }
@@ -285,6 +389,8 @@ function windowedSnapshot(input: {
         pinnedTaskTodoItems: [],
         latestForkableAssistantMessageId: "assistant-9",
         restorableSetupInterruption: null,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
       },
     },
   };
@@ -319,6 +425,274 @@ describe("windowed snapshot with a hydrated tail", () => {
       expect(state.accumulatedFileChangeCount).toBe(7);
       // Nothing missing, so nothing asked for.
       expect(harness.rangeRequests).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * The two answers a windowed client can no longer read out of an ABSENCE.
+ *
+ * Both consumers used to take an irreversible action on "I cannot find it in
+ * `messages`" - one offers to error out a question, the other declines to
+ * invalidate a stale provider query - and on this line that array is the
+ * hydrated subset.
+ */
+describe("host answers a windowed client cannot derive", () => {
+  it("hydrates the row a cold pending question lives on", () => {
+    // The tail is complete, the reader is looking at nothing in particular,
+    // and ordinal 4 is far outside the window. No scroll would ever ask for
+    // it - the answer card renders in the COMPOSER - so without the required
+    // obligation the chat sits blocked with the question invisible.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        withPendingQuestion(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 30,
+            tailFromOrdinal: 29,
+            tailMessages: [userMessage("m-29", 29)],
+            accumulatedFileChangeCount: 0,
+          }),
+          {
+            pendingInterviews: [{ blockId: "ask-1", requestedAt: 10 }],
+            interviewAnswerability: [{ blockId: "ask-1", ordinal: 4 }],
+          },
+        ),
+      );
+
+      expect(harness.rangeRequests).toHaveLength(1);
+      const request = harness.rangeRequests[0];
+      expect(request.epoch).toBe(4);
+      expect(request.fromOrdinal).toBe(4);
+      // Inclusive on the wire, so one row is `[4, 4]`.
+      expect(request.toOrdinal).toBe(4);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("asks for nothing when the host says no row renders the question", () => {
+    // `ordinal: null` is the genuinely-stuck judgement. There is no row to
+    // fetch, and the composer's dismiss notice is the correct affordance -
+    // fetching anything here would be a request with no answer.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        withPendingQuestion(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 30,
+            tailFromOrdinal: 29,
+            tailMessages: [userMessage("m-29", 29)],
+            accumulatedFileChangeCount: 0,
+          }),
+          {
+            pendingInterviews: [{ blockId: "ask-1", requestedAt: 10 }],
+            interviewAnswerability: [{ blockId: "ask-1", ordinal: null }],
+          },
+        ),
+      );
+
+      expect(harness.rangeRequests).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("asks for nothing for a placed question that is no longer pending", () => {
+    // The judgement and the pending set are one pair at the snapshot that
+    // produced them, and they diverge afterwards: an interview settled by a
+    // live frame leaves `pendingInterviews` immediately while the derived
+    // payload keeps naming its row until the next snapshot. Fetching that row
+    // is work with nothing on the other end of it.
+    //
+    // ANOTHER question stays pending on purpose. With an empty pending list
+    // this would pass on the store's "nothing is pending" early return and
+    // assert nothing about the intersection - which is exactly what the first
+    // version of this test did.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        withPendingQuestion(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 30,
+            tailFromOrdinal: 29,
+            tailMessages: [userMessage("m-29", 29)],
+            accumulatedFileChangeCount: 0,
+          }),
+          {
+            pendingInterviews: [{ blockId: "ask-2", requestedAt: 20 }],
+            interviewAnswerability: [
+              { blockId: "ask-1", ordinal: 4 },
+              { blockId: "ask-2", ordinal: null },
+            ],
+          },
+        ),
+      );
+
+      expect(harness.rangeRequests).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("never evicts the question's row, on either path that runs the budget", () => {
+    // The re-fetch loop in its purest form. A required ordinal is re-planned
+    // with NO viewport to scroll away from, so a required span evicted as
+    // coldest is re-requested immediately, evicted again, and the client
+    // fetches one row forever. Both callers of the budget have to know:
+    // `onRange`, which seats it, and `onWindowedSnapshot`, which runs on every
+    // history mutation.
+    //
+    // One oversized row puts the window over budget on its own - a legal
+    // response, since the host always serves the first requested row whatever
+    // it costs - and nothing is visible throughout, so only the required rule
+    // can save the span.
+    const harness = createWindowedHarness();
+    try {
+      const callbacks = harness.callbacks();
+      const question = {
+        pendingInterviews: [{ blockId: "ask-1", requestedAt: 10 }],
+        interviewAnswerability: [{ blockId: "ask-1", ordinal: 0 }],
+      };
+      const snapshot = (): Parameters<
+        ChatStreamCallbacks["onWindowedSnapshot"]
+      >[0] =>
+        withPendingQuestion(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 30,
+            tailFromOrdinal: 29,
+            tailMessages: [userMessage("m-29", 29)],
+            accumulatedFileChangeCount: 0,
+          }),
+          question,
+        );
+
+      callbacks.onWindowedSnapshot(snapshot());
+      // The tail is complete and nothing is visible, so this request exists
+      // only because ordinal 0 is required.
+      expect(harness.rangeRequests).toHaveLength(1);
+      expect(harness.rangeRequests[0]?.fromOrdinal).toBe(0);
+
+      callbacks.onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: harness.lastRangeRequestId(),
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0"],
+          messages: [oversizedMessage("m-0", 0)],
+          events: [],
+          rowContext: {},
+          reachedStart: true,
+          reachedEnd: false,
+        },
+      });
+      // Survived `onRange`'s eviction, and nothing was asked for again.
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.map((span) => span.fromOrdinal),
+      ).toContain(0);
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      // And survives the next snapshot's, which reads the FRAME's pair
+      // because the store has not been given this one yet.
+      callbacks.onWindowedSnapshot(snapshot());
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.map((span) => span.fromOrdinal),
+      ).toContain(0);
+      expect(harness.rangeRequests).toHaveLength(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("nudges the provider query for a failure outside the hydrated tail", () => {
+    // The exact shape the scan cannot see: the tail holds one user row and no
+    // assistant record at all, so a backwards scan over `state.messages`
+    // answers "no failure" and the re-auth banner never mounts.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        withAuthFailure(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 30,
+            tailFromOrdinal: 29,
+            tailMessages: [userMessage("m-29", 29)],
+            accumulatedFileChangeCount: 0,
+          }),
+          "turn-failed",
+        ),
+      );
+
+      expect(
+        harness.handle.store
+          .getState()
+          .messages.some((message) => message.role === "assistant"),
+      ).toBe(false);
+      expect(harness.providerAuthNudgeCount()).toBe(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("nudges once per failure, not once per snapshot carrying it", () => {
+    // Every aux-only re-broadcast - a queue change, an approval - re-sends the
+    // whole snapshot with the same derived key. A nudge per frame would
+    // refetch `providers.list` on every chat event for as long as the failure
+    // is the latest turn.
+    const harness = createWindowedHarness();
+    try {
+      const frame = withAuthFailure(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 30,
+          tailFromOrdinal: 29,
+          tailMessages: [userMessage("m-29", 29)],
+          accumulatedFileChangeCount: 0,
+        }),
+        "turn-failed",
+      );
+      harness.callbacks().onWindowedSnapshot(frame);
+      harness.callbacks().onWindowedSnapshot(frame);
+      expect(harness.providerAuthNudgeCount()).toBe(1);
+
+      // A LATER failure is a different key, and must nudge again: the user may
+      // already have re-authed the first one.
+      harness
+        .callbacks()
+        .onWindowedSnapshot(withAuthFailure(frame, "turn-failed-again"));
+      expect(harness.providerAuthNudgeCount()).toBe(2);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not nudge when the host reports no failure", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 3,
+          tailFromOrdinal: 1,
+          tailMessages: [userMessage("m-1", 1), userMessage("m-2", 2)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.providerAuthNudgeCount()).toBe(0);
     } finally {
       harness.handle.dispose();
     }
