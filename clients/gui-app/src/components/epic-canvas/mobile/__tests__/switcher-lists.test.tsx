@@ -188,7 +188,7 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
 // artifact-kind dropdown) doesn't need to mount here - this file exercises
 // each list's editor gating and row positioning in isolation.
 vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
-  SwitcherNewChatRow: () => (
+  SwitcherNewChatAction: () => (
     <button type="button" data-testid="switcher-new-chat" />
   ),
   SwitcherNewTerminalRow: () => (

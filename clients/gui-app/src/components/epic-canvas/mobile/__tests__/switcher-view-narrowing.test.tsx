@@ -130,7 +130,7 @@ vi.mock("@/components/epic-canvas/mobile/switcher-agent-icon", () => ({
   SwitcherAgentIcon: () => null,
 }));
 vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
-  SwitcherNewChatRow: () => (
+  SwitcherNewChatAction: () => (
     <button type="button" data-testid="switcher-new-chat" />
   ),
   SwitcherNewArtifactMenu: () => (

@@ -47,14 +47,31 @@ import { cn } from "@/lib/utils";
  * hits are ordinary rows in the list below it, not an overlay it controls.
  */
 /**
- * The one phone treatment. `h-11` rather than the reference box's `h-8`: that
- * height is a pointer-sized control, and this is the only surface where the
- * touch-target guideline binds. The `!` modifiers are not decoration - the
- * `InputGroup` primitive sets its own height and shadow, and a bare utility
- * would tie rather than win.
+ * The one phone treatment: the git-diff repo switcher's box, literally - its
+ * `h-8` included. That box is the one that was chosen by eye on a phone, and
+ * its proportions are part of what was chosen; a taller field wearing the same
+ * border reads as a different control, not as that one.
+ *
+ * The `!` modifiers are not decoration - the `InputGroup` primitive sets its own
+ * height and shadow, and a bare utility would tie rather than win.
  */
 const MOBILE_FIELD_CLASS =
-  "h-11! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!";
+  "h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!";
+
+/**
+ * Hit area without paint: the input keeps a touch-sized box while the FIELDSET
+ * stays 30px, so what the user sees is the reference box and what the thumb
+ * lands on is not a 30px target.
+ *
+ * It goes on the input rather than the wrapper because only the input can carry
+ * it. `InputGroup` is a bare `fieldset` with no click-to-focus handler, so slop
+ * added there would enlarge a box that does nothing when tapped - and an
+ * `<input>` renders no pseudo-elements, so the `::after` trick the shell's touch
+ * scope uses for buttons has nothing to attach to here. A taller input inside a
+ * fixed-height flex row simply overflows it, invisibly: the input paints no
+ * background of its own.
+ */
+const MOBILE_INPUT_HIT_CLASS = "h-11";
 
 export interface PanelSearchFieldCombobox {
   readonly listboxRendered: boolean;
@@ -142,7 +159,7 @@ export function PanelSearchField(props: {
         }
         autoComplete="off"
         spellCheck={false}
-        className="text-ui-sm"
+        className={cn("text-ui-sm", isMobileViewport && MOBILE_INPUT_HIT_CLASS)}
         data-testid={`${testIdPrefix}-input`}
       />
       <InputGroupAddon align="inline-end">

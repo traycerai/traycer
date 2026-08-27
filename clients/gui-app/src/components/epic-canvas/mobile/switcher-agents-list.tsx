@@ -7,7 +7,7 @@ import {
   SwitcherListRow,
 } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
-import { SwitcherNewChatRow } from "@/components/epic-canvas/mobile/switcher-create-actions";
+import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
 import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
@@ -127,9 +127,9 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* Create stays a row inside the list below, so the header carries only
-            search and the view menu - unlike Artifacts, whose create is a
-            header "+". */}
+        {/* One header shape across both tabs: search, then create, then the
+            view menu. Creating used to be a row in the list here, which taught
+            two different places to look for the same action. */}
         <SwitcherListHeader
           search={
             <SwitcherSearchField
@@ -141,20 +141,18 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
               testIdPrefix="switcher-agents-search"
             />
           }
-          action={null}
+          action={
+            canMutate ? (
+              <SwitcherNewChatAction
+                epicId={epicId}
+                tabId={tabId}
+                onClose={onClose}
+              />
+            ) : null
+          }
           viewMenu={<SwitcherAgentsViewMenu epicId={epicId} />}
         />
         <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-          {/* Editor-gated: a viewer's create is server-rejected, so an ungated
-              row would only lead to a dead end. Inside the scroll region and
-              above the items, so it is the first thing in the list either way. */}
-          {canMutate ? (
-            <SwitcherNewChatRow
-              epicId={epicId}
-              tabId={tabId}
-              onClose={onClose}
-            />
-          ) : null}
           {agents.length === 0 ? (
             <SwitcherAgentsEmpty
               searchActive={searchQuery.trim().length > 0}
