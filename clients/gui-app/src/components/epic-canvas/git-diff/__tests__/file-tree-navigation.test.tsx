@@ -150,6 +150,25 @@ describe("<FileTree /> nested focus navigation", () => {
   });
 
   /**
+   * Inside the mobile switcher sheet this tree is a vaul drawer descendant, and
+   * vaul decides scroll-vs-dismiss by climbing `parentElement` from the touch
+   * target. Pierre's scroller is in a shadow root and a touch inside one
+   * retargets to the host, so that climb finds nothing scrollable and claims
+   * the gesture - which is what left the tree unscrollable on device.
+   *
+   * This pins the attribute, NOT the scrolling: whether a finger scrolls is a
+   * touch-arbitration question that jsdom cannot answer, and the earlier
+   * attempt to settle it with `scrollTop` is precisely what missed the bug.
+   */
+  it("marks the tree wrapper as not a drawer-drag surface", () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    renderTree(tabId);
+
+    const tree = screen.getByTestId("git-pierre-file-tree");
+    expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
+  });
+
+  /**
    * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref
    * (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
    * bubbling out of Pierre's shadow-rooted scroller before it reaches a

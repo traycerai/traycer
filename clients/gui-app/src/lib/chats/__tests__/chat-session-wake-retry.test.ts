@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { SystemResumeEvent } from "@traycer-clients/shared/platform/runner-host";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
@@ -163,7 +164,7 @@ describe("subscribeChatSessionWakeRetry", () => {
     readonly fireResume: () => void;
     readonly resumeDispose: Mock<() => void>;
   } {
-    let capturedResume: (() => void) | null = null;
+    let capturedResume: ((event: SystemResumeEvent) => void) | null = null;
     const resumeDispose = vi.fn<() => void>();
     vi.spyOn(runnerHost, "onSystemResumed").mockImplementation((listener) => {
       capturedResume = listener;
@@ -173,7 +174,7 @@ describe("subscribeChatSessionWakeRetry", () => {
     // type (a direct narrow on the `let` collapses the else-branch to `never`).
     const fireResume = (): void => {
       if (capturedResume === null) throw new Error("Expected resume listener");
-      capturedResume();
+      capturedResume({ backgroundedForMs: null });
     };
     return { fireResume, resumeDispose };
   }

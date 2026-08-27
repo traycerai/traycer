@@ -51,6 +51,7 @@ import {
   prepareStreamSubscribeRequest,
   type ParamsOf,
 } from "../ws-stream-client";
+import type { WakeProbeTuning } from "../host-stream-client";
 import { jitteredBackoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
@@ -66,6 +67,7 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
+  RELAY_WAKE_PROBE_TIMEOUT_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -394,8 +396,29 @@ export interface IRemoteSession<
    * flight, and never forgives the escalation (that needs a connection to
    * SURVIVE; see the class contract). So repeated wakes cannot become a dial
    * loop, and a fleet woken by one shared event does not redial in a herd.
+   *
+   * `probe` sizes the probe that verdict rides on; `null` is the default
+   * desktop-calibrated deadline. A caller that measured a brief mobile
+   * background passes a shorter one, and may additionally ask for the redial
+   * after a FAILED probe to skip its backoff rung (see
+   * {@link WakeProbeTuning}) - the user is watching that recovery happen.
    */
-  wake(reason: string): void;
+  wake(reason: string, probe: WakeProbeTuning | null): void;
+  /**
+   * Drops the current socket - alive or not - and redials with no backoff
+   * delay. The forced flavour of {@link wake}, for a caller whose evidence
+   * says the socket is not worth probing: a user tapping Retry, a network
+   * path change under a socket that cannot have survived it, a mobile resume
+   * after a background long enough that iOS has torn the socket down.
+   *
+   * Same skip-not-pardon stance as `wake`: the redial is pulled to now, but
+   * the escalation counter is untouched, so a host that is genuinely gone
+   * keeps climbing the ladder between forced attempts instead of being pinned
+   * at the fastest tier. An attach already in flight is left alone - its own
+   * phase timers bound it, and a timer frozen through an OS suspend fires
+   * immediately on unfreeze, so a stale dial already fails fast on resume.
+   */
+  forceReconnect(reason: string): void;
   /**
    * Subscribes to the session's terminal close - a caller `close()` (on the
    * shared session, once every consumer released) or a terminal session
@@ -680,6 +703,20 @@ export class RemoteSession<
    * arrive during it.
    */
   private backoffCollapsed = false;
+  /**
+   * The connect generation a {@link forceReconnect} arrived DURING, when that
+   * generation's dial was already in flight and could be neither dropped
+   * (nothing attached yet) nor hurried (its own phase timers bound it). The
+   * intent is scoped to exactly that generation: if generation G fails into
+   * the loss funnel, the funnel arms its normal backoff (accounting and
+   * evidence preserved) and then spends this intent by pulling that one wait
+   * to zero; if G reaches ready, the force is satisfied and the intent is
+   * consumed unspent. A newer generation never inherits it - `beginConnect`
+   * clears any stale value when it allocates - and terminal close clears it,
+   * so callback ordering around an iOS unfreeze (resume task vs overdue
+   * phase timer) cannot strand the session on its old rung either way.
+   */
+  private pendingForceGeneration: number | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /**
@@ -886,7 +923,7 @@ export class RemoteSession<
           // Aborts, terminal closures, post-send ambiguity and host-originated
           // failures never reach this branch: they are not
           // `RetryableTransportError`.
-          this.wake("pre-send-failure");
+          this.wake("pre-send-failure", null);
         }
         throw cause;
       }
@@ -1223,7 +1260,7 @@ export class RemoteSession<
   }
 
   /** See {@link IRemoteSession.wake}. */
-  wake(reason: string): void {
+  wake(reason: string, probe: WakeProbeTuning | null): void {
     if (this.phase === "closed" || this.phase === "idle") {
       // Closed is terminal, and idle has never dialed - `start()` owns that,
       // and every caller that wants a session calls it first.
@@ -1242,9 +1279,56 @@ export class RemoteSession<
       // collapse below has to run afterwards to pull that redial forward too.
       // A socket that merely looks alive is left connected and answers the
       // poke's probe on its own deadline.
-      this.connection.relaySocket.pokeKeepalive();
+      //
+      // Deadline and failure policy travel INTO the socket together: the arm
+      // merges concurrent pokes monotonically (earlier deadline wins, the
+      // immediate-redial policy can be raised but never lowered), so mixed
+      // wake bursts - a measured mobile resume beside a generic online edge,
+      // in either order - always keep the stronger evidence.
+      this.connection.relaySocket.pokeKeepalive(
+        probe === null ? RELAY_WAKE_PROBE_TIMEOUT_MS : probe.timeoutMs,
+        probe !== null && probe.immediateRedialOnFailure,
+      );
     }
     this.collapseBackoff(reason);
+  }
+
+  /** See {@link IRemoteSession.forceReconnect}. */
+  forceReconnect(reason: string): void {
+    if (this.phase === "closed" || this.phase === "idle") {
+      return;
+    }
+    const connection = this.connection;
+    if (this.phase === "ready" && connection !== null) {
+      // A client-initiated teardown says nothing about the host - the durable
+      // rule is that `confirmed-refusal` requires evidence from the HOST's
+      // transport plane, and this loss is our own decision (see the provenance
+      // note on `handleConnectionLost`).
+      this.handleConnectionLost(
+        connection.generation,
+        `forced-reconnect:${reason}`,
+        "not-host-evidence",
+      );
+      this.pullRedialToNow(reason);
+      return;
+    }
+    if (this.backoffTimer !== null) {
+      // An armed backoff timer is the truth REGARDLESS of phase: the
+      // pre-dial landers (a failed grant mint, a thrown connect path) arm it
+      // while the phase still reads `connecting`, and a force landing just
+      // after one of them has no future failure lander left to spend a
+      // recorded intent - the pending wait itself is what must move.
+      this.pullRedialToNow(reason);
+      return;
+    }
+    // A dial/handshake/revalidation is genuinely in flight with no timer
+    // armed: it is not interrupted (one dial owner at a time), but the
+    // demand is NOT dropped either - record it against this exact
+    // generation, so if this attempt fails its loss redials immediately
+    // instead of arming the rung the caller was trying to skip. Success
+    // consumes the intent - a fresh attach is everything a force could have
+    // bought.
+    this.pendingForceGeneration = this.connectGeneration;
   }
 
   /** See {@link IRemoteSession.onClosed}. */
@@ -1287,6 +1371,7 @@ export class RemoteSession<
     }
     this.dialFailures.recordAbandoned();
     this.phase = "closed";
+    this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
@@ -1426,6 +1511,11 @@ export class RemoteSession<
       return;
     }
     const generation = ++this.connectGeneration;
+    // Any intent recorded against an earlier generation is stale by
+    // construction: that dial ended (its failure spent the intent, or a path
+    // that never consults it retired the attempt), and this fresh dial must
+    // not inherit a demand nobody made of it.
+    this.pendingForceGeneration = null;
     this.phase = "connecting";
     this.clearPhaseTimer();
     this.reattachMarks = {
@@ -1478,7 +1568,7 @@ export class RemoteSession<
         this.dialAttemptId(generation),
         "indeterminate",
       );
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `could not mint an attach grant: ${provision.detail}`,
         // The per-attempt text goes in the CONTEXT, never the cause: a server
@@ -1522,12 +1612,27 @@ export class RemoteSession<
         onReauthAck: () => undefined,
         onPeerGone: (reason) => this.onPeerGone(generation, reason),
         onError: () => undefined,
-        onClose: (info) =>
+        onClose: (info) => {
+          // The socket's own verdict on the current wake-probe arm, read at
+          // the one moment it matters: this close IS the arm's negative
+          // ending, whatever delivered it - the arm's own deadline, an
+          // OS-delivered error close, missed pongs. An answered arm reads
+          // false here forever, so a loss after proven liveness stays an
+          // ordinary loss. Each connection owns its socket object, so this
+          // cannot leak across dials.
+          const immediateRedialEarned =
+            relaySocket.hasUnansweredImmediateRedialProbe();
           this.handleConnectionLost(
             generation,
             describeSocketClose(this.phase, info),
             "host-transport-plane",
-          ),
+          );
+          if (immediateRedialEarned) {
+            // A user is watching this recovery happen; sleeping out the
+            // backoff rung the funnel armed would be pure added outage.
+            this.pullRedialToNow("wake-probe-failed");
+          }
+        },
       },
     });
 
@@ -2370,7 +2475,7 @@ export class RemoteSession<
     }
     this.dropConnection(cause);
     this.syncReadinessLatch();
-    const retryInMs = this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
     // rejection, `peer_gone`, and phase timeout arrives here. This is the one
@@ -2554,7 +2659,12 @@ export class RemoteSession<
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
     this.dropConnection("session-fatal-unauthorized");
-    void this.revalidateThenReconnect(auth, details, rejectedBearer);
+    void this.revalidateThenReconnect(
+      generation,
+      auth,
+      details,
+      rejectedBearer,
+    );
   }
 
   /**
@@ -2571,11 +2681,19 @@ export class RemoteSession<
    * the host keeps rejecting) is bounded and goes terminal to stop looping.
    */
   private async revalidateThenReconnect(
+    generation: number,
     auth: StreamAuthRevalidator,
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
     const outcome = await this.revalidateWithinBudget(auth);
+    if (generation !== this.connectGeneration) {
+      // A stale completion: the generation this revalidation was recovering
+      // has been superseded while it was in flight. It owns nothing now - it
+      // must neither schedule a redial for the new owner nor spend an intent
+      // recorded against a different generation.
+      return;
+    }
     if (this.phase !== "reconnecting" || this.connection !== null) {
       // Closed - or a competing path already owns reconnection - while the
       // revalidation was in flight.
@@ -2587,7 +2705,7 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause:
           "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
@@ -2617,7 +2735,7 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    const retryInMs = this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({
       cause:
         "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
@@ -2676,6 +2794,10 @@ export class RemoteSession<
     );
     this.terminalFatalDetails = details;
     this.phase = "closed";
+    // Terminal means every recorded demand dies with the loop - the field's
+    // contract says terminal close clears it, and BOTH terminal transitions
+    // (caller `close()` and this fatal) must honor that, not just one.
+    this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("session-fatal");
@@ -2955,6 +3077,75 @@ export class RemoteSession<
   }
 
   /**
+   * Spends a force recorded against `generation`, pulling the backoff that
+   * generation's failure just armed to zero. Called after EVERY path that
+   * arms a reconnect for a failed attempt - the connection-loss funnel and
+   * the direct schedulers (grant-provision failure, a thrown connect path,
+   * UNAUTHORIZED revalidation) alike - so whether the demand is honored does
+   * not depend on which lander a failure happens to take. The rung is always
+   * armed first: attempt accounting and the failure log see the ordinary
+   * schedule, and only then is the one wait pulled to zero.
+   * Generation-scoped on both sides: a newer dial's loss can never spend an
+   * older intent.
+   */
+  private consumePendingForce(generation: number): void {
+    if (this.pendingForceGeneration !== generation) {
+      return;
+    }
+    this.pendingForceGeneration = null;
+    this.pullRedialToNow("pending-forced-redial");
+  }
+
+  /**
+   * THE reconnect scheduler for a failed attempt: arms the ordinary rung
+   * (attempt accounting, jitter, and the failure log all see the ordinary
+   * delay, which is returned for that log) and then spends a force recorded
+   * against exactly `generation` by pulling that newly armed wait to zero.
+   * Every retryable failure lander must come through here - the loss funnel,
+   * the grant-provision failure, the thrown connect path, and both
+   * UNAUTHORIZED revalidation arms - so whether a recorded demand is honored
+   * cannot depend on which lander a failure happens to take.
+   */
+  private scheduleReconnectForFailedGeneration(generation: number): number {
+    const retryInMs = this.scheduleReconnect();
+    this.consumePendingForce(generation);
+    return retryInMs;
+  }
+
+  /**
+   * Clears a pending backoff wait and dials NOW. Distinct from
+   * {@link collapseBackoff} on both axes that make collapse safe to wire to
+   * free-firing signals: no jitter (the callers are single-device,
+   * user-scoped edges - a Retry tap, a forced resume, a probe this session
+   * just watched fail - not fleet-synchronized events), and not
+   * once-per-timer (a forced caller's evidence does not expire because an
+   * earlier wake already spent the collapse). `reconnectAttempt` stays
+   * untouched: this skips ONE wait, it does not forgive the escalation, so a
+   * host that is genuinely gone keeps climbing the ladder between forced
+   * redials.
+   */
+  private pullRedialToNow(reason: string): void {
+    // Keyed on the ARMED TIMER, not on a phase: the pre-dial landers (a
+    // failed grant mint, a thrown connect path) arm their backoff while the
+    // phase still reads `connecting`, and a pull that insisted on
+    // `reconnecting` silently no-opped for exactly the failures the pending
+    // force exists to hurry. A pending wait is a pending wait; `closed` is
+    // the only state whose timer must never be revived.
+    if (this.phase === "closed" || this.backoffTimer === null) {
+      return;
+    }
+    clearTimeout(this.backoffTimer);
+    this.backoffTimer = null;
+    // Spend the timer's wake-collapse as well: the wait it guarded no longer
+    // exists, so a wake racing in behind this must find nothing to shorten.
+    this.backoffCollapsed = true;
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) redialing now (${reason})`,
+    );
+    this.armBackoffTimer(Date.now(), 0);
+  }
+
+  /**
    * `beginConnect` with its pre-connection failure modes routed back into the
    * state machine.
    *
@@ -2999,7 +3190,7 @@ export class RemoteSession<
         return;
       }
       this.dropConnection("connect-path-threw");
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `the connect path threw before dialing: ${
           cause instanceof Error ? cause.message : String(cause)
@@ -3268,6 +3459,10 @@ export class RemoteSession<
       }
     }
     this.readyBoundaryGeneration = this.connectGeneration;
+    // A force recorded against this generation is satisfied by reaching
+    // ready: a fresh attach is everything it could have bought. Consumed
+    // unspent, so it cannot leak onto a later, unrelated loss.
+    this.pendingForceGeneration = null;
     this.armStableResetTimer();
     // Order matters: the breakdown reads `hasReachedReadyOnce` to decide
     // whether this was a REATTACH at all, so the flag is raised after it.

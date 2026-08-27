@@ -270,12 +270,17 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
   const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
-    // Pierre's scroller lives in a shadow root; inside the mobile switcher
-    // sheet the modal scroll lock would keep it from ever touch-scrolling.
-    // See `useShadowScrollerTouchShield`.
+    // `data-vaul-no-drag` for the same reason as the workspace file tree: this
+    // tree's scroller is inside a shadow root, so vaul's parentElement climb
+    // from the retargeted touch target cannot find it and would claim the
+    // gesture as a drawer dismiss. `touchShieldRef` for the same reason as
+    // there too: the sheet's modal scroll lock would otherwise keep the
+    // shadow-rooted scroller from touch-scrolling (see
+    // `useShadowScrollerTouchShield`). Both inert outside the mobile sheet.
     <div
       {...bridge.wrapperProps}
       ref={touchShieldRef}
+      data-vaul-no-drag=""
       className="flex h-full min-h-0 flex-col"
     >
       <PierreFileTree

@@ -1369,7 +1369,10 @@ describe("WsStreamClient", () => {
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unsupported");
 
-    client.reconnectAll("host-endpoint-change", { probeFirst: false });
+    client.reconnectAll("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
     expect(
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unknown");
@@ -3301,7 +3304,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     // ones (this describe block runs on real timers).
     vi.useFakeTimers();
     try {
-      client.reconnectAll("wake-resume", { probeFirst: true });
+      client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
       // The probe is a real ping on the wire...
       const pinged = sockets[0].socket.textSent.some((raw) =>
         raw.includes('"kind":"ping"'),
@@ -3341,7 +3344,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     vi.useFakeTimers();
     try {
-      client.reconnectAll("wake-resume", { probeFirst: true });
+      client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
       // A probe really went out, so the re-dial below is the TIMEOUT path and
       // not the "nothing live to probe" shortcut.
       expect(
@@ -3378,7 +3381,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     // A concurrent wake re-dials and FULLY reconnects socket 1 while the
     // revalidation is still pending.
-    client.reconnectAll("wake-resume", { probeFirst: false });
+    client.reconnectAll("wake-resume", { probeFirst: false, wakeProbe: null });
     await wait(30);
     expect(sockets.length).toBeGreaterThanOrEqual(2);
     const socket1 = sockets[1].socket;
@@ -4858,7 +4861,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
 
     const sentBeforeProbe = stub.textSent.length;
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
     // The probe really went out on the SAME socket.
     expect(stub.textSent.length).toBe(sentBeforeProbe + 1);
     expect(parseText(stub.textSent[sentBeforeProbe]).kind).toBe("ping");
@@ -4890,7 +4893,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     const stub = await settleHandshake(sockets);
 
     vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
     expect(stub.closed).toBeNull();
 
     // No pong arrives; the 5s wake-probe timeout is the detector.
@@ -4925,7 +4928,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     // Sleep: the wall clock jumps far past every threshold with no timer run.
     vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
 
     // The probe's pong: the socket survived (kept, no reconnect) AND the gap
     // it answers is the whole sleep - that positive edge is the only recovery
@@ -4970,7 +4973,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     // A brief offline/resume cycle: well under pingIntervalMs (1s) + the 5s
     // recovery slack, so the gap-based arm can never fire for it.
     vi.setSystemTime(Date.now() + 2_000);
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
 
     stub.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);
