@@ -1,13 +1,11 @@
 import {
   chmod,
   copyFile,
-  mkdtemp,
   rename,
   stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { hashFileSha256 } from "../installer/sha256";
 import { downloadToFile } from "../registry/fetch-resource";
@@ -246,23 +244,47 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           };
         }
 
-        // Download to a staging path next to the live binary so the
-        // final rename stays on the same filesystem. We use the OS
-        // tempdir if the install directory isn't writable (e.g. desktop
-        // staged the CLI under a system path).
+        // Staging goes NEXT TO the live binary so publication is a
+        // same-filesystem rename. An unwritable install directory is
+        // therefore fatal, and fatal HERE - before the download - rather
+        // than after it: publishing atomically means creating a file in
+        // that directory, so a directory we cannot create files in has no
+        // successful path left. The old code staged into the OS tempdir
+        // instead, which only deferred the problem to a cross-device
+        // publication that fails the same way, having first downloaded
+        // (and then leaked) a full executable per attempt.
         const installDir = dirname(manifest.binaryPath);
-        const installDirWritable = await directoryWritable(installDir);
-        const stagingRoot = installDirWritable
-          ? installDir
-          : await mkdtemp(join(tmpdir(), "traycer-cli-upgrade-"));
+        if (!(await directoryWritable(installDir))) {
+          ctx.runtime.logger.warn(
+            "CLI upgrade refused unwritable install dir",
+            {
+              environment: ctx.runtime.environment,
+              targetVersion,
+              platformKey,
+            },
+          );
+          throw cliError({
+            code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
+            message:
+              `cli upgrade: ${installDir} is not writable, so the new binary cannot be published ` +
+              `next to ${manifest.binaryPath} and swapped in atomically. Nothing was downloaded and ` +
+              `the live binary is untouched. Make ${installDir} writable and re-run, or install the ` +
+              "new binary by hand and record it with " +
+              "'traycer cli re-anchor --binary-path <path> --installed-version <version>'.",
+            details: {
+              livePath: manifest.binaryPath,
+              installDir,
+              targetVersion,
+            },
+            exitCode: 1,
+          });
+        }
         ctx.runtime.logger.info("CLI upgrade staging root selected", {
           environment: ctx.runtime.environment,
-          installDirWritable,
-          stagingInInstallDir: installDirWritable,
           platformKey,
         });
         const stagedBinaryPath = join(
-          stagingRoot,
+          installDir,
           `traycer-${targetVersion}-${platformKey}${binaryExtension()}`,
         );
 
@@ -430,14 +452,14 @@ async function tryReplaceLiveBinary(opts: {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  // Optional digest to re-verify before publication. The same-volume
-  // rename path moves the already-verified staged file byte-for-byte and
-  // never consults this; it is only meaningful on the EXDEV path, where
-  // the bytes go through `copyFile`. Callers without the asset manifest
-  // in scope (the deferred finalize path, whose persisted
-  // `pendingUpgrade` record does not carry a digest) pass `null`: their
-  // publication is still atomic, so the worst case is an unverified
-  // copy rather than a destroyed live binary.
+  // The release digest, when the caller has one in scope. The
+  // same-volume rename path moves the already-verified staged file
+  // byte-for-byte and never consults it; it matters on the EXDEV path,
+  // where the bytes go through `copyFile`. Callers without it (the
+  // deferred finalize path, whose persisted `pendingUpgrade` record
+  // carries no digest) pass `null` and get the staged file's own digest
+  // instead - see `publishAcrossFilesystems`, which never publishes
+  // unverified bytes either way.
   readonly expectedSha256: string | null;
   readonly logger: ILogger;
 }): Promise<ReplaceResult> {
@@ -516,6 +538,13 @@ async function tryReplaceLiveBinary(opts: {
 // failure mode before the rename leaves the previous binary
 // byte-for-byte intact, so there is no window in which it is gone and
 // nothing to restore from.
+//
+// `cli upgrade` no longer reaches this: it stages beside the live binary
+// and refuses outright when that directory is unwritable, so its rename
+// is same-volume by construction. What still reaches it is the deferred
+// finalize path holding a `pendingUpgrade` an OLDER CLI staged in the OS
+// tempdir - which is exactly the compatibility case this must keep
+// handling, and the one whose record carries no release digest.
 async function publishAcrossFilesystems(opts: {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
@@ -531,6 +560,22 @@ async function publishAcrossFilesystems(opts: {
       .slice(2, 8)}.tmp`,
   );
   try {
+    // What the published copy must hash to. Prefer the release digest;
+    // when the caller has none - the deferred finalize path, whose
+    // persisted `pendingUpgrade` record carries no digest - fall back to
+    // the staged file's own digest, read here, immediately before the
+    // copy. That is strictly weaker: it proves the published bytes equal
+    // the staged bytes, NOT that the staged bytes are still the release.
+    // Authenticating a staged file that was tampered with between
+    // download and finalize needs the digest persisted alongside
+    // `pendingUpgrade`, which is a `@traycer/protocol` schema change.
+    // But it does close the gap that matters here - copyFile is not
+    // byte-for-byte safe, so an unverified cross-volume copy could
+    // publish a short or corrupt file over a working CLI and report
+    // success. There is now no publication path that skips verification.
+    const expectedPublishedSha256 =
+      opts.expectedSha256 ??
+      (await hashFileSha256(opts.stagedBinaryPath, null));
     await copyFile(opts.stagedBinaryPath, publishPath);
     // The staged binary already carries the executable bit on POSIX, but
     // it is set on the staged path, not inherited by a fresh copy under
@@ -538,34 +583,32 @@ async function publishAcrossFilesystems(opts: {
     if (process.platform !== "win32") {
       await chmod(publishPath, 0o755);
     }
-    // Re-verify the copy. The staged bytes were verified at download
-    // time, but a short write or a hostile local actor between then and
-    // now would otherwise publish corrupt bytes: rename is
-    // byte-for-byte safe, copyFile is not.
-    if (opts.expectedSha256 !== null) {
-      const actual = await hashFileSha256(publishPath, null);
-      if (actual !== opts.expectedSha256) {
-        opts.logger.error(
-          "CLI upgrade cross-device copy hash mismatch",
-          { environment: opts.environment },
-          null,
-        );
-        await safeUnlink(publishPath, opts.environment, opts.logger);
-        throw cliError({
-          code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
-          message:
-            `cli upgrade: cross-device copy hash mismatch (expected ${opts.expectedSha256}, got ${actual}); ` +
-            `the live binary at ${opts.livePath} was left untouched`,
-          details: {
-            livePath: opts.livePath,
-            stagedBinaryPath: opts.stagedBinaryPath,
-            publishPath,
-            expectedSha256: opts.expectedSha256,
-            actualSha256: actual,
-          },
-          exitCode: 1,
-        });
-      }
+    const actual = await hashFileSha256(publishPath, null);
+    if (actual !== expectedPublishedSha256) {
+      opts.logger.error(
+        "CLI upgrade cross-device copy hash mismatch",
+        {
+          environment: opts.environment,
+          digestSource: opts.expectedSha256 !== null ? "release" : "staged",
+        },
+        null,
+      );
+      await safeUnlink(publishPath, opts.environment, opts.logger);
+      throw cliError({
+        code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
+        message:
+          `cli upgrade: cross-device copy hash mismatch (expected ${expectedPublishedSha256}, got ${actual}); ` +
+          `the live binary at ${opts.livePath} was left untouched`,
+        details: {
+          livePath: opts.livePath,
+          stagedBinaryPath: opts.stagedBinaryPath,
+          publishPath,
+          expectedSha256: expectedPublishedSha256,
+          actualSha256: actual,
+          digestSource: opts.expectedSha256 !== null ? "release" : "staged",
+        },
+        exitCode: 1,
+      });
     }
   } catch (prepareErr) {
     if (prepareErr instanceof CliError) throw prepareErr;

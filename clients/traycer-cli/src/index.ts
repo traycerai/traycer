@@ -1353,17 +1353,19 @@ function registerCliCommands(program: Command): void {
     cli
       .command("upgrade")
       .description(
-        "Download and install the CLI version Traycer's release feed currently publishes, replacing this binary. " +
+        "Download and install the CLI version Traycer's release feed currently publishes, replacing the tracked binary " +
+          "recorded in the CLI install manifest (not necessarily the file you invoked). " +
           "Only Desktop-installed and manual installs can self-upgrade: Homebrew, npm, winget, Scoop, apt and rpm installs are " +
           "refused with their manager's upgrade command, so package ownership stays intact. " +
           "Requires a recorded install - if none exists (for example after moving the binary by hand), run " +
           "'traycer cli re-anchor --binary-path <path> --installed-version <version>' first. " +
-          "When the live binary is locked - usually because the host supervisor is running it - the new binary is staged and the " +
-          "swap is completed by the next 'traycer host restart'.",
+          "When the live binary is locked - usually because the host supervisor is running it - the new binary is staged and " +
+          "finalized on a later 'traycer host restart'; a restart retries the swap rather than guaranteeing it, and any staged " +
+          "upgrade that is still outstanding is reported by 'traycer host doctor'.",
       )
       .option(
         "--dry-run",
-        "Report the version and download URL that would be installed, without downloading, staging or replacing anything",
+        "Report the version and download URL that would be installed, without downloading the binary, staging or replacing anything (the release feed itself is still fetched)",
       )
       .option(
         "--target <version>",

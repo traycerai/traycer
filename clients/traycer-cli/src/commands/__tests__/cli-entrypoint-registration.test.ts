@@ -897,14 +897,44 @@ describe("traycer CLI entrypoint registration", () => {
   it("cli upgrade --help names the package-manager refusal, the re-anchor prerequisite, and documents --target as an assertion rather than a version selector (audit CLI-016)", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["cli", "upgrade"]);
-    const help = cmd.helpInformation();
+    // Commander word-wraps `helpInformation()` for the terminal, which
+    // would otherwise break every multi-word substring match below on an
+    // unrelated line-width change. Collapse whitespace first so the
+    // assertions test content, not layout.
+    const help = cmd.helpInformation().replace(/\s+/g, " ");
 
-    // Package-manager ownership boundary - self-upgrade is refused for
-    // package-manager installs, not silently no-op'd.
-    expect(help).toMatch(/homebrew|package manager/i);
+    // Replaces the binary TRACKED IN THE MANIFEST, not necessarily the
+    // file the caller invoked (`re-anchor` can point tracking elsewhere).
+    expect(help).toMatch(
+      /tracked binary recorded in the cli install manifest/i,
+    );
 
-    // Re-anchor prerequisite when no manifest exists.
-    expect(help).toContain("cli re-anchor");
+    // Package-manager installs are REFUSED and routed to the package
+    // manager's own upgrade command - not silently no-op'd, and not
+    // merely mentioned in passing.
+    expect(help).toMatch(/refused with their manager's upgrade command/i);
+    expect(help).toMatch(/homebrew/i);
+
+    // Re-anchor is the prerequisite specifically for a MISSING recorded
+    // install, not a generic pointer to the command.
+    expect(help).toMatch(
+      /requires a recorded install[\s\S]*if none exists[\s\S]*cli re-anchor/i,
+    );
+
+    // A staged swap is only RETRIED by the next 'traycer host restart',
+    // never guaranteed to complete there - still-locked, missing-stage,
+    // helper-scheduling and service-start failures are all modelled
+    // outcomes, not edge cases the help text can gloss over.
+    expect(help).toMatch(/retries the swap rather than guaranteeing it/i);
+    expect(help).not.toMatch(/completed by the next/i);
+
+    // `--dry-run` must not claim nothing is fetched - the release feed
+    // itself is still fetched to resolve the target version.
+    const dryRunOption = cmd.options.find((o) => o.long === "--dry-run");
+    expect(dryRunOption).toBeDefined();
+    expect(dryRunOption?.description).toMatch(
+      /release feed itself is still fetched/i,
+    );
 
     // `--target` is a guard/assertion against the release feed, not a
     // selector that can install an arbitrary historical version.

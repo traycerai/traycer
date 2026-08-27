@@ -260,6 +260,73 @@ describe("cross-filesystem CLI binary publication (CLI-014)", () => {
     expect(manifest.pendingUpgrade).toBeNull();
   });
 
+  it("deferred finalize path (no release digest in scope) still verifies against the staged file's own digest: a corrupted cross-device copy leaves the live binary untouched, the pending upgrade retained, and throws with digestSource 'staged'", async () => {
+    // `finalizePendingCliUpgrade` never has the release sha256 in scope
+    // (the persisted `pendingUpgrade` record doesn't carry one), so it
+    // calls `tryReplaceLiveBinary` with `expectedSha256: null`. Before
+    // the fix, `publishAcrossFilesystems` skipped verification entirely
+    // whenever `expectedSha256` was `null` - a corrupt cross-device copy
+    // on THIS path would have published silently and reported
+    // "finalised". The fix falls back to hashing the staged file itself
+    // immediately before the copy, so this path is verified too.
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "original-live-bytes");
+
+    const stagingDir = join(workHome, "staging");
+    mkdirSync(stagingDir, { recursive: true });
+    const stagedBinaryPath = join(stagingDir, "traycer-1.5.0");
+    writeFileSync(stagedBinaryPath, "staged-new-bytes-1.5.0");
+
+    writeManifest({
+      version: "1.4.0",
+      installedAt: "2026-04-01T00:00:00Z",
+      binaryPath: liveBinaryPath,
+      source: "manual",
+      pendingUpgrade: {
+        version: "1.5.0",
+        stagedBinaryPath,
+        stagedAt: "2026-05-10T00:00:00Z",
+        reason: "binary-locked",
+      },
+    });
+
+    mocks.failRenameOnceFor = { src: stagedBinaryPath, dest: liveBinaryPath };
+    mocks.corruptCopyDestSuffix = ".traycer-upgrade-";
+
+    const { finalizePendingCliUpgrade } = await import("../cli-upgrade");
+    const { CLI_ERROR_CODES, CliError } = await import("../../runner/errors");
+
+    let caught: unknown = null;
+    try {
+      await finalizePendingCliUpgrade({ environment: "production" });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(CliError);
+    if (caught instanceof CliError) {
+      expect(caught.code).toBe(CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED);
+      expect(caught.details).toMatchObject({ digestSource: "staged" });
+    }
+
+    // The staged binary was never touched by the corrupt copy - only the
+    // sibling publish temp was - so hashing it again would still match.
+    // What matters is the LIVE binary: still the pre-upgrade bytes.
+    expect(readFileSync(liveBinaryPath, "utf8")).toBe("original-live-bytes");
+    expect(leftoverPublishTempFiles(join(workHome, "bin"))).toEqual([]);
+
+    // The pending upgrade is RETAINED, not cleared: the swap never
+    // completed, and `pendingUpgrade` is the only record that a
+    // finalized upgrade was ever requested.
+    const manifest = readManifest();
+    expect(manifest.version).toBe("1.4.0");
+    expect(manifest.pendingUpgrade).toMatchObject({
+      version: "1.5.0",
+      stagedBinaryPath,
+    });
+  });
+
   it("digest mismatch on the cross-device copy leaves the live binary untouched, cleans up the .tmp, and throws E_CLI_UPGRADE_REPLACE_FAILED", async () => {
     const platformKey = await currentPlatformKey();
     const installDir = join(workHome, "bin");
@@ -324,6 +391,9 @@ describe("cross-filesystem CLI binary publication (CLI-014)", () => {
     expect(caught).toBeInstanceOf(CliError);
     if (caught instanceof CliError) {
       expect(caught.code).toBe(CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED);
+      // `buildCliUpgradeCommand` has the release digest in scope (from
+      // the resolved asset), unlike the deferred finalize path above.
+      expect(caught.details).toMatchObject({ digestSource: "release" });
     }
 
     // The regression that mattered: the old EXDEV fallback unlinked the
