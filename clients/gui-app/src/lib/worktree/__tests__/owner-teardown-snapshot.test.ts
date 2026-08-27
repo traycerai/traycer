@@ -62,16 +62,16 @@ describe("snapshotOwnerTeardownHolders", () => {
   });
 
   it("names a working chat turn", () => {
-    expect(snapshotOwnerTeardownHolders(input({ hasActiveTurn: true }))).toEqual(
-      [
-        {
-          ownerRef: OWNER,
-          holdKind: "chat-turn",
-          activity: "working",
-          label: "Planner is working",
-        },
-      ],
-    );
+    expect(
+      snapshotOwnerTeardownHolders(input({ hasActiveTurn: true })),
+    ).toEqual([
+      {
+        ownerRef: OWNER,
+        holdKind: "chat-turn",
+        activity: "working",
+        label: "Planner is working",
+      },
+    ]);
   });
 
   it("discloses a live PTY as a restart, not a loss", () => {
@@ -134,6 +134,60 @@ describe("snapshotOwnerTeardownHolders", () => {
       ),
     ).toEqual([]);
   });
+
+  it("excludes a live shell whose cwd is unknown even when paths are dropped", () => {
+    expect(
+      snapshotOwnerTeardownHolders(
+        input({
+          droppedRunDirectories: ["/wt/old"],
+          shells: [
+            {
+              id: "sh-unknown",
+              description: "watch",
+              command: "npm run dev",
+              cwd: null,
+              live: true,
+            },
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("includes a shell under a pending-removed folder in the teardown set", () => {
+    const dropped = droppedRunDirectoriesFromDraft({
+      binding: binding([
+        bindingEntry("/src/a", "/wt/a"),
+        bindingEntry("/src/b", "/wt/b"),
+      ]),
+      draft: null,
+      removedWorkspacePaths: ["/src/b"],
+    });
+    expect(dropped).toEqual(["/wt/b"]);
+    expect(
+      snapshotOwnerTeardownHolders(
+        input({
+          droppedRunDirectories: dropped,
+          shells: [
+            {
+              id: "sh-b",
+              description: "watch",
+              command: "npm run dev",
+              cwd: "/wt/b/apps",
+              live: true,
+            },
+          ],
+        }),
+      ),
+    ).toEqual([
+      {
+        ownerRef: OWNER,
+        holdKind: "supervised-shell",
+        activity: "working",
+        label: "npm run dev",
+      },
+    ]);
+  });
 });
 
 describe("droppedRunDirectoriesFromDraft", () => {
@@ -152,6 +206,7 @@ describe("droppedRunDirectoriesFromDraft", () => {
       droppedRunDirectoriesFromDraft({
         binding: binding([bindingEntry("/src/app", "/wt/old")]),
         draft,
+        removedWorkspacePaths: [],
       }),
     ).toEqual(["/wt/old"]);
   });
@@ -172,6 +227,7 @@ describe("droppedRunDirectoriesFromDraft", () => {
       droppedRunDirectoriesFromDraft({
         binding: binding([bindingEntry("/src/app", "/wt/old")]),
         draft,
+        removedWorkspacePaths: [],
       }),
     ).toEqual([]);
   });

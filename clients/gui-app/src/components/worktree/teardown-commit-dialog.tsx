@@ -27,16 +27,8 @@ export function TeardownCommitDialog(props: {
 }) {
   const blocked = props.choice === "blocked";
   const submit = props.choice === "submit";
-  const title = blocked
-    ? "Apply this folder change on the next message?"
-    : submit
-      ? "Send in the new folder?"
-      : "Switch workspace?";
-  const description = blocked
-    ? "This host will not switch folders while the agent is running. The draft stays local until the next message."
-    : submit
-      ? "Sending this message will switch folders and stop the processes below."
-      : "These processes run in the current folder and will stop if you switch now.";
+  const title = dialogTitle(props.choice);
+  const description = dialogDescription(props.choice);
   return (
     <Dialog
       open={props.open}
@@ -102,4 +94,22 @@ export function TeardownCommitDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+function dialogTitle(choice: TeardownCommitChoice | null): string {
+  if (choice === "blocked") {
+    return "Apply this folder change on the next message?";
+  }
+  if (choice === "submit") return "Send in the new folder?";
+  return "Switch workspace?";
+}
+
+function dialogDescription(choice: TeardownCommitChoice | null): string {
+  if (choice === "blocked") {
+    return "This host will not switch folders while the agent is running. The draft stays local until the next message.";
+  }
+  if (choice === "submit") {
+    return "Sending this message will switch folders and stop the processes below.";
+  }
+  return "These processes run in the current folder and will stop if you switch now.";
 }

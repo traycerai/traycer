@@ -64,9 +64,16 @@ import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-se
 import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { droppedRunDirectoriesFromDraft } from "@/lib/worktree/owner-teardown-snapshot";
+import {
+  takeArmedTeardownSubmit,
+  worktreeCommitCaptureIsStale,
+  type ArmedTeardownSubmit,
+  type WorktreeCommitCapture,
+} from "@/lib/worktree/worktree-commit-capture";
 import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentRevision,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
@@ -1944,10 +1951,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
   } | null>(null);
-  const pendingSubmitRef = useRef<ChatComposerSubmitInput | null>(null);
-  const teardownConfirmedRef = useRef(false);
+  const pendingSubmitRef =
+    useRef<ArmedTeardownSubmit<ChatComposerSubmitInput> | null>(null);
 
-  const submitMessage = useCallback(
+  const dispatchUserSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
       if (!canAct) return false;
       if (profile === null) return false;
@@ -1955,6 +1962,45 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         type: "user",
         userId: profile.userId,
       };
+      const expectedTitle = state.chat?.title ?? node.name;
+      const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
+        {
+          chat: state.chat,
+          messages: state.messages,
+          pendingUserMessages: state.pendingUserMessages,
+          content: input.content,
+        },
+      );
+      const sent = chatActions.sendMessage(
+        input.content,
+        sender,
+        input.settings,
+        input.deliveryPolicy,
+      );
+      if (sent === null) return false;
+      if (shouldMarkTitlePending) {
+        useEpicCanvasStore
+          .getState()
+          .markChatTitlePending(node.id, expectedTitle);
+      }
+      return true;
+    },
+    [
+      canAct,
+      chatActions,
+      node.id,
+      node.name,
+      profile,
+      state.chat,
+      state.messages,
+      state.pendingUserMessages,
+    ],
+  );
+
+  const submitMessage = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
+      if (!canAct) return false;
+      if (profile === null) return false;
       if (activeEditingQueueItemId !== null) {
         const actionId = chatActions.queueEdit(
           activeEditingQueueItemId,
@@ -1985,53 +2031,32 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
-      const expectedTitle = state.chat?.title ?? node.name;
-      const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
-        {
-          chat: state.chat,
-          messages: state.messages,
-          pendingUserMessages: state.pendingUserMessages,
-          content: input.content,
-        },
+      const stagedKey: WorktreeStagingKey = {
+        surface: "owner",
+        hostId: activeHostId,
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      const capture: WorktreeCommitCapture = {
+        draft: readStagedWorktreeIntent(stagedKey),
+        revision: stagedWorktreeIntentRevision(stagedKey),
+        binding: state.worktreeBinding,
+        removedWorkspacePaths: [],
+      };
+      const holders = snapshotTeardownHolders(
+        droppedRunDirectoriesFromDraft({
+          binding: capture.binding,
+          draft: capture.draft,
+          removedWorkspacePaths: capture.removedWorkspacePaths,
+        }),
       );
-      if (!teardownConfirmedRef.current) {
-        const stagedKey: WorktreeStagingKey = {
-          surface: "owner",
-          hostId: activeHostId,
-          epicId: currentEpicId,
-          ownerKind: "chat",
-          ownerId: node.id,
-        };
-        const staged = readStagedWorktreeIntent(stagedKey);
-        const holders =
-          staged === null
-            ? []
-            : snapshotTeardownHolders(
-                droppedRunDirectoriesFromDraft({
-                  binding: state.worktreeBinding,
-                  draft: staged,
-                }),
-              );
-        if (holders.length > 0) {
-          pendingSubmitRef.current = input;
-          setTeardownDialog({ holders });
-          return false;
-        }
+      if (holders.length > 0) {
+        pendingSubmitRef.current = { input, capture };
+        setTeardownDialog({ holders });
+        return false;
       }
-      teardownConfirmedRef.current = false;
-      const sent = chatActions.sendMessage(
-        input.content,
-        sender,
-        input.settings,
-        input.deliveryPolicy,
-      );
-      if (sent === null) return false;
-      if (shouldMarkTitlePending) {
-        useEpicCanvasStore
-          .getState()
-          .markChatTitlePending(node.id, expectedTitle);
-      }
-      return true;
+      return dispatchUserSend(input);
     },
     [
       activeEditingQueueItemId,
@@ -2040,14 +2065,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       chatActions,
       currentEpicId,
       dispatchUi,
+      dispatchUserSend,
       node.id,
-      node.name,
       profile,
       snapshotTeardownHolders,
       state.worktreeBinding,
-      state.chat,
-      state.messages,
-      state.pendingUserMessages,
     ],
   );
   const canSendNextStep =
@@ -2277,6 +2299,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       activeHostId,
       currentEpicId,
       node.id,
+      node.name,
       state.worktreeBinding,
       effectiveMissingPaths,
       state.snapshotLoaded,
@@ -2570,12 +2593,38 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       choice: "submit" as const,
       holders: teardownDialog?.holders ?? [],
       onImmediate: () => {
-        const pending = pendingSubmitRef.current;
-        pendingSubmitRef.current = null;
+        const armed = takeArmedTeardownSubmit(pendingSubmitRef);
         setTeardownDialog(null);
-        if (pending === null) return;
-        teardownConfirmedRef.current = true;
-        submitMessage(pending);
+        if (armed === null) return;
+        if (!canAct || profile === null) return;
+        const stagedKey: WorktreeStagingKey = {
+          surface: "owner",
+          hostId: activeHostId,
+          epicId: currentEpicId,
+          ownerKind: "chat",
+          ownerId: node.id,
+        };
+        const live: WorktreeCommitCapture = {
+          draft: readStagedWorktreeIntent(stagedKey),
+          revision: stagedWorktreeIntentRevision(stagedKey),
+          binding: state.worktreeBinding,
+          removedWorkspacePaths: [],
+        };
+        if (worktreeCommitCaptureIsStale(armed.capture, live)) {
+          const holders = snapshotTeardownHolders(
+            droppedRunDirectoriesFromDraft({
+              binding: live.binding,
+              draft: live.draft,
+              removedWorkspacePaths: live.removedWorkspacePaths,
+            }),
+          );
+          if (holders.length > 0) {
+            pendingSubmitRef.current = { input: armed.input, capture: live };
+            setTeardownDialog({ holders });
+            return;
+          }
+        }
+        dispatchUserSend(armed.input);
       },
       onDismiss: () => {
         pendingSubmitRef.current = null;

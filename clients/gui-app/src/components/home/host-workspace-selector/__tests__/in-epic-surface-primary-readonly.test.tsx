@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,9 +9,12 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
+  WorktreeFolderIntent,
+  WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -33,11 +37,19 @@ const mutationMocks = vi.hoisted(() => ({
   addBindingFolder: vi.fn(),
   createWorktree: vi.fn().mockResolvedValue({ perEntry: [] }),
   recordRecent: vi.fn(),
-  removeBindingFolder: vi.fn(),
+  removeBindingFolder: vi.fn().mockResolvedValue({}),
 }));
 const recentMocks = vi.hoisted(() => ({
   prepareRecent: vi.fn(),
   recordRecentAsync: vi.fn(),
+}));
+const teardownMocks = vi.hoisted(() => ({
+  snapshot: vi.fn(
+    (_dropped: readonly string[]): readonly WorktreeBusyHolder[] => [],
+  ),
+}));
+const listByPathsMocks = vi.hoisted(() => ({
+  workspaces: [] as WorktreeWorkspaceSummaryV15[],
 }));
 
 const RECENT_FOLDER: PreparedWorkspaceFolder = {
@@ -75,10 +87,13 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 }));
 vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   useWorktreeListByWorkspacePathsForClient: () => ({
-    data: { workspaces: [] },
+    data: { workspaces: listByPathsMocks.workspaces },
     isFetching: false,
     isLoading: false,
   }),
+}));
+vi.mock("@/hooks/worktree/use-owner-teardown-snapshot", () => ({
+  useOwnerTeardownSnapshot: () => teardownMocks.snapshot,
 }));
 vi.mock("@/hooks/worktree/use-worktree-workspaces-refresh", () => ({
   useWorktreeWorkspacesRefresh: () => ({
@@ -111,6 +126,7 @@ vi.mock(
   () => ({
     useWorkspaceBindingRemoveEntryForClient: () => ({
       mutate: mutationMocks.removeBindingFolder,
+      mutateAsync: mutationMocks.removeBindingFolder,
       isPending: false,
     }),
     usePendingRemoveBindingEntryPaths: () => new Set<string>(),
@@ -286,6 +302,9 @@ function renderBoundSurface(
 beforeEach(() => {
   recentMocks.prepareRecent.mockResolvedValue({ folders: [RECENT_FOLDER] });
   recentMocks.recordRecentAsync.mockResolvedValue({});
+  mutationMocks.createWorktree.mockResolvedValue({ perEntry: [] });
+  mutationMocks.removeBindingFolder.mockResolvedValue({});
+  teardownMocks.snapshot.mockImplementation(() => []);
 });
 
 afterEach(() => {
@@ -294,6 +313,8 @@ afterEach(() => {
   mutationMocks.createWorktree.mockReset();
   mutationMocks.recordRecent.mockReset();
   mutationMocks.removeBindingFolder.mockReset();
+  teardownMocks.snapshot.mockReset();
+  listByPathsMocks.workspaces = [];
   recentMocks.prepareRecent.mockReset();
   recentMocks.recordRecentAsync.mockReset();
   useWorktreeIntentStagingStore.getState().resetForTests();
@@ -481,4 +502,172 @@ it("refuses terminal Update when metadata regresses to unresolved", async () => 
       worktreeStagingKeyString(key)
     ],
   ).toBeDefined();
+});
+
+const TERMINAL_STAGING_KEY = {
+  surface: "owner" as const,
+  hostId: "host-test",
+  epicId: "epic-1",
+  ownerKind: "terminal-agent" as const,
+  ownerId: "owner-1",
+};
+
+function shellHolder(label: string): WorktreeBusyHolder {
+  return {
+    ownerRef: {
+      epicId: "epic-1",
+      ownerKind: "terminal-agent",
+      ownerId: "owner-1",
+    },
+    holdKind: "supervised-shell",
+    activity: "working",
+    label,
+  };
+}
+
+function newWorktreeIntent(
+  workspacePath: string,
+  branchName: string,
+): WorktreeFolderIntent {
+  return {
+    kind: "worktree",
+    scripts: null,
+    workspacePath,
+    repoIdentifier: null,
+    isPrimary: false,
+    branch: {
+      type: "new",
+      name: branchName,
+      source: "main",
+      carryUncommittedChanges: false,
+    },
+  };
+}
+
+function resolvedSummary(workspacePath: string): WorktreeWorkspaceSummaryV15 {
+  return {
+    workspacePath,
+    isGitRepo: true,
+    repoIdentifier: { owner: "acme", repo: "app" },
+    mainBranch: "main",
+    worktrees: [
+      {
+        worktreePath: workspacePath,
+        branch: "main",
+        head: null,
+        isMain: true,
+        isLocked: false,
+      },
+    ],
+    scripts: null,
+    repoBranchPrefix: { status: "absent" },
+    resolvedAt: 1,
+    presence: "present",
+  };
+}
+
+function seedResolvedBindingMetadata(): void {
+  listByPathsMocks.workspaces = [
+    resolvedSummary("/repo/alpha"),
+    resolvedSummary("/repo/beta"),
+  ];
+}
+
+async function openTerminalFolderPopover(): Promise<void> {
+  renderBoundSurface("terminal-agent", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  await screen.findAllByTestId("folder-row");
+}
+
+it("stages a TUI folder removal and discloses a shell under it on Update", async () => {
+  teardownMocks.snapshot.mockImplementation((dropped: readonly string[]) =>
+    dropped.includes("/repo/alpha") ? [shellHolder("npm run dev")] : [],
+  );
+
+  await openTerminalFolderPopover();
+  fireEvent.click(screen.getByRole("button", { name: "Remove alpha" }));
+
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+    "npm run dev",
+  );
+  expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+    "Shell",
+  );
+  expect(teardownMocks.snapshot).toHaveBeenCalledWith(["/repo/alpha"]);
+
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "terminal-agent",
+      workspacePath: "/repo/alpha",
+    });
+  });
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+});
+
+it("re-discloses when TUI staging mutates under an open confirmation", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => [shellHolder("npm run dev")]);
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+  act(() => {
+    useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+      entries: [newWorktreeIntent("/repo/alpha", "feat-b")],
+    });
+  });
+
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  await waitFor(() => {
+    expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
+  });
+  const createArg = mutationMocks.createWorktree.mock.calls[0]?.[0] as {
+    readonly entries: ReadonlyArray<{
+      readonly branch?: { readonly name?: string };
+    }>;
+  };
+  expect(createArg.entries[0]?.branch?.name).toBe("feat-b");
+});
+
+it("commits the disclosed TUI draft when staging is unchanged", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => [shellHolder("npm run dev")]);
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  await waitFor(() => {
+    expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
+  });
+  const createArg = mutationMocks.createWorktree.mock.calls[0]?.[0] as {
+    readonly entries: ReadonlyArray<{
+      readonly branch?: { readonly name?: string };
+    }>;
+  };
+  expect(createArg.entries[0]?.branch?.name).toBe("feat-a");
 });

@@ -69,6 +69,7 @@ import {
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
+  stagedWorktreeIntentRevision,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -130,6 +131,10 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 import { droppedRunDirectoriesFromDraft } from "@/lib/worktree/owner-teardown-snapshot";
 import { isWorktreeRebindBlocked } from "@/lib/worktree/is-worktree-rebind-blocked";
+import {
+  worktreeCommitCaptureIsStale,
+  type WorktreeCommitCapture,
+} from "@/lib/worktree/worktree-commit-capture";
 import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
 import {
   TeardownCommitDialog,
@@ -1722,12 +1727,14 @@ function branchForSummary(
 // `WorkspaceFolderSummaryControl`.
 type FolderEditorState = {
   readonly dirtyPathsSinceResume: ReadonlySet<string>;
+  readonly pendingRemovedPaths: ReadonlySet<string>;
 };
 type FolderEditorAction =
   | {
       readonly type: "markDirty";
       readonly workspacePaths: ReadonlyArray<string>;
     }
+  | { readonly type: "stageRemoval"; readonly workspacePath: string }
   | { readonly type: "resumed" };
 function folderEditorReducer(
   state: FolderEditorState,
@@ -1742,10 +1749,23 @@ function folderEditorReducer(
       ]);
       return next.size === state.dirtyPathsSinceResume.size
         ? state
-        : { dirtyPathsSinceResume: next };
+        : { ...state, dirtyPathsSinceResume: next };
+    }
+    case "stageRemoval": {
+      if (state.pendingRemovedPaths.has(action.workspacePath)) return state;
+      return {
+        ...state,
+        pendingRemovedPaths: new Set([
+          ...state.pendingRemovedPaths,
+          action.workspacePath,
+        ]),
+      };
     }
     case "resumed":
-      return { dirtyPathsSinceResume: new Set<string>() };
+      return {
+        dirtyPathsSinceResume: new Set<string>(),
+        pendingRemovedPaths: new Set<string>(),
+      };
   }
 }
 interface InEpicSurfaceProps {
@@ -1771,6 +1791,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         ];
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
+    pendingRemovedPaths: new Set<string>(),
   });
   const ownerKind: WorktreeBindingOwnerKind =
     surface.kind === "chat" ? "chat" : "terminal-agent";
@@ -1794,6 +1815,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly choice: TeardownCommitChoice;
     readonly holders: readonly WorktreeBusyHolder[];
+    readonly capture: WorktreeCommitCapture;
   } | null>(null);
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
@@ -2007,107 +2029,148 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     surface.missingWorktreePaths,
     changedWorkspacePathsSinceResume,
   );
-  const applyStagedFoldersAndResume = useCallback((): void => {
-    if (stagedWorktreeIntentIsSuspended(stagedKey)) return;
-    const staged = readStagedWorktreeIntent(stagedKey);
-    const stagedEntries = staged?.entries ?? [];
-    // A just-added git folder may still be waiting for metadata so the default
-    // new-worktree seed can be staged. Keep Update enabled, but don't resume
-    // until those pending defaults either stage or resolve as no-op.
-    if (pendingDefaultPathsRef.current.size > 0) return;
-    // Defensive: the button is already gated on the same condition, but guard
-    // against an empty apply (nothing staged AND no committed add/remove).
-    if (stagedEntries.length === 0 && editor.dirtyPathsSinceResume.size === 0) {
-      return;
-    }
-    const changedWorkspacePaths = Array.from(
-      new Set([
-        ...editor.dirtyPathsSinceResume,
-        ...stagedEntries.map((entry) => entry.workspacePath),
-      ]),
-    );
-    const finishAndResume = (): void => {
-      clearStagedWorktreeIntent(stagedKey);
-      // Closes the popover AND clears dirty in one update.
-      dispatchEditor({ type: "resumed" });
-      handleBindingCommitted(changedWorkspacePaths);
-    };
-    // Only add/remove happened — already committed to the binding, so there is
-    // nothing to create; just resume the PTY against the updated binding.
-    if (stagedEntries.length === 0) {
-      finishAndResume();
-      return;
-    }
-    void worktreeCreateMutation
-      .mutateAsync({
-        epicId: surface.epicId,
-        ownerId: surface.ownerId,
-        ownerKind,
-        entries: worktreeCreateEntries(stagedEntries),
-      })
-      .then((result) => {
-        applyWorktreeCreateResult({
-          stagedEntries,
-          changedWorkspacePaths,
-          perEntry: result.perEntry,
-          actions: {
-            finishAndResume,
-            unstageEntry: (workspacePath) =>
-              unstageWorktreeEntry(stagedKey, workspacePath),
-            commitPaths: handleBindingCommitted,
-            showPartialFailure: (message) =>
-              reportableErrorToast(message, undefined, {
-                title: "Workspace update incomplete",
-                message: null,
-                code: null,
-                source: "Worktree update",
-              }),
-          },
-        });
-        trackUserInitiatedWorktreeWrite(stagedEntries, result);
-      })
-      .catch((error: unknown) => {
-        if (!isWorktreeRebindBlocked(error)) return;
-        const draft = readStagedWorktreeIntent(stagedKey);
-        const dropped = droppedRunDirectoriesFromDraft({
-          binding: surface.binding,
-          draft,
-        });
-        setTeardownDialog({
-          choice: "blocked",
-          holders: snapshotTeardownHolders(dropped),
-        });
-      });
-  }, [
-    editor.dirtyPathsSinceResume,
-    worktreeCreateMutation,
-    surface.binding,
-    surface.epicId,
-    surface.ownerId,
-    ownerKind,
-    stagedKey,
-    clearStagedWorktreeIntent,
-    unstageWorktreeEntry,
-    handleBindingCommitted,
-    snapshotTeardownHolders,
-  ]);
-  const requestStagedFolderCommit = useCallback((): void => {
-    const staged = readStagedWorktreeIntent(stagedKey);
-    const dropped = droppedRunDirectoriesFromDraft({
+  const readLiveCommitCapture = useCallback((): WorktreeCommitCapture => {
+    return {
+      draft: readStagedWorktreeIntent(stagedKey),
+      revision: stagedWorktreeIntentRevision(stagedKey),
       binding: surface.binding,
-      draft: staged,
+      removedWorkspacePaths: [...editor.pendingRemovedPaths],
+    };
+  }, [editor.pendingRemovedPaths, stagedKey, surface.binding]);
+  const applyStagedFoldersAndResume = useCallback(
+    (capture: WorktreeCommitCapture): void => {
+      if (stagedWorktreeIntentIsSuspended(stagedKey)) return;
+      const stagedEntries = capture.draft?.entries ?? [];
+      const removedWorkspacePaths = capture.removedWorkspacePaths;
+      // A just-added git folder may still be waiting for metadata so the default
+      // new-worktree seed can be staged. Keep Update enabled, but don't resume
+      // until those pending defaults either stage or resolve as no-op.
+      if (pendingDefaultPathsRef.current.size > 0) return;
+      if (
+        stagedEntries.length === 0 &&
+        editor.dirtyPathsSinceResume.size === 0 &&
+        removedWorkspacePaths.length === 0
+      ) {
+        return;
+      }
+      const changedWorkspacePaths = Array.from(
+        new Set([
+          ...editor.dirtyPathsSinceResume,
+          ...stagedEntries.map((entry) => entry.workspacePath),
+          ...removedWorkspacePaths,
+        ]),
+      );
+      const finishAndResume = (): void => {
+        clearStagedWorktreeIntent(stagedKey);
+        dispatchEditor({ type: "resumed" });
+        handleBindingCommitted(changedWorkspacePaths);
+      };
+      const createThenResume = (): void => {
+        if (stagedEntries.length === 0) {
+          finishAndResume();
+          return;
+        }
+        void worktreeCreateMutation
+          .mutateAsync({
+            epicId: surface.epicId,
+            ownerId: surface.ownerId,
+            ownerKind,
+            entries: worktreeCreateEntries(stagedEntries),
+          })
+          .then((result) => {
+            applyWorktreeCreateResult({
+              stagedEntries,
+              changedWorkspacePaths,
+              perEntry: result.perEntry,
+              actions: {
+                finishAndResume,
+                unstageEntry: (workspacePath) =>
+                  unstageWorktreeEntry(stagedKey, workspacePath),
+                commitPaths: handleBindingCommitted,
+                showPartialFailure: (message) =>
+                  reportableErrorToast(message, undefined, {
+                    title: "Workspace update incomplete",
+                    message: null,
+                    code: null,
+                    source: "Worktree update",
+                  }),
+              },
+            });
+            trackUserInitiatedWorktreeWrite(stagedEntries, result);
+          })
+          .catch((error: unknown) => {
+            if (!isWorktreeRebindBlocked(error)) return;
+            const live = readLiveCommitCapture();
+            const dropped = droppedRunDirectoriesFromDraft({
+              binding: live.binding,
+              draft: live.draft,
+              removedWorkspacePaths: live.removedWorkspacePaths,
+            });
+            setTeardownDialog({
+              choice: "blocked",
+              holders: snapshotTeardownHolders(dropped),
+              capture: live,
+            });
+          });
+      };
+      if (removedWorkspacePaths.length === 0) {
+        createThenResume();
+        return;
+      }
+      void removedWorkspacePaths
+        .reduce(
+          (prior, workspacePath) =>
+            prior.then(() =>
+              removeBindingEntryMutation
+                .mutateAsync({
+                  epicId: surface.epicId,
+                  ownerId: surface.ownerId,
+                  ownerKind,
+                  workspacePath,
+                })
+                .then(() => {
+                  pendingDefaultPathsRef.current.delete(workspacePath);
+                  unstageWorktreeEntry(stagedKey, workspacePath);
+                }),
+            ),
+          Promise.resolve(),
+        )
+        .then(() => {
+          createThenResume();
+        });
+    },
+    [
+      editor.dirtyPathsSinceResume,
+      worktreeCreateMutation,
+      removeBindingEntryMutation,
+      readLiveCommitCapture,
+      surface.epicId,
+      surface.ownerId,
+      ownerKind,
+      stagedKey,
+      clearStagedWorktreeIntent,
+      unstageWorktreeEntry,
+      handleBindingCommitted,
+      snapshotTeardownHolders,
+    ],
+  );
+  const requestStagedFolderCommit = useCallback((): void => {
+    const capture = readLiveCommitCapture();
+    const dropped = droppedRunDirectoriesFromDraft({
+      binding: capture.binding,
+      draft: capture.draft,
+      removedWorkspacePaths: capture.removedWorkspacePaths,
     });
     const holders = snapshotTeardownHolders(dropped);
     if (holders.length === 0) {
-      applyStagedFoldersAndResume();
+      applyStagedFoldersAndResume(capture);
       return;
     }
-    setTeardownDialog({ choice: "commit", holders });
+    setTeardownDialog({ choice: "commit", holders, capture });
   }, [
     applyStagedFoldersAndResume,
+    readLiveCommitCapture,
     snapshotTeardownHolders,
-    stagedKey,
-    surface.binding,
   ]);
   // Terminal-agent add/remove commit to the binding but deliberately do NOT
   // resume — only the explicit "Update" does. Mark the binding dirty so
@@ -2117,6 +2180,48 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       dispatchEditor({ type: "markDirty", workspacePaths });
     },
     [],
+  );
+  const stageFolderRemoval = useCallback(
+    (workspacePath: string): void => {
+      pendingDefaultPathsRef.current.delete(workspacePath);
+      unstageWorktreeEntry(stagedKey, workspacePath);
+      dispatchEditor({ type: "stageRemoval", workspacePath });
+    },
+    [stagedKey, unstageWorktreeEntry],
+  );
+  const removeFolderNow = useCallback(
+    (workspacePath: string): void => {
+      removeBindingEntryMutation.mutate(
+        {
+          epicId: surface.epicId,
+          ownerId: surface.ownerId,
+          ownerKind,
+          workspacePath,
+        },
+        {
+          onSuccess: () => {
+            pendingDefaultPathsRef.current.delete(workspacePath);
+            unstageWorktreeEntry(stagedKey, workspacePath);
+            if (surface.kind === "terminal-agent") {
+              markBindingDirtyWithoutResume([workspacePath]);
+              return;
+            }
+            handleBindingCommitted([workspacePath]);
+          },
+        },
+      );
+    },
+    [
+      handleBindingCommitted,
+      markBindingDirtyWithoutResume,
+      ownerKind,
+      removeBindingEntryMutation,
+      stagedKey,
+      surface.epicId,
+      surface.kind,
+      surface.ownerId,
+      unstageWorktreeEntry,
+    ],
   );
   useEffect(() => {
     const pending = pendingDefaultPathsRef.current;
@@ -2269,10 +2374,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         // Persist the per-folder choice immediately (not at send) so it survives
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
-        if (
-          surface.kind === "terminal-agent" ||
-          (surface.kind === "chat" && surface.isOwnerActive)
-        ) {
+        if (surface.kind === "terminal-agent" || surface.isOwnerActive) {
           // Draft: no host write. Terminal-agent commits via Update;
           // a busy chat rides the next send. `stageIntent` merges by
           // workspacePath, so re-picking a folder replaces its prior choice.
@@ -2408,245 +2510,224 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
+  const remainingVisibleFolders = bindingEntries.filter(
+    (entry) => !editor.pendingRemovedPaths.has(entry.workspacePath),
+  ).length;
   const workspaceRunItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
-      workspaces.map((ws) => {
-        const {
-          currentMode,
-          modeLabel,
-          removePending,
-          isPrimary,
-          currentIntent,
-          defaultNewBranchName,
-          branchPrefixWarning,
-          currentBranch,
-          rowMetadataPending,
-          rowIsGitRepo,
-          branchLabel,
-          emit,
-        } = deriveInEpicRowState(ws);
-        // Presence is per-(host, path) display state — never stored on the
-        // binding. An absent path is not a non-git folder; Locate REPLACes
-        // the dead path with a picked one (add-only left it blocking).
-        // Handlers that close over pendingDefaultPathsRef are attached AFTER
-        // unresolvedWorkspaceRunItem returns — passing them as arguments is
-        // flagged by react-hooks/refs as "ref access during render".
-        if (ws.presence === "absent" && ws.resolvedAt !== null) {
-          const base = unresolvedWorkspaceRunItem({
-            path: ws.workspacePath,
-            name: workspaceFolderName(ws.workspacePath),
-            repoIdentifier: ws.repoIdentifier,
-            hostLabel: props.hostLabel,
+      workspaces
+        .filter((ws) => !editor.pendingRemovedPaths.has(ws.workspacePath))
+        .map((ws) => {
+          const {
+            currentMode,
+            modeLabel,
+            removePending,
             isPrimary,
-            onLocate: () => undefined,
-            onMakePrimary: () => undefined,
-            onRemove: () => undefined,
-          });
+            currentIntent,
+            defaultNewBranchName,
+            branchPrefixWarning,
+            currentBranch,
+            rowMetadataPending,
+            rowIsGitRepo,
+            branchLabel,
+            emit,
+          } = deriveInEpicRowState(ws);
+          // Presence is per-(host, path) display state — never stored on the
+          // binding. An absent path is not a non-git folder; Locate REPLACes
+          // the dead path with a picked one (add-only left it blocking).
+          // Handlers that close over pendingDefaultPathsRef are attached AFTER
+          // unresolvedWorkspaceRunItem returns — passing them as arguments is
+          // flagged by react-hooks/refs as "ref access during render".
+          if (ws.presence === "absent" && ws.resolvedAt !== null) {
+            const base = unresolvedWorkspaceRunItem({
+              path: ws.workspacePath,
+              name: workspaceFolderName(ws.workspacePath),
+              repoIdentifier: ws.repoIdentifier,
+              hostLabel: props.hostLabel,
+              isPrimary,
+              onLocate: () => undefined,
+              onMakePrimary: () => undefined,
+              onRemove: () => undefined,
+            });
+            return {
+              ...base,
+              // Bound owner rows have no set-primary RPC.
+              canChangePrimary: false,
+              // An absent row is still a BOUND row: Locate adds and removes
+              // binding entries exactly like the normal controls, so it takes
+              // the same active-run lock. Without this the one row that mutates
+              // the binding hardest stayed live while an owner turn was running,
+              // and `unresolvedWorkspaceRunItem`'s `removeDisabled: false` came
+              // through the spread untouched. The lock clears with the turn and
+              // the row is retryable again - nothing about it is one-shot.
+              removeDisabled:
+                activeRunLocksBinding ||
+                removePending ||
+                remainingVisibleFolders <= 1,
+              removeDisabledReason: removeDisabledReasonFor(
+                activeRunLocksBinding,
+                activeRunNotice,
+              ),
+              onLocate: activeRunLocksBinding
+                ? null
+                : () => {
+                    // Locate REPLACes only after ≥1 DISTINCT add succeeds — never
+                    // delete-first (empty pick / all-adds-fail would drop the entry).
+                    // Cancel and zero-success leave the binding untouched.
+                    void (async (): Promise<void> => {
+                      const result =
+                        await folderActions.pickAndPrepareFolders(false);
+                      const outcome = await locateReplaceBoundFolder({
+                        absentPath: ws.workspacePath,
+                        pick: result,
+                        add: async (workspacePath) => {
+                          try {
+                            await addFolderMutation.mutateAsync({
+                              epicId: surface.epicId,
+                              ownerId: surface.ownerId,
+                              ownerKind,
+                              workspacePath,
+                            });
+                            pendingDefaultPathsRef.current.add(workspacePath);
+                            return true;
+                          } catch {
+                            return false;
+                          }
+                        },
+                        remove: async (workspacePath) => {
+                          try {
+                            await removeBindingEntryMutation.mutateAsync({
+                              epicId: surface.epicId,
+                              ownerId: surface.ownerId,
+                              ownerKind,
+                              workspacePath,
+                            });
+                            pendingDefaultPathsRef.current.delete(
+                              workspacePath,
+                            );
+                            unstageWorktreeEntry(stagedKey, workspacePath);
+                            return true;
+                          } catch {
+                            return false;
+                          }
+                        },
+                      });
+                      if (
+                        outcome.kind !== "replaced" &&
+                        outcome.kind !== "replaced-stale-entry"
+                      ) {
+                        return;
+                      }
+                      // A retained path is still bound, so it is not "touched" by a
+                      // commit that did not move it - the absent row stays put and
+                      // stays retryable. The adds are real either way.
+                      const touchedPaths =
+                        outcome.kind === "replaced"
+                          ? [outcome.removedPath, ...outcome.addedPaths]
+                          : [...outcome.addedPaths];
+                      if (surface.kind === "terminal-agent") {
+                        markBindingDirtyWithoutResume(touchedPaths);
+                      } else {
+                        handleBindingCommitted(touchedPaths);
+                      }
+                    })();
+                  },
+              onRemove: () => {
+                if (activeRunLocksBinding || removePending) return;
+                if (surface.kind === "terminal-agent") {
+                  stageFolderRemoval(ws.workspacePath);
+                  return;
+                }
+                removeFolderNow(ws.workspacePath);
+              },
+            };
+          }
           return {
-            ...base,
-            // Bound owner rows have no set-primary RPC.
+            key: ws.workspacePath,
+            displayName: workspaceFolderName(ws.workspacePath),
+            displayPath: ws.workspacePath,
+            unresolved: false,
+            metadataPending: rowMetadataPending,
+            missing: visibleMissingWorktreePaths.includes(ws.workspacePath),
+            isGitRepo: rowIsGitRepo,
+            mode: currentMode,
+            branchLabel:
+              currentMode === "local"
+                ? (currentBranch ?? modeLabel)
+                : branchLabel,
+            summary: ws,
+            currentIntent,
+            defaultNewBranchName,
+            branchPrefixWarning,
+            repoIdentifier: ws.repoIdentifier,
+            isPrimary,
+            // Bound owner rows (chat / terminal-agent) have no atomic
+            // set-primary RPC yet - the badge renders read-only here; switching
+            // stays scoped to not-yet-created pickers (landing, fork dialogs,
+            // the new-conversation modal, the terminal-agent launcher).
             canChangePrimary: false,
-            // An absent row is still a BOUND row: Locate adds and removes
-            // binding entries exactly like the normal controls, so it takes
-            // the same active-run lock. Without this the one row that mutates
-            // the binding hardest stayed live while an owner turn was running,
-            // and `unresolvedWorkspaceRunItem`'s `removeDisabled: false` came
-            // through the spread untouched. The lock clears with the turn and
-            // the row is retryable again - nothing about it is one-shot.
-            removeDisabled: activeRunLocksBinding || removePending,
+            makePrimaryDisabled: false,
+            makePrimaryDisabledReason: null,
+            hostClient: props.hostClient,
+            modeDisabled: rowMetadataPending,
+            modeDisabledReason: modeDisabledReasonFor(
+              false,
+              activeRunNotice,
+              rowMetadataPending,
+            ),
+            removeDisabled:
+              activeRunLocksBinding ||
+              removePending ||
+              remainingVisibleFolders <= 1,
             removeDisabledReason: removeDisabledReasonFor(
               activeRunLocksBinding,
               activeRunNotice,
             ),
-            onLocate: activeRunLocksBinding
-              ? null
-              : () => {
-                  // Locate REPLACes only after ≥1 DISTINCT add succeeds — never
-                  // delete-first (empty pick / all-adds-fail would drop the entry).
-                  // Cancel and zero-success leave the binding untouched.
-                  void (async (): Promise<void> => {
-                    const result =
-                      await folderActions.pickAndPrepareFolders(false);
-                    const outcome = await locateReplaceBoundFolder({
-                      absentPath: ws.workspacePath,
-                      pick: result,
-                      add: async (workspacePath) => {
-                        try {
-                          await addFolderMutation.mutateAsync({
-                            epicId: surface.epicId,
-                            ownerId: surface.ownerId,
-                            ownerKind,
-                            workspacePath,
-                          });
-                          pendingDefaultPathsRef.current.add(workspacePath);
-                          return true;
-                        } catch {
-                          return false;
-                        }
-                      },
-                      remove: async (workspacePath) => {
-                        try {
-                          await removeBindingEntryMutation.mutateAsync({
-                            epicId: surface.epicId,
-                            ownerId: surface.ownerId,
-                            ownerKind,
-                            workspacePath,
-                          });
-                          pendingDefaultPathsRef.current.delete(workspacePath);
-                          unstageWorktreeEntry(stagedKey, workspacePath);
-                          return true;
-                        } catch {
-                          return false;
-                        }
-                      },
-                    });
-                    if (
-                      outcome.kind !== "replaced" &&
-                      outcome.kind !== "replaced-stale-entry"
-                    ) {
-                      return;
-                    }
-                    // A retained path is still bound, so it is not "touched" by a
-                    // commit that did not move it - the absent row stays put and
-                    // stays retryable. The adds are real either way.
-                    const touchedPaths =
-                      outcome.kind === "replaced"
-                        ? [outcome.removedPath, ...outcome.addedPaths]
-                        : [...outcome.addedPaths];
-                    if (surface.kind === "terminal-agent") {
-                      markBindingDirtyWithoutResume(touchedPaths);
-                    } else {
-                      handleBindingCommitted(touchedPaths);
-                    }
-                  })();
-                },
+            removePending,
+            onEmit: emit,
+            onMakePrimary: () => undefined,
+            onSelectMode: (nextMode) => {
+              // Unresolved rows (`resolvedAt === null`) have no verified git
+              // facts yet - the mode switch itself is disabled for them
+              // (`modeDisabled` above), but guard here too since this closure
+              // outlives that render.
+              if (ws.resolvedAt === null) return;
+              emitRowMode({
+                currentBranch,
+                currentIntent,
+                defaultNewBranchName,
+                emit,
+                isGitRepo: rowIsGitRepo,
+                isPrimary,
+                mode: currentMode,
+                nextMode,
+                repoIdentifier: ws.repoIdentifier,
+                workspacePath: ws.workspacePath,
+              });
+            },
+            onLocate: null,
             onRemove: () => {
-              if (activeRunLocksBinding || removePending) return;
-              removeBindingEntryMutation.mutate(
-                {
-                  epicId: surface.epicId,
-                  ownerId: surface.ownerId,
-                  ownerKind,
-                  workspacePath: ws.workspacePath,
-                },
-                {
-                  onSuccess: () => {
-                    pendingDefaultPathsRef.current.delete(ws.workspacePath);
-                    unstageWorktreeEntry(stagedKey, ws.workspacePath);
-                    if (surface.kind === "terminal-agent") {
-                      markBindingDirtyWithoutResume([ws.workspacePath]);
-                      return;
-                    }
-                    handleBindingCommitted([ws.workspacePath]);
-                  },
-                },
-              );
+              if (removePending) return;
+              if (surface.kind === "terminal-agent") {
+                stageFolderRemoval(ws.workspacePath);
+                return;
+              }
+              removeFolderNow(ws.workspacePath);
             },
           };
-        }
-        return {
-          key: ws.workspacePath,
-          displayName: workspaceFolderName(ws.workspacePath),
-          displayPath: ws.workspacePath,
-          unresolved: false,
-          metadataPending: rowMetadataPending,
-          missing: visibleMissingWorktreePaths.includes(ws.workspacePath),
-          isGitRepo: rowIsGitRepo,
-          mode: currentMode,
-          branchLabel:
-            currentMode === "local"
-              ? (currentBranch ?? modeLabel)
-              : branchLabel,
-          summary: ws,
-          currentIntent,
-          defaultNewBranchName,
-          branchPrefixWarning,
-          repoIdentifier: ws.repoIdentifier,
-          isPrimary,
-          // Bound owner rows (chat / terminal-agent) have no atomic
-          // set-primary RPC yet - the badge renders read-only here; switching
-          // stays scoped to not-yet-created pickers (landing, fork dialogs,
-          // the new-conversation modal, the terminal-agent launcher).
-          canChangePrimary: false,
-          makePrimaryDisabled: false,
-          makePrimaryDisabledReason: null,
-          hostClient: props.hostClient,
-          modeDisabled: rowMetadataPending,
-          modeDisabledReason: modeDisabledReasonFor(
-            false,
-            activeRunNotice,
-            rowMetadataPending,
-          ),
-          removeDisabled: activeRunLocksBinding || removePending,
-          removeDisabledReason: removeDisabledReasonFor(
-            activeRunLocksBinding,
-            activeRunNotice,
-          ),
-          removePending,
-          onEmit: emit,
-          onMakePrimary: () => undefined,
-          onSelectMode: (nextMode) => {
-            // Unresolved rows (`resolvedAt === null`) have no verified git
-            // facts yet - the mode switch itself is disabled for them
-            // (`modeDisabled` above), but guard here too since this closure
-            // outlives that render.
-            if (ws.resolvedAt === null) return;
-            emitRowMode({
-              currentBranch,
-              currentIntent,
-              defaultNewBranchName,
-              emit,
-              isGitRepo: rowIsGitRepo,
-              isPrimary,
-              mode: currentMode,
-              nextMode,
-              repoIdentifier: ws.repoIdentifier,
-              workspacePath: ws.workspacePath,
-            });
-          },
-          onLocate: null,
-          onRemove: () => {
-            if (removePending) return;
-            removeBindingEntryMutation.mutate(
-              {
-                epicId: surface.epicId,
-                ownerId: surface.ownerId,
-                ownerKind,
-                workspacePath: ws.workspacePath,
-              },
-              {
-                // Terminal-agent: remove from the binding but don't resume —
-                // only "Update" does. Chat: no PTY to resume (no-op callback).
-                onSuccess: () => {
-                  // A folder removed before its metadata resolved has nothing
-                  // to seed - its summary never arrives, so left in place the
-                  // path would pin the pending-defaults guard and block
-                  // Update's resume forever.
-                  pendingDefaultPathsRef.current.delete(ws.workspacePath);
-                  // And if metadata DID resolve first, the seeding effect may
-                  // already have staged a default worktree intent for this
-                  // path - unstage it, or the next Update would call
-                  // worktree.create for a folder no longer in the binding.
-                  unstageWorktreeEntry(stagedKey, ws.workspacePath);
-                  if (surface.kind === "terminal-agent") {
-                    markBindingDirtyWithoutResume([ws.workspacePath]);
-                    return;
-                  }
-                  handleBindingCommitted([ws.workspacePath]);
-                },
-              },
-            );
-          },
-        };
-      }),
+        }),
     [
       activeRunNotice,
       activeRunLocksBinding,
       addFolderMutation,
       deriveInEpicRowState,
       folderActions,
+      editor.pendingRemovedPaths,
       handleBindingCommitted,
       markBindingDirtyWithoutResume,
+      remainingVisibleFolders,
+      removeFolderNow,
+      stageFolderRemoval,
       stagedKey,
       unstageWorktreeEntry,
       props.hostClient,
@@ -2833,9 +2914,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 ? requestStagedFolderCommit
                 : null
             }
-            draftPending={hasStagedFolderChanges}
+            draftPending={
+              hasStagedFolderChanges || editor.pendingRemovedPaths.size > 0
+            }
             updateEnabled={
-              hasStagedFolderChanges || editor.dirtyPathsSinceResume.size > 0
+              hasStagedFolderChanges ||
+              editor.dirtyPathsSinceResume.size > 0 ||
+              editor.pendingRemovedPaths.size > 0
             }
             updatePending={worktreeCreatePending}
             onDiscardStaged={null}
@@ -2867,8 +2952,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         choice={teardownDialog?.choice ?? null}
         holders={teardownDialog?.holders ?? []}
         onImmediate={() => {
+          const dialog = teardownDialog;
           setTeardownDialog(null);
-          applyStagedFoldersAndResume();
+          if (dialog === null) return;
+          const live = readLiveCommitCapture();
+          if (worktreeCommitCaptureIsStale(dialog.capture, live)) {
+            requestStagedFolderCommit();
+            return;
+          }
+          applyStagedFoldersAndResume(dialog.capture);
         }}
         onDefer={() => {
           setTeardownDialog(null);

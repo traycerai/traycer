@@ -14,10 +14,13 @@ import type {
  * `listHolders` minor lands (path-scoped with optional owner filter), only
  * this provider changes.
  *
- * Known gaps vs the T6 inventory, acceptable at gesture time because neither
- * is a user-stoppable thing here:
+ * Known gaps vs the T6 inventory, acceptable at gesture time because they
+ * are not a user-stoppable thing here, or cannot be proven from GUI state:
  * - host-only `active-run-cwd` marks after a partial rebind
  * - grace-window PTYs (no live session in the terminal store)
+ * - TUI-owned (and any other) supervised shells whose host or cwd is
+ *   unproven — the resource projection has no cwd and is not
+ *   host-attributed, so those rows are omitted rather than over-matched
  */
 export type OwnerTeardownShell = {
   readonly id: string;
@@ -52,14 +55,16 @@ export function runDirectoryOfFolderIntent(
 
 /**
  * Run directories the draft would leave: each staged folder whose next run
- * directory differs from the live binding. Staged intent is a sparse overlay
- * (changed folders only), so unstaged binding entries are not dropped.
+ * directory differs from the live binding, plus each pending-removed folder's
+ * current run directory. Staged intent is a sparse overlay (changed folders
+ * only), so unstaged binding entries are not dropped unless listed in
+ * `removedWorkspacePaths`.
  */
 export function droppedRunDirectoriesFromDraft(input: {
   readonly binding: WorktreeBinding | null;
   readonly draft: WorktreeIntent | null;
+  readonly removedWorkspacePaths: readonly string[];
 }): readonly string[] {
-  if (input.draft === null) return [];
   const previousByWorkspace = new Map(
     (input.binding?.entries ?? []).map((entry) => [
       entry.workspacePath,
@@ -68,14 +73,24 @@ export function droppedRunDirectoriesFromDraft(input: {
   );
   const dropped: string[] = [];
   const seen = new Set<string>();
-  for (const entry of input.draft.entries) {
-    const previous = previousByWorkspace.get(entry.workspacePath);
+  const pushDropped = (path: string): void => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    dropped.push(path);
+  };
+  if (input.draft !== null) {
+    for (const entry of input.draft.entries) {
+      const previous = previousByWorkspace.get(entry.workspacePath);
+      if (previous === undefined) continue;
+      const next = runDirectoryOfFolderIntent(entry);
+      if (next === previous) continue;
+      pushDropped(previous);
+    }
+  }
+  for (const workspacePath of input.removedWorkspacePaths) {
+    const previous = previousByWorkspace.get(workspacePath);
     if (previous === undefined) continue;
-    const next = runDirectoryOfFolderIntent(entry);
-    if (next === previous) continue;
-    if (seen.has(previous)) continue;
-    seen.add(previous);
-    dropped.push(previous);
+    pushDropped(previous);
   }
   return dropped;
 }
@@ -132,10 +147,9 @@ function shellBelongsToDroppedPaths(
   droppedRunDirectories: readonly string[],
 ): boolean {
   if (droppedRunDirectories.length === 0) return false;
-  if (shell.cwd === null) return true;
-  return droppedRunDirectories.some((root) =>
-    pathContainsDirectory(root, shell.cwd ?? ""),
-  );
+  const cwd = shell.cwd;
+  if (cwd === null) return false;
+  return droppedRunDirectories.some((root) => pathContainsDirectory(root, cwd));
 }
 
 function shellLabel(shell: OwnerTeardownShell): string {

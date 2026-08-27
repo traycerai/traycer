@@ -46,11 +46,16 @@ function HolderGroup(props: {
   readonly tone: "working" | "idle";
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-1.5" data-testid={props.testId}>
+    <section
+      className="flex min-w-0 flex-col gap-1.5"
+      data-testid={props.testId}
+    >
       <p
         className={cn(
           "text-ui-sm font-medium",
-          props.tone === "working" ? "text-foreground" : "text-muted-foreground",
+          props.tone === "working"
+            ? "text-foreground"
+            : "text-muted-foreground",
         )}
       >
         {props.heading}
@@ -77,9 +82,7 @@ function HolderGroup(props: {
   );
 }
 
-export function holdKindLabel(
-  holdKind: WorktreeBusyHolder["holdKind"],
-): string {
+function holdKindLabel(holdKind: WorktreeBusyHolder["holdKind"]): string {
   if (holdKind === "chat-turn") return "Turn";
   if (holdKind === "terminal-agent-pty") return "Terminal";
   if (holdKind === "supervised-shell") return "Shell";
