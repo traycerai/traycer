@@ -8,10 +8,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { hashFileSha256 } from "../installer/sha256";
 import { downloadToFile } from "../registry/fetch-resource";
 import {
+  cliAssetVersion,
   currentCliPlatformKey,
   fetchCliVersions,
   resolveCliAsset,
@@ -61,12 +62,26 @@ import { withCliLock } from "../store/cli-lock";
 //     supervisor restart) finalise the swap.
 //   * On success we update the manifest's top-level version/path and
 //     clear any prior pendingUpgrade.
+//
+// Target-version contract (audit CLI-013):
+//
+//   The rolling feed publishes ONE build's platform assets. There is no
+//   per-version asset map, so no historical version is resolvable. The
+//   version stamped into the manifest is therefore always the feed's
+//   own `version` - the one its `platforms` map describes - and
+//   `--target` is a GUARD, not a selector: it asserts which build the
+//   caller expected and fails when the feed no longer serves it. That
+//   keeps installed bytes and recorded version inseparable; the
+//   previous behaviour downloaded the feed's build and recorded the
+//   caller's arbitrary string.
 
 export interface CliUpgradeArgs {
   // When true, fetch the CLI manifest and report what would be done
   // without actually replacing or staging anything.
   readonly dryRun: boolean;
-  // Optional override for the target version. Defaults to manifest.latest.
+  // Optional assertion that the feed still serves this exact version.
+  // Not a selector - see the target-version contract above. `null`
+  // accepts whatever the feed currently publishes.
   readonly targetVersion: string | null;
 }
 
@@ -146,13 +161,45 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           workUnits: null,
         });
         const versions = await fetchCliVersions();
-        const targetVersion = args.targetVersion ?? versions.latest;
+        // The feed's own `version`, never `latest` and never the
+        // caller's string: this is the only version whose bytes we can
+        // actually resolve, so it is the only one we may install or
+        // record. See the target-version contract at the top of the file.
+        const targetVersion = cliAssetVersion(versions);
+        if (
+          args.targetVersion !== null &&
+          !sameCliVersion(args.targetVersion, targetVersion)
+        ) {
+          ctx.runtime.logger.warn("CLI upgrade refused unavailable target", {
+            environment: ctx.runtime.environment,
+            currentVersion: manifest.version,
+            requestedVersion: args.targetVersion,
+            feedVersion: targetVersion,
+          });
+          throw cliError({
+            code: CLI_ERROR_CODES.CLI_UPGRADE_TARGET_UNAVAILABLE,
+            message:
+              `cli upgrade: --target ${args.targetVersion} is not available. ` +
+              `The CLI release feed publishes assets for exactly one build (${targetVersion}) ` +
+              "and cannot resolve historical versions. Re-run without --target to install " +
+              `${targetVersion}, or install the version you want by hand and record it with ` +
+              "'traycer cli re-anchor --binary-path <path> --installed-version <version>'.",
+            details: {
+              requestedVersion: args.targetVersion,
+              feedVersion: targetVersion,
+              feedLatest: versions.latest,
+              currentVersion: manifest.version,
+            },
+            exitCode: 1,
+          });
+        }
         ctx.runtime.logger.info("CLI upgrade target resolved", {
           environment: ctx.runtime.environment,
           currentVersion: manifest.version,
           targetVersion,
           source: manifest.source,
           latestVersion: versions.latest,
+          targetAsserted: args.targetVersion !== null,
         });
         if (manifest.version === targetVersion) {
           ctx.runtime.logger.info("CLI upgrade no-op; already current", {
@@ -189,6 +236,10 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
               source: manifest.source,
               binaryPath: manifest.binaryPath,
               downloadUrl: asset.url,
+              // Emitted so callers (and the end-to-end test the audit
+              // asks for) can tie the reported version to the exact
+              // bytes it names, rather than trusting the number alone.
+              downloadSha256: asset.sha256,
             },
             human: `would upgrade cli ${manifest.version} → ${targetVersion} (source=${manifest.source}, url=${asset.url})`,
             exitCode: 0,
@@ -379,13 +430,14 @@ async function tryReplaceLiveBinary(opts: {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  // Optional digest the live path is expected to hold after a
-  // copy-based swap. The atomic-rename path inherits the digest of the
-  // staged file (which was already verified during download), so this
-  // re-hash is only meaningful on the EXDEV cross-volume fallback path
-  // where the bytes were copied through `copyFile`. Pre-finalize
-  // helper callers that don't have the asset manifest in scope may pass
-  // `null` to skip the check - the rename path doesn't touch bytes.
+  // Optional digest to re-verify before publication. The same-volume
+  // rename path moves the already-verified staged file byte-for-byte and
+  // never consults this; it is only meaningful on the EXDEV path, where
+  // the bytes go through `copyFile`. Callers without the asset manifest
+  // in scope (the deferred finalize path, whose persisted
+  // `pendingUpgrade` record does not carry a digest) pass `null`: their
+  // publication is still atomic, so the worst case is an unverified
+  // copy rather than a destroyed live binary.
   readonly expectedSha256: string | null;
   readonly logger: ILogger;
 }): Promise<ReplaceResult> {
@@ -408,16 +460,8 @@ async function tryReplaceLiveBinary(opts: {
     await refreshWellKnownSlot(opts.environment, opts.livePath, opts.logger);
     return { status: "replaced", errorMessage: null };
   } catch (err) {
-    const code =
-      err !== null && typeof err === "object" && "code" in err
-        ? String((err as { code: unknown }).code)
-        : null;
-    if (
-      code === "EBUSY" ||
-      code === "EPERM" ||
-      code === "EACCES" ||
-      code === "ETXTBSY"
-    ) {
+    const code = errnoCodeOf(err);
+    if (isBinaryLockedCode(code)) {
       opts.logger.warn("CLI upgrade live binary is locked", {
         environment: opts.environment,
         errorCode: code,
@@ -427,90 +471,15 @@ async function tryReplaceLiveBinary(opts: {
         errorMessage: err instanceof Error ? err.message : String(err),
       };
     }
-    // POSIX cross-device rename: fall back to copy + unlink so the
-    // operator's intent (replace the binary) still completes when the
-    // staging dir isn't on the same volume.
+    // POSIX cross-device rename: the staged bytes are on another
+    // volume, so they have to be copied. Publication still goes through
+    // a destination-side temp + rename - see publishAcrossFilesystems.
     if (code === "EXDEV") {
-      opts.logger.info("CLI upgrade falling back to cross-device copy", {
+      opts.logger.info("CLI upgrade falling back to cross-device publication", {
         environment: opts.environment,
         expectedSha256: opts.expectedSha256 !== null,
       });
-      try {
-        await copyFile(opts.stagedBinaryPath, opts.livePath);
-        // Re-verify the destination digest. A partial-write or a hostile
-        // local actor between the staged-binary's verified write and the
-        // cross-volume copy would otherwise install corrupt bytes - the
-        // rename path is byte-for-byte safe but copyFile is not.
-        if (opts.expectedSha256 !== null) {
-          const actual = await hashFileSha256(opts.livePath, null);
-          if (actual !== opts.expectedSha256) {
-            opts.logger.error(
-              "CLI upgrade post-copy hash mismatch",
-              {
-                environment: opts.environment,
-              },
-              null,
-            );
-            try {
-              await unlink(opts.livePath);
-            } catch {
-              // Best-effort cleanup of the corrupt copy.
-            }
-            throw cliError({
-              code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
-              message: `cli upgrade: post-copy hash mismatch (expected ${opts.expectedSha256}, got ${actual})`,
-              details: {
-                livePath: opts.livePath,
-                stagedBinaryPath: opts.stagedBinaryPath,
-                expectedSha256: opts.expectedSha256,
-                actualSha256: actual,
-              },
-              exitCode: 1,
-            });
-          }
-        }
-        try {
-          await unlink(opts.stagedBinaryPath);
-        } catch (unlinkErr) {
-          opts.logger.warn(
-            "CLI upgrade failed to remove staged copy after fallback",
-            {
-              environment: opts.environment,
-              errorName: errorFromUnknown(unlinkErr).name,
-              errorMessage: errorFromUnknown(unlinkErr).message,
-            },
-          );
-          // Staged copy is harmless if it lingers.
-        }
-        opts.logger.info("CLI upgrade live binary replacement succeeded", {
-          environment: opts.environment,
-          strategy: "copy",
-        });
-        await refreshWellKnownSlot(
-          opts.environment,
-          opts.livePath,
-          opts.logger,
-        );
-        return { status: "replaced", errorMessage: null };
-      } catch (copyErr) {
-        if (copyErr instanceof CliError) throw copyErr;
-        opts.logger.error(
-          "CLI upgrade cross-device copy failed",
-          {
-            environment: opts.environment,
-          },
-          errorFromUnknown(copyErr),
-        );
-        throw cliError({
-          code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
-          message: `cli upgrade: cross-device fallback copy failed: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`,
-          details: {
-            livePath: opts.livePath,
-            stagedBinaryPath: opts.stagedBinaryPath,
-          },
-          exitCode: 1,
-        });
-      }
+      return publishAcrossFilesystems(opts);
     }
     opts.logger.error(
       "CLI upgrade live binary replacement failed",
@@ -530,6 +499,210 @@ async function tryReplaceLiveBinary(opts: {
       exitCode: 1,
     });
   }
+}
+
+// Cross-filesystem publication of the staged binary (audit CLI-014).
+//
+// `rename` refused with EXDEV, so the bytes genuinely have to be copied.
+// They are never copied INTO the live path: an interrupted process, a
+// full disk, or a short write there leaves the user holding a truncated
+// executable, and the previous implementation's digest check then
+// unlinked the live path outright - turning a corrupt CLI into no CLI.
+//
+// Instead the copy lands on a sibling temp file on the DESTINATION
+// filesystem, is verified there, and is published with the same atomic
+// rename the same-volume path uses. That is also what "retain/recover
+// the previous binary" reduces to once publication is atomic: every
+// failure mode before the rename leaves the previous binary
+// byte-for-byte intact, so there is no window in which it is gone and
+// nothing to restore from.
+async function publishAcrossFilesystems(opts: {
+  readonly environment: Environment;
+  readonly stagedBinaryPath: string;
+  readonly livePath: string;
+  readonly expectedSha256: string | null;
+  readonly logger: ILogger;
+}): Promise<ReplaceResult> {
+  const liveDir = dirname(opts.livePath);
+  const publishPath = join(
+    liveDir,
+    `.${basename(opts.livePath)}.traycer-upgrade-${process.pid}-${Math.random()
+      .toString(16)
+      .slice(2, 8)}.tmp`,
+  );
+  try {
+    await copyFile(opts.stagedBinaryPath, publishPath);
+    // The staged binary already carries the executable bit on POSIX, but
+    // it is set on the staged path, not inherited by a fresh copy under
+    // every umask - stamp it on the file that is actually published.
+    if (process.platform !== "win32") {
+      await chmod(publishPath, 0o755);
+    }
+    // Re-verify the copy. The staged bytes were verified at download
+    // time, but a short write or a hostile local actor between then and
+    // now would otherwise publish corrupt bytes: rename is
+    // byte-for-byte safe, copyFile is not.
+    if (opts.expectedSha256 !== null) {
+      const actual = await hashFileSha256(publishPath, null);
+      if (actual !== opts.expectedSha256) {
+        opts.logger.error(
+          "CLI upgrade cross-device copy hash mismatch",
+          { environment: opts.environment },
+          null,
+        );
+        await safeUnlink(publishPath, opts.environment, opts.logger);
+        throw cliError({
+          code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
+          message:
+            `cli upgrade: cross-device copy hash mismatch (expected ${opts.expectedSha256}, got ${actual}); ` +
+            `the live binary at ${opts.livePath} was left untouched`,
+          details: {
+            livePath: opts.livePath,
+            stagedBinaryPath: opts.stagedBinaryPath,
+            publishPath,
+            expectedSha256: opts.expectedSha256,
+            actualSha256: actual,
+          },
+          exitCode: 1,
+        });
+      }
+    }
+  } catch (prepareErr) {
+    if (prepareErr instanceof CliError) throw prepareErr;
+    await safeUnlink(publishPath, opts.environment, opts.logger);
+    const prepareCode = errnoCodeOf(prepareErr);
+    opts.logger.error(
+      "CLI upgrade cross-device copy failed",
+      {
+        environment: opts.environment,
+        errorCode: prepareCode ?? "unknown",
+      },
+      errorFromUnknown(prepareErr),
+    );
+    // The common cause is an install directory the user cannot write
+    // to - which is also why staging landed on another volume in the
+    // first place. There is no atomic publication without creating a
+    // file next to the live binary, so say what to fix rather than
+    // streaming bytes over the live path the way the old fallback did.
+    throw cliError({
+      code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
+      message:
+        `cli upgrade: could not stage the new binary next to ${opts.livePath} ` +
+        `(${prepareCode ?? "unknown error"}: ${prepareErr instanceof Error ? prepareErr.message : String(prepareErr)}). ` +
+        `The live binary was left untouched. Make ${liveDir} writable and re-run, or install the new ` +
+        "binary by hand and record it with 'traycer cli re-anchor --binary-path <path> --installed-version <version>'.",
+      details: {
+        livePath: opts.livePath,
+        liveDir,
+        stagedBinaryPath: opts.stagedBinaryPath,
+        publishPath,
+        errorCode: prepareCode,
+      },
+      exitCode: 1,
+    });
+  }
+
+  try {
+    await rename(publishPath, opts.livePath);
+  } catch (publishErr) {
+    const publishCode = errnoCodeOf(publishErr);
+    await safeUnlink(publishPath, opts.environment, opts.logger);
+    if (isBinaryLockedCode(publishCode)) {
+      // Same contract as the same-volume path: a held binary is a
+      // deferrable state, not a failure. The staged binary is still
+      // where the caller left it, so `pendingUpgrade` stays finalisable.
+      opts.logger.warn("CLI upgrade live binary is locked", {
+        environment: opts.environment,
+        errorCode: publishCode,
+        strategy: "cross-device",
+      });
+      return {
+        status: "locked",
+        errorMessage:
+          publishErr instanceof Error ? publishErr.message : String(publishErr),
+      };
+    }
+    opts.logger.error(
+      "CLI upgrade cross-device publication failed",
+      {
+        environment: opts.environment,
+        errorCode: publishCode ?? "unknown",
+      },
+      errorFromUnknown(publishErr),
+    );
+    throw cliError({
+      code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
+      message:
+        `cli upgrade: cross-device publication failed: ${publishErr instanceof Error ? publishErr.message : String(publishErr)}; ` +
+        `the live binary at ${opts.livePath} was left untouched`,
+      details: {
+        livePath: opts.livePath,
+        stagedBinaryPath: opts.stagedBinaryPath,
+        publishPath,
+      },
+      exitCode: 1,
+    });
+  }
+
+  // Published. The staged copy is now redundant; a lingering one is
+  // harmless, so its removal stays best-effort.
+  await safeUnlink(opts.stagedBinaryPath, opts.environment, opts.logger);
+  opts.logger.info("CLI upgrade live binary replacement succeeded", {
+    environment: opts.environment,
+    strategy: "cross-device-publish",
+  });
+  await refreshWellKnownSlot(opts.environment, opts.livePath, opts.logger);
+  return { status: "replaced", errorMessage: null };
+}
+
+// Codes that mean "the live binary is held open / not replaceable right
+// now" rather than "the upgrade is broken". Callers turn these into a
+// retained `pendingUpgrade` instead of an error.
+function isBinaryLockedCode(code: string | null): boolean {
+  return (
+    code === "EBUSY" ||
+    code === "EPERM" ||
+    code === "EACCES" ||
+    code === "ETXTBSY"
+  );
+}
+
+function errnoCodeOf(err: unknown): string | null {
+  return err !== null && typeof err === "object" && "code" in err
+    ? String((err as { code: unknown }).code)
+    : null;
+}
+
+async function safeUnlink(
+  path: string,
+  environment: Environment,
+  logger: ILogger,
+): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (unlinkErr) {
+    if (errnoCodeOf(unlinkErr) === "ENOENT") return;
+    logger.warn("CLI upgrade failed to remove temporary file", {
+      environment,
+      errorName: errorFromUnknown(unlinkErr).name,
+      errorMessage: errorFromUnknown(unlinkErr).message,
+    });
+  }
+}
+
+// Loose equality for a user-supplied `--target` assertion against the
+// feed's version. Only surface noise is normalised (whitespace, a
+// leading `v`) - `--target 1.2` never matches `1.2.0`, because the point
+// of the flag is to assert an EXACT build.
+function sameCliVersion(a: string, b: string): boolean {
+  return normalizeCliVersion(a) === normalizeCliVersion(b);
+}
+
+function normalizeCliVersion(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith("v") || trimmed.startsWith("V")
+    ? trimmed.slice(1)
+    : trimmed;
 }
 
 // Live CLI bytes just changed at `livePath`; refresh the well-known slot
@@ -591,6 +764,7 @@ export type FinalizePendingCliUpgradeOutcome =
   | { readonly status: "no-manifest" }
   | {
       readonly status: "staged-binary-missing";
+      readonly stagedVersion: string;
       readonly stagedBinaryPath: string;
     }
   | {
@@ -655,6 +829,7 @@ export async function finalizePendingCliUpgrade(opts: {
     });
     return {
       status: "staged-binary-missing",
+      stagedVersion: pending.version,
       stagedBinaryPath: pending.stagedBinaryPath,
     };
   }

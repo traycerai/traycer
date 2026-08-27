@@ -1345,21 +1345,29 @@ function registerServiceCommands(host: Command): void {
 function registerCliCommands(program: Command): void {
   const cli = program
     .command("cli")
-    .description("Manage the installed CLI binary (upgrade, re-anchor)");
+    .description(
+      "Manage the installed CLI binary: self-upgrade Desktop and manual installs, or re-anchor upgrade tracking after moving the binary by hand. Package-manager installs (Homebrew, npm, winget, Scoop, apt, rpm) are upgraded through their package manager, not here.",
+    );
 
   withRunner(
     cli
       .command("upgrade")
       .description(
-        "Self-upgrade the CLI binary; stages a pending swap when the live binary is locked",
+        "Download and install the CLI version Traycer's release feed currently publishes, replacing this binary. " +
+          "Only Desktop-installed and manual installs can self-upgrade: Homebrew, npm, winget, Scoop, apt and rpm installs are " +
+          "refused with their manager's upgrade command, so package ownership stays intact. " +
+          "Requires a recorded install - if none exists (for example after moving the binary by hand), run " +
+          "'traycer cli re-anchor --binary-path <path> --installed-version <version>' first. " +
+          "When the live binary is locked - usually because the host supervisor is running it - the new binary is staged and the " +
+          "swap is completed by the next 'traycer host restart'.",
       )
       .option(
         "--dry-run",
-        "Resolve the target version without staging or replacing",
+        "Report the version and download URL that would be installed, without downloading, staging or replacing anything",
       )
       .option(
         "--target <version>",
-        "Override the target version (defaults to latest)",
+        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets and cannot install older versions, so this asserts which build you expect rather than selecting one",
       ),
     (opts) =>
       buildCliUpgradeCommand({
@@ -1414,7 +1422,11 @@ function registerCliCommands(program: Command): void {
     cli
       .command("re-anchor")
       .description(
-        "Point Traycer's upgrade tracking at a CLI binary you installed or moved by hand, so future 'cli upgrade' runs update the right file. Use after manually relocating or replacing the binary.",
+        "Point Traycer's upgrade tracking at a CLI binary you installed or moved by hand, so future 'cli upgrade' runs update the right file. " +
+          "Use after manually relocating or replacing the binary, or when 'cli upgrade' reports no recorded install. " +
+          "Records the install as manual and clears any pending upgrade; it does not move the binary, and the version you pass is " +
+          "recorded as given - it is never checked against the binary. Refreshing Traycer's copy of the binary is best-effort: a " +
+          "failure there is reported but does not fail the command.",
       )
       .requiredOption(
         "--binary-path <path>",
@@ -1424,7 +1436,7 @@ function registerCliCommands(program: Command): void {
       // `--version` collision (see `cli mark-source`).
       .requiredOption(
         "--installed-version <version>",
-        "Version reported by the binary",
+        "Version this binary reports; recorded as given and never verified by running it",
       ),
     (opts) =>
       buildCliReAnchorCommand({

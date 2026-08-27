@@ -60,6 +60,16 @@ export type FinalizeSwapOutcome =
       readonly serviceStartError: string | null;
     }
   | { readonly status: "swap-failed"; readonly errorMessage: string }
+  // The manifest still records a pendingUpgrade, but the file it points
+  // at is gone (audit CLI-015). Kept distinct from `no-pending`: the two
+  // describe opposite persisted states, and collapsing them reported
+  // "nothing to finalize" while the manifest was still asking every
+  // future restart to finalize a file that no longer exists.
+  | {
+      readonly status: "staged-binary-missing";
+      readonly stagedVersion: string;
+      readonly stagedBinaryPath: string;
+    }
   | { readonly status: "no-pending" }
   | { readonly status: "lock-timeout" };
 
@@ -81,12 +91,39 @@ export async function runFinalizeUpgradeSwap(opts: {
     status: swap.status,
   });
 
-  if (
-    swap.status === "no-pending" ||
-    swap.status === "no-manifest" ||
-    swap.status === "staged-binary-missing"
-  ) {
+  if (swap.status === "no-pending" || swap.status === "no-manifest") {
     return { status: "no-pending" };
+  }
+
+  if (swap.status === "staged-binary-missing") {
+    // The pending record outlived the file it points at (cleanup, AV,
+    // a wiped tmpdir). `pendingUpgrade` is deliberately RETAINED rather
+    // than cleared: it is the only remaining evidence that the user
+    // asked for an upgrade they never received, and Doctor already
+    // renders it as "CLI upgrade staged but staged binary is missing"
+    // with `traycer cli upgrade` as the recovery command. Clearing it
+    // here would silently erase that request; re-downloading here would
+    // turn the finalize helper - which runs detached, after its parent
+    // exited - into a network operation nobody is watching.
+    //
+    // The marker reuses the `swap-failed` status on purpose. Marker
+    // files cross CLI versions (the STAGED binary writes one, the
+    // still-LIVE older binary reads it), and an unrecognised status
+    // reads as `marker-invalid` on every already-installed CLI. The
+    // errorMessage carries the distinction that matters.
+    await writePostFinalizeMarkerFile(markerPath, {
+      status: "swap-failed",
+      attemptedAt: new Date().toISOString(),
+      livePath: "",
+      stagedBinaryPath: swap.stagedBinaryPath,
+      errorMessage: `staged binary for ${swap.stagedVersion} is missing at ${swap.stagedBinaryPath}`,
+      serviceStartError: null,
+    });
+    return {
+      status: "staged-binary-missing",
+      stagedVersion: swap.stagedVersion,
+      stagedBinaryPath: swap.stagedBinaryPath,
+    };
   }
 
   if (swap.status === "still-locked") {
@@ -146,6 +183,12 @@ function humanForOutcome(outcome: FinalizeSwapOutcome): string {
         : `finalized cli upgrade ${outcome.previousVersion} -> ${outcome.version}`;
     case "swap-failed":
       return `cli finalize-upgrade: swap failed (${outcome.errorMessage}); pending state retained`;
+    case "staged-binary-missing":
+      return (
+        `cli finalize-upgrade: staged binary for ${outcome.stagedVersion} is missing at ` +
+        `${outcome.stagedBinaryPath}; pending state retained. ` +
+        "Re-run 'traycer cli upgrade' to re-stage it."
+      );
     case "no-pending":
       return "cli finalize-upgrade: nothing to finalize";
     case "lock-timeout":

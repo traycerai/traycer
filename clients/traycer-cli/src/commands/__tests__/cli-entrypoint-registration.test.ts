@@ -894,6 +894,26 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--target");
   });
 
+  it("cli upgrade --help names the package-manager refusal, the re-anchor prerequisite, and documents --target as an assertion rather than a version selector (audit CLI-016)", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["cli", "upgrade"]);
+    const help = cmd.helpInformation();
+
+    // Package-manager ownership boundary - self-upgrade is refused for
+    // package-manager installs, not silently no-op'd.
+    expect(help).toMatch(/homebrew|package manager/i);
+
+    // Re-anchor prerequisite when no manifest exists.
+    expect(help).toContain("cli re-anchor");
+
+    // `--target` is a guard/assertion against the release feed, not a
+    // selector that can install an arbitrary historical version.
+    const targetOption = cmd.options.find((o) => o.long === "--target");
+    expect(targetOption).toBeDefined();
+    expect(targetOption?.description).toMatch(/fail unless/i);
+    expect(targetOption?.description).not.toMatch(/^override/i);
+  });
+
   it("hides internal agent hook commands from agent help", () => {
     const program = buildProgram();
     const agent = expectCommand(program, ["agent"]);

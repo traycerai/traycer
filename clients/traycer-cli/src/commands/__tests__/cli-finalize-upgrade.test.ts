@@ -292,13 +292,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     });
   });
 
-  it.each(["no-pending", "no-manifest", "staged-binary-missing"])(
+  it.each(["no-pending", "no-manifest"])(
     "on %s, writes no marker and never starts the service",
     async (status) => {
-      mocks.finalizeResult =
-        status === "staged-binary-missing"
-          ? { status, stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0" }
-          : { status };
+      mocks.finalizeResult = { status };
 
       const { cliFinalizeUpgradeCommand } =
         await import("../cli-finalize-upgrade");
@@ -309,6 +306,35 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       expect(existsSync(markerPath())).toBe(false);
     },
   );
+
+  it("on staged-binary-missing, keeps the distinct status, writes a 'swap-failed' marker naming the missing staged path, and never starts the service", async () => {
+    mocks.finalizeResult = {
+      status: "staged-binary-missing",
+      stagedVersion: "1.5.0",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+    };
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    const result = await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual([]);
+    expect(result.data).toEqual({
+      status: "staged-binary-missing",
+      stagedVersion: "1.5.0",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+    });
+    expect(existsSync(markerPath())).toBe(true);
+    const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
+    expect(marker).toMatchObject({
+      status: "swap-failed",
+      livePath: "",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      errorMessage:
+        "staged binary for 1.5.0 is missing at /opt/traycer/cli/traycer-1.5.0",
+      serviceStartError: null,
+    });
+  });
 
   it("on a cli-lock timeout, writes no marker, never runs the swap, and does not throw", async () => {
     // `cli-finalize-upgrade.ts` checks `err instanceof CliError` against

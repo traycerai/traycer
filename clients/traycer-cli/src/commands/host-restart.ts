@@ -242,7 +242,7 @@ function humanForRestart(
     case "still-locked":
       return `${reconcilePrefix}${base}; cli upgrade ${outcome.stagedBinaryPath} still locked (${outcome.errorMessage}) - pending state retained`;
     case "staged-binary-missing":
-      return `${reconcilePrefix}${base}; cli upgrade staged binary ${outcome.stagedBinaryPath} missing - re-run 'traycer cli upgrade'`;
+      return `${reconcilePrefix}${base}; cli upgrade staged binary for ${outcome.stagedVersion} missing at ${outcome.stagedBinaryPath} - re-run 'traycer cli upgrade'`;
     case "no-pending":
     case "no-manifest":
       return `${reconcilePrefix}${base}`;
