@@ -212,6 +212,7 @@ export function useChatTimelineFollowLatch(
   const readerGestureGenerationRef = useRef(0);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
+  const pendingEndCorrectionScrollRef = useRef<Promise<void> | null>(null);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   const lastTouchClientYRef = useRef<number | null>(null);
 
@@ -345,7 +346,14 @@ export function useChatTimelineFollowLatch(
           return;
         }
         correction.attempts += 1;
-        void list.scrollToEnd({ animated: false });
+        const pendingScroll = list.scrollToEnd({ animated: false });
+        pendingEndCorrectionScrollRef.current = pendingScroll;
+        const clearPendingScroll = (): void => {
+          if (pendingEndCorrectionScrollRef.current === pendingScroll) {
+            pendingEndCorrectionScrollRef.current = null;
+          }
+        };
+        void pendingScroll.then(clearPendingScroll, clearPendingScroll);
         scheduleValidation();
       };
 
@@ -467,7 +475,21 @@ export function useChatTimelineFollowLatch(
     }
     if (tryReattachReader(node, geometry)) return;
     if (!permissionRef.current) return;
-    if (armedReaderDepartureRef.current !== null) {
+    const armedDeparture = armedReaderDepartureRef.current;
+    if (armedDeparture !== null) {
+      if (
+        armedDeparture.source === "gesture" &&
+        pendingEndCorrectionScrollRef.current !== null
+      ) {
+        // LegendList may still be waiting for data/layout readiness before it
+        // executes an already-issued scrollToEnd. Supersede that stale command
+        // with the reader's landed offset before publishing free-scrolling.
+        pendingEndCorrectionScrollRef.current = null;
+        void listRef.current?.scrollToOffset({
+          offset: geometry.scrollTop,
+          animated: false,
+        });
+      }
       armedReaderDepartureRef.current = null;
       setFollowIntent(false);
       return;
