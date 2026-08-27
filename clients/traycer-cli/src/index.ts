@@ -813,8 +813,15 @@ function registerHostCommands(program: Command): void {
       // command can replace the `traycer` binary itself. Someone restarting the
       // host to clear a hang deserves to know that before their CLI version
       // changes under them.
+      //
+      // "attempts"/"may" rather than "completes", because the finalize is
+      // explicitly non-fatal: a missing staged binary, a still-locked binary on
+      // a read-only install, or a Windows helper that only gets SCHEDULED all
+      // return exit 0 with the pending upgrade retained. Promising completion
+      // would be the same false-status defect this PR removes elsewhere; the
+      // human result already reports which of those actually happened.
       .description(
-        "Restart the host service. If a CLI self-upgrade is waiting to be applied, this completes it too, replacing the 'traycer' binary.",
+        "Restart the host service. If a CLI self-upgrade is waiting to be applied, this also attempts to finalize it, which may replace the 'traycer' binary.",
       )
       // Hidden: the CLI-owned activation mode (desktop controller's
       // idle-gated restart cycle), not a user-facing switch - see

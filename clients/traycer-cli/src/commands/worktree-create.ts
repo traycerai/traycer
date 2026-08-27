@@ -211,13 +211,23 @@ export function formatWorktreeCreateResult(
         // `resolveWorktreeBranchSelection` rejects `--carry-uncommitted`
         // alongside `--existing`, so an `existing` create has nothing to
         // report here rather than a "no" a reader would have to interpret.
+        //
+        // The carrying case is reported as INTENT, not as an outcome, and the
+        // distinction is load-bearing. The response says a worktree was
+        // created; it does not say whether any WIP came with it. Carry is
+        // best-effort on the host - an unresolvable carry root, a failed stash
+        // replay, an unreadable untracked file - and none of those turn the
+        // create into a failed `perEntry`. Printing "carried" off the request
+        // flag would state as fact something this command cannot observe, which
+        // is the class of false human status CLI-020 exists to remove. The
+        // not-carrying case IS certain: nothing was asked for, so nothing moved.
         ...(branch.type === "existing"
           ? []
           : ([
               [
                 "Uncommitted changes",
                 branch.carryUncommittedChanges
-                  ? "carried from the source workspace when valid"
+                  ? "carry requested - best effort, confirm in the new worktree"
                   : "left in the source workspace",
               ],
             ] satisfies [string, string][])),

@@ -325,7 +325,9 @@ describe("formatWorktreeCreateResult", () => {
     expect(summary).toContain(WORKSPACE);
     expect(summary).toContain("acme/web");
     expect(summary).toContain("worktree");
-    expect(summary).toContain("carried from the source workspace when valid");
+    expect(summary).toContain(
+      "carry requested - best effort, confirm in the new worktree",
+    );
   });
 
   it("new-branch success: the carry row reads 'left in the source workspace' when not carrying", () => {

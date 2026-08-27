@@ -37,9 +37,14 @@ export function addRunnerFlags(cmd: Command): Command {
       // `unknown option` failure and cost the renderer's host-failure card its
       // bootstrap.log tail on exactly the machines that are already broken.
       // Delete the token only once that compatibility window has closed.
+      // Describes what it does TODAY, not what it is expected to become.
+      // `host status` still reads `runtime.noBootstrap`, so calling this a
+      // no-op here would contradict the live contract in the one place a
+      // maintainer looks to learn it - and the removal it anticipates is on
+      // another branch and may not land first.
       new Option(
         "--no-bootstrap",
-        "Deprecated no-op, accepted so older callers keep parsing",
+        "Compatibility option for older callers: skips the implicit provisioning 'host status' performs. No effect on any other command; becomes a no-op everywhere once that provisioning is removed.",
       ).hideHelp(),
     );
 }
