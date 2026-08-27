@@ -738,7 +738,7 @@ function publishHeaderStripDragState(input: {
   readonly headerTab: HeaderTabDragData;
   readonly geometry: StripDragGeometry | null;
   readonly pointerX: number;
-}): number | null {
+}): string | null {
   const dndStore = useEpicDndStore.getState();
   const contentOriginX = readHeaderStripContentOriginX();
   const { headerTab } = input;
@@ -777,7 +777,7 @@ function publishHeaderStripDragState(input: {
       : null,
   );
   if (next.kind !== "merge-armed") return null;
-  return Math.max(0, next.armedAtMs + MERGE_DWELL_MS - nowMs);
+  return `${next.targetItemId}:${next.armedAtMs}`;
 }
 
 /**
@@ -1152,7 +1152,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const publishStripState = useCallback(
     (headerTab: HeaderTabDragData, pointerX: number) => {
       lastHeaderDrag = { headerTab, pointerX };
-      const dwellMs = publishHeaderStripDragState({
+      const dwellKey = publishHeaderStripDragState({
         headerTab,
         geometry: activeHeaderStripGeometry,
         pointerX,
@@ -1160,7 +1160,10 @@ export function RootDndProvider(props: RootDndProviderProps) {
       // A pending dwell means the model is armed; hand it to the latch, which
       // owns the timer that will wake it.
       headerMergeDwell().observe({
-        key: dwellMs === null ? null : `merge:${headerTab.stripItemId}`,
+        key:
+          dwellKey === null
+            ? null
+            : `merge:${headerTab.stripItemId}:${dwellKey}`,
         point: { x: pointerX, y: 0 },
         nowMs: performance.now(),
       });
