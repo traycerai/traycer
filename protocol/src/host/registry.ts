@@ -515,6 +515,7 @@ import {
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV10,
+  hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -8482,10 +8483,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsCloudFeedSubscribeV11,
         },
       },
     },

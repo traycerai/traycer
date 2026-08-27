@@ -11,6 +11,10 @@ import {
   hiddenHostNotificationKinds,
   hostNotificationEntrySchema,
   hostNotificationEntrySchemaV21,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
+  hostNotificationsCloudFeedSubscribeV10,
+  hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsListDowngradeV21ToV10,
@@ -169,6 +173,37 @@ describe("released schemas stay frozen", () => {
     ).toBe(false);
   });
 
+  it("leaves the cloud feed @1.0 frame unable to carry the new arm, @1.1 able", () => {
+    const snapshot = (rows: unknown[]): unknown => ({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 3,
+      rows,
+      summary: { totalCount: rows.length, unreadCount: 1, attentionCount: 0 },
+    });
+    const row = {
+      entryId: "0195a1f0-0001-7000-8000-00000000000a",
+      originHostId: "host-a",
+      coalesceKey: "worktree.deletion:wt-1",
+      entry: OPERATION_FINISHED_ENTRY,
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+    // The live bug this pins against: the cloud relay validated every row
+    // against the frozen V1 union, so this exact row was silently dropped
+    // AFTER being counted into the badge.
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.safeParse(
+        snapshot([row]),
+      ).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV11.safeParse(
+        snapshot([row]),
+      ).success,
+    ).toBe(true);
+  });
+
   it("keeps the released contracts byte-identical to their frozen sources", () => {
     const dump = (schema: z.ZodType): unknown =>
       z.toJSONSchema(schema, { unrepresentable: "any" });
@@ -183,6 +218,18 @@ describe("released schemas stay frozen", () => {
     expect(
       dump(hostNotificationsFeedSubscribeV10.serverFrameSchema),
     ).not.toEqual(dump(hostNotificationsFeedSubscribeV11.serverFrameSchema));
+    // Same discipline for the cloud feed's own minor pair.
+    expect(
+      dump(hostNotificationsCloudFeedSubscribeV10.openRequestSchema),
+    ).toEqual(dump(hostNotificationsCloudFeedSubscribeV11.openRequestSchema));
+    expect(
+      dump(hostNotificationsCloudFeedSubscribeV10.clientFrameSchema),
+    ).toEqual(dump(hostNotificationsCloudFeedSubscribeV11.clientFrameSchema));
+    expect(
+      dump(hostNotificationsCloudFeedSubscribeV10.serverFrameSchema),
+    ).not.toEqual(
+      dump(hostNotificationsCloudFeedSubscribeV11.serverFrameSchema),
+    );
     // Requests are untouched by the response widening.
     expect(dump(hostNotificationsListV20.requestSchema)).toEqual(
       dump(hostNotificationsListV21.requestSchema),
@@ -215,6 +262,18 @@ describe("registry wiring", () => {
     const line = hostStreamRpcRegistry["host.notifications.subscribe"][1];
     expect(line.latestMinor).toBe(0);
     expect(Object.keys(line.versions)).toEqual(["0"]);
+  });
+
+  it("advertises cloud feed @1.1 with @1.0 still installed for older peers", () => {
+    const line =
+      hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1];
+    expect(line.latestMinor).toBe(1);
+    expect(line.versions[0].contract).toBe(
+      hostNotificationsCloudFeedSubscribeV10,
+    );
+    expect(line.versions[1].contract).toBe(
+      hostNotificationsCloudFeedSubscribeV11,
+    );
   });
 });
 
@@ -255,6 +314,16 @@ describe("negotiated-version visibility projection", () => {
         version: { major: 1, minor: 0 },
         sees: false,
       },
+      {
+        surface: { method: "host.notifications.cloudFeed.subscribe" },
+        version: { major: 1, minor: 0 },
+        sees: false,
+      },
+      {
+        surface: { method: "host.notifications.cloudFeed.subscribe" },
+        version: { major: 1, minor: 1 },
+        sees: true,
+      },
     ];
     for (const { surface, version, sees } of cases) {
       const visible = visibleHostNotificationKinds(surface, version);
@@ -280,6 +349,7 @@ describe("negotiated-version visibility projection", () => {
       { method: "host.notifications.list" } as const,
       { method: "host.notifications.feed.subscribe" } as const,
       { method: "host.notifications.subscribe" } as const,
+      { method: "host.notifications.cloudFeed.subscribe" } as const,
     ]) {
       for (const version of [
         { major: 3, minor: 0 },
