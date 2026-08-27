@@ -178,24 +178,30 @@ function accountDescription(state: ProviderCliState | undefined): ReactNode {
  * leave most of a dozen-plus rows off, and offering to sign a user in to a CLI
  * they have never installed is an invitation to a failure.
  *
- * "Off" is not itself evidence of a missing account, though, and the two
- * directions are not symmetric. NEGATIVE evidence is genuinely unavailable
- * here - a disabled provider's credentials are never probed
- * (`resolveAuthState` short-circuits it rather than spawning its CLI), so the
- * row cannot report a signed-out verdict to key on, and the sign-in itself is
- * what discovers whether there was an account to find. POSITIVE evidence needs
- * no probe and is therefore honoured: a configured API key is stored config,
- * and an already-`authenticated` ambient verdict is a real answer that
- * outlived whatever switched the provider off. Both mean the row is one
- * TOGGLE away from working, and the switch beside this affordance is that
- * toggle - so offering a login would send the user through an OAuth round trip
- * to arrive where they already were.
+ * "Off" is not itself evidence of a missing account. A configured API key is
+ * stored config that needs no probe, and it is the case that was actively
+ * wrong rather than merely redundant: an API-key-only provider ships no
+ * `oauthArgs`, so it fell to `providerSignInUnavailableHint`'s first branch
+ * and rendered the affordance's "Not signed in" fallback over a key the user
+ * had already set, under a hint telling them to go set one.
  *
- * The API-key case is the one that was actively wrong rather than merely
- * redundant. An API-key-only provider ships no `oauthArgs`, so it fell to
- * `providerSignInUnavailableHint`'s first branch and rendered the affordance's
- * "Not signed in" fallback over a key the user had already set, under a hint
- * telling them to go set one.
+ * THIS PREDICATE DECIDES MOUNTING, which constrains what may be read here far
+ * more than correctness alone would. `SignInToEnableButton` owns the attempt,
+ * and the enable runs from a per-`mutate` `onSuccess` that TanStack DROPS once
+ * the observer unmounts (spelled out in `use-host-scoped-mutation.ts`). So an
+ * input that flips as a RESULT of the attempt unmounts the row mid-flight and
+ * strands it: the account authenticates and the provider stays off, which is
+ * the single outcome this button exists to prevent.
+ *
+ * `state.enabled` flips that way and is safe only because it flips when the
+ * work is DONE. The ambient auth verdict is not safe: `awaitLogin`'s own
+ * `onSuccess` overlays the authenticated echo into `providers.list` and awaits
+ * that invalidation BEFORE the per-`mutate` callback runs, so keying on it
+ * unmounts the row in precisely the window the enable still needs. It belongs
+ * to the button's own already-signed-in branch instead, where it changes what
+ * a press DOES without changing whether the row is there to press.
+ *
+ * Read only inputs that are constant across an attempt.
  */
 function providerNeedsSignInToEnable(
   state: ProviderCliState,
@@ -208,7 +214,6 @@ function providerNeedsSignInToEnable(
   // exactly backwards for the one provider that is always signed in.
   if (state.providerId === "traycer") return false;
   if (state.apiKey.configured) return false;
-  if (isProviderAmbientAuthenticated(state)) return false;
   return !state.enabled && installDetected;
 }
 
@@ -315,34 +320,36 @@ function SignInToEnableButton(props: {
   // render "did not start" and "did not complete" together - the second one
   // describing an attempt the user had already moved on from.
   //
-  // Both phases below read ONE verdict rather than each testing the status
-  // itself, so they cannot stop being exact complements.
+  // Both phases below derive from ONE flag rather than each testing the auth
+  // state itself, so they cannot stop being exact complements. As independent
+  // comparisons they agreed only while both spelled the check the same way,
+  // and any change to one would make "did not complete" and "awaiting enable"
+  // simultaneously true - a failure message on a button that is in fact about
+  // to enable.
   //
-  // As two independent comparisons they only agreed while both spelled the
-  // check the same way. The ambient verdict is true in cases a top-level
-  // `=== "authenticated"` is not, so changing one and not the other makes
-  // "did not complete" and "awaiting enable" simultaneously true - a failure
-  // message on a button that is in fact about to retry the enable. Deriving
-  // both from `attemptAuthenticated` removes the second copy that could drift.
+  // The account is signed in EITHER because this attempt just signed it in, or
+  // because it already was before the user pressed - a provider switched off
+  // by hand keeps its account. Both mean the remaining gesture is the ENABLE
+  // alone, so both take the same branch.
+  //
+  // Restarting a login in that state is not merely wasteful: a CLI that
+  // refuses to start one while already signed in answers `started: false`, so
+  // the press would render "sign-in did not start" and the button could never
+  // complete the action it advertises. The user's only way out would be
+  // leaving onboarding.
+  //
+  // Read here rather than in `providerNeedsSignInToEnable` deliberately - see
+  // that function for why an attempt-dependent input must never reach the
+  // MOUNT decision. Here it changes what a press does; there it would delete
+  // the row mid-attempt and strand the enable.
   const attemptAuthenticated =
     awaitLogin.isSuccess &&
     awaitLogin.data.state !== null &&
     isProviderAmbientAuthenticated(awaitLogin.data.state);
+  const authenticatedAwaitingEnable =
+    attemptAuthenticated || isProviderAmbientAuthenticated(state);
   const notAuthenticated =
-    !isPending && awaitLogin.isSuccess && !attemptAuthenticated;
-  // This attempt DID authenticate, and the row is still off - so the enable was
-  // the half that failed (this button only renders while `!state.enabled`).
-  //
-  // A press then has to retry the ENABLE, not the login. Restarting the login
-  // is not merely wasteful: a CLI that refuses to start one while an account is
-  // already signed in answers `started: false`, so the retry would render "sign
-  // in did not start" and the button could never complete the action it
-  // advertises. The user's only way out would be leaving onboarding.
-  //
-  // Derived rather than latched: `awaitLogin` already holds this attempt's
-  // verdict, and `onSignIn` resets it, so the phase begins and ends with the
-  // attempt it describes.
-  const authenticatedAwaitingEnable = attemptAuthenticated;
+    !isPending && awaitLogin.isSuccess && !authenticatedAwaitingEnable;
   const onSignIn = (providerId: ProviderId): void => {
     // Scope the await result to THIS attempt. `startLogin.mutate` resets its
     // own result and so clears `declined` on its own; `awaitLogin` is a

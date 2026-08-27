@@ -357,12 +357,16 @@ describe("OnboardingDetectedAgents", () => {
     expect(screen.getByRole("switch", { name: /^Enable / })).toBeTruthy();
   });
 
-  it("shows only the toggle for a disabled provider that is already signed in", () => {
-    // A provider the user deliberately switched off keeps its account. Offering
-    // a login here sends them through an OAuth round trip to arrive exactly
-    // where they already were - and a CLI that refuses to start a login while
-    // signed in answers `started: false`, so the button would report a failure
-    // for a state that is not one.
+  it("enables directly, without a login, for a disabled provider that is already signed in", () => {
+    // A provider the user deliberately switched off keeps its account, so the
+    // remaining gesture is the ENABLE. Starting an OAuth round trip would
+    // arrive exactly where they already were - and a CLI that refuses to start
+    // a login while signed in answers `started: false`, so the press would
+    // report a failure for a state that is not one.
+    //
+    // The row still MOUNTS: the auth verdict decides what a press does, never
+    // whether the row exists. Keying mounting on it is what strands the enable
+    // (see the mid-attempt test below).
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -376,10 +380,10 @@ describe("OnboardingDetectedAgents", () => {
     ];
     render(<OnboardingDetectedAgents />);
 
-    expect(
-      screen.queryByRole("button", { name: /sign in to enable/i }),
-    ).toBeNull();
-    expect(screen.getByRole("switch", { name: /^Enable / })).toBeTruthy();
+    fireEvent.click(signInButton());
+
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.startLoginMutate).not.toHaveBeenCalled();
   });
 });
 
@@ -926,5 +930,56 @@ describe("SignInToEnableButton pending lifecycle", () => {
     });
     view.rerender(<OnboardingDetectedAgents />);
     expect(signInButton()).toHaveProperty("disabled", false);
+  });
+});
+
+// The row is where the enable lives, so anything that can unmount it mid-
+// attempt can strand a successful sign-in with the provider still off.
+describe("SignInToEnableButton mount survival", () => {
+  afterEach(resetFixtures);
+
+  it("stays mounted when the authenticated echo lands before the completion callback", () => {
+    // `awaitLogin`'s own `onSuccess` overlays the authenticated echo into
+    // `providers.list` and AWAITS that invalidation before TanStack runs the
+    // per-`mutate` `onSuccess` this button enables from - and TanStack drops
+    // those per-call callbacks once the observer unmounts
+    // (`use-host-scoped-mutation.ts`). So a mount gate that reads the ambient
+    // auth verdict deletes this row in exactly that window: the account
+    // authenticates and the provider stays OFF, which is the single outcome
+    // this button exists to prevent.
+    const view = startSignInAttempt(false);
+
+    // The overlay: authenticated now, still disabled.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+
+    // The precondition TanStack actually requires of us.
+    expect(
+      screen.queryByRole("button", { name: /sign in to enable/i }),
+    ).not.toBeNull();
+
+    // ...and so the completion still reaches the enable.
+    act(() => {
+      latestAwaitLoginOptions().onSuccess({
+        state: {
+          auth: { status: "authenticated" },
+          authPending: false,
+          profiles: [],
+        },
+      });
+    });
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
   });
 });
