@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { TerminalStreamClient } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import { useHostClient } from "@/lib/host";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -129,6 +129,16 @@ export function useTerminalSessionHandle(
     null,
   );
 
+  // The previous acquire effect's cleanup runs AFTER this commit's layout
+  // effects, so a disappearing `transportKey` is visible to `release` as
+  // `transportAlive: false`. The captured effect-local key is still the
+  // old non-null value; a render-time ref write is forbidden (`react-hooks/refs`).
+  const transportReadyRef = useRef(false);
+  useLayoutEffect(() => {
+    transportReadyRef.current =
+      transportKey !== null && ownerIdentityKey !== null;
+  }, [transportKey, ownerIdentityKey]);
+
   useEffect(() => {
     creationConfigRef.current = {
       cols: args.cols,
@@ -230,7 +240,7 @@ export function useTerminalSessionHandle(
     setHandle(next);
 
     return () => {
-      registry.release(args.instanceId, next);
+      registry.release(args.instanceId, next, transportReadyRef.current);
     };
     // `openTransport` is referentially stable and reads its deps live;
     // `transportKey` already encodes user + host + endpoint identity;
