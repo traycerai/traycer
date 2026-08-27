@@ -104,6 +104,7 @@ function rangeResponse(input: {
     rowIds: [...input.rowIds],
     messages: [...input.messages],
     events: [...(input.events ?? [])],
+    rowContext: {},
     reachedStart: input.fromOrdinal === 0,
     reachedEnd: false,
   };

@@ -5,6 +5,7 @@ import type {
   TranscriptRowDescriptor,
   TranscriptRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
@@ -133,6 +134,20 @@ export interface TranscriptRangeSlice {
   /** Deduplicated union of the records the served rows render from. */
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
+  /**
+   * Per-row projection context, by row id - see {@link TranscriptRowContext}.
+   *
+   * A MAP holding only the rows that have something to say, not a parallel
+   * array to {@link rowIds}. Most rows render from their own records alone, and
+   * a parallel array would spend two bytes plus a separator on `{}` for every
+   * one of them - about 13 KB across the 4,378-row response that already drove
+   * this frame past its budget once.
+   *
+   * Keyed by row id rather than by ordinal offset because that is what the
+   * client matches on everywhere else here, and an offset would break the
+   * moment a response was applied at a different `fromOrdinal` than requested.
+   */
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   /** The span reaches the first row of the transcript. */
   readonly reachedStart: boolean;
   /** The span reaches the last row of the transcript. */
@@ -257,6 +272,7 @@ export function sliceTranscriptRange(
     rowIds: [],
     messages: [],
     events: [],
+    rowContext: {},
     reachedStart: true,
     reachedEnd: true,
     truncatedAtOrdinal: undefined,
@@ -280,6 +296,7 @@ export function sliceTranscriptRange(
   const rowIds: string[] = [];
   const messages: Message[] = [];
   const events: ChatEvent[] = [];
+  const rowContext: Record<string, TranscriptRowContext> = {};
   const seenMessageIds = new Set<string>();
   const seenEventIds = new Set<string>();
   let spent = 0;
@@ -302,6 +319,15 @@ export function sliceTranscriptRange(
     // plus a separator. Charging only the records is what let 4,378 small rows
     // overshoot a 1 MiB budget by 148 KB.
     let cost = encodedElementBytes(rows[ordinal].rowId);
+    // Context is part of the frame, so it is part of the budget. Charged only
+    // when the row has some - an empty one is not serialized at all.
+    const context = rows[ordinal].context;
+    const hasContext = Object.keys(context).length > 0;
+    if (hasContext) {
+      cost +=
+        encodedElementBytes(rows[ordinal].rowId) +
+        utf8ByteLength(JSON.stringify(context));
+    }
     for (const messageId of needed.messageIds) {
       if (seenMessageIds.has(messageId)) continue;
       const message = lookup.messagesById.get(messageId);
@@ -326,6 +352,7 @@ export function sliceTranscriptRange(
     }
     spent += cost;
     rowIds.push(rows[ordinal].rowId);
+    if (hasContext) rowContext[rows[ordinal].rowId] = context;
     for (const message of freshMessages) {
       seenMessageIds.add(message.messageId);
       messages.push(message);
@@ -341,6 +368,7 @@ export function sliceTranscriptRange(
     rowIds,
     messages,
     events,
+    rowContext,
     reachedStart: from === 0,
     // Truncation means the span did not finish, so it cannot have reached the
     // end even when the REQUEST named the last row.

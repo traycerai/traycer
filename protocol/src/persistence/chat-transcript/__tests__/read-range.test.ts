@@ -69,6 +69,7 @@ function userRow(message: Message): TranscriptRowDescriptor {
     rowId: message.messageId,
     createdAt: message.timestamp,
     source: { kind: "user", messageId: message.messageId },
+    context: {},
   };
 }
 
@@ -77,6 +78,7 @@ function forkRow(event: ChatEvent): TranscriptRowDescriptor {
     rowId: `forked-chat-link:${event.eventId}`,
     createdAt: event.timestamp,
     source: { kind: "forked-chat-link", eventId: event.eventId },
+    context: {},
   };
 }
 
@@ -99,6 +101,7 @@ function sliceRows(
       synthesizedBoundary: false,
       decoratingEventIds: [],
     },
+    context: {},
   }));
 }
 
@@ -158,6 +161,7 @@ describe("sliceTranscriptRange", () => {
       rowIds: [],
       messages: [],
       events: [],
+      rowContext: {},
       reachedStart: true,
       reachedEnd: true,
       truncatedAtOrdinal: undefined,
@@ -442,6 +446,7 @@ describe("the frame ceiling", () => {
       rowId: `${message.messageId}:${"x".repeat(200)}`,
       createdAt: message.timestamp,
       source: { kind: "user", messageId: message.messageId },
+      context: {},
     }));
 
     const request = {
@@ -777,6 +782,7 @@ describe("a row's records are enumerated, not inferred", () => {
         eventId: "e-1",
         triggeringMessageId: "m-1",
       },
+      context: {},
     };
 
     const slice = sliceTranscriptRange(
@@ -803,6 +809,7 @@ describe("a row's records are enumerated, not inferred", () => {
         eventId: "e-1",
         triggeringMessageId: "m-gone",
       },
+      context: {},
     };
 
     const slice = sliceTranscriptRange(

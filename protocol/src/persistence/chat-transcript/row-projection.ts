@@ -4,6 +4,12 @@ import type {
   Message,
   UserMessage,
 } from "@traycer/protocol/persistence/epic/messages";
+import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/senders";
+
+import {
+  EMPTY_ROW_CONTEXT,
+  type TranscriptRowContext,
+} from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
@@ -179,6 +185,14 @@ export interface TranscriptRowDescriptor {
    */
   readonly createdAt: number;
   readonly source: TranscriptRowSource;
+  /**
+   * What this row renders WITH - see {@link TranscriptRowContext}.
+   *
+   * Always an object, never absent, so a consumer reads fields rather than
+   * branching on the container first. Empty for the many rows whose rendering
+   * depends on nothing around them.
+   */
+  readonly context: TranscriptRowContext;
 }
 
 export interface TranscriptRowProjectionInput {
@@ -666,9 +680,18 @@ export function projectTranscriptRows(
   // walk-order dependent, not `createdAt`-order dependent, which is why this
   // module fixes the walk order rather than sorting first.
   let lastUserTimestamp: number | null = null;
+  // The session anchor in effect at this point of the walk. Updated from EVERY
+  // user record - including a nested-steered one, which the ordinal walk below
+  // skips entirely. The renderer's `profileLabelsByTurnKeyFromMessages` does
+  // not skip it either, and an anchor that disagreed with the renderer's would
+  // be worse than none.
+  let currentSessionAnchor: ChatSessionAnchor | null = null;
 
   for (const message of input.messages) {
     if (message.role === "user") {
+      if (message.sessionAnchor !== null) {
+        currentSessionAnchor = message.sessionAnchor;
+      }
       // A steered user record is a mid-turn interjection rendered inside its
       // turn. Updating the anchor here would mis-anchor a LATER turn on the
       // steer instant, so it is skipped entirely, not merely un-emitted.
@@ -678,6 +701,7 @@ export function projectTranscriptRows(
         rowId: message.messageId,
         createdAt: message.timestamp,
         source: { kind: "user", messageId: message.messageId },
+        context: EMPTY_ROW_CONTEXT,
       });
       continue;
     }
@@ -694,6 +718,7 @@ export function projectTranscriptRows(
         activeTurnId: input.activeTurnId,
         stopped: stoppedByTurnKey.get(turnKey) ?? null,
         decoratingEventIdsByTurnKey,
+        sessionAnchor: currentSessionAnchor,
       }),
     );
   }
@@ -714,6 +739,7 @@ export function projectTranscriptRows(
         eventId: entry.stopped.eventId,
         triggeringMessageId: entry.triggeringMessageId,
       },
+      context: EMPTY_ROW_CONTEXT,
     });
   }
 
@@ -727,6 +753,7 @@ export function projectTranscriptRows(
       rowId: forkedChatLinkRowId(event.eventId),
       createdAt: event.timestamp,
       source: { kind: "forked-chat-link", eventId: event.eventId },
+      context: EMPTY_ROW_CONTEXT,
     });
   }
   for (const event of input.events) {
@@ -735,6 +762,7 @@ export function projectTranscriptRows(
       rowId: chatTranscriptEventRowId(event.eventId),
       createdAt: event.timestamp,
       source: { kind: "notification-anchor", eventId: event.eventId },
+      context: EMPTY_ROW_CONTEXT,
     });
   }
 
@@ -756,6 +784,8 @@ function describeTurnRows(input: {
   readonly activeTurnId: string | null;
   readonly stopped: TurnStoppedInfo | null;
   readonly decoratingEventIdsByTurnKey: ReadonlyMap<string, readonly string[]>;
+  /** The anchor in effect at this turn - see {@link TranscriptRowContext}. */
+  readonly sessionAnchor: ChatSessionAnchor | null;
 }): readonly TranscriptRowDescriptor[] {
   const { turn } = input;
   // Every branch of the renderer's timing derivation returns this same anchor;
@@ -769,6 +799,20 @@ function describeTurnRows(input: {
   const plan = planAssistantTurnRows(blocks);
   const decoratingEventIds =
     input.decoratingEventIdsByTurnKey.get(turn.turnKey) ?? EMPTY_EVENT_IDS;
+  // One object shared by every row of the turn: they all render with the same
+  // anchor and the same elapsed counter, and sharing it keeps a split turn from
+  // allocating a fresh copy per slice.
+  //
+  // `legacyRowAnchorAt` is carried ONLY when `startedAt` did not supply the
+  // anchor. For a modern turn the renderer reads `startedAt` off the record it
+  // already has and cannot get it wrong, so speaking would be noise on every
+  // row of every chat.
+  const context: TranscriptRowContext = {
+    ...(turn.startedAt === null ? { legacyRowAnchorAt: rowAnchorAt } : {}),
+    ...(input.sessionAnchor === null
+      ? {}
+      : { sessionAnchor: input.sessionAnchor }),
+  };
 
   const rows: TranscriptRowDescriptor[] = plan.entries.map((entry) => {
     if (entry.kind === "steer") {
@@ -794,6 +838,7 @@ function describeTurnRows(input: {
           blockId: block.blockId,
           queueItemId: block.queueItemId,
         },
+        context,
       };
     }
     return {
@@ -809,6 +854,7 @@ function describeTurnRows(input: {
         synthesizedBoundary: false,
         decoratingEventIds,
       },
+      context,
     };
   });
 
@@ -838,6 +884,7 @@ function describeTurnRows(input: {
         synthesizedBoundary: true,
         decoratingEventIds,
       },
+      context,
     });
   }
   return rows;
@@ -877,6 +924,14 @@ function placeSetupCards(
         kind: "setup-card" as const,
         windowIndex,
         eventIds: window.events.map((event) => event.eventId),
+      },
+      // Both facts come from a partition over the WHOLE log. A client re-running
+      // it on this window's events alone renumbers the card to 0 - which changes
+      // its generated row id, so the skeleton stops matching and the ordinal is
+      // suppressed - and can revive a closed window as active.
+      context: {
+        setupWindowIndex: windowIndex,
+        setupWindowIsActive: window.isActive,
       },
     },
     anchorId: window.triggeringMessageId,

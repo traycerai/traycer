@@ -17,6 +17,7 @@ import {
   rowSkeletonEntrySchema,
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   restorableSetupInterruptionSchema,
   selectRestorableSetupInterruption,
@@ -508,6 +509,25 @@ export const chatRangeResponseSchema = z.object({
    */
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema),
+  /**
+   * What the served rows render WITH, by row id.
+   *
+   * The host projects a row against whole history; this response serves that
+   * row's records alone. Anything the renderer derives by looking at rows
+   * AROUND the one it is drawing therefore gets a different answer from an
+   * isolated span - and in two cases the re-derived row id then disagrees with
+   * the skeleton, so the ordinal is suppressed and the row draws unplaced at
+   * the tail. Those derivations read this instead.
+   *
+   * A map holding only rows with something to say, not a parallel array to
+   * `rowIds`: most rows need none, and `{}` per row is real bytes on a frame
+   * that has already overshot its budget once.
+   *
+   * Absent for a row means "the projection has nothing to add", NOT a default -
+   * a consumer falls back to its own derivation, which is what keeps a host
+   * predating a field from silently asserting one.
+   */
+  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
   reachedStart: z.boolean(),
   reachedEnd: z.boolean(),
   truncatedAtOrdinal: z.number().int().nonnegative().optional(),

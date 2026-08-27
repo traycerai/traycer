@@ -10,6 +10,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 /**
  * # The client half of the windowed transcript
@@ -57,6 +58,17 @@ export interface HydratedSpan {
   readonly fromOrdinal: number;
   /** One row id per row served, in order. Its length is the span's extent. */
   readonly rowIds: readonly string[];
+  /**
+   * What these rows render WITH, by row id - the host's answer to derivations
+   * this client cannot make from a bounded subset (`row-context.ts`).
+   *
+   * Held per SPAN rather than per window so it is evicted with the rows it
+   * describes: a window-level map would outlive them and grow for the life of
+   * the tab, which is the shape of a bug this file already carries one of.
+   *
+   * Sparse by construction - only rows with something to say appear.
+   */
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
   readonly bytes: number;
@@ -659,9 +671,17 @@ function insertSpan(
     incoming.events,
     (event) => event.eventId,
   );
+  // Incoming last, so a re-served row's context supersedes the held copy for
+  // the same reason its row id does.
+  const rowContext = Object.assign(
+    {},
+    ...overlapping.map((span) => span.rowContext),
+    incoming.rowContext,
+  ) as Readonly<Record<string, TranscriptRowContext>>;
   const merged: HydratedSpan = {
     fromOrdinal,
     rowIds,
+    rowContext,
     messages,
     events,
     bytes: recordsByteLength(messages, events),
@@ -730,6 +750,13 @@ export function applyWindowedSnapshot(
   const tailSpan: HydratedSpan = {
     fromOrdinal: input.tail.fromOrdinal,
     rowIds: tailRowIds,
+    // The inline tail carries no context of its own: the snapshot ships records
+    // and an ordinal, not row ids, so there is nothing to key one on. Its rows
+    // gain context when a range later re-serves them. The exposure that leaves
+    // is narrow - the tail is the newest rows, whose surrounding context is
+    // usually inside the tail - but it is real, and this is `{}` rather than an
+    // assertion that the tail needs none.
+    rowContext: {},
     messages: input.tail.messages,
     events: input.tail.events,
     bytes: recordsByteLength(input.tail.messages, input.tail.events),
@@ -1127,6 +1154,7 @@ export function applyRangeResponse(
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
     rowIds: response.rowIds,
+    rowContext: response.rowContext,
     messages: response.messages,
     events: response.events,
     bytes: recordsByteLength(response.messages, response.events),
@@ -1139,6 +1167,29 @@ export function applyRangeResponse(
     hydratedBytes: totalBytes(spans),
     clock,
   });
+}
+
+/**
+ * Everything the hydrated spans can say about how their rows render, by row id.
+ *
+ * Merged across spans rather than looked up per span, because the renderer asks
+ * by row id and has no idea which span a row came from. Later spans win on the
+ * rare duplicate, matching the merge rule inside a span.
+ *
+ * Rebuilt per publish rather than cached: it is proportional to the CONTEXT-
+ * BEARING rows currently hydrated, which is a small fraction of a bounded
+ * window, and a cache here would need invalidating on every span mutation.
+ */
+export function hydratedRowContext(
+  window: TranscriptWindow,
+): Readonly<Record<string, TranscriptRowContext>> {
+  const out: Record<string, TranscriptRowContext> = {};
+  for (const span of window.spans) {
+    for (const rowId of Object.keys(span.rowContext)) {
+      out[rowId] = span.rowContext[rowId];
+    }
+  }
+  return out;
 }
 
 /**
