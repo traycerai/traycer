@@ -496,6 +496,7 @@ export function ActiveHostWorkspaceControls(
       props.hostScope.onSelect(hostId);
       return;
     }
+    if (hostId === activeHostId) return;
     // Writes THIS surface's pin and nothing else. Before P1.2 this called
     // `binding.directory.selectById(hostId)` - moving the whole app to place
     // one chat, which is the defect the surface-pin model exists to end.

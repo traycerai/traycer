@@ -200,6 +200,11 @@ function pickBuildHost(): void {
   fireEvent.click(screen.getByRole("option", { name: /Build Box/ }));
 }
 
+function pickHomeHost(): void {
+  fireEvent.click(screen.getByRole("button", { name: /^Host:/ }));
+  fireEvent.click(screen.getByRole("option", { name: /Home Mac/ }));
+}
+
 beforeEach(() => {
   useSurfaceHostSelectionStore.getState().resetForTests();
   useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -272,6 +277,33 @@ describe("composer host picker writes a surface pin", () => {
     expect(
       useLandingDraftStore.getState().drafts[0]?.workspace.folders,
     ).toEqual(["/home/draft-only"]);
+  });
+
+  it("does not replace a draft workspace when reselecting its current host", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/global-from-another-draft",
+        name: "global-from-another-draft",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().addDraftResolvedFolders(draftId, [
+      {
+        path: "/home/this-draft",
+        name: "this-draft",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickHomeHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/this-draft"]);
   });
 
   it("keys the pin per WINDOW, so both composer instances agree", () => {
