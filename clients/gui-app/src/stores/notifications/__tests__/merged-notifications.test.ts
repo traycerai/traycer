@@ -301,11 +301,23 @@ describe("merged notifications feed", () => {
         ...cloudRow,
         presentation: {
           ...cloudRow.presentation,
-          epicTitle: null,
+          epicTitle: "",
         },
       }),
     ).toMatchObject({
       title: "Test Code Execution",
+      body: "Test Code Execution • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...cloudRow,
+        presentation: {
+          epicTitle: "",
+          chatTitle: "",
+        },
+      }),
+    ).toMatchObject({
+      title: "Stale task title",
       body: "Test Code Execution • Done",
     });
   });
