@@ -467,8 +467,11 @@ export function useLandingComposerActions(
         return;
       }
       // Mark before the one-shot create request so the existence reconciler
-      // cannot prune the result while `epic.listTasks` still lags it.
-      markEpicCreatedThisSession(epicId);
+      // cannot prune the result while `epic.listTasks` still lags it. The
+      // create host rides along so the epic session opens against the machine
+      // that holds the local-first warm slot - any other host cold-opens into
+      // a cloud NOT_FOUND until the create host's background connect lands.
+      markEpicCreatedThisSession(epicId, activeHostId);
 
       void createLandingEpic({
         epicId,
@@ -731,7 +734,10 @@ export function useLandingComposerActions(
       // Terminal-agent create registers no initial-chat handoff, so this
       // synchronous marker is what keeps the existence reconciler from
       // force-closing the tab before `epic.listTasks` reflects the new epic.
-      markEpicCreatedThisSession(epicId);
+      // The create host rides along for session placement; this flow
+      // navigates BEFORE the host round-trip, so the session provider mounts
+      // while only the create host can ever serve the epic.
+      markEpicCreatedThisSession(epicId, hostId);
       const replaced =
         workspaceContext.draftId === null
           ? null

@@ -137,6 +137,10 @@ vi.mock("@tanstack/react-router", () => ({
 
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import {
+  clearSessionCreatedEpics,
+  markEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
+import {
   __getOpenEpicRegistryForTests,
   __setEpicStreamClientFactoryForTests,
   EpicSessionPresentationContext,
@@ -492,6 +496,7 @@ describe("<EpicSessionProvider />", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     __setEpicStreamClientFactoryForTests(null);
     setDesktopEpicOwnershipBridge(null);
+    clearSessionCreatedEpics();
     resetAuth("signed-in", "alice@example.com");
   });
 
@@ -504,6 +509,7 @@ describe("<EpicSessionProvider />", () => {
     resetAuth("signed-out", null);
     hostBindingRef.value = null;
     resetHostConnectionRegistryForTest();
+    clearSessionCreatedEpics();
   });
 
   it("shares one resolved host client with every session consumer", async () => {
@@ -2094,5 +2100,44 @@ describe("<EpicSessionProvider />", () => {
       expect(streams[0].closeCount).toBe(0);
       expect(seenHandles.at(-1)).toBe(firstHandle);
     });
+  });
+
+  it("seeds requestedHostId from the create-host marker, so a freshly created epic opens its session on the create host instead of the effective one", async () => {
+    const EPIC_ID = "epic-created-host-test";
+    // The effective host (`hostState.id`, defaulted to "host-a" in
+    // `beforeEach`) is deliberately a DIFFERENT host than the marker records,
+    // so a pass here can only mean the marker's host won.
+    markEpicCreatedThisSession(EPIC_ID, "host-create");
+    __setEpicStreamClientFactoryForTests(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const seenClients: unknown[] = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <SessionHostClientProbe
+          onClient={(client) => {
+            seenClients.push(client);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    const createHostClient = resolveSessionHostClient("host-create");
+    await waitFor(() => {
+      expect(seenClients).toContain(createHostClient);
+    });
+    const effectiveHostClient = resolveSessionHostClient(hostState.id);
+    expect(seenClients).not.toContain(effectiveHostClient);
+    const mountedHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+    if (mountedHandle === null) {
+      throw new Error("expected a mounted handle");
+    }
+    expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-create");
   });
 });

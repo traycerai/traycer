@@ -48,6 +48,7 @@ import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
+import { sessionCreatedEpicHostId } from "@/lib/epics/session-created-epics";
 
 export interface EpicSessionProviderProps {
   readonly epicId: string;
@@ -291,11 +292,22 @@ export function EpicSessionProvider(
   const [session, setSession] = useState<MountedSessionState | null>(null);
   const sessionRef = useRef<MountedSessionState | null>(null);
   const originalHostIdRef = useRef<string | null>(null);
-  const [requestedHostId, setRequestedHostId] = useState<string | null>(null);
+  // Seeded from the create-host memory for an epic THIS renderer just
+  // created: `epic.create` is local-first on the create host - the cloud
+  // record is written by that host's deferred background connect - so until
+  // it lands, the create host is the only machine that can serve the epic.
+  // Opening on `effectiveHostId` in that window cold-opens into a cloud
+  // NOT_FOUND, which the access coordinator reads as an adjudicated "epic is
+  // gone" and force-closes the brand-new tab. The seed is time-bounded (see
+  // `sessionCreatedEpicHostId`), so later opens of the same epic follow the
+  // effective host as before.
+  const [requestedHostId, setRequestedHostId] = useState<string | null>(() =>
+    sessionCreatedEpicHostId(epicId),
+  );
   const [retryGeneration, setRetryGeneration] = useState(0);
   const [presentation, setPresentation] = useState<SessionPresentationState>({
     kind: "establishing",
-    targetHostId: effectiveHostId,
+    targetHostId: requestedHostId ?? effectiveHostId,
     originalHostId: null,
   });
   const targetHostId = requestedHostId ?? effectiveHostId;
