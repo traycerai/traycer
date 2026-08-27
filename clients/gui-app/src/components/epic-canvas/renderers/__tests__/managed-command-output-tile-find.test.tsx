@@ -108,6 +108,18 @@ function line(
   return { channel, text, atMs: AT_MS };
 }
 
+/**
+ * The jump-live control carries whichever of three labels its state calls for,
+ * so proving it is ABSENT has to rule out all three: a name-scoped query for
+ * one of them passes while the button sits there wearing another.
+ */
+const ANY_JUMP_LIVE_LABEL =
+  /^(Jump to live|New output available|Loading live output…)$/;
+
+function queryJumpLive(): HTMLElement | null {
+  return screen.queryByRole("button", { name: ANY_JUMP_LIVE_LABEL });
+}
+
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
   awareness: () => undefined,
@@ -283,7 +295,7 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
     // tail following live output, so the jump-live button is absent. Without
     // this, the assertion below proves only that the button is present, not
     // that the search is what turned following off.
-    expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
+    expect(queryJumpLive()).toBeNull();
     searchTile(node, "ab", false);
 
     await waitFor(() => {
@@ -309,7 +321,7 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
         .getAllByTestId("managed-command-output-find-match")
         .map((el) => el.getAttribute("data-start-col")),
     ).toEqual(["6", "0"]);
-    expect(screen.getByTestId("managed-command-output-jump-live")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Jump to live" })).toBeTruthy();
 
     act(() => {
       useTileFindStore.getState().next(node.instanceId);
@@ -339,7 +351,7 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
     await waitFor(() => {
       expect(tileSnapshot(node).total).toBe(2);
     });
-    expect(screen.getByTestId("managed-command-output-jump-live")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Jump to live" })).toBeTruthy();
 
     // A replacement snapshot renumbers every line, so the seq holding the
     // active match is gone and the adapter clamps to a different one. That is a
@@ -354,7 +366,7 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
     await waitFor(() => {
       expect(tileSnapshot(node).total).toBe(2);
     });
-    expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
+    expect(queryJumpLive()).toBeNull();
     expect(tileSnapshot(node)).toMatchObject({
       status: "ready",
       current: 1,
