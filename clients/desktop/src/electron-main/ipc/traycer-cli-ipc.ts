@@ -78,22 +78,28 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
   // `host status` is a runner-aware command (Native Packaging cutover): it
   // emits the shared NDJSON envelope.
   //
-  // This used to pass `--no-bootstrap`, because `host status` would
-  // otherwise install the host, register its OS service, and start it before
-  // answering - and host-status from Desktop is informational only (the
-  // renderer's boot card reads it for its `Show details` bootstrap.log tail),
-  // with the launch reconciler (`HostController`) and Settings → Host driving
-  // the install pipeline explicitly. The CLI now makes `host status`
-  // observational by construction (audit finding CLI-001), so the flag has
-  // nothing left to suppress and the guarantee no longer depends on every
-  // caller remembering to opt out of it.
+  // `--no-bootstrap` is KEPT, and the reason is version skew rather than the
+  // CLI's current behavior. host-status from Desktop is informational only
+  // (the renderer's boot card reads it for its `Show details` bootstrap.log
+  // tail), with the launch reconciler (`HostController`) and Settings → Host
+  // driving the install pipeline explicitly; it must never implicitly install
+  // the host.
   //
-  // The token itself still parses - `addRunnerFlags` keeps it as a hidden
-  // deprecated no-op - which is what makes dropping it here safe even though
-  // `runTraycerCliJson` resolves through `discoverCli()` (manifest → PATH →
-  // bundled) and can therefore run a CLI older than this app.
+  // The CLI in THIS repo no longer needs the flag - `host status` is now
+  // observational by construction (audit finding CLI-001) and the token
+  // survives only as a hidden deprecated no-op. But `runTraycerCliJson`
+  // resolves the binary through `discoverCli()` (manifest → PATH → bundled),
+  // which is explicitly NOT version-matched with this app -
+  // `runBundledTraycerCliJson` is the version-matched one. So a Desktop build
+  // carrying this commit can still drive a CLI from BEFORE it, and that CLI
+  // will happily download the host, register its service and start it in
+  // response to a status read unless the flag is passed.
+  //
+  // Dropping the flag is therefore safe in exactly one skew direction and
+  // unsafe in the other. Keeping it is safe in both: a new CLI ignores it, an
+  // old CLI obeys it.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostStatus, async () => {
-    return runTraycerCliJson(["host", "status"]);
+    return runTraycerCliJson(["host", "status", "--no-bootstrap"]);
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerConfigShellGet, async () => {

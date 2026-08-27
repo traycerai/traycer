@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { connect, type Socket } from "node:net";
 import {
   cliCredentialsPath,
+  cliPostFinalizeMarkerPath,
   hostCredentialPath,
   hostDevIdentityPoolRoot,
   hostIdentityNeedsReauthPath,
@@ -403,6 +404,31 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const finalizeMarker = await readPostFinalizeMarker({
     environment: opts.environment,
   });
+  // An UNREADABLE marker is a fault in its own right, and independent of
+  // whether the manifest currently has a pending upgrade. `readPostFinalize-
+  // Marker` distinguishes `invalid` from `absent` precisely so it can be
+  // reported; consulting that only inside the pending-upgrade branch below
+  // would mean a corrupt marker on a manifest with nothing pending produces
+  // silence, and doctor calls the CLI-upgrade state clean while a file it
+  // could not parse sits on disk shaping the next `host restart`.
+  if (finalizeMarker.status === "invalid") {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNREADABLE,
+      severity: "warning",
+      title: "CLI upgrade finalize marker is unreadable",
+      message:
+        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be read: ` +
+        `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed, ` +
+        "and 'traycer host restart' will discard the marker as invalid rather than acting on it. " +
+        "If a CLI upgrade appears stuck, re-run 'traycer cli upgrade' to re-stage it.",
+      fixAction: null,
+      terminalCommand: `traycer cli upgrade`,
+      details: {
+        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        errorMessage: finalizeMarker.errorMessage,
+      },
+    });
+  }
 
   // `traycer cli upgrade` stages a new binary and records
   // `pendingUpgrade` when the live binary is locked (Windows: the
@@ -720,6 +746,25 @@ function postFinalizeMarkerIssue(
 ): DoctorIssue | null {
   if (read.status !== "present") return null;
   const marker = read.marker;
+  // CORRELATE THE MARKER WITH THIS PENDING UPGRADE BEFORE BELIEVING IT.
+  //
+  // The marker carries no version - only the two paths it operated on - so
+  // "a marker exists" is not evidence about "the upgrade the manifest is
+  // currently pending". The helper writes the marker and `host restart`
+  // consumes it, but nothing guarantees that consumption happened: a helper
+  // that swapped 1.2.0 can leave its marker behind, and a later
+  // `traycer cli upgrade` will overwrite `pendingUpgrade` with 1.3.0 without
+  // clearing it. Doctor would then read the 1.2.0 marker as proof that 1.3.0
+  // is "already applied" and tell the user their upgrade was done - the
+  // opposite of true, and unfalsifiable from the card.
+  //
+  // `stagedBinaryPath` is a strong discriminator because `cli upgrade` stamps
+  // the target version into the filename it stages to
+  // (`traycer-<version>-<platform>`), so a mismatch here is precisely the
+  // stale-marker case. A mismatched marker is treated as not describing this
+  // upgrade at all: the caller falls through to the ordinary pending report,
+  // which carries the marker's status in `details` for anyone investigating.
+  if (marker.stagedBinaryPath !== pending.stagedBinaryPath) return null;
   if (marker.status === "swapped") {
     // The bytes are already swapped; only the manifest is behind. INFO, not
     // warning: nothing is broken and nothing is at risk, so this must not

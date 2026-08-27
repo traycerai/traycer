@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+// Type-only, so it is erased before `vi.hoisted` runs. Annotating the fixture
+// with the PRODUCER's contract rather than a hand-copied structural twin is
+// what makes this mock fail to compile - instead of silently going stale -
+// when `KillConflictingPortOwnerResult` grows a field the command must handle.
+import type { KillConflictingPortOwnerResult } from "../../host/free-port-kill";
 
 // `host free-port-and-restart`'s command-level wiring (Host Update Layer
 // Redesign Tech Plan, "Lifecycle lock coverage"): the kill (when a pid
@@ -15,15 +20,9 @@ const mocks = vi.hoisted(() => ({
     killed: true,
     killError: null,
     release: "released",
-    releaseDetail: "pid 4242 exited after SIGTERM",
+    releaseDetail: "port 51820 has no listener (pid 4242 released it)",
     holderPid: null,
-  } as {
-    killed: boolean;
-    killError: string | null;
-    release: "released" | "still-held" | "unverified";
-    releaseDetail: string;
-    holderPid: number | null;
-  },
+  } as KillConflictingPortOwnerResult,
   killThrows: null as Error | null,
 }));
 

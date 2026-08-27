@@ -64,6 +64,12 @@ export const DOCTOR_ISSUE_CODES = {
   // to finalise") is actively wrong here: a helper already ran with the lock
   // released. The operator needs the helper's own error, which this carries.
   CLI_UPGRADE_FINALIZE_FAILED: "CLI_UPGRADE_FINALIZE_FAILED",
+  // The finalize helper's marker exists but could not be parsed. Reported
+  // independently of whether a pending upgrade is recorded: an unreadable
+  // marker is a fault whether or not the manifest happens to reference an
+  // upgrade right now, and staying silent about it would let doctor call the
+  // CLI-upgrade state clean while an unparseable file sits on disk.
+  CLI_UPGRADE_MARKER_UNREADABLE: "CLI_UPGRADE_MARKER_UNREADABLE",
   // The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the
   // Desktop app points into its own bundle; removing or replacing the app
   // leaves it dangling. `ls` (lstat) still shows the file while executing

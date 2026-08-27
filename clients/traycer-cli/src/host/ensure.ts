@@ -22,6 +22,23 @@ import { installSourceLogFields } from "./install-source-log-fields";
 // wants a host to exist asks for it here, or via `host install` /
 // `host service install`.
 //
+// ONE SEMANTIC DIFFERENCE FROM AUTO-BOOTSTRAP IS DELIBERATE, and is the point
+// rather than an oversight. When bytes were already installed but the OS
+// service registration was missing, auto-bootstrap forced `satisfaction:
+// presence` so a registration repair could never replace the installed host.
+// `ensureHost` does NOT: it derives satisfaction from the resolved source, so
+// bytes that differ from this CLI's expected version are reinstalled even
+// when the only visible gap was the registration.
+//
+// That asymmetry tracks implicit vs explicit. Auto-bootstrap ran off a READ,
+// where swapping a user's host bytes as a side effect is indefensible;
+// `ensure` is a convergence verb someone typed, and converging to the
+// expected version is what it promises (Desktop's post-auth call depends on
+// exactly that). Do not "restore" presence-only semantics here to match the
+// deleted module - it would break that contract. A caller that wants
+// registration repaired WITHOUT touching bytes wants `host service install`,
+// which is the narrower tool and still has that behaviour.
+//
 // Source resolution order (offline-capable, self-contained when the host
 // ships beside the CLI):
 //   1. explicit `--from <path>`

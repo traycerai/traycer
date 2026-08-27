@@ -140,9 +140,15 @@ export function buildHostFreePortAndRestartCommand(
         };
       },
     );
+    // "sent SIGTERM to" rather than "terminated": the signal is all this
+    // command actually did to the process. A well-behaved server can close
+    // its listener and keep running to drain connections, which satisfies the
+    // repair without dying, so claiming termination would overstate it in
+    // exactly the direction this whole change is about. What was verified is
+    // in `releaseDetail`.
     const human =
       kill !== null
-        ? `terminated pid ${args.pid ?? "?"} (${kill.releaseDetail}); restart requested for service '${label.id}'`
+        ? `sent SIGTERM to pid ${args.pid ?? "?"} (${kill.releaseDetail}); restart requested for service '${label.id}'`
         : `restart requested for service '${label.id}'`;
     return {
       data: {

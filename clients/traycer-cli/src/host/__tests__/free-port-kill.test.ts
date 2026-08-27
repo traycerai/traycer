@@ -244,24 +244,7 @@ describe.skipIf(process.platform === "win32")(
       vi.useRealTimers();
     });
 
-    it("released: process exits after SIGTERM", async () => {
-      // Pre-kill ownership check only - the loop never reaches a second
-      // probe because `isProcessAlive` reports dead on its first check.
-      responseQueue = [ownsPort(TARGET_PID)];
-      mocks.isProcessAliveMock.mockReturnValue(false);
-
-      const result = await killConflictingPortOwner({
-        pid: TARGET_PID,
-        port: PORT,
-        commandName: "host free-port",
-      });
-
-      expect(result.release).toBe("released");
-      expect(result.releaseDetail).toContain("exited after SIGTERM");
-      expect(result.holderPid).toBeNull();
-    });
-
-    it("released: probe reports no-listener", async () => {
+    it("released: the port has no listener after SIGTERM", async () => {
       responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
 
       const result = await killConflictingPortOwner({
@@ -271,11 +254,18 @@ describe.skipIf(process.platform === "win32")(
       });
 
       expect(result.release).toBe("released");
-      expect(result.releaseDetail).toContain("no listener remains");
+      expect(result.releaseDetail).toContain("no listener");
+      expect(result.holderPid).toBeNull();
     });
 
-    it("released: a different pid now holds the port (service manager auto-respawn is not a failure)", async () => {
-      responseQueue = [ownsPort(TARGET_PID), ownsPort(7777)];
+    it("released: a dead target is confirmed by the port probe, not by process exit alone", async () => {
+      // The verifier no longer short-circuits on `isProcessAlive` - a dead
+      // pid says nothing about whether the PORT is free. Liveness reports
+      // dead here AND the probe reports no listener; the probe is what makes
+      // it a release. The companion test below pins the case where those two
+      // facts disagree.
+      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+      mocks.isProcessAliveMock.mockReturnValue(false);
 
       const result = await killConflictingPortOwner({
         pid: TARGET_PID,
@@ -284,7 +274,31 @@ describe.skipIf(process.platform === "win32")(
       });
 
       expect(result.release).toBe("released");
+      expect(result.holderPid).toBeNull();
+    });
+
+    it("still-held: the target died but a replacement listener took the port", async () => {
+      // The CLI-011 regression that three reviewers caught. A supervised
+      // foreign listener respawning under a NEW pid leaves the conflict fully
+      // intact while the pid we signalled is gone. Reporting `released` here
+      // would restart the host onto an occupied port and call it a completed
+      // repair - the exact false success this change exists to remove.
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = ownsPort(7777);
+      mocks.isProcessAliveMock.mockReturnValue(false);
+
+      const pending = killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
+      const result = await pending;
+
+      expect(result.release).toBe("still-held");
+      expect(result.release).not.toBe("released");
       expect(result.holderPid).toBe(7777);
+      expect(result.releaseDetail).toContain("7777");
     });
 
     it("still-held: target stays alive and keeps the port past the deadline", async () => {

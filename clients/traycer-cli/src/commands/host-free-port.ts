@@ -85,7 +85,11 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
         releaseDetail: result.releaseDetail,
         holderPid: result.holderPid,
       },
-      human: `terminated pid ${args.pid}; port ${args.port} released (${result.releaseDetail})`,
+      // "sent SIGTERM to", not "terminated" - the signal is all this command
+      // did to the process, and a server that closes its listener while
+      // draining connections satisfies the repair without dying. The verified
+      // claim is the port one, which is what `releaseDetail` carries.
+      human: `sent SIGTERM to pid ${args.pid}; port ${args.port} released (${result.releaseDetail})`,
       exitCode: 0,
     };
   };

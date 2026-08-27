@@ -149,7 +149,7 @@ const HOST_NOT_INSTALLED: HostDoctorIssue = {
   title: "Host not installed",
   message: "No host is installed.",
   fixAction: "host-install-latest",
-  terminalCommand: "traycer host install latest",
+  terminalCommand: "traycer host install",
   details: null,
 };
 

@@ -446,6 +446,23 @@ function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
   return true;
 }
 
+// Narrow a validated payload to the declared `PostFinalizeMarker`, collapsing
+// an OMITTED `serviceStartError` to `null`.
+//
+// The validator above deliberately accepts the field being absent, because
+// legacy markers (and the Windows helper's `parent-still-alive` branch) never
+// wrote it. That tolerance quietly made the type a lie: the interface says
+// `string | null`, so every reader is entitled to test `=== null` for "no
+// error", and an `undefined` slipping through fails that test. Doctor's
+// `swapped` card did exactly that and rendered "the helper could not start
+// the host service afterwards: undefined" for a perfectly clean legacy
+// marker. `reconcilePostFinalizeMarker` had been papering over the same gap
+// with `?? null` at each use site; normalising once, here, means no future
+// reader has to remember.
+function toPostFinalizeMarker(value: PostFinalizeMarker): PostFinalizeMarker {
+  return { ...value, serviceStartError: value.serviceStartError ?? null };
+}
+
 // What a read-only caller learns from the post-finalize marker.
 // `"absent"` and `"invalid"` are kept distinct because they license
 // different statements: absent means the helper wrote nothing (it never
@@ -504,7 +521,7 @@ export async function readPostFinalizeMarker(opts: {
       errorMessage: "marker payload does not match expected shape",
     };
   }
-  return { status: "present", marker: parsed };
+  return { status: "present", marker: toPostFinalizeMarker(parsed) };
 }
 
 export type ReconcileOutcome =
@@ -527,9 +544,13 @@ export type ReconcileOutcome =
 // marker is unlinked after a successful read, so repeated invocations
 // are no-ops.
 //
-// Called from the host-restart command (to apply marker effects
-// before the next stop/start cycle) and from the Doctor engine (so
-// Doctor's reported state reflects the most recent helper outcome).
+// Called ONLY from the host-restart command, to apply marker effects before
+// the next stop/start cycle. The Doctor engine used to call it too, so its
+// report would reflect the most recent helper outcome - but that made a
+// diagnostic delete the marker and rewrite the manifest as a side effect of
+// being asked a question (audit finding CLI-007). Doctor now uses the
+// read-only `readPostFinalizeMarker` above and reports what it sees, naming
+// `traycer host restart` - i.e. this function - as the thing that applies it.
 export async function reconcilePostFinalizeMarker(opts: {
   readonly environment: Environment;
 }): Promise<ReconcileOutcome> {

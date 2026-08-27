@@ -388,4 +388,97 @@ describe("runDoctor pending CLI upgrade surface", () => {
       ),
     );
   });
+
+  // A marker carries no version - only the paths it operated on - so "a marker
+  // exists" is not evidence about the upgrade the manifest is CURRENTLY
+  // pending. A helper that swapped 1.5.0 can leave its marker behind, and a
+  // later `cli upgrade` overwrites pendingUpgrade with 1.6.0 without clearing
+  // it. Believing the stale marker would tell the user 1.6.0 was already
+  // applied - the opposite of true, and unfalsifiable from the card.
+  it("ignores a post-finalize marker that belongs to a DIFFERENT staged upgrade", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.6.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      version: "1.6.0",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: true,
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    // Marker from the PRIOR 1.5.0 swap, never consumed.
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    // The pending 1.6.0 upgrade is still pending, and must be reported as such.
+    expect(
+      result.issues.find(
+        (i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+      ),
+    ).toBeUndefined();
+    const pending = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    expect(pending).toBeDefined();
+    // The stale marker is still surfaced in details for anyone investigating.
+    expect(pending?.details?.finalizeMarker).toBe("swapped");
+  });
+
+  // `readPostFinalizeMarker` separates `invalid` from `absent` precisely so the
+  // fault can be reported. Consulting that only inside the pending-upgrade
+  // branch would mean a corrupt marker on a manifest with nothing pending
+  // produces silence, and doctor calls the CLI-upgrade state clean while a file
+  // it could not parse sits on disk shaping the next `host restart`.
+  it("reports an unreadable finalize marker even when no upgrade is pending", async () => {
+    stageDoctorMocks();
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: "1.5.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: join(workHome, "bin", "traycer"),
+          source: "manual",
+          pendingUpgrade: null,
+        },
+        null,
+        2,
+      ),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    const markerBody = "{ not valid json";
+    writeFileSync(markerPath, markerBody, { encoding: "utf8", mode: 0o600 });
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const unreadable = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_MARKER_UNREADABLE",
+    );
+    expect(unreadable).toBeDefined();
+    expect(unreadable?.severity).toBe("warning");
+    // Still observational: reporting the fault must not repair it.
+    expect(readFileSync(markerPath, "utf8")).toBe(markerBody);
+  });
 });

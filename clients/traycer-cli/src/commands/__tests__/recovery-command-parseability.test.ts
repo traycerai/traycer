@@ -135,7 +135,14 @@ function collapseAdjacentStringConcatenation(text: string): string {
   return current;
 }
 
-const STRING_OR_TEMPLATE_LITERAL = /`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"/g;
+// Single-quoted literals are matched too. Formatting normalises `terminalCommand`
+// values to double quotes or backticks today, so omitting them looked harmless -
+// but the scanner's job is to be robust to how the source is WRITTEN, not to
+// today's formatter settings. A single-quoted `terminalCommand: 'traycer ...'`
+// would otherwise be picked up only by the prose pass, silently dropping it from
+// the strict level-2 check that Desktop's copy-paste chip actually depends on.
+const STRING_OR_TEMPLATE_LITERAL =
+  /`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
 
 function findTerminalCommandLiterals(
   file: string,
