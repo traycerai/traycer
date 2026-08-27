@@ -145,6 +145,7 @@ function createStubRebuildPacer(): StreamRebuildPacer {
   return {
     markBuilt: vi.fn(),
     nextRebuildDelayMs: vi.fn(() => 0),
+    clearStreak: vi.fn(),
   };
 }
 

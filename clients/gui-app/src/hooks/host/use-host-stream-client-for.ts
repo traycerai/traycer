@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
@@ -26,6 +26,7 @@ import {
   noteHostCredentialState,
 } from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
+import { useCloudCapabilityRestored } from "@/hooks/host/use-cloud-capability-restored";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -595,6 +596,25 @@ export function useHostStreamClientBindingFor(
       clearBackoffTimer();
     };
   }, [client, rebuildBackoff]);
+
+  // Wake a binding whose backoff was earned entirely under a cloud capability
+  // that has since come back. Both halves are needed and neither is sufficient:
+  // `clearStreak()` alone leaves nothing to trigger a re-acquire (the transport
+  // key never moved, so the build effect above has no changed dependency), and
+  // the nonce bump alone would be paced by a streak of up to 30s that the
+  // restored capability has already invalidated.
+  //
+  // Unconditional, rather than gated on `client.isClosed()`. A binding whose
+  // client is healthy has an empty streak and rebuilds instantly, so the bump
+  // costs one re-acquire of an already-cached session; gating on the closed
+  // flag would instead miss the case this is for, where the demotion's rebuild
+  // is still sitting in its `setTimeout` and no client is published to ask.
+  useCloudCapabilityRestored(
+    useCallback(() => {
+      rebuildBackoff.clearStreak();
+      setRebuildNonce((nonce) => nonce + 1);
+    }, [rebuildBackoff]),
+  );
 
   return binding?.client.isClosed() === true ? null : binding;
 }
