@@ -154,24 +154,8 @@ export function useHomeWorkspaceSource(
     seededWorkspaceState.seed === workspaceSeed
       ? seededWorkspaceState.workspace
       : workspaceSeed;
-  // A landing draft owns one workspace snapshot, while the remembered folder
-  // cache is bucketed per host. A host-pin change can render once before the
-  // HomeSurface synchronization effect replaces that snapshot. Never send the
-  // previous host's paths through the new host during that frame: read the new
-  // host's bucket immediately. Empty snapshots are treated the same way when
-  // the destination already has remembered folders.
-  const draftWorkspaceMatchesHost =
-    draftWorkspace === null ||
-    (draftWorkspace.folders.length === 0
-      ? globalFolders.length === 0
-      : draftWorkspace.folders.every(
-          (path) => draftWorkspace.folderInfoByPath[path]?.hostId === hostId,
-        ));
-  const hostScopedDraftWorkspace = draftWorkspaceMatchesHost
-    ? draftWorkspace
-    : null;
-  const source = modalWorkspace ?? hostScopedDraftWorkspace ?? seededWorkspace;
-  const activeDraftId = hostScopedDraftWorkspace === null ? null : draftId;
+  const source = modalWorkspace ?? draftWorkspace ?? seededWorkspace;
+  const activeDraftId = draftWorkspace === null ? null : draftId;
   const modalSeedWorkspace = useMemo(
     () => workspaceSeed ?? emptyLandingDraftWorkspaceSnapshot(),
     [workspaceSeed],

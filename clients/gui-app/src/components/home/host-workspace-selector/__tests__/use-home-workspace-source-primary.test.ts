@@ -8,7 +8,6 @@ import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-stagi
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 const TEST_HOST_ID = "host-a";
-const OTHER_HOST_ID = "host-b";
 
 // Stamped with the host the hook targets: the store files a folder only in
 // the bucket of the host it was actually prepared on, so an unstamped fixture
@@ -25,12 +24,6 @@ const PINNED: WorkspaceFolderInfo = {
   name: "pinned-repo",
   repoIdentifier: null,
   hostId: TEST_HOST_ID,
-};
-const OTHER_HOST_FOLDER: WorkspaceFolderInfo = {
-  path: "/tmp/other-host-repo",
-  name: "other-host-repo",
-  repoIdentifier: null,
-  hostId: OTHER_HOST_ID,
 };
 
 function resetStores(): void {
@@ -115,30 +108,5 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
     });
 
     expect(result.current.primaryWorkspacePath).toBe(FIRST.path);
-  });
-
-  it("reads the destination host bucket immediately when a draft still carries the previous host", () => {
-    const draftId = useLandingDraftStore.getState().createDraft(null);
-    const { result, rerender } = renderHook(
-      ({ hostId }: { readonly hostId: string }) =>
-        useHomeWorkspaceSource(
-          { surface: "landing", hostId, draftId },
-          null,
-          hostId,
-        ),
-      { initialProps: { hostId: TEST_HOST_ID } },
-    );
-
-    act(() => {
-      result.current.addResolvedFolders([FIRST]);
-      useWorkspaceFoldersStore
-        .getState()
-        .addResolvedFolders(OTHER_HOST_ID, [OTHER_HOST_FOLDER]);
-    });
-
-    rerender({ hostId: OTHER_HOST_ID });
-
-    expect(result.current.folders).toEqual([OTHER_HOST_FOLDER.path]);
-    expect(result.current.primaryWorkspacePath).toBe(OTHER_HOST_FOLDER.path);
   });
 });

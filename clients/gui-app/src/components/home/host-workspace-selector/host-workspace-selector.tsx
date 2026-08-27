@@ -324,13 +324,6 @@ function HomeSurface(props: HomeSurfaceProps) {
   // have to agree on which machine they describe. That resolution is the
   // composer surface pin (pin ?? effective), so read the same primitive.
   const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
-  const restoreDraftWorkspaceForHost = useLandingDraftStore(
-    (state) => state.restoreDraftWorkspaceForHost,
-  );
-  useEffect(() => {
-    if (props.draftId === null) return;
-    restoreDraftWorkspaceForHost(props.draftId, landingHostId);
-  }, [landingHostId, props.draftId, restoreDraftWorkspaceForHost]);
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -506,6 +499,18 @@ export function ActiveHostWorkspaceControls(
     // Writes THIS surface's pin and nothing else. Before P1.2 this called
     // `binding.directory.selectById(hostId)` - moving the whole app to place
     // one chat, which is the defect the surface-pin model exists to end.
+    // Restore the target host's remembered workspace BEFORE publishing the
+    // new pin. That makes the host gesture atomic at the submit boundary and,
+    // unlike an effect keyed by `resolvedHostId`, does not overwrite another
+    // draft on mount or react to lease-driven automatic failover.
+    if (
+      props.stagingKey.surface === "landing" &&
+      props.stagingKey.draftId !== null
+    ) {
+      useLandingDraftStore
+        .getState()
+        .restoreDraftWorkspaceForHost(props.stagingKey.draftId, hostId);
+    }
     composerPin.setSelection(hostId);
   };
 

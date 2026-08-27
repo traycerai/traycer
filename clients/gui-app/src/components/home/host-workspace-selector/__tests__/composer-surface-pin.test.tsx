@@ -7,6 +7,8 @@ import {
   composerSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
  * The landing composer's host picker is a SURFACE PIN (redesign P1.2,
@@ -159,6 +161,7 @@ function renderComposerPicker(
         readonly hostId: string;
         readonly hostClient: null;
       },
+  draftId: string | null = null,
 ): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -168,7 +171,7 @@ function renderComposerPicker(
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", hostId: null, draftId: null }}
+          stagingKey={{ surface: "landing", hostId: null, draftId }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}
@@ -199,6 +202,8 @@ function pickBuildHost(): void {
 
 beforeEach(() => {
   useSurfaceHostSelectionStore.getState().resetForTests();
+  useWorkspaceFoldersStore.setState({ byHost: {} });
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   mocks.selectById.mockClear();
   mocks.effectiveHostId.current = "host-home";
 });
@@ -215,6 +220,58 @@ describe("composer host picker writes a surface pin", () => {
     // The whole point of the row: placing one chat elsewhere must not move
     // the window. `selectById` belongs to the selection-authority bridge now.
     expect(mocks.selectById).not.toHaveBeenCalled();
+  });
+
+  it("restores the picked host's folders before publishing the new pin", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/project",
+        name: "project",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-build", [
+      {
+        path: "/build/project",
+        name: "project",
+        repoIdentifier: null,
+        hostId: "host-build",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .restoreDraftWorkspaceForHost(draftId, "host-home");
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickBuildHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/build/project"]);
+    expect(pinnedHostId()).toBe("host-build");
+  });
+
+  it("does not replace a draft workspace during automatic host following", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().addDraftResolvedFolders(draftId, [
+      {
+        path: "/home/draft-only",
+        name: "draft-only",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    cleanup();
+    mocks.effectiveHostId.current = "host-build";
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/draft-only"]);
   });
 
   it("keys the pin per WINDOW, so both composer instances agree", () => {
