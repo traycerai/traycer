@@ -334,6 +334,7 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
       backgrounds={props.diffViewerPreferences.backgrounds}
       lineNumbers={props.diffViewerPreferences.lineNumbers}
       indicatorStyle={props.diffViewerPreferences.indicatorStyle}
+      loadDiffFiles={editing.loadDiffFiles}
       sizing="content"
       scrollContainerRef={null}
       onScroll={null}
