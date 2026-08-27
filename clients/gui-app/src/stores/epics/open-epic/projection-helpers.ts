@@ -41,6 +41,14 @@ import {
   type RoleClaim,
 } from "@traycer/protocol/persistence/epic/role-claims";
 import * as Y from "yjs";
+import type { PendingMetadataOverlay } from "./pending-metadata-overlay";
+import {
+  applyPendingOverlayToArtifacts,
+  applyPendingOverlayToChats,
+  applyPendingOverlayToEpicHeader,
+  applyPendingOverlayToTuiAgents,
+  collectDeadPendingMutations,
+} from "./pending-metadata-overlay";
 import type {
   ArtifactProjection,
   AgentRolesSlice,
@@ -479,9 +487,17 @@ export function terminalAgentProjectionsEq(
     a.archivedAt === b.archivedAt,
   ].every((fieldEqual) => fieldEqual);
 
+  // Nullability first: `?? []` on both sides would call `null` and `[]`
+  // equal, and any identity-preserving consumer (the incremental reconcile,
+  // the full-projection stabilizer) would then splice a stale `null` row back
+  // over a real `null → []` transition.
+  const shellArgsEqual =
+    a.terminalShellArgs === null || b.terminalShellArgs === null
+      ? a.terminalShellArgs === b.terminalShellArgs
+      : arrayShallowEq(a.terminalShellArgs, b.terminalShellArgs);
   return (
     scalarFieldsEqual &&
-    arrayShallowEq(a.terminalShellArgs ?? [], b.terminalShellArgs ?? []) &&
+    shellArgsEqual &&
     arrayShallowEq(a.workspaceFolders, b.workspaceFolders)
   );
 }
@@ -1179,43 +1195,112 @@ export function projectTreeSlice(
 
 // ─── Full-doc projection (snapshot + initial attach) ──────────────────────
 
-export function projectFullState(
-  doc: Y.Doc,
-  currentUserId: string | null,
+/**
+ * Everything a projection folds in besides the doc itself.
+ *
+ * Grouped rather than passed positionally because all three share one
+ * property: they arrive on their own schedule and must be read AT projection
+ * time, never captured when the session was constructed. The projector holds a
+ * lazy getter for each for that reason. (It also keeps `projectFullState`
+ * inside the repo's parameter-count limit, which is the same pressure pointing
+ * the same way.)
+ */
+export interface ProjectionInputs {
   /**
    * The host's store-backed chat records (`epic.listChatRecords`). Empty in
    * doc-only mode - an older host, or before the first response - and the union
    * then returns the doc slice itself.
    */
-  chatRecords: ChatsSlice,
+  readonly chatRecords: ChatsSlice;
   /**
    * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`),
    * with exactly the chat records' contract: empty in doc-only mode, and the
    * union then returns the doc slice itself.
    */
-  tuiAgentRecords: TerminalAgentsSlice,
+  readonly tuiAgentRecords: TerminalAgentsSlice;
+  /**
+   * Metadata mutations this client has stamped and has no answer for yet.
+   * Empty when nothing is in flight, and every applier is then a reference
+   * pass-through, so the common case costs nothing.
+   */
+  readonly pendingOverlay: PendingMetadataOverlay;
+  /**
+   * Receives the request ids of overlay chains this projection proved
+   * finished (`collectDeadPendingMutations`): landed-only chains whose row
+   * caught up or was overwritten. The store deletes them from the retained
+   * map - without republishing, since a dead chain already displays the
+   * authoritative value. `null` for callers with no map to sweep (tests
+   * projecting a bare doc).
+   */
+  readonly reportDeadMutations:
+    ((requestIds: readonly string[]) => void) | null;
+}
+
+export function projectFullState(
+  doc: Y.Doc,
+  currentUserId: string | null,
+  inputs: ProjectionInputs,
 ): EpicProjectedSlices {
+  const { chatRecords, tuiAgentRecords, pendingOverlay, reportDeadMutations } =
+    inputs;
   const artifacts = projectArtifactsSlice(doc);
   const deletedArtifacts = projectDeletedArtifactsSlice(doc);
   const docChats = projectChatsSlice(doc, currentUserId);
   const chats = unionChatsSlice(docChats, chatRecords, currentUserId);
   const docTuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
   const tuiAgents = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
+  const epicHeader = projectEpicHeader(doc);
+  // Sweep finished overlay chains against the PRE-overlay values - the only
+  // place both the union slices and the overlay are in hand together. Runs
+  // before the appliers so a chain proven dead here never patches this
+  // projection either (the map mutation the callback performs is visible to
+  // nothing else mid-projection; the appliers below read the same `pendingOverlay`
+  // reference, which the callback edits in place).
+  if (reportDeadMutations !== null && pendingOverlay.size > 0) {
+    const dead = collectDeadPendingMutations(pendingOverlay, {
+      artifacts,
+      chats,
+      tuiAgents,
+      epicTitle: epicHeader.title,
+    });
+    if (dead.length > 0) reportDeadMutations(dead);
+  }
   const agentRoles = projectAgentRolesSlice(
     doc,
     currentUserId,
     chats,
     tuiAgents,
   );
-  const tree = projectTreeSlice(artifacts, chats, tuiAgents);
-  return {
-    epic: projectEpicHeader(doc),
+  // The optimistic overlay lands HERE - on the union outputs components read,
+  // and BEFORE the tree is built, so a pending reparent restructures
+  // `childrenByParent` / `rootIds` for free instead of needing the tree
+  // patched a second time.
+  //
+  // `docChats` / `docTuiAgents` are deliberately NOT overlaid: they are the
+  // projector's own input state, and an incremental doc patch has to reconcile
+  // against the doc's history rather than against a display patch.
+  const overlaidArtifacts = applyPendingOverlayToArtifacts(
     artifacts,
+    pendingOverlay,
+  );
+  const overlaidChats = applyPendingOverlayToChats(chats, pendingOverlay);
+  const overlaidTuiAgents = applyPendingOverlayToTuiAgents(
+    tuiAgents,
+    pendingOverlay,
+  );
+  const tree = projectTreeSlice(
+    overlaidArtifacts,
+    overlaidChats,
+    overlaidTuiAgents,
+  );
+  return {
+    epic: applyPendingOverlayToEpicHeader(epicHeader, pendingOverlay),
+    artifacts: overlaidArtifacts,
     deletedArtifacts,
     docChats,
-    chats,
+    chats: overlaidChats,
     docTuiAgents,
-    tuiAgents,
+    tuiAgents: overlaidTuiAgents,
     agentRoles,
     tree,
   };

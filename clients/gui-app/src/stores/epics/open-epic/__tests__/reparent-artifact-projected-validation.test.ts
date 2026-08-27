@@ -174,7 +174,7 @@ describe("reparentArtifact validates against the projected tree", () => {
     seedTerminalAgent(handle, "agent-1", "Agent");
     handle.store
       .getState()
-      .applyChatRecords([chatRecord({ chatId: "chat-registry" })]);
+      .applyChatRecords([chatRecord({ chatId: "chat-registry" })], null);
 
     const mutated = handle.store
       .getState()
@@ -200,7 +200,7 @@ describe("reparentArtifact validates against the projected tree", () => {
     const artifact = createArtifactInDocForTests(handle.doc, "spec", null);
     handle.store
       .getState()
-      .applyChatRecords([chatRecord({ chatId: "chat-registry" })]);
+      .applyChatRecords([chatRecord({ chatId: "chat-registry" })], null);
 
     expect(() =>
       handle?.store.getState().reparentArtifact(artifact, "chat-registry"),
@@ -215,9 +215,10 @@ describe("reparentArtifact validates against the projected tree", () => {
     // chat-registry at all.
     handle.store
       .getState()
-      .applyChatRecords([
-        chatRecord({ chatId: "chat-registry", parentChatId: null }),
-      ]);
+      .applyChatRecords(
+        [chatRecord({ chatId: "chat-registry", parentChatId: null })],
+        null,
+      );
     seedDocChat(handle, "chat-doc", "Doc chat", "chat-registry");
 
     // Moving chat-registry under chat-doc would cycle: chat-doc already
@@ -234,9 +235,10 @@ describe("reparentArtifact validates against the projected tree", () => {
     const docParent = createArtifactInDocForTests(handle.doc, "chat", null);
     handle.store
       .getState()
-      .applyChatRecords([
-        chatRecord({ chatId: "chat-registry", parentChatId: null }),
-      ]);
+      .applyChatRecords(
+        [chatRecord({ chatId: "chat-registry", parentChatId: null })],
+        null,
+      );
 
     const before = handle.store.getState();
     expect(before.tree.nodeById["chat-registry"].parentId).toBeNull();

@@ -656,7 +656,9 @@ function isDocOnlyTerminalAgent(
  * target. Resolves the live epic session via the registry (`peek`, never
  * `acquire`), RE-RUNS `canReparent` against the projected tree (Decision D:
  * this closes the drag-over→drag-end TOCTOU), then persists:
- *   - registry-backed agents → `epic.reparentChat` only
+ *   - registry-backed agents → `epic.reparentChat`, under an optimistic
+ *     overlay patch (`beginReparentMutation`) so the row moves at drop time
+ *     rather than a record round-trip later
  *   - artifacts → local `reparentArtifact` (Y stream) **and**
  *     `epic.reparentArtifact` (host cloud-sync / the persist path that
  *     survives dropping the doc arm). Dual-write is safe: host `update()`
@@ -716,6 +718,20 @@ export function commitSidebarReparentDrop(
     if (client === null) return;
     const sessionHostId = getEpicSessionHandleHostId(handle);
     const movedNodeType = evaluation.node.type;
+    // The optimistic overlay (Phase 1.1): a registry-backed row has no doc
+    // entry, so without this the drop had no local feedback and the node sat
+    // under its old parent until the record round-trip - the one branch of
+    // this commit that was pure RPC. `begin` re-evaluates against the same
+    // projected tree the gate above read, synchronously, so it cannot refuse
+    // a move that gate accepted; `null` (same parent, viewer) makes retire a
+    // no-op.
+    const requestId = handle.store
+      .getState()
+      .beginReparentMutation(input.sourceNodeId, input.newParentId);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      handle.store.getState().retirePendingMutation(requestId, outcome);
+    };
     void client
       .request("epic.reparentChat", {
         epicId: input.epicId,
@@ -729,13 +745,21 @@ export function commitSidebarReparentDrop(
         // the 20s poll would - so re-ask now, the way every hook-based record
         // mutation does on success. Scoped to the session's host: that is
         // the client the request was sent on.
+        //
+        // "landed" keeps the overlay patch applied until the refreshed rows
+        // actually arrive - the ack is proof the host holds the new parent -
+        // so the row never snaps back under the old one while the refetch
+        // (or, on a refetch failure, the next poll) is in flight. The
+        // projection's dead sweep forgets the stamp once the row catches up.
         if (movedNodeType === "terminal-agent") {
           invalidateEpicTuiAgentRecords(input.queryClient, sessionHostId);
         } else {
           invalidateEpicChatRecords(input.queryClient, sessionHostId);
         }
+        retire("landed");
       })
       .catch((error: unknown) => {
+        retire("failed");
         toastFromHostError(
           toHostRpcError(error, "epic.reparentChat"),
           "Couldn't move this agent.",

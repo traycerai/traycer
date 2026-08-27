@@ -8,6 +8,7 @@ import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
 /**
  * Fills the mobile-header right-actions slot on the epic route with the tab
@@ -60,9 +61,34 @@ export function MobileEpicHeaderTitle(props: {
   const updateTitle = useEpicUpdateTitle();
   const handleCommit = useCallback(
     (next: string) => {
-      updateTitle.mutate({
-        epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
-      });
+      // Optimistic overlay, so this control behaves identically to the wide
+      // viewport's tab strip. Both were RPC-only here until 1.1, which meant
+      // the SAME user on the SAME device got different feedback either side of
+      // a 768px window drag - `useIsMobileViewport()` is a media query, not a
+      // platform. Reached through the registry rather than `useOpenEpicHandle`
+      // because this renders outside the epic session tree, exactly as the
+      // permission-role read above does.
+      const handle = getOpenEpicRegistry().peek(epicId);
+      const requestId =
+        handle?.store.getState().beginEpicTitleMutation(next) ?? null;
+      // Retire rides the promise, not a per-call `onSettled` - TanStack drops
+      // those on unmount, and this control UNMOUNTS on the very resize the
+      // 768px parity contract is about. Contract note in
+      // `use-rename-canvas-tab.ts`.
+      void updateTitle
+        .mutateAsync({
+          epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
+        })
+        .then(
+          () => {
+            if (requestId === null) return;
+            handle?.store.getState().retirePendingMutation(requestId, "landed");
+          },
+          () => {
+            if (requestId === null) return;
+            handle?.store.getState().retirePendingMutation(requestId, "failed");
+          },
+        );
     },
     [epicId, updateTitle],
   );

@@ -1599,26 +1599,41 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do. That write no-opped for every registry-backed row — which
+    // post chats-off-YJS is most of this tree — so these renames had no local
+    // feedback at all. Rationale and the promise-carried retire contract live
+    // in `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    const landed = (): void => {
+      retire("landed");
+      // The tab snapshot only on settlement - it is a persisted fallback with
+      // no rollback path, so a speculative write would preserve a rejected
+      // title across restarts. See `use-rename-canvas-tab.ts`.
+      renameArtifactInTab(tabId, nodeId, trimmed);
+      setIsRenaming(false);
+    };
+    const failed = (): void => {
+      retire("failed");
+    };
     if (artifactType === "chat") {
-      renameChat.mutate(
-        { epicId, chatId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameChat
+        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+        .then(landed, failed);
     } else if (artifactType === "terminal-agent") {
-      renameTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameTerminalAgent
+        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+        .then(landed, failed);
+    } else {
+      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
+      // would never land; drop it outright.
+      retire("failed");
     }
   }, [
     artifactType,

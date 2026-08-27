@@ -192,7 +192,7 @@ describe("commitSidebarReparentDrop when the projected gate and the doc write no
     // record-only chat lands in `state.tree`.
     handle.store
       .getState()
-      .applyChatRecords([chatRecord({ chatId: "chat-parent" })]);
+      .applyChatRecords([chatRecord({ chatId: "chat-parent" })], null);
 
     __getOpenEpicRegistryForTests().acquireMounted("epic-1", () => handle);
 

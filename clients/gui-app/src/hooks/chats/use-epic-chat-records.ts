@@ -1,11 +1,25 @@
 import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+
+/**
+ * What the cache holds for one `epic.listChatRecords` answer: the rows, plus
+ * where the session's chat-record ingest counter stood when the request was
+ * DISPATCHED. The store merges omissions against that fence - a row the
+ * answer does not carry is retracted only if the answer was issued after the
+ * row landed - so the fence has to be captured before the RPC, not when the
+ * answer is applied. `null` when no session existed to read at dispatch.
+ */
+interface ChatRecordListAnswer {
+  readonly chats: readonly ChatRecordSummary[];
+  readonly issuedAtSeq: number | null;
+}
 
 /**
  * Feeds the epic session's record table from the host's chat registry.
@@ -59,7 +73,13 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // identity's own chats, so two users on one installation have different
   // correct answers and must never share a cache slot.
   const viewerUserId = useCloudChatViewerId();
-  const query = useHostQuery<HostRpcRegistry, "epic.listChatRecords">({
+  const store = handle?.store ?? null;
+  const query = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "epic.listChatRecords",
+    ChatRecordListAnswer,
+    number | null
+  >({
     cacheKeyIdentity: [viewerUserId],
     client,
     method: "epic.listChatRecords",
@@ -76,20 +96,29 @@ export function useEpicSyncChatRecords(epicId: string): void {
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
+    // Runs immediately before the RPC is dispatched - see
+    // `ChatRecordListAnswer`. A push delta that lands while this request is
+    // in flight advances the counter past this value, which is exactly how
+    // the store knows the answer could not have carried that row.
+    captureRequestContext: () =>
+      store === null ? null : store.getState().peekChatIngestSeq(),
+    mapResponse: ({ response, requestContext }) => ({
+      chats: response.chats,
+      issuedAtSeq: requestContext ?? null,
+    }),
   });
 
-  const chats = query.data?.chats ?? null;
+  const answer = query.data ?? null;
   const recordListAuthoritative =
     query.isSuccess ||
     (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
-  const store = handle?.store ?? null;
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
-    if (chats !== null) {
-      store.getState().applyChatRecords(chats);
+    if (answer !== null) {
+      store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);
     }
     store.getState().markChatRecordListAuthoritative();
-  }, [chats, recordListAuthoritative, store]);
+  }, [answer, recordListAuthoritative, store]);
 }
 
 /**
