@@ -4,6 +4,9 @@ import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 
 const testState = vi.hoisted(() => ({
   refresh: vi.fn(() => Promise.resolve()),
+  isPending: false,
+  isError: false,
+  checkedAt: Date.now(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
@@ -18,9 +21,9 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
         note: null,
       },
     ],
-    isPending: false,
-    isError: false,
-    checkedAt: Date.now(),
+    isPending: testState.isPending,
+    isError: testState.isError,
+    checkedAt: testState.checkedAt,
     canRefresh: true,
     refresh: testState.refresh,
   }),
@@ -67,6 +70,9 @@ function worktreeEntry(): WorktreeHostEntryV14 {
 describe("SweepWorktreesDialog refresh", () => {
   beforeEach(() => {
     testState.refresh.mockClear();
+    testState.isPending = false;
+    testState.isError = false;
+    testState.checkedAt = Date.now();
   });
 
   afterEach(() => {
@@ -94,5 +100,30 @@ describe("SweepWorktreesDialog refresh", () => {
     fireEvent.keyDown(window, { key: "r" });
 
     expect(testState.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the cached snapshot visible but non-actionable while rechecking", () => {
+    testState.isPending = true;
+
+    render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Refresh sweep"
+        onOpenChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("traycer/refresh")).toBeTruthy();
+    expect(screen.queryByText("Checking worktrees…")).toBeNull();
+    expect(screen.getByTestId("sweep-worktrees-checked-at")).toBeTruthy();
+    const checkbox = screen.getByTestId<HTMLButtonElement>(
+      "sweep-worktrees-checkbox",
+    );
+    const confirm = screen.getByTestId<HTMLButtonElement>(
+      "sweep-worktrees-confirm",
+    );
+    expect(checkbox.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
   });
 });

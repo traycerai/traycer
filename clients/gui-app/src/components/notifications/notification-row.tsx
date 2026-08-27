@@ -4,10 +4,12 @@ import {
   Bell,
   Check,
   CheckCircle2,
+  FolderX,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
   Shield,
+  Trash2,
   UserMinus,
   UserPlus,
   type LucideIcon,
@@ -541,8 +543,15 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     return { icon: tone.Icon, colorClassName: tone.className };
   }
   const statusTone = notificationFeedTone(row);
+  const semanticIcon = hostNotificationSemanticIcon(row);
   if (statusTone !== null) {
-    return { icon: statusTone.Icon, colorClassName: statusTone.className };
+    return {
+      icon: semanticIcon ?? statusTone.Icon,
+      colorClassName: statusTone.className,
+    };
+  }
+  if (semanticIcon !== null) {
+    return { icon: semanticIcon, colorClassName: NEUTRAL_COLOR };
   }
   switch (row.hostKind) {
     case "agent.stopped":
@@ -562,6 +571,25 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     case null:
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
   }
+}
+
+/**
+ * Host events whose subject is not an agent keep their subject-specific glyph
+ * while severity continues to own color. Without this layer, the shared
+ * done/failure tones turn every successful or failed host operation into a
+ * chat bubble before the host-kind fallback can run.
+ */
+function hostNotificationSemanticIcon(
+  row: MergedNotificationRow,
+): LucideIcon | null {
+  if (row.hostKind === "workspace.operation.failed") return FolderX;
+  if (
+    row.hostKind === "host.operation.finished" &&
+    row.payload?.kind === "hostSurface"
+  ) {
+    return Trash2;
+  }
+  return null;
 }
 
 function globalEventGlyph(event: NotificationEvent): RowGlyph {
