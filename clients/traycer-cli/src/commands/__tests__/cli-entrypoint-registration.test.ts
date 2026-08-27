@@ -469,7 +469,12 @@ describe("traycer CLI entrypoint registration", () => {
         .map(([chunk]) => String(chunk))
         .join("");
       expect(printedHelp).not.toContain("exits 0");
-      expect(printedHelp).toContain("STILL SIGNED IN");
+      // The sign-out arm must not be described as a certainty in EITHER
+      // direction: `commitMutation` deletes the file before it finalizes, so a
+      // failed commit can leave the user signed out after all.
+      expect(printedHelp).not.toContain("STILL SIGNED IN");
+      expect(printedHelp).toContain("could not be CONFIRMED");
+      expect(printedHelp).toContain("may or may not still be signed in");
       expect(printedHelp).toContain("cache directory could");
     } finally {
       write.mockRestore();

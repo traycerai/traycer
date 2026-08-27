@@ -496,7 +496,10 @@ describe("runLinkPhoneFlow", () => {
   });
 
   it("does not sign in when the user is not logged in", async () => {
-    credentialsMock.mockResolvedValue({ kind: "no-credentials" });
+    credentialsMock.mockResolvedValue({
+      kind: "no-credentials",
+      effect: "none",
+    });
 
     await expect(
       runLinkPhoneFlow(interactiveCtx(), { showQr: true }),

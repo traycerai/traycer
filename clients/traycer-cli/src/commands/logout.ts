@@ -28,14 +28,19 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
     return { hadSession: before !== null, signOut: outcome };
   });
   if (signOut.outcome !== "deleted") {
-    // `commit-failed` (the delete/tombstone never landed) or `lock-busy`
-    // (another traycer process holds the credentials lock): the credential was
-    // NOT cleared, so we must not claim signed-out.
+    // `lock-busy` (another traycer process holds the credentials lock) or
+    // `commit-failed`. Neither can claim signed-out - but neither can claim
+    // still-signed-in either: `commitMutation` DELETES the credentials file at
+    // its apply step and only then finalizes the sidecar, so a finalize fault
+    // returns `commit-failed` with the file already gone. The message says
+    // "could not confirm" because that is the whole of what is known, and
+    // points at the one action that resolves it either way - logout is
+    // idempotent, so re-running is always safe.
     throw cliError({
       code: CLI_ERROR_CODES.UNEXPECTED,
       message:
-        "Logout failed to clear the stored credentials - another traycer process may be busy; please try again.",
-      details: null,
+        "Logout could not confirm that the stored credentials were cleared - another traycer process may be busy. You may or may not still be signed in; run `traycer logout` again, then `traycer whoami` to check.",
+      details: { signOutOutcome: signOut.outcome },
       exitCode: 1,
     });
   }

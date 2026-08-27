@@ -45,8 +45,13 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   if (result.kind === "network-error") {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NETWORK,
-      message: "Could not reach the authn service; check your network.",
-      details: null,
+      message:
+        result.effect === "none"
+          ? "Could not reach the authn service; check your network."
+          : "Could not reach the authn service while refreshing the stored credentials; the refresh token was spent and the result is unknown. Check your network, and run `traycer login` if the next command fails to authenticate.",
+      // The error path carries the effect too: a network failure can land
+      // AFTER a spend, and this envelope is the only thing the caller gets.
+      details: { credentialUpdate: result.effect },
       exitCode: 2,
     });
   }
@@ -57,7 +62,7 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
       data: {
         status: "no-credentials" as const,
         validated: false,
-        credentialUpdate: "none" as const,
+        credentialUpdate: result.effect,
       },
       human: ctx.runtime.json
         ? null
@@ -67,17 +72,18 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   }
   if (result.kind === "rejected") {
     return {
-      // A rejected rotate writes nothing (the refresh spend was refused, or the
-      // file was deleted/tombstoned/foreign under the lock), so the stored
-      // credentials are exactly as this command found them.
+      // Usually nothing was written - the spend was refused, or the file was
+      // deleted/tombstoned/foreign under the lock. But a rejection can also
+      // arrive AFTER a spend whose commit was lost, so the effect is reported
+      // rather than assumed, and the human line says so when it happened.
       data: {
         status: "rejected" as const,
         validated: true,
-        credentialUpdate: "none" as const,
+        credentialUpdate: result.effect,
       },
       human: ctx.runtime.json
         ? null
-        : "Stored credentials were rejected by the authn service. Run `traycer login` to re-authenticate.",
+        : `Stored credentials were rejected by the authn service. Run \`traycer login\` to re-authenticate.${humanEffectSuffix(result.effect)}`,
       exitCode: 1,
     };
   }

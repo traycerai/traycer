@@ -49,10 +49,18 @@ export type ValidationEffect =
   | "token-rotated"
   | "token-rotation-unconfirmed";
 
+/**
+ * Every outcome carries `effect`, including the ones that failed. A rotate can
+ * spend the refresh token on its first attempt and then, during the retry
+ * delay, meet a concurrent logout or account switch that turns the next attempt
+ * into `deleted`/`tombstoned`/`user-mismatch` - a rejection that arrives AFTER
+ * a spend. Hanging the field off the `valid` arm alone would drop that on the
+ * floor and let the command report having changed nothing.
+ */
 export type ValidationOutcome =
-  | { readonly kind: "no-credentials" }
-  | { readonly kind: "rejected" }
-  | { readonly kind: "network-error" }
+  | { readonly kind: "no-credentials"; readonly effect: ValidationEffect }
+  | { readonly kind: "rejected"; readonly effect: ValidationEffect }
+  | { readonly kind: "network-error"; readonly effect: ValidationEffect }
   | {
       readonly kind: "valid";
       readonly credentials: StoredCredentials;
@@ -75,7 +83,7 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
     logger.debug("Stored credential validation skipped; no credentials", {
       environment: config.environment,
     });
-    return { kind: "no-credentials" };
+    return { kind: "no-credentials", effect: "none" };
   }
 
   logger.debug("Stored credential validation started", {
@@ -91,7 +99,8 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
     logger.warn("Stored credential validation hit network error", {
       environment: config.environment,
     });
-    return { kind: "network-error" };
+    // The `/user` probe never reached a rotate, so nothing was spent.
+    return { kind: "network-error", effect: "none" };
   }
   if (validation.kind === "valid") {
     return reconcileValidProfile(stored, validation.user, logger);
@@ -219,15 +228,16 @@ async function rotateStaleCredentials(
             credentials: result.credentials,
             effect: rotateEffect(result.outcome, spentRefreshToken),
           }
-        : { kind: "rejected" };
+        : { kind: "rejected", effect: spentEffect(spentRefreshToken) };
     case "refresh-network":
     case "lock-busy":
     case "spend-pending":
       logger.warn("Stored credential validation rotate hit transient failure", {
         environment: config.environment,
         outcome: result.outcome,
+        spentRefreshToken,
       });
-      return { kind: "network-error" };
+      return { kind: "network-error", effect: spentEffect(spentRefreshToken) };
     case "deleted":
     case "tombstoned":
     case "user-mismatch":
@@ -235,9 +245,24 @@ async function rotateStaleCredentials(
       logger.warn("Stored credential validation rotate rejected", {
         environment: config.environment,
         outcome: result.outcome,
+        spentRefreshToken,
       });
-      return { kind: "rejected" };
+      return { kind: "rejected", effect: spentEffect(spentRefreshToken) };
   }
+}
+
+/**
+ * The effect to report on an outcome that did NOT end in a usable credential.
+ *
+ * A failure can still arrive after a spend: the first attempt mints a pair and
+ * loses the commit, and by the retry a concurrent logout or account switch has
+ * turned the file into something this rotate refuses (`deleted`, `tombstoned`,
+ * `user-mismatch`) or unreachable (`refresh-network`). The command failed, but
+ * it did not fail WITHOUT consuming the refresh token, and a caller auditing
+ * what this invocation touched needs the difference.
+ */
+function spentEffect(spentRefreshToken: boolean): ValidationEffect {
+  return spentRefreshToken ? "token-rotation-unconfirmed" : "none";
 }
 
 /**

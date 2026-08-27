@@ -303,7 +303,10 @@ describe("whoami runner migration", () => {
 
   it("emits a single ok result with status='no-credentials', validated=false, and exits 1 when not signed in", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({ kind: "no-credentials" }),
+      validateStoredCredentials: async () => ({
+        kind: "no-credentials",
+        effect: "none",
+      }),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);
@@ -322,7 +325,10 @@ describe("whoami runner migration", () => {
 
   it("emits a single ok result with status='rejected', validated=true, and exits 1 when the token was rejected", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({ kind: "rejected" }),
+      validateStoredCredentials: async () => ({
+        kind: "rejected",
+        effect: "none",
+      }),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);
@@ -334,9 +340,68 @@ describe("whoami runner migration", () => {
     });
   });
 
+  // A rejection can arrive AFTER a spend (first rotate attempt loses its
+  // commit, a concurrent logout/account switch turns the retry into
+  // deleted/tombstoned/user-mismatch). Reporting "none" there would tell an
+  // auditing caller this invocation touched nothing, when it consumed the
+  // refresh token.
+  it("reports the spend on a rejection that followed one, in data and on the human line", async () => {
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: async () => ({
+        kind: "rejected",
+        effect: "token-rotation-unconfirmed",
+      }),
+    }));
+    const { whoamiCommand } = await import("../whoami");
+    const out = await runJsonCommand(whoamiCommand);
+    expect(out.exitCode).toBe(1);
+    expect(out.terminal).toMatchObject({
+      status: "ok",
+      data: {
+        status: "rejected",
+        credentialUpdate: "token-rotation-unconfirmed",
+      },
+    });
+
+    stdoutChunks = [];
+    vi.resetModules();
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: async () => ({
+        kind: "rejected",
+        effect: "token-rotation-unconfirmed",
+      }),
+    }));
+    const { whoamiCommand: humanCmd } = await import("../whoami");
+    await runHumanCommand(humanCmd);
+    expect(joined(stdoutChunks)).toContain("may be stale");
+  });
+
+  // The network path throws, so its envelope is the ONLY thing the caller
+  // gets - the spend has to ride on it or it is lost.
+  it("carries a spend that preceded a network failure in the error envelope", async () => {
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: async () => ({
+        kind: "network-error",
+        effect: "token-rotation-unconfirmed",
+      }),
+    }));
+    const { whoamiCommand } = await import("../whoami");
+    const out = await runJsonCommand(whoamiCommand);
+    expect(out.exitCode).toBe(2);
+    const error = out.terminal?.error as Record<string, unknown>;
+    expect(error.code).toBe("E_AUTH_NETWORK");
+    expect(error.details).toMatchObject({
+      credentialUpdate: "token-rotation-unconfirmed",
+    });
+    expect(String(error.message)).toContain("refresh token was spent");
+  });
+
   it("emits a single error envelope with code=E_AUTH_NETWORK and exits 2 on a network failure", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({ kind: "network-error" }),
+      validateStoredCredentials: async () => ({
+        kind: "network-error",
+        effect: "none",
+      }),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);

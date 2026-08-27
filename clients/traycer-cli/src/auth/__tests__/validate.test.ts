@@ -251,6 +251,7 @@ describe("validateStoredCredentials", () => {
     readMock.mockResolvedValue(null);
     expect(await validateStoredCredentials()).toEqual({
       kind: "no-credentials",
+      effect: "none",
     });
     expect(identityMock).not.toHaveBeenCalled();
   });
@@ -259,6 +260,7 @@ describe("validateStoredCredentials", () => {
     identityMock.mockResolvedValue({ kind: "network-error" });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
+      effect: "none",
     });
     expect(rotateMock).not.toHaveBeenCalled();
   });
@@ -296,7 +298,12 @@ describe("validateStoredCredentials", () => {
       outcome: "refresh-rejected",
       credentials: null,
     });
-    expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
+    // The server refused the refresh token, so nothing was minted and nothing
+    // was written - `none` here is a fact, not an assumption.
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "rejected",
+      effect: "none",
+    });
   });
 
   it("maps a transient rotate failure to network-error", async () => {
@@ -307,6 +314,7 @@ describe("validateStoredCredentials", () => {
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
+      effect: "none",
     });
   });
 
@@ -324,7 +332,10 @@ describe("validateStoredCredentials", () => {
         user: { id: "u2", email: "other@traycer.ai", name: "Other" },
       },
     });
-    expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "rejected",
+      effect: "none",
+    });
   });
 
   it("adopts a sibling's pair on superseded (valid) and reports effect='none' - nothing was spent or written here", async () => {
@@ -398,9 +409,46 @@ describe("validateStoredCredentials", () => {
     });
   });
 
+  // A failure can arrive AFTER a spend: the first attempt mints a pair and
+  // loses the commit, and by the retry a concurrent logout/account switch has
+  // turned the file into something this rotate refuses. The command failed, but
+  // it did not fail without consuming the refresh token - and a caller auditing
+  // what this invocation touched has no other way to learn that.
+  it.each([
+    ["deleted", "rejected"],
+    ["tombstoned", "rejected"],
+    ["user-mismatch", "rejected"],
+    ["refresh-network", "network-error"],
+  ] as const)(
+    "carries the spend into a terminal %s: reports %s with effect='token-rotation-unconfirmed'",
+    async (outcome, kind) => {
+      identityMock.mockResolvedValue({ kind: "rejected" });
+      rotateMock
+        .mockResolvedValueOnce({
+          outcome: "commit-failed",
+          credentials: {
+            token: "minted-token",
+            refreshToken: "minted-refresh",
+            savedAt: "2026-03-01T00:00:00.000Z",
+            user: storedCreds.user,
+          },
+        })
+        .mockResolvedValueOnce({ outcome, credentials: null });
+
+      expect(await validateStoredCredentials()).toEqual({
+        kind,
+        effect: "token-rotation-unconfirmed",
+      });
+      expect(rotateMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("maps a tombstoned file (a sign-out stands) to rejected", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({ outcome: "tombstoned", credentials: null });
-    expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "rejected",
+      effect: "none",
+    });
   });
 });

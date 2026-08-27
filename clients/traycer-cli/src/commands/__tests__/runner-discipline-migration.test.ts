@@ -425,6 +425,15 @@ describe("logoutCommand runner contract", () => {
     const error = out.terminal?.error as Record<string, unknown>;
     expect(error.code).toBe("E_UNEXPECTED");
     expect(out.exitCode).toBe(1);
+    // The message must not claim the session survived. `commitMutation`
+    // DELETES the credentials file at its apply step and only then finalizes
+    // the sidecar, so a `commit-failed` can arrive with the file already gone -
+    // "could not confirm" is the whole of what is known here.
+    expect(String(error.message)).toContain("could not confirm");
+    expect(String(error.message)).toContain(
+      "may or may not still be signed in",
+    );
+    expect(error.details).toMatchObject({ signOutOutcome: "commit-failed" });
   });
 });
 
