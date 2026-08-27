@@ -128,7 +128,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     );
   });
 
-  it("prints every non-hidden option's flags in that command's own rendered help", () => {
+  it("prints every non-hidden option's flags, and every registered argument's name, in that command's own rendered help", () => {
     const program = freshProgram();
     for (const { path, cmd } of allCommands(program)) {
       const help = cmd.helpInformation();
@@ -146,6 +146,15 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
             `${pathLabel(path)}: rendered help is missing '${option.short}'`,
           ).toBe(true);
         }
+      }
+      // Commander's `Arguments:` section lists the BARE name (no `<>`/`[]`/
+      // `...`), e.g. `artifactPaths`, not `[artifactPaths...]` - confirmed by
+      // inspecting `helpInformation()` output directly rather than guessing.
+      for (const argument of cmd.registeredArguments) {
+        expect(
+          help.includes(argument.name()),
+          `${pathLabel(path)}: rendered help is missing registered argument '${argument.name()}'`,
+        ).toBe(true);
       }
     }
   });
@@ -292,7 +301,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     ).toBe(false);
   });
 
-  it("keeps internal vocabulary out of every visible command's description and its visible options' descriptions", () => {
+  it("keeps internal vocabulary out of every visible command's description, its visible options' descriptions, and its registered arguments' descriptions", () => {
     const program = freshProgram();
     // Deliberately does NOT blocklist "bootstrap" (host start's description
     // is owned by another in-flight PR) or "NDJSON" (a real format name).
@@ -319,6 +328,20 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
           expect(
             pattern.test(option.description),
             `${pathLabel(path)} ${option.long}: description leaks '${label}': "${option.description}"`,
+          ).toBe(false);
+        }
+      }
+      // Positional argument descriptions are rendered help text too
+      // (`comments list [artifactPaths...]`, `terminal output <terminal-id>`,
+      // etc.) - a regression here (e.g. "this epic" instead of "this Task")
+      // is exactly as user-visible as one in an option description, so it
+      // gets the same blocklist. `registeredArguments` is commander's public
+      // accessor for this - not an internal field.
+      for (const argument of cmd.registeredArguments) {
+        for (const [pattern, label] of banned) {
+          expect(
+            pattern.test(argument.description),
+            `${pathLabel(path)} ${argument.name()}: description leaks '${label}': "${argument.description}"`,
           ).toBe(false);
         }
       }
@@ -418,6 +441,27 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "relative to the current directory (resolved before the request)";
       expect(list).toContain(expectedWording);
       expect(setStatus).toContain(expectedWording);
+    });
+
+    // Belt-and-braces duplicate of the generic internal-vocabulary sweep
+    // above: this is a proven regression (CLI-005 walked right back in via
+    // `comments list`'s `[artifactPaths...]` argument description reverting
+    // to "this epic"), and the generic sweep's failure message names the
+    // command path but not what the wording SHOULD say. This one points
+    // straight at the finding.
+    it("comments list's [artifactPaths...] argument says 'this Task', never 'epic' (CLI-005 regression)", () => {
+      const program = freshProgram();
+      const list = findByPath(program, ["comments", "list"]);
+      const argument = list.registeredArguments.find(
+        (candidate) => candidate.name() === "artifactPaths",
+      );
+      expect(
+        argument,
+        "expected 'comments list' to register an 'artifactPaths' argument",
+      ).toBeDefined();
+      const description = argument?.description ?? "";
+      expect(description).toContain("this Task");
+      expect(description).not.toMatch(/\bepics?\b/i);
     });
   });
 });
