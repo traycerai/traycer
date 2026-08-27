@@ -154,7 +154,13 @@ try {
   assert.ok(
     await evaluate(
       client,
-      `document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-separator-last] [data-expand-button]:not([data-collapse-button])') !== null`,
+      `Boolean(
+        document
+          .querySelector("diffs-container")
+          ?.shadowRoot?.querySelector(
+            '[data-separator-last] [data-expand-button]:not([data-collapse-button])',
+          ),
+      )`,
     ),
     "partial context expansion lost its remaining expander",
   );
