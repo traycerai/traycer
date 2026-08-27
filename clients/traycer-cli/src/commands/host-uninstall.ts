@@ -11,14 +11,25 @@ import {
   createServiceController,
   serviceLabelFor,
   type ServiceLabel,
+  type ServiceState,
+  type ServiceStatus,
   type StopServiceOptions,
   type UninstallServiceOptions,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer host uninstall [--all]`:
-//   default → remove install dir + record only
-//   --all   → also deregister the OS service + clear environment runtime state
+//   default → remove the installed + staged host bytes and the install
+//             record, and NOTHING else. The OS service stays registered, and
+//             a host that is already running keeps running until it exits -
+//             after which the surviving registration has no valid install to
+//             launch. That end state is legal (it is how a
+//             remove-then-reinstall is expressed) but it is not what
+//             "optionally removes the OS service" suggests, so both the help
+//             text and this command's own output name it explicitly.
+//   --all   → deregister the OS service first, then cooperatively stop the
+//             host, then remove the bytes; environment runtime state (pid
+//             metadata, log) is purged only once the stop is confirmed.
 // User data under ~/.traycer/ (chats, sqlite, downloaded models, credentials)
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
@@ -31,6 +42,7 @@ export interface RuntimePurgeStopController {
 
 export interface HostUninstallServiceController extends RuntimePurgeStopController {
   uninstall(options: UninstallServiceOptions): Promise<void>;
+  status(label: ServiceLabel): Promise<ServiceStatus>;
 }
 
 export interface RunHostUninstallDeps {
@@ -108,6 +120,14 @@ export async function runHostUninstall(
 ): Promise<CommandResult> {
   let serviceUninstalled = false;
   let purgeChannelRuntime = false;
+  // Observed BEFORE anything is removed, and only on the default path: it is
+  // the only way this command can say what it is about to leave behind. On
+  // `--all` the end state is unconditional (nothing registered, nothing
+  // running) so there is nothing to report and no reason to pay for the
+  // platform probe.
+  const retainedService = args.all
+    ? null
+    : await readServiceStateBestEffort(deps, ctx);
   if (args.all) {
     ctx.logger.warn(
       "Host uninstall command will deregister service and purge runtime",
@@ -168,7 +188,10 @@ export async function runHostUninstall(
     removedStagedDir: result.removedStagedDir,
     purgedRuntime: result.purgedRuntime,
     hadInstallRecord: result.removedRecord !== null,
+    retainedServiceState: retainedService?.state ?? null,
   });
+  const serviceRegistrationRetained =
+    retainedService !== null && retainedService.state !== "not-installed";
   return {
     data: {
       removedRecord: result.removedRecord,
@@ -176,20 +199,51 @@ export async function runHostUninstall(
       removedStagedDir: result.removedStagedDir,
       serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
+      // What the machine is left holding, so an automated caller does not
+      // have to infer the default path's end state from the absence of
+      // `serviceUninstalled`. `null` on `--all` (nothing is retained) and
+      // whenever the platform probe could not answer.
+      serviceRegistrationRetained,
+      retainedServiceState: retainedService?.state ?? null,
+      hostStillRunning: retainedService?.state === "running",
     },
     human: humanSummary({
       removedVersion: result.removedRecord?.version ?? null,
       serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
+      retainedServiceState: retainedService?.state ?? null,
     }),
     exitCode: 0,
   };
+}
+
+// Never fails the uninstall: this read exists to DESCRIBE the end state, and
+// a platform probe that cannot answer (launchctl missing, a systemd user
+// manager that was never started) must not turn a working removal into an
+// error. An unanswerable probe simply drops the extra disclosure.
+async function readServiceStateBestEffort(
+  deps: RunHostUninstallDeps,
+  ctx: RunHostUninstallContext,
+): Promise<ServiceStatus | null> {
+  try {
+    return await deps
+      .createServiceController()
+      .status(serviceLabelFor(ctx.environment));
+  } catch (err) {
+    ctx.logger.warn("Host uninstall could not read the OS service state", {
+      environment: ctx.environment,
+      errorName: err instanceof Error ? err.name : "Error",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 function humanSummary(args: {
   readonly removedVersion: string | null;
   readonly serviceUninstalled: boolean;
   readonly purgedRuntime: boolean;
+  readonly retainedServiceState: ServiceState | null;
 }): string {
   const parts: string[] = [];
   if (args.removedVersion === null) {
@@ -199,5 +253,22 @@ function humanSummary(args: {
   }
   if (args.serviceUninstalled) parts.push("deregistered OS service");
   if (args.purgedRuntime) parts.push("cleared environment runtime state");
+  // The default path's end state, spelled out. Leaving a registered
+  // supervisor pointed at an install that no longer exists is the one
+  // outcome of this command a user is most likely not to have intended, and
+  // it is silent otherwise - nothing fails, and nothing else reports it until
+  // the next start attempt.
+  if (args.retainedServiceState === "running") {
+    parts.push(
+      "the OS service is still registered and the running host keeps serving until it exits, after which it cannot be started again - run 'traycer host uninstall --all' to stop and deregister it, or 'traycer host install' to reinstall",
+    );
+  } else if (
+    args.retainedServiceState !== null &&
+    args.retainedServiceState !== "not-installed"
+  ) {
+    parts.push(
+      "the OS service is still registered and has no install left to launch - run 'traycer host service uninstall' to deregister it, or 'traycer host install' to reinstall",
+    );
+  }
   return parts.join("; ");
 }

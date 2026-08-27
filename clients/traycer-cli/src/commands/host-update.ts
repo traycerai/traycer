@@ -35,6 +35,15 @@ import { withCliLock } from "../store/cli-lock";
 // staged version attached to `details`, rather than the generic
 // `details: null` `assertHostNotBusy` throws on its own.
 //
+// SUCCESS CONTRACT: exit 0 here means the host is RUNNING the requested
+// version. The post-apply `probeHostHealth` below is what earns that claim,
+// and a host that committed cleanly but never came back exits non-zero with
+// `E_HOST_UPDATE_HEALTH_CHECK_FAILED` (no rollback - see the note at the
+// probe). This is deliberately stronger than `host apply`'s exit 0, which
+// promises only that the bytes committed; `commands/host-apply.ts` records
+// why the low-level primitive must keep reporting "applied but not
+// converged" as a successful, inspectable outcome instead of an error.
+//
 // Legacy wire-contract compat: Desktop's `host-management-ipc.ts` runs
 // `host update`'s stdout through `projectInstallResult`, which reads a
 // *flat* legacy shape off `data` (`version`, `installedAt`,
