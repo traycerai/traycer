@@ -1233,7 +1233,8 @@ export interface ProjectionInputs {
    * projecting a bare doc).
    */
   readonly reportDeadMutations:
-    ((requestIds: readonly string[]) => void) | null;
+    | ((requestIds: readonly string[]) => void)
+    | null;
 }
 
 export function projectFullState(

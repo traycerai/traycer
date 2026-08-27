@@ -112,7 +112,9 @@ export interface PendingReparent {
 }
 
 export type PendingMetadataMutation =
-  PendingRename | PendingEpicTitle | PendingReparent;
+  | PendingRename
+  | PendingEpicTitle
+  | PendingReparent;
 
 /**
  * Every mutation this client has stamped and not yet finished with, keyed by
