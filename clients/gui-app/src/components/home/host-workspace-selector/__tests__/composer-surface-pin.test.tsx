@@ -304,6 +304,7 @@ describe("composer host picker writes a surface pin", () => {
     expect(
       useLandingDraftStore.getState().drafts[0]?.workspace.folders,
     ).toEqual(["/home/this-draft"]);
+    expect(pinnedHostId()).toBe("host-home");
   });
 
   it("keys the pin per WINDOW, so both composer instances agree", () => {

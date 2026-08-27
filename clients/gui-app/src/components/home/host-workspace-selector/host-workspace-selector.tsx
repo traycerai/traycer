@@ -496,7 +496,6 @@ export function ActiveHostWorkspaceControls(
       props.hostScope.onSelect(hostId);
       return;
     }
-    if (hostId === activeHostId) return;
     // Writes THIS surface's pin and nothing else. Before P1.2 this called
     // `binding.directory.selectById(hostId)` - moving the whole app to place
     // one chat, which is the defect the surface-pin model exists to end.
@@ -505,6 +504,7 @@ export function ActiveHostWorkspaceControls(
     // unlike an effect keyed by `resolvedHostId`, does not overwrite another
     // draft on mount or react to lease-driven automatic failover.
     if (
+      hostId !== activeHostId &&
       props.stagingKey.surface === "landing" &&
       props.stagingKey.draftId !== null
     ) {
@@ -512,7 +512,9 @@ export function ActiveHostWorkspaceControls(
         .getState()
         .restoreDraftWorkspaceForHost(props.stagingKey.draftId, hostId);
     }
-    composerPin.setSelection(hostId);
+    if (composerPin.selection !== hostId) {
+      composerPin.setSelection(hostId);
+    }
   };
 
   if (props.layout === "stacked") {
