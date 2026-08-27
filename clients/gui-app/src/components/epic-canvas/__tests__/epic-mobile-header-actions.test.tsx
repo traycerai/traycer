@@ -44,7 +44,16 @@ const session = vi.hoisted(() => ({
   registered: false,
   /** A registered session whose serving client is momentarily gone. */
   hasHostClient: false,
+  /**
+   * The handle's stable transport binding. `null` is the cold-restore shape -
+   * a registered session that never announced a host because the provider
+   * that stamps identity is unmounted - and it is NOT interchangeable with a
+   * named host: only a named host that differs from the app-wide one makes an
+   * app-wide dispatch a request swap.
+   */
+  hostId: null as string | null,
 }));
+const appWideHostId = vi.hoisted(() => ({ value: "host-a" as string | null }));
 const beginEpicTitleMutation = vi.hoisted(() =>
   vi.fn<(title: string) => string>(() => "req-1"),
 );
@@ -95,6 +104,13 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
           request: sessionRequest,
         }
       : null,
+  getEpicSessionHandleHostId: () => session.hostId,
+}));
+vi.mock("@/lib/host/runtime", () => ({
+  getAppHostClientSnapshot: () =>
+    appWideHostId.value === null
+      ? null
+      : { getActiveHostId: () => appWideHostId.value },
 }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: reportableErrorToastSpy,
@@ -155,6 +171,8 @@ describe("<MobileEpicHeaderTitle />", () => {
     mutateAsyncSpy.mockResolvedValue(undefined);
     session.registered = false;
     session.hasHostClient = false;
+    session.hostId = null;
+    appWideHostId.value = "host-a";
     beginEpicTitleMutation.mockClear();
     retirePendingMutation.mockClear();
     sessionRequest.mockClear();
@@ -238,21 +256,22 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(retirePendingMutation).toHaveBeenCalledWith("req-1", "landed");
   });
 
-  it("refuses the rename when a registered session has no serving client", async () => {
+  it("refuses the rename when the session names a host the app-wide client is not on", async () => {
     session.registered = true;
     session.hasHostClient = false;
+    session.hostId = "host-b";
+    appWideHostId.value = "host-a";
     renderWithQueryClient(
       <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
     );
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
-    // The stamp went on THIS session's store, so dispatching app-wide would
-    // rename whichever host the window is pointed at and then mark the
-    // session's overlay landed for an ack it can never echo. `epicRenameClient`
-    // refuses the same substitution on the wide viewport by returning null;
-    // this is the mobile half of that contract, so the app-wide mutation must
-    // stay untouched rather than serve as a fallback.
+    // The stamp went on THIS session's store, so dispatching to host-a would
+    // rename the wrong machine's copy and then mark the session's overlay
+    // landed for an ack it can never echo. `epicRenameClient` refuses the same
+    // substitution on the wide viewport; this is the mobile half of it, so the
+    // app-wide mutation must stay untouched rather than serve as a fallback.
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
     expect(sessionRequest).not.toHaveBeenCalled();
     // Nothing can land the stamp, so it is dropped rather than left to expire.
@@ -260,6 +279,43 @@ describe("<MobileEpicHeaderTitle />", () => {
     await waitFor(() => {
       expect(reportableErrorToastSpy).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("still renames through the app-wide mutation when the session names no host", () => {
+    session.registered = true;
+    session.hasHostClient = false;
+    session.hostId = null;
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    const input = openEdit("mobile-epic-header-title");
+    fireEvent.change(input, { target: { value: "Renamed epic" } });
+    fireEvent.blur(input);
+    // The cold-restore shape: a registered session whose provider is unmounted,
+    // so it never announced a host. There is no second host to swap TO, which
+    // is why `epicRenameClient` hands the strip the app-wide client for a
+    // `null` tab host rather than refusing. Refusing on client-absence alone
+    // would break renaming on a restored mobile tab.
+    expect(mutateAsyncSpy).toHaveBeenCalledTimes(1);
+    expect(reportableErrorToastSpy).not.toHaveBeenCalled();
+  });
+
+  it("still renames through the app-wide mutation when the session is on that same host", () => {
+    session.registered = true;
+    session.hasHostClient = false;
+    session.hostId = "host-a";
+    appWideHostId.value = "host-a";
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    const input = openEdit("mobile-epic-header-title");
+    fireEvent.change(input, { target: { value: "Renamed epic" } });
+    fireEvent.blur(input);
+    // Same host, so the app-wide client already addresses the machine the
+    // stamp is on - substituting it is not a request swap. This is
+    // `epicRenameClient`'s `hostId === appClient.getActiveHostId()` branch.
+    expect(mutateAsyncSpy).toHaveBeenCalledTimes(1);
+    expect(reportableErrorToastSpy).not.toHaveBeenCalled();
   });
 
   it("still falls back to the app-wide mutation when no session is registered", () => {

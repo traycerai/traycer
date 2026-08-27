@@ -12,8 +12,10 @@ import { toast } from "sonner";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import {
   getEpicSessionHandleHostClient,
+  getEpicSessionHandleHostId,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
+import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -98,21 +100,38 @@ export function MobileEpicHeaderTitle(props: {
       // the landed stamp masking the real title until expiry (and renaming
       // the wrong host's copy).
       //
-      // NO session at all is the only case that falls back to the app-wide
-      // mutation - all this surface ever had before sessions carried a host,
-      // and with no handle there is no stamp to strand either. A REGISTERED
-      // session whose serving client is momentarily gone (a disconnect, a
-      // host transition) is UNREACHABLE, not app-wide. Substituting there is
-      // exactly the request swap `epicRenameClient` exists to refuse -
-      // "rename the epic on host B" and "rename it on whichever machine this
-      // window happens to be pointed at" are different requests - and it
-      // refuses by returning `null` for this precise case, after which
-      // `tab-strip-item.tsx` drops the stamp and reports. Parity is the whole
-      // point of this control, so the two halves of the 768px contract have
-      // to REFUSE alike, not merely route alike.
-      if (handle !== null) {
-        const sessionClient = getEpicSessionHandleHostClient(handle);
-        if (sessionClient === null) {
+      // Falling back to the app-wide mutation is safe only where it cannot be
+      // a request SWAP, and `epicRenameClient` draws that line by HOST ID
+      // rather than by client availability: it hands back the app-wide client
+      // when the tab names no host OR names the active one, and refuses
+      // (`null`) only for a host it does name and cannot resolve. "Rename the
+      // epic on host B" and "rename it on whichever machine this window
+      // happens to be pointed at" are only different requests when B is a
+      // different machine. Same three cases here, in the same order:
+      //
+      //   - no handle: no stamp to strand, and all this surface had before
+      //     sessions carried a host;
+      //   - a handle naming NO host: the session never announced one, which
+      //     is the cold-restore shape - this control reads a restored epic's
+      //     title with the epic surface, and so the provider that stamps
+      //     identity, unmounted - so there is no second host to swap TO;
+      //   - a handle naming a DIFFERENT host: the swap Codex reported. The
+      //     overlay is stamped on that session's store, so an app-wide ack
+      //     would mark it landed for a rename its host never saw, against
+      //     another host's copy. Refuse and drop the stamp, as the strip does.
+      const sessionClient =
+        handle === null ? null : getEpicSessionHandleHostClient(handle);
+      if (handle !== null && sessionClient === null) {
+        // An ABSENT entry and a `null` one both arrive here and are not the
+        // same state - `handleHostClients` says so in as many words: absent is
+        // a handle the provider never saw, `null` is a session with no serving
+        // client just now. The host id is what separates them, and it is the
+        // handle's stable transport binding, so it does not drift the way the
+        // client legitimately rotates on reconnect.
+        const sessionHostId = getEpicSessionHandleHostId(handle);
+        const appWideHostId =
+          getAppHostClientSnapshot()?.getActiveHostId() ?? null;
+        if (sessionHostId !== null && sessionHostId !== appWideHostId) {
           // No RPC ever fired, so nothing can land this stamp - drop it.
           retire("failed");
           reportableErrorToast(
@@ -127,6 +146,8 @@ export function MobileEpicHeaderTitle(props: {
           );
           return;
         }
+      }
+      if (sessionClient !== null) {
         const hostId = sessionClient.getActiveHostId();
         const userId = sessionClient.getRequestContextUserId();
         void sessionClient
