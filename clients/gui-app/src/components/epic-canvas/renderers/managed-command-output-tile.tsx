@@ -372,6 +372,13 @@ function ManagedCommandOutputTileBody(props: {
     getItemKey: getOutputRowKey,
     overscan: OUTPUT_VIRTUAL_OVERSCAN,
     initialRect: OUTPUT_VIRTUAL_INITIAL_RECT,
+    // The first snapshot scrolls to an estimated tail. Wrapped rows at that
+    // tail are measured after the scroll and can grow the virtual document;
+    // end anchoring carries that growth into scrollTop so the fresh window
+    // stays live. This does not turn every focus into "jump to live": TanStack
+    // applies the end correction only while the viewport is already at the
+    // end, so a restored reader parked in history keeps their position.
+    anchorTo: "end",
     // Row measurement can land while the follow/prepend layout effects are
     // committing. TanStack's synchronous default calls React `flushSync` from
     // that ResizeObserver path, which React rejects and which turns a burst of

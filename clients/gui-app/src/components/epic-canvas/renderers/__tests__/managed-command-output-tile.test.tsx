@@ -45,8 +45,12 @@ const boundHostSupport = vi.hoisted<{ value: StreamMethodSupport }>(() => ({
   value: "supported",
 }));
 
-const virtualizerConfig = vi.hoisted<{ useFlushSync: boolean | null }>(() => ({
+const virtualizerConfig = vi.hoisted<{
+  useFlushSync: boolean | null;
+  anchorTo: "start" | "end" | null;
+}>(() => ({
   useFlushSync: null,
+  anchorTo: null,
 }));
 
 vi.mock("@tanstack/react-virtual", async (importOriginal) => {
@@ -56,6 +60,7 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
     ...actual,
     useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
       virtualizerConfig.useFlushSync = options.useFlushSync ?? null;
+      virtualizerConfig.anchorTo = options.anchorTo ?? null;
       return actual.useVirtualizer(options);
     },
   };
@@ -340,6 +345,7 @@ beforeEach(() => {
   defaultHostSupport.value = "supported";
   boundHostSupport.value = "supported";
   virtualizerConfig.useFlushSync = null;
+  virtualizerConfig.anchorTo = null;
   sentFrames = [];
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
@@ -431,6 +437,10 @@ describe("managed-command output window", () => {
     expect(mountedRows.length).toBeGreaterThan(0);
     expect(mountedRows.length).toBeLessThan(100);
     expect(virtualizerConfig.useFlushSync).toBe(false);
+    // A fresh window first reaches an estimated tail. End anchoring is what
+    // keeps it there when wrapped rows are measured and enlarge the document;
+    // without this option the viewport can settle in the middle of the log.
+    expect(virtualizerConfig.anchorTo).toBe("end");
   });
 
   it("floats live status over the log instead of titling itself", () => {
