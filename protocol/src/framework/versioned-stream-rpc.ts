@@ -113,8 +113,8 @@ declare const validatedVersionedStreamRpcRegistryBrand: unique symbol;
  * or `defineVersionedStreamRpcRegistry`.
  */
 export type StreamMethodVersionRegistry<
-  Registry extends
-    UncheckedStreamMethodVersionRegistry = UncheckedStreamMethodVersionRegistry,
+  Registry extends UncheckedStreamMethodVersionRegistry =
+    UncheckedStreamMethodVersionRegistry,
 > = Registry & {
   readonly [validatedStreamMethodVersionRegistryBrand]: true;
 };
@@ -123,11 +123,12 @@ export type StreamMethodVersionRegistry<
  * Validated multi-method stream registry.
  */
 export type VersionedStreamRpcRegistry<
-  Registry extends
-    UncheckedVersionedStreamRpcRegistry = UncheckedVersionedStreamRpcRegistry,
+  Registry extends UncheckedVersionedStreamRpcRegistry =
+    UncheckedVersionedStreamRpcRegistry,
 > = {
-  readonly [Method in keyof Registry &
-    string]: StreamMethodVersionRegistry<Registry[Method]>;
+  readonly [Method in keyof Registry & string]: StreamMethodVersionRegistry<
+    Registry[Method]
+  >;
 } & {
   readonly [validatedVersionedStreamRpcRegistryBrand]: true;
 };
@@ -376,9 +377,7 @@ function flattenToFieldMap(schema: z.ZodType, context: string): FieldMap {
       const discriminatorValue = literalValues[0];
 
       if (typeof discriminatorValue !== "string") {
-        throw new Error(
-          `${context}: discriminator literal must be a string`,
-        );
+        throw new Error(`${context}: discriminator literal must be a string`);
       }
 
       for (const [field, fieldSchema] of Object.entries(option.shape)) {
@@ -401,9 +400,7 @@ function flattenObjectShape(schema: z.ZodObject, context: string): FieldMap {
 
   for (const [field, fieldSchema] of Object.entries(schema.shape)) {
     if (!(fieldSchema instanceof z.ZodType)) {
-      throw new Error(
-        `${context}: field '${field}' is not a zod schema`,
-      );
+      throw new Error(`${context}: field '${field}' is not a zod schema`);
     }
 
     out[field] = JSON.stringify(z.toJSONSchema(fieldSchema));

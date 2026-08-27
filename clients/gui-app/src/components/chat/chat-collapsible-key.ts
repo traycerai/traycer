@@ -1,5 +1,9 @@
 export type ChatCollapsibleKind =
-  "subagent" | "activity-group" | "a2a-send" | "a2a-received" | "interview";
+  | "subagent"
+  | "activity-group"
+  | "a2a-send"
+  | "a2a-received"
+  | "interview";
 
 export interface ChatCollapsibleKey {
   readonly tileInstanceId: string;

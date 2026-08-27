@@ -704,25 +704,23 @@ function main() {
         }),
       });
     }
-    caskOutputs.push(
-      {
-        manager: "homebrew-cask-versioned",
-        path: path.join(
-          staging,
-          "homebrew",
-          "Casks",
-          `traycer-desktop@${versionedCaskVersion}.rb`,
-        ),
-        content: renderHomebrewCask({
-          token: `traycer-desktop@${versionedCaskVersion}`,
-          version,
-          homepage,
-          macArm,
-          macX64,
-          linuxX64AppImage,
-        }),
-      },
-    );
+    caskOutputs.push({
+      manager: "homebrew-cask-versioned",
+      path: path.join(
+        staging,
+        "homebrew",
+        "Casks",
+        `traycer-desktop@${versionedCaskVersion}.rb`,
+      ),
+      content: renderHomebrewCask({
+        token: `traycer-desktop@${versionedCaskVersion}`,
+        version,
+        homepage,
+        macArm,
+        macX64,
+        linuxX64AppImage,
+      }),
+    });
     for (const output of caskOutputs) {
       writeFile(output.path, output.content);
     }
@@ -775,26 +773,24 @@ function main() {
         }),
       });
     }
-    formulaOutputs.push(
-      {
-        manager: "homebrew-versioned",
-        path: path.join(
-          staging,
-          "homebrew",
-          "Formula",
-          `traycer@${versionedFormulaVersion}.rb`,
-        ),
-        content: renderHomebrewFormula({
-          version,
-          className: homebrewVersionedClassName(versionedFormulaVersion),
-          kegOnly: true,
-          byPlatform,
-          homepage,
-          license,
-          releaseNotesUrl,
-        }),
-      },
-    );
+    formulaOutputs.push({
+      manager: "homebrew-versioned",
+      path: path.join(
+        staging,
+        "homebrew",
+        "Formula",
+        `traycer@${versionedFormulaVersion}.rb`,
+      ),
+      content: renderHomebrewFormula({
+        version,
+        className: homebrewVersionedClassName(versionedFormulaVersion),
+        kegOnly: true,
+        byPlatform,
+        homepage,
+        license,
+        releaseNotesUrl,
+      }),
+    });
     for (const output of formulaOutputs) {
       writeFile(output.path, output.content);
       summary.written.push({

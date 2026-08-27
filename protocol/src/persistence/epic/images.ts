@@ -8,9 +8,7 @@ export const supportedImageMediaTypes = [
   "image/svg+xml",
 ] as const;
 
-export const supportedImageMediaTypeSchema = z.enum(
-  supportedImageMediaTypes,
-);
+export const supportedImageMediaTypeSchema = z.enum(supportedImageMediaTypes);
 export type SupportedImageMediaType = z.infer<
   typeof supportedImageMediaTypeSchema
 >;

@@ -19,7 +19,12 @@ import {
 } from "../../../../__tests__/contrast";
 
 type ButtonVariant =
-  "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
+  | "default"
+  | "secondary"
+  | "destructive"
+  | "outline"
+  | "ghost"
+  | "link";
 
 // The three utilities `Kbd` must ship for a button that paints an opaque fill.
 // Spelled out rather than scraped off the element: the source assertion below

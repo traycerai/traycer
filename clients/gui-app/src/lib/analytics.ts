@@ -21,7 +21,9 @@ export type AnalyticsSource =
   | "host_failover";
 
 export type AnalyticsWorkspaceSurface =
-  "landing" | "new-conversation" | "owner";
+  | "landing"
+  | "new-conversation"
+  | "owner";
 
 export type AnalyticsWorkspaceContextSource = "browse" | "recent";
 
@@ -122,7 +124,12 @@ export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
  * summary unavailable) - never as a generic "didn't bother computing it"
  * escape hatch. */
 export type AnalyticsCountBucket =
-  "unknown" | "0" | "1" | "2-5" | "6-20" | "21+";
+  | "unknown"
+  | "0"
+  | "1"
+  | "2-5"
+  | "6-20"
+  | "21+";
 
 export type AnalyticsNotificationEntryPoint = Extract<
   AnalyticsSource,
@@ -132,14 +139,16 @@ export type AnalyticsNotificationEntryPoint = Extract<
 export type AnalyticsNotificationHostState = "exact" | "unknown";
 
 export type AnalyticsNotificationFilter =
-  "unread_only" | AnalyticsNotificationCategory;
+  | "unread_only"
+  | AnalyticsNotificationCategory;
 
 export type AnalyticsNotificationSection = "attention" | "recent";
 
 export type AnalyticsNotificationSurface = "center" | "toast" | "native";
 
 export type AnalyticsNotificationAcknowledgmentSource =
-  "explicit_action" | "activation";
+  | "explicit_action"
+  | "activation";
 
 export type AnalyticsNotificationOutcome = "success" | "failure";
 
@@ -162,7 +171,10 @@ export function analyticsCountBucket(
  * bugs show up as heap correlating with this bucket, so it is the axis every
  * resource sample must carry. */
 export type AnalyticsSessionAgeBucket =
-  "under_1h" | "1_to_4h" | "4_to_12h" | "over_12h";
+  | "under_1h"
+  | "1_to_4h"
+  | "4_to_12h"
+  | "over_12h";
 
 /** Escalating JS-heap pressure bands. `critical` sits below the renderer's
  * 4 GB old-space ceiling with room to still report before an OOM. */
@@ -842,7 +854,10 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";
     readonly blocked_action:
-      "send" | "open_github_issue" | "report_on_github" | "save_bundle";
+      | "send"
+      | "open_github_issue"
+      | "report_on_github"
+      | "save_bundle";
   };
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
     | {
@@ -891,7 +906,7 @@ export const POSTHOG_CONFIG = {
   disable_surveys_automatic_display: true,
   disable_product_tours: true,
   disable_web_experiments: true,
-  advanced_disable_decide: true,
+  advanced_disable_flags: true,
   advanced_disable_feature_flags: true,
   person_profiles: "identified_only",
   save_campaign_params: false,
@@ -2390,7 +2405,12 @@ export function analyticsAppSurface(): "desktop" | "mobile" {
 }
 
 export function analyticsPlatform():
-  "android" | "ios" | "linux" | "macos" | "other" | "windows" {
+  | "android"
+  | "ios"
+  | "linux"
+  | "macos"
+  | "other"
+  | "windows" {
   if (isMobileApp()) {
     // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile
     // WebViews, which the desktop branches below would misfile as other or

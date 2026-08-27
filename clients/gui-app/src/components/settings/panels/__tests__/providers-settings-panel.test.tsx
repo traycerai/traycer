@@ -147,7 +147,9 @@ const providerMocks = vi.hoisted(() => ({
     isError: false,
     isFetching: false,
     error: undefined as
-      HostRpcError | { message: string; code: string } | undefined,
+      | HostRpcError
+      | { message: string; code: string }
+      | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -169,7 +171,8 @@ const providerMocks = vi.hoisted(() => ({
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
   submitLoginCodeData: undefined as
-    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+    | { readonly outcome: "accepted" | "noActiveLogin" }
+    | undefined,
   submitLoginCodeError: null as Error | null,
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
@@ -2490,7 +2493,9 @@ describe("<ProvidersSettingsPanel />", () => {
       readonly enabled: boolean;
       readonly enablementMode?: "auto" | "on" | "off";
       readonly enablementSource?:
-        "sticky" | "auto-detected" | "auto-undetected";
+        | "sticky"
+        | "auto-detected"
+        | "auto-undetected";
     }): void {
       providerMocks.listResult.data = {
         providers: [
@@ -2764,7 +2769,9 @@ describe("<ProvidersSettingsPanel />", () => {
       readonly enabled: boolean;
       readonly enablementMode?: "auto" | "on" | "off";
       readonly enablementSource?:
-        "sticky" | "auto-detected" | "auto-undetected";
+        | "sticky"
+        | "auto-detected"
+        | "auto-undetected";
     }): void {
       providerMocks.listResult.data = {
         providers: [

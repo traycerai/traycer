@@ -626,12 +626,25 @@ function ManagedCommandOutputTileBody(props: {
          * process that is still running.
          */}
         {command === null ? null : (
-          <ManagedCommandOutputControls
-            command={command}
-            epicId={epicId}
-            hostId={node.hostId}
-            viewTabId={props.viewTabId}
-          />
+          <>
+            {/*
+             * The fade the floating cluster is legible against. Sits under the
+             * cluster and over the log, and is painted in the tile's own
+             * surface token so every preset theme dissolves scrolling text
+             * into its own background rather than into a grey of ours.
+             */}
+            <div
+              aria-hidden
+              data-testid="managed-command-output-scrim"
+              className="pointer-events-none absolute inset-x-0 top-0 z-[5] h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
+            />
+            <ManagedCommandOutputControls
+              command={command}
+              epicId={epicId}
+              hostId={node.hostId}
+              viewTabId={props.viewTabId}
+            />
+          </>
         )}
         <div
           ref={viewRef}
@@ -656,17 +669,19 @@ function ManagedCommandOutputTileBody(props: {
             fontFamily: terminalFont.fontFamily,
             fontSize: `${terminalFont.fontSize}px`,
           }}
-          // The floating cluster hangs over this surface, so the log reserves
-          // a lane for it on the right. Without that, the cluster sits on the
-          // tail of whichever line happens to be at the top - permanently,
-          // since the log scrolls under it - and a reader loses the end of a
-          // line for no reason they can see. The lane is a share of the
-          // width, capped: a fixed lane the cluster's full width took a third
-          // of a narrow pane away from the log, which is the one thing a
-          // person opened it to read - so on a narrow pane the lane shrinks
-          // and the cluster may overlap the tail of a long line, and on a wide
-          // one it never grows past what the cluster actually needs.
-          className="h-full w-full overflow-y-auto py-2 pr-[min(30%,12rem)] pl-3 leading-relaxed focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none"
+          // The log keeps the full width of the pane. The cluster used to buy
+          // its clearance with a reserved right lane, which cost every line a
+          // share of the width for a collision that only ever happens in the
+          // top row - and cost most on a split pane, where the log is already
+          // narrow. Clearance is bought vertically instead: the log starts
+          // below the cluster, so nothing is under it at rest, and a line
+          // scrolled up dissolves into the scrim rather than colliding with
+          // the label. Only the flow of the log moves; the cluster is still
+          // lifted out of it.
+          className={cn(
+            "h-full w-full overflow-y-auto px-3 leading-relaxed focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
+            command === null ? "py-2" : "pt-9.5 pb-2",
+          )}
         >
           {loadingOlder ? (
             <div className="flex justify-center py-1">
@@ -754,9 +769,14 @@ function ManagedCommandOutputTileBody(props: {
  * the tab; what stays is the pair of facts the tab cannot carry: what the shell
  * is doing right now, and the two verbs that change it.
  *
- * Backdrop-blurred rather than opaque, so it reads as hovering over the log
- * rather than as a hole punched in it, and the reader can still see that text
- * continues underneath.
+ * Bare text and icons - no card, no border, no fill. A box here read as chrome
+ * pasted onto the log; without one the pair of facts sits in the window's air.
+ * What makes that legible is not this component: the log's own top fade
+ * (rendered beside it, one layer below) is what the label is read against, and
+ * the log starting below this row is what keeps a line from ever resting under
+ * it. Neither can be removed without giving the box back. The buttons keep
+ * their ghost hover fill, which is now the only affordance saying they are
+ * pressable.
  */
 function ManagedCommandOutputControls(props: {
   readonly command: ManagedCommand;
@@ -765,14 +785,14 @@ function ManagedCommandOutputControls(props: {
   readonly viewTabId: string;
 }) {
   return (
-    <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1">
+    <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-0.5">
       {/*
        * Stays pointer-transparent: it is a readout, and it sits permanently
        * over a corner of a scrollable log, so a wheel turn there has to reach
        * the log rather than land on a label that cannot do anything with it.
        */}
       <span
-        className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-canvas/80 px-2 py-1 text-ui-xs text-foreground/85 shadow-sm backdrop-blur-sm"
+        className="flex shrink-0 items-center gap-1.5 px-1.5 py-1 text-ui-xs text-foreground/85"
         data-testid="managed-command-output-status"
       >
         <ManagedCommandStatusDot
@@ -781,7 +801,7 @@ function ManagedCommandOutputControls(props: {
         />
         {managedCommandStatusLabel(props.command.status)}
       </span>
-      <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas/80 px-0.5 shadow-sm backdrop-blur-sm">
+      <span className="pointer-events-auto flex shrink-0 items-center">
         <ManagedCommandOutputDetails
           command={props.command}
           epicId={props.epicId}
@@ -964,10 +984,15 @@ function OutputRow(props: { readonly line: ManagedCommandTimelineLine }) {
  * matching lines against something else that happened, and the date is already
  * carried by the window they are in. `null` is a line the host could not read a
  * timestamp from - a partial record left by a crash.
+ *
+ * 24-hour regardless of locale, like every other log this one is read beside:
+ * a fixed-width column of eight characters instead of a locale's eleven, in a
+ * gutter that repeats on every line of the pane.
  */
 function formatLineTime(atMs: number | null): string {
   if (atMs === null) return "--:--:--";
   return new Date(atMs).toLocaleTimeString(undefined, {
+    hourCycle: "h23",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

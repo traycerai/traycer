@@ -151,9 +151,9 @@ describe("chat-head lineage", () => {
     expect(parse(wireHead).parentHeadSha256).toBeNull();
 
     const parent = "c".repeat(64);
-    expect(parse({ ...wireHead, parentHeadSha256: parent }).parentHeadSha256).toBe(
-      parent,
-    );
+    expect(
+      parse({ ...wireHead, parentHeadSha256: parent }).parentHeadSha256,
+    ).toBe(parent);
   });
 
   it("chains a head to the digest of the head it superseded", () => {
@@ -355,9 +355,9 @@ describe("chat-head canonical encoding", () => {
       },
     };
 
-    expect(canonicalJsonStringify(encodeChatHead(parse(withFutureFields)))).toBe(
-      canonicalJsonStringify(withFutureFields),
-    );
+    expect(
+      canonicalJsonStringify(encodeChatHead(parse(withFutureFields))),
+    ).toBe(canonicalJsonStringify(withFutureFields));
   });
 
   /**

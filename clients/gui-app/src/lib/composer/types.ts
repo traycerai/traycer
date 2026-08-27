@@ -10,7 +10,12 @@ import type { MentionPathTree } from "@/lib/path";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
-  "epic" | "chat" | "terminal-agent" | "terminal" | EpicArtifactKind | "user";
+  | "epic"
+  | "chat"
+  | "terminal-agent"
+  | "terminal"
+  | EpicArtifactKind
+  | "user";
 /**
  * Wire spelling, not a local one: these strings ARE `ContextType` members in
  * `@traycer/protocol`'s json-content serializer, which reads the mention
@@ -26,7 +31,8 @@ export type MentionContextType =
   | GithubMentionContextType;
 
 export type ComposerPromptSegment =
-  { type: "text"; text: string } | { type: "mention"; path: string };
+  | { type: "text"; text: string }
+  | { type: "mention"; path: string };
 
 export type WorkspaceEntry = WorkspaceMentionSuggestion;
 
@@ -96,7 +102,8 @@ export interface EpicTerminalAgentMentionEntry extends EpicAgentMentionEntryBase
 }
 
 export type EpicAgentMentionEntry =
-  EpicChatMentionEntry | EpicTerminalAgentMentionEntry;
+  | EpicChatMentionEntry
+  | EpicTerminalAgentMentionEntry;
 
 /**
  * A plain interactive terminal in the open Task - the shell itself, not an
@@ -124,7 +131,9 @@ export interface EpicTerminalMentionEntry {
 
 export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
 export type MentionSuggestionEntry =
-  WorkspaceEntry | EpicMentionEntry | EpicTerminalMentionEntry;
+  | WorkspaceEntry
+  | EpicMentionEntry
+  | EpicTerminalMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";

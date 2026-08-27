@@ -17,7 +17,10 @@ import {
   worktreeBusyHolderSchema,
 } from "@traycer/protocol/framework/index";
 import { unaryResponsePayloadSchema } from "@traycer/protocol/host-transport/mux";
-import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
 import {
   terminalSubscribeOpenRequestSchema,
   terminalSubscribeOpenRequestSchemaV16,

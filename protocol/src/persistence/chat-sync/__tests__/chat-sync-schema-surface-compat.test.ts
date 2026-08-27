@@ -151,9 +151,11 @@ describe("chat-sync storage projections describe the wire", () => {
 
     // And the registered schemas agree, so the two describe the same input.
     expect(
-      getRecordSchema(persistenceRecordRegistry, "chat-head", "latest").safeParse(
-        wireHead,
-      ).success,
+      getRecordSchema(
+        persistenceRecordRegistry,
+        "chat-head",
+        "latest",
+      ).safeParse(wireHead).success,
     ).toBe(true);
     expect(
       getRecordSchema(
@@ -166,7 +168,8 @@ describe("chat-sync storage projections describe the wire", () => {
 
   it("accepts wire records carrying unmodeled keys", () => {
     expect(
-      chatHeadStorageSchema.safeParse({ ...wireHead, futureTopLevel: 1 }).success,
+      chatHeadStorageSchema.safeParse({ ...wireHead, futureTopLevel: 1 })
+        .success,
     ).toBe(true);
     expect(
       chatShardStorageSchema.safeParse({ ...wireShard, futureTopLevel: 1 })
@@ -177,7 +180,12 @@ describe("chat-sync storage projections describe the wire", () => {
   it("rejects a record missing a required section", () => {
     // The bug this guards: the preprocess surface marks captured children
     // optional, so a truncated record would "pass" a frozen storage schema.
-    for (const omitted of ["core", "hostPrivate", "schemaVersion", "messageShards"]) {
+    for (const omitted of [
+      "core",
+      "hostPrivate",
+      "schemaVersion",
+      "messageShards",
+    ]) {
       const truncated: JsonObject = { ...wireHead };
       delete truncated[omitted];
       expect(chatHeadStorageSchema.safeParse(truncated).success).toBe(false);

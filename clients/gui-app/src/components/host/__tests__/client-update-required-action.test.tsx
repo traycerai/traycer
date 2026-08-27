@@ -81,7 +81,9 @@ function requirement(
     observedClientKind: "desktop",
     observedClientAppVersion: "1.1.10",
     observedClientAppVersionStatus: "valid",
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
     minimumKnownClientAppVersion: null,
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
     upgradeChannel: null,
     hostReleaseChannel: "stable",
     ...overrides,
@@ -219,9 +221,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   it("asks the updater once when it has never been asked", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
     );
     await waitFor(() => {
@@ -246,9 +246,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       lastCheckIntent: "automatic",
     });
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
     );
     await waitFor(() => {
@@ -263,9 +261,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       cleanup();
       const bridge = new FakeAppUpdatesBridge({ ...IDLE_SNAPSHOT, status });
       renderAction(
-        <ClientUpdateRequiredAction
-          requirement={requirement({ minimumKnownClientAppVersion: null })}
-        />,
+        <ClientUpdateRequiredAction requirement={requirement({})} />,
         bridge,
       );
       await waitFor(() => {
@@ -289,9 +285,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       status: "checking",
     });
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
     );
     await waitFor(() => {
@@ -307,9 +301,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   it("never asks when there is no updater bridge at all", async () => {
     // Web/dev shells. The manual link is the whole answer there.
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ upgradeChannel: "stable" })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       null,
     );
     await Promise.resolve();
@@ -332,7 +324,7 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
       cleanup();
       renderAction(
         <ClientUpdateRequiredAction
-          requirement={requirement({ upgradeChannel: channel })}
+          requirement={requirement({ hostReleaseChannel: channel })}
         />,
         null,
       );

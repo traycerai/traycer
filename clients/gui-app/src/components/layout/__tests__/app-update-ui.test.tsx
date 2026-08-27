@@ -161,7 +161,8 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
 
 class DelayedSnapshotAppUpdatesBridge extends FakeAppUpdatesBridge {
   private resolveSnapshot:
-    ((snapshot: DesktopAppUpdateSnapshot) => void) | null = null;
+    | ((snapshot: DesktopAppUpdateSnapshot) => void)
+    | null = null;
 
   override getSnapshot(): Promise<DesktopAppUpdateSnapshot> {
     return new Promise((resolve) => {

@@ -17,7 +17,8 @@ export interface ComposerSuggestionRenderArgs {
   readonly kind: ComposerPickerKind;
   readonly slashTrigger: ComposerSlashTrigger | null;
   readonly slashScopeForProps:
-    ((props: SuggestionProps) => ComposerSlashScope) | null;
+    | ((props: SuggestionProps) => ComposerSlashScope)
+    | null;
   /**
    * The suggestion plugin's own key, for dismissals that must survive the
    * NEXT `@` occurrence. Closing only the picker store leaves the tiptap

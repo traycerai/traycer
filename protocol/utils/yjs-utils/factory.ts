@@ -98,7 +98,11 @@ function addDetachedReadFallbacks(
     keys: () => (isAttached() ? originalKeys() : detachedEntries.keys()),
 
     forEach: (
-      callback: (value: unknown, key: string, targetMap: Y.Map<unknown>) => void,
+      callback: (
+        value: unknown,
+        key: string,
+        targetMap: Y.Map<unknown>,
+      ) => void,
     ) => {
       if (isAttached()) {
         originalForEach((value, key) => callback(value, key, map));

@@ -158,7 +158,11 @@ export class CipherState {
       throw new NoiseNonceError("nonce exhausted; rekey required");
     }
     const nonce = this.nonce;
-    const plaintext = await this.openWithNonce(nonce, associatedData, ciphertext);
+    const plaintext = await this.openWithNonce(
+      nonce,
+      associatedData,
+      ciphertext,
+    );
     this.nonce = nonce + 1n;
     return plaintext;
   }

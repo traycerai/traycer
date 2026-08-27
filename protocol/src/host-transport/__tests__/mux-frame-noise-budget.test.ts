@@ -97,7 +97,9 @@ function frameAtExactSize(targetBytes: number): EncodeMuxFrameInput {
  * ciphertext.
  */
 function encodeHostLegFrame(sid: number, ciphertext: Uint8Array): Uint8Array {
-  const framed = new Uint8Array(RELAY_HOST_LEG_PREFIX_BYTES + ciphertext.length);
+  const framed = new Uint8Array(
+    RELAY_HOST_LEG_PREFIX_BYTES + ciphertext.length,
+  );
   new DataView(framed.buffer).setUint32(0, sid, false);
   framed.set(ciphertext, RELAY_HOST_LEG_PREFIX_BYTES);
   return framed;
@@ -113,7 +115,10 @@ describe("mux frame plaintext cap vs. relay ciphertext cap", () => {
     expect(plaintext.length).toBe(MAX_MUX_FRAME_PLAINTEXT_BYTES);
 
     const { initiator } = await establishSessionPair();
-    const ciphertext = await initiator.encrypt(plaintext, EMPTY_ASSOCIATED_DATA);
+    const ciphertext = await initiator.encrypt(
+      plaintext,
+      EMPTY_ASSOCIATED_DATA,
+    );
     const hostLeg = encodeHostLegFrame(0xdeadbeef, ciphertext);
     expect(hostLeg.length).toBeLessThanOrEqual(MAX_MUX_FRAME_BYTES);
     // The budget is exact, not merely sufficient: the three constants tile
