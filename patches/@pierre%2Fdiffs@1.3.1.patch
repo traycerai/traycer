@@ -21,3 +21,198 @@ diff --git a/dist/editor/editor.js b/dist/editor/editor.js
  		this.#lineYCache.set(line, y);
  		return y;
  	}
+diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
+--- a/dist/components/FileDiff.js
++++ b/dist/components/FileDiff.js
+@@ -423,6 +423,11 @@ var FileDiff = class {
+ 		this.rerender();
+ 	}
+ 	handleExpandHunk = (hunkIndex, direction, expansionLineCountOverride) => {
++		if (direction === "collapse") {
++			this.hunksRenderer.collapseHunk(hunkIndex);
++			this.rerender();
++			return;
++		}
+ 		this.expandHunk(hunkIndex, direction, expansionLineCountOverride);
+ 	};
+ 	expandHunk = (hunkIndex, direction, expansionLineCountOverride) => {
+diff --git a/dist/managers/InteractionManager.js b/dist/managers/InteractionManager.js
+--- a/dist/managers/InteractionManager.js
++++ b/dist/managers/InteractionManager.js
+@@ -215,7 +215,7 @@ var InteractionManager = class {
+ 					break;
+ 				}
+ 				if (isExpandoPointerTarget(target) && onHunkExpand != null) {
+-					onHunkExpand(target.hunkIndex, target.all || event.shiftKey ? "both" : target.direction, target.all || event.shiftKey ? Number.POSITIVE_INFINITY : void 0);
++					onHunkExpand(target.hunkIndex, target.collapse ? "collapse" : target.all || event.shiftKey ? "both" : target.direction, target.collapse ? void 0 : target.all || event.shiftKey ? Number.POSITIVE_INFINITY : void 0);
+ 					break;
+ 				}
+ 				if (!isHoverableLinePointerTarget(target)) break;
+@@ -976,7 +976,7 @@ var InteractionManager = class {
+ 				lineIndexValue = element.getAttribute("data-line-index") ?? void 0;
+ 				continue;
+ 			}
+-			if (expandInfo == null && (element.hasAttribute("data-expand-button") || element.hasAttribute("data-unmodified-lines"))) {
++			if (expandInfo == null && (element.hasAttribute("data-expand-button") || element.hasAttribute("data-unmodified-lines") || element.hasAttribute("data-collapse-button"))) {
+ 				expandInfo = {
+ 					hunkIndex: void 0,
+ 					direction: (() => {
+@@ -984,7 +984,8 @@ var InteractionManager = class {
+ 						if (element.hasAttribute("data-expand-down")) return "down";
+ 						return "both";
+ 					})(),
+-					all: element.hasAttribute("data-expand-all-button")
++					all: element.hasAttribute("data-expand-all-button"),
++					collapse: element.hasAttribute("data-collapse-button")
+ 				};
+ 				continue;
+ 			}
+@@ -1004,7 +1005,8 @@ var InteractionManager = class {
+ 			type: "line-info",
+ 			hunkIndex: expandInfo.hunkIndex,
+ 			direction: expandInfo.direction,
+-			all: expandInfo.all
++			all: expandInfo.all,
++			collapse: expandInfo.collapse
+ 		};
+ 		lineElement ??= lineIndexValue != null ? queryHTMLElement(codeElement, `[data-line][data-line-index="${lineIndexValue}"]`) : void 0;
+ 		numberElement ??= lineIndexValue != null ? queryHTMLElement(codeElement, `[data-column-number][data-line-index="${lineIndexValue}"]`) : void 0;
+diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
+--- a/dist/renderers/DiffHunksRenderer.js
++++ b/dist/renderers/DiffHunksRenderer.js
+@@ -148,6 +148,10 @@ var DiffHunksRenderer = class {
+ 		if (this.renderCache?.highlighted !== true) this.clearRenderCache();
+ 		this.expandedHunks.set(index, region);
+ 	}
++	collapseHunk(index) {
++		if (this.renderCache?.highlighted !== true) this.clearRenderCache();
++		this.expandedHunks.delete(index);
++	}
+ 	getExpandedHunk(hunkIndex) {
+ 		return this.expandedHunks.get(hunkIndex) ?? DEFAULT_EXPANDED_REGION;
+ 	}
+@@ -541,6 +545,7 @@ var DiffHunksRenderer = class {
+ 		let deletionsContentAST = [];
+ 		let unifiedContentAST = [];
+ 		const hunkData = [];
++		const renderedCollapseHunks = new Set();
+ 		const { additionLines, deletionLines } = code;
+ 		const context = {
+ 			rowCount: 0,
+@@ -621,14 +626,18 @@ var DiffHunksRenderer = class {
+ 				const splitLineIndex = deletionLine != null ? deletionLine.splitLineIndex : additionLine.splitLineIndex;
+ 				const unifiedLineIndex = additionLine != null ? additionLine.unifiedLineIndex : deletionLine.unifiedLineIndex;
+ 				if (diffStyle === "split" && type !== "change") pendingSplitContext.flush();
+-				if (collapsedBefore > 0) pushSeparators({
++				const isCollapsible = type === "context-expanded" && this.expandedHunks.has(hunkIndex) && !renderedCollapseHunks.has(hunkIndex);
++				if (isCollapsible) renderedCollapseHunks.add(hunkIndex);
++				if (collapsedBefore > 0 || isCollapsible) pushSeparators({
+ 					hunkIndex,
+ 					collapsedLines: collapsedBefore,
+ 					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
+ 					hunkSpecs: hunk?.hunkSpecs,
+ 					isFirstHunk: hunkIndex === 0,
+ 					isLastHunk: false,
+-					isExpandable: isExpandableDiff
++					isExpandable: isExpandableDiff && !isCollapsible,
++					isCollapsible,
++					collapseOnly: collapsedBefore <= 0
+ 				});
+ 				const lineIndex = diffStyle === "unified" ? unifiedLineIndex : splitLineIndex;
+ 				const renderedLineContext = {
+@@ -1020,8 +1029,8 @@ function pushLineWithAnnotation({ diffStyle, type, deletionLine, additionLine, u
+ 	}
+ 	if (hasAnnotationRow) context.incrementRowCount(1);
+ }
+-function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs, isFirstHunk, isLastHunk, isExpandable }, context) {
+-	if (typeof collapsedLines === "number" && collapsedLines <= 0) return;
++function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs, isFirstHunk, isLastHunk, isExpandable, isCollapsible = false, collapseOnly = false }, context) {
++	if (typeof collapsedLines === "number" && collapsedLines <= 0 && !isCollapsible) return;
+ 	const linesAST = type === "unified" ? context.unifiedContentAST : type === "deletions" ? context.deletionsContentAST : context.additionsContentAST;
+ 	if (context.hunkSeparators === "metadata") {
+ 		if (hunkSpecs != null) {
+@@ -1059,8 +1068,8 @@ function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs,
+ 	}
+ 	const slotName = getHunkSeparatorSlotName(type, hunkIndex);
+ 	const chunked = rangeSize > context.expansionLineCount;
+-	const expandIndex = isExpandable ? hunkIndex : void 0;
+-	const content = typeof collapsedLines === "number" ? getModifiedLinesString(collapsedLines) : "More unchanged context may be available";
++	const expandIndex = isExpandable || isCollapsible ? hunkIndex : void 0;
++	const content = collapseOnly ? "Collapse expanded lines" : typeof collapsedLines === "number" ? getModifiedLinesString(collapsedLines) : "More unchanged context may be available";
+ 	context.pushToGutter(type, createSeparator({
+ 		type: context.hunkSeparators,
+ 		content,
+@@ -1068,7 +1077,9 @@ function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs,
+ 		chunked,
+ 		slotName,
+ 		isFirstHunk,
+-		isLastHunk
++		isLastHunk,
++		collapsible: isCollapsible,
++		collapseOnly
+ 	}));
+ 	linesAST.push(createSeparator({
+ 		type: context.hunkSeparators,
+@@ -1077,7 +1088,9 @@ function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs,
+ 		chunked,
+ 		slotName,
+ 		isFirstHunk,
+-		isLastHunk
++		isLastHunk,
++		collapsible: isCollapsible,
++		collapseOnly
+ 	}));
+ 	if (type !== "additions") context.incrementRowCount(1);
+ 	context.hunkData.push({
+diff --git a/dist/utils/createSeparator.js b/dist/utils/createSeparator.js
+--- a/dist/utils/createSeparator.js
++++ b/dist/utils/createSeparator.js
+@@ -16,7 +16,25 @@ function createExpandButton(type) {
+ 		}
+ 	});
+ }
+-function createSeparator({ type, content, expandIndex, chunked = false, slotName, isFirstHunk, isLastHunk }) {
++function createCollapseButton() {
++	return createHastElement({
++		tagName: "button",
++		children: [createIconElement({
++			name: "diffs-icon-expand",
++			properties: { "data-icon": "" }
++		})],
++		properties: {
++			type: "button",
++			"aria-label": "Collapse expanded lines",
++			"aria-expanded": "true",
++			"data-expand-button": "",
++			"data-expand-down": "",
++			"data-collapse-button": "",
++			style: "appearance:none;border-top:0;border-bottom:0;border-left:0;padding:0"
++		}
++	});
++}
++function createSeparator({ type, content, expandIndex, chunked = false, slotName, isFirstHunk, isLastHunk, collapsible = false, collapseOnly = false }) {
+ 	let buttonCount = 0;
+ 	const children = [];
+ 	if (type === "metadata" && content != null) children.push(createHastElement({
+@@ -26,7 +44,11 @@ function createSeparator({ type, content, expandIndex, chunked = false, slotName
+ 	}));
+ 	if ((type === "line-info" || type === "line-info-basic") && content != null) {
+ 		const contentChildren = [];
+-		if (expandIndex != null) if (!chunked) {
++		if (collapsible) {
++			contentChildren.push(createCollapseButton());
++			buttonCount++;
++		}
++		if (expandIndex != null) if (!chunked) {
+ 			contentChildren.push(createExpandButton(!isFirstHunk && !isLastHunk ? "both" : isFirstHunk ? "down" : "up"));
+ 			buttonCount++;
+ 		} else {
+@@ -44,7 +66,7 @@ function createSeparator({ type, content, expandIndex, chunked = false, slotName
+ 			children: [createHastElement({
+ 				tagName: "span",
+ 				children: [createTextNodeElement(content)],
+-				properties: { "data-unmodified-lines": "" }
++				properties: collapseOnly ? { "data-collapse-button": "" } : { "data-unmodified-lines": "" }
+ 			})],
+ 			properties: { "data-separator-content": "" }
+ 		}));
