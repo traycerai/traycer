@@ -46,32 +46,58 @@ function connect(webSocketDebuggerUrl) {
         request.resolve(message.result);
       }
     });
-    socket.addEventListener("open", () => {
+    socket.addEventListener("open", async () => {
       const send = (method, params = {}) =>
         new Promise((requestResolve, requestReject) => {
           const id = ++nextId;
           pending.set(id, { resolve: requestResolve, reject: requestReject });
           socket.send(JSON.stringify({ id, method, params }));
         });
-      const evaluate = async (expression) => {
-        const response = await send("Runtime.evaluate", {
-          expression,
-          returnByValue: true,
-          awaitPromise: true,
+      try {
+        const windowResponse = await send("Runtime.evaluate", {
+          expression: "window",
         });
-        if (response.exceptionDetails !== undefined) {
-          throw new Error(
-            response.exceptionDetails.exception?.description ??
-              JSON.stringify(response.exceptionDetails),
-          );
+        const windowObjectId = windowResponse.result.objectId;
+        if (windowObjectId === undefined) {
+          reject(new Error("CDP did not return the page global object"));
+          return;
         }
-        return response.result.value;
-      };
-      resolve({
-        close: () => socket.close(),
-        evaluate,
-        send,
-      });
+        const callBridge = async (method, args = []) => {
+          const response = await send("Runtime.callFunctionOn", {
+            objectId: windowObjectId,
+            functionDeclaration: `function(method,args){
+            const bridge=Reflect.get(this,"__traycerSeedFixture");
+            if(bridge===undefined) return {state:"ABSENT"};
+            if(method==="__inspect") {
+              const required=["listTabs","seed","measure","roundTrip","teardown","restoreScroll","seedHeader","measureHeader","teardownHeader","seedDraft","teardownDrafts","purgeSeeded","fingerprint"];
+              const missing=required.filter((key)=>typeof bridge[key]!=="function");
+              if(missing.length>0) return {state:"STALE",missing};
+              return {state:"CURRENT",sentinel:bridge.sentinel,tabs:bridge.listTabs()};
+            }
+            const operation=bridge[method];
+            if(typeof operation!=="function") throw new Error("Unknown fixture bridge operation");
+            return operation(...args);
+          }`,
+            arguments: [{ value: method }, { value: args }],
+            returnByValue: true,
+            awaitPromise: true,
+          });
+          if (response.exceptionDetails !== undefined) {
+            throw new Error(
+              response.exceptionDetails.exception?.description ??
+                JSON.stringify(response.exceptionDetails),
+            );
+          }
+          return response.result.value;
+        };
+        resolve({
+          callBridge,
+          close: () => socket.close(),
+          send,
+        });
+      } catch (error) {
+        reject(error);
+      }
     });
   });
 }
@@ -91,21 +117,10 @@ async function readPageTargets() {
   return (await response.json()).filter((target) => target.type === "page");
 }
 
-const bridgeExpression = (body) =>
-  `(()=>{const bridge=Reflect.get(window,"__traycerSeedFixture");${body}})()`;
-
 async function inspectTarget(target) {
   const client = await connect(target.webSocketDebuggerUrl);
   try {
-    const capability = await client.evaluate(
-      bridgeExpression(`
-        if (bridge === undefined) return {state:"ABSENT"};
-        const required=["listTabs","seed","measure","roundTrip","teardown","restoreScroll","seedHeader","measureHeader","teardownHeader","seedDraft","teardownDrafts","purgeSeeded"];
-        const missing=required.filter((key)=>typeof bridge[key]!=="function");
-        if (missing.length>0) return {state:"STALE",missing};
-        return {state:"CURRENT",sentinel:bridge.sentinel,tabs:bridge.listTabs()};
-      `),
-    );
+    const capability = await client.callBridge("__inspect");
     return { capability, client, target };
   } catch (error) {
     client.close();
@@ -189,22 +204,15 @@ async function seedCanvas() {
   const hostId = process.env.SEED_HOST_ID ?? "seed-host";
   console.log(`target=${entry.target.id} tab=${tab.tabId}`);
   console.log(
-    `before=${await entry.client.evaluate(bridgeExpression(`return bridge.fingerprint(${JSON.stringify(tab.tabId)});`))}`,
+    `before=${await entry.client.callBridge("fingerprint", [tab.tabId])}`,
   );
-  const seed = await entry.client.evaluate(
-    bridgeExpression(
-      `return bridge.seed(${JSON.stringify(tab.tabId)},${JSON.stringify(spec)},${JSON.stringify(hostId)});`,
-    ),
-  );
+  const seed = await entry.client.callBridge("seed", [tab.tabId, spec, hostId]);
   await sleep(1_200);
-  const roundTrip = await entry.client.evaluate(
-    bridgeExpression(`return bridge.roundTrip(${JSON.stringify(tab.tabId)});`),
-  );
-  const measurement = await entry.client.evaluate(
-    bridgeExpression(
-      `return bridge.measure(${JSON.stringify(tab.tabId)},${JSON.stringify(spec.requireAutoScrollOverflow)});`,
-    ),
-  );
+  const roundTrip = await entry.client.callBridge("roundTrip", [tab.tabId]);
+  const measurement = await entry.client.callBridge("measure", [
+    tab.tabId,
+    spec.requireAutoScrollOverflow,
+  ]);
   console.log(JSON.stringify({ seed, roundTrip, measurement }, null, 2));
   entry.client.close();
   if (!seed.ok || !roundTrip.ok || !measurement.ok) process.exitCode = 1;
@@ -215,15 +223,12 @@ async function seedHeader() {
   const { entry, tab } = pickSeedTarget(entries);
   await closeExcept(entries, entry);
   const count = Number(process.env.HEADER_TABS ?? 5);
-  const report = await entry.client.evaluate(
-    bridgeExpression(
-      `return bridge.seedHeader(${JSON.stringify(count)},${JSON.stringify(tab.epicId)});`,
-    ),
-  );
+  const report = await entry.client.callBridge("seedHeader", [
+    count,
+    tab.epicId,
+  ]);
   await sleep(1_000);
-  const measurement = await entry.client.evaluate(
-    bridgeExpression("return bridge.measureHeader();"),
-  );
+  const measurement = await entry.client.callBridge("measureHeader");
   console.log(`target=${entry.target.id} epic=${tab.epicId}`);
   console.log(JSON.stringify({ report, measurement }, null, 2));
   entry.client.close();
@@ -234,9 +239,7 @@ async function seedDraft() {
   const entries = await discoverCurrentTargets();
   const entry = entries[0];
   await closeExcept(entries, entry);
-  const report = await entry.client.evaluate(
-    bridgeExpression("return bridge.seedDraft();"),
-  );
+  const report = await entry.client.callBridge("seedDraft");
   console.log(`target=${entry.target.id}`);
   console.log(JSON.stringify(report, null, 2));
   entry.client.close();
@@ -250,16 +253,12 @@ async function cleanup() {
   let removedDrafts = 0;
   let failures = 0;
   for (const entry of entries) {
-    const structural = await entry.client.evaluate(
-      bridgeExpression(`
-        const teardown=bridge.teardown();
-        return {teardown,drafts:bridge.teardownDrafts(),purge:bridge.purgeSeeded()};
-      `),
-    );
+    const teardown = await entry.client.callBridge("teardown");
+    const drafts = await entry.client.callBridge("teardownDrafts");
+    const purge = await entry.client.callBridge("purgeSeeded");
+    const structural = { teardown, drafts, purge };
     await sleep(1_000);
-    const scroll = await entry.client.evaluate(
-      bridgeExpression("return bridge.restoreScroll();"),
-    );
+    const scroll = await entry.client.callBridge("restoreScroll");
     if (structural.teardown.ok) restoredCanvas += 1;
     removedHeaders += structural.purge.removed.length;
     removedDrafts += structural.drafts;
