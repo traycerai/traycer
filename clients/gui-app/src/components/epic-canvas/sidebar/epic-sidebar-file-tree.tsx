@@ -789,7 +789,7 @@ function FileTreeBodyForResolvedHost(
         <PanelSearchField
           value={searchQuery}
           onValueChange={handleSearchQueryChange}
-          onClear={() => setSearchQuery("")}
+          onClear={clearSearchQuery}
           onClose={null}
           onKeyDown={null}
           ref={null}
