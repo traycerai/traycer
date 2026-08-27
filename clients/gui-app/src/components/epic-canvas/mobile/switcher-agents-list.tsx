@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
+import { MessagesSquare, SearchX } from "lucide-react";
 import { SwitcherAgentIcon } from "@/components/epic-canvas/mobile/switcher-agent-icon";
 import {
-  SwitcherListEmpty,
   SwitcherListHeader,
   SwitcherListRow,
 } from "@/components/epic-canvas/mobile/switcher-list-row";
@@ -23,15 +23,12 @@ import {
 } from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
 import { CHATS_TREE_FILTER } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import {
-  CHAT_ORIGIN,
-  CHAT_OWNERSHIP,
   isChatFilterActive,
   useChatFilter,
   useChatSort,
-  useLeftPanelStore,
   type ChatFilter,
 } from "@/stores/epics/left-panel-store";
-import { Button } from "@/components/ui/button";
+import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import {
   useEpicArtifactRecords,
   useEpicNodeHostId,
@@ -155,9 +152,9 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
         <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
           {agents.length === 0 ? (
             <SwitcherAgentsEmpty
+              hasAnyAgents={filtered.length > 0}
               searchActive={searchQuery.trim().length > 0}
               filter={chatFilter}
-              epicId={epicId}
             />
           ) : (
             agents.map((record) => (
@@ -178,84 +175,50 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
 }
 
 /**
- * Why the list is empty, in the sidebar's own words.
+ * Desktop's own empty states, mounted here rather than restated.
  *
- * A search that matched nothing is reported as a search failure even when a
- * filter is also on, and only mentions the filter as a possible second cause:
- * blaming the filter for a query that matches nothing would send the user to
- * the wrong control. With no query, an active filter is named outright, and
- * only an epic with neither gets the "nothing here yet" reading.
+ * Same component, icons, wording and test ids as the sidebar's agent panel, and
+ * the same precedence: a query that matches nothing owns the empty state even
+ * when a filter is also on, because blaming the filter for an unmatched query
+ * would send the user to the wrong control. An epic with no agents at all is
+ * reported as that first, whatever narrowing happens to be set.
  */
 function SwitcherAgentsEmpty(props: {
+  readonly hasAnyAgents: boolean;
   readonly searchActive: boolean;
   readonly filter: ChatFilter;
-  readonly epicId: string;
 }) {
-  const filterActive = isChatFilterActive(props.filter);
+  if (!props.hasAnyAgents) {
+    return (
+      <SidebarPanelEmptyState
+        icon={MessagesSquare}
+        title="No agents yet."
+        description="Add an agent and choose a Chat or Terminal interface."
+        testId="epic-chat-sidebar-empty"
+      />
+    );
+  }
   if (props.searchActive) {
     return (
-      <SwitcherListEmpty
-        message="No agents match your search."
+      <SidebarPanelEmptyState
+        icon={SearchX}
+        title="No agents match your search."
         description={
-          filterActive
+          isChatFilterActive(props.filter)
             ? "The current filters may also be hiding matches."
             : null
         }
-        // The query is the narrowing the user can undo here, and the field is
-        // right above with its own clear; a filter reset would aim them at the
-        // wrong one.
-        action={null}
-      />
-    );
-  }
-  if (filterActive) {
-    return (
-      <SwitcherListEmpty
-        message={FILTERED_EMPTY_TITLE}
-        description={chatFilterEmptyStateDescription(props.filter)}
-        action={<SwitcherClearAgentFilters epicId={props.epicId} />}
+        testId="epic-chat-sidebar-search-empty"
       />
     );
   }
   return (
-    <SwitcherListEmpty
-      message="No agents yet."
-      description={null}
-      action={null}
+    <SidebarPanelEmptyState
+      icon={MessagesSquare}
+      title={FILTERED_EMPTY_TITLE}
+      description={chatFilterEmptyStateDescription(props.filter)}
+      testId="epic-chat-sidebar-filter-empty"
     />
-  );
-}
-
-/**
- * The way out of a filter this surface cannot show.
- *
- * The Agents menu exposes Interface only - Ownership is degenerate here, since
- * every local agent is the viewer's own - but both facets are stored per epic
- * and both narrow this list, so an Ownership filter set on a desktop can empty
- * the phone completely. Naming the cause is not enough when the user has no
- * desktop to hand: an empty list with no control to restore it is a dead end,
- * and this surface must not be able to reach one.
- *
- * It clears the two FILTER axes only, deliberately not `resetChatView`, which
- * would also reset archive visibility - a facet the user cannot see here and
- * did not ask to change.
- */
-function SwitcherClearAgentFilters(props: { readonly epicId: string }) {
-  const setChatOrigin = useLeftPanelStore((state) => state.setChatOrigin);
-  const setChatOwnership = useLeftPanelStore((state) => state.setChatOwnership);
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      data-testid="switcher-agents-clear-filters"
-      onClick={() => {
-        setChatOrigin(props.epicId, CHAT_ORIGIN.All);
-        setChatOwnership(props.epicId, CHAT_OWNERSHIP.All);
-      }}
-    >
-      Show all agents
-    </Button>
   );
 }
 

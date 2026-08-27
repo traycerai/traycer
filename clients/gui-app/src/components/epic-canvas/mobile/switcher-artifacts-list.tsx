@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import {
-  SwitcherListEmpty,
   SwitcherListHeader,
   SwitcherListRow,
 } from "@/components/epic-canvas/mobile/switcher-list-row";
@@ -26,7 +25,6 @@ import {
   useArtifactFilterMatchIds,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
 import {
-  isArtifactFilterActive,
   useArtifactFilter,
   useArtifactSort,
   type ArtifactFilter,
@@ -42,6 +40,8 @@ import {
   formatCascadeSummary,
 } from "@/lib/epic-tree-cascade";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { FileText, Search, SearchX } from "lucide-react";
+import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import {
   STATUS_DOT_CLASSES,
   computeArtifactNodeStatusDot,
@@ -153,6 +153,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
       ) : (
         <SwitcherArtifactBrowseList
           artifacts={artifacts}
+          hasAnyArtifacts={filtered.length > 0}
           filter={artifactFilter}
           records={records}
           epicId={epicId}
@@ -171,6 +172,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
  */
 function SwitcherArtifactBrowseList(props: {
   readonly artifacts: ReadonlyArray<EpicTreeRecord>;
+  readonly hasAnyArtifacts: boolean;
   readonly filter: ArtifactFilter;
   readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
@@ -179,7 +181,12 @@ function SwitcherArtifactBrowseList(props: {
 }) {
   const { artifacts, records, epicId, tabId, onClose } = props;
   if (artifacts.length === 0) {
-    return <SwitcherArtifactsEmpty filter={props.filter} />;
+    return (
+      <SwitcherArtifactsEmpty
+        hasAnyArtifacts={props.hasAnyArtifacts}
+        filter={props.filter}
+      />
+    );
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
@@ -244,10 +251,11 @@ function SwitcherArtifactSearchBody(props: {
   const { search, hitRecords, records, epicId, tabId, onClose } = props;
   if (search.isUnsupported) {
     return (
-      <SwitcherListEmpty
-        message="Search isn't available on this host."
+      <SidebarPanelEmptyState
+        icon={SearchX}
+        title="Search isn't available on this host."
         description="Update this device's Traycer host to search artifacts."
-        action={null}
+        testId="epic-artifact-search-unsupported"
       />
     );
   }
@@ -290,23 +298,25 @@ function SwitcherArtifactSearchBody(props: {
   }
   if (search.response.outcome === "mirror-unavailable") {
     return (
-      <SwitcherListEmpty
-        message="Artifact search isn't ready yet."
-        description="This epic's artifacts are still being prepared on the host."
-        action={null}
+      <SidebarPanelEmptyState
+        icon={Search}
+        title="Artifact search isn't ready yet."
+        description="This Epic's artifacts are still syncing to this device."
+        testId="epic-artifact-search-mirror-unavailable"
       />
     );
   }
   if (hitRecords.length === 0) {
     return (
-      <SwitcherListEmpty
-        message="No artifacts match your search."
+      <SidebarPanelEmptyState
+        icon={FileText}
+        title="No artifacts match your search."
         description={
           search.response.truncated
-            ? "More results exist beyond the search limit."
+            ? "More results exist beyond the search limit - refine your query."
             : null
         }
-        action={null}
+        testId="epic-artifact-search-empty"
       />
     );
   }
@@ -327,25 +337,29 @@ function SwitcherArtifactSearchBody(props: {
 }
 
 /**
- * Why the list is empty, in the sidebar's own words. An epic narrowed to
- * nothing must not read as an epic with nothing in it - the two states look
- * identical and only one of them is the user's own doing.
+ * Desktop's own artifact empty states, mounted rather than restated - same
+ * component, icons, wording and test ids as the sidebar's artifact panel.
  */
-function SwitcherArtifactsEmpty(props: { readonly filter: ArtifactFilter }) {
-  if (isArtifactFilterActive(props.filter)) {
+function SwitcherArtifactsEmpty(props: {
+  readonly hasAnyArtifacts: boolean;
+  readonly filter: ArtifactFilter;
+}) {
+  if (!props.hasAnyArtifacts) {
     return (
-      <SwitcherListEmpty
-        message={FILTERED_EMPTY_TITLE}
-        description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
-        action={null}
+      <SidebarPanelEmptyState
+        icon={FileText}
+        title="No artifacts yet."
+        description={null}
+        testId="epic-artifact-sidebar-empty"
       />
     );
   }
   return (
-    <SwitcherListEmpty
-      message="No artifacts yet."
-      description={null}
-      action={null}
+    <SidebarPanelEmptyState
+      icon={FileText}
+      title={FILTERED_EMPTY_TITLE}
+      description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
+      testId="epic-artifact-sidebar-filter-empty"
     />
   );
 }

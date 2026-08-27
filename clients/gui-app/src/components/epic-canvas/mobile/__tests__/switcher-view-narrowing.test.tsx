@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import {
-  CHAT_ARCHIVE_VISIBILITY,
   CHAT_ORIGIN,
   CHAT_OWNERSHIP,
   useLeftPanelStore,
@@ -195,7 +194,6 @@ beforeEach(() => {
     artifactFilterByEpicId: {},
     chatSortByEpicId: {},
     artifactSortByEpicId: {},
-    chatArchiveVisibilityByEpicId: {},
   });
 });
 
@@ -325,37 +323,24 @@ describe("switcher Agents narrowing", () => {
     ).toBeDefined();
   });
 
-  it("offers a way out of a filter this surface cannot show", () => {
-    // Ownership has no control here, but it still narrows this list - so a
-    // value set on a desktop can empty the phone. Naming the cause is not
-    // enough when the user has no desktop to hand; without this the list is a
-    // dead end.
-    holder.records = [agentRecord("a-1", "Alpha", "chat")];
-    useLeftPanelStore
-      .getState()
-      .setChatOwnership(EPIC_ID, CHAT_OWNERSHIP.Others);
-    // Set a NON-default archive visibility too, so the "only the filter axes"
-    // claim below has something to discriminate against - asserting an
-    // untouched default would pass whatever the button did.
-    useLeftPanelStore
-      .getState()
-      .setChatArchiveVisibility(EPIC_ID, CHAT_ARCHIVE_VISIBILITY.Archived);
+  it("mounts the sidebar's own empty states, with search owning over filter", () => {
+    // Same component, ids and precedence as the desktop panel: an epic with
+    // nothing gets the "yet" state; a query that matches nothing owns the empty
+    // state even under an active filter, because blaming the filter for an
+    // unmatched query aims the user at the wrong control.
     const view = render(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual([]);
+    expect(screen.getByTestId("epic-chat-sidebar-empty")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show all agents" }));
+    holder.records = [agentRecord("a-1", "Alpha", "chat")];
+    useLeftPanelStore.getState().setChatOrigin(EPIC_ID, CHAT_ORIGIN.Tui);
     view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual(["Alpha"]);
-    // The store drops the entry entirely once neither axis narrows - an
-    // inactive filter is absence, not a record of two "all"s.
-    expect(
-      useLeftPanelStore.getState().chatFilterByEpicId[EPIC_ID],
-    ).toBeUndefined();
-    // Archive visibility survives: a facet this surface never showed is not
-    // one the user asked to change.
-    expect(
-      useLeftPanelStore.getState().chatArchiveVisibilityByEpicId[EPIC_ID],
-    ).toBe(CHAT_ARCHIVE_VISIBILITY.Archived);
+    expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).toBeDefined();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
+      target: { value: "zzzz" },
+    });
+    expect(screen.getByTestId("epic-chat-sidebar-search-empty")).toBeDefined();
+    expect(screen.queryByTestId("epic-chat-sidebar-filter-empty")).toBeNull();
   });
 
   it("still applies an Ownership filter set from the sidebar, and explains it", () => {
