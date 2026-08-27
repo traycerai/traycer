@@ -468,6 +468,19 @@ describe("liveBusySessionCount", () => {
     ).toBe(1);
   });
 
+  it("keeps RENDERING a retained count while an errored read is refetching", () => {
+    // `isError` used to win over `fetching` and unmount the Overview busy
+    // chip for the round trip even though TanStack still holds the last
+    // success. Display keeps it; settled still refuses to arm.
+    const refetchingAfterError = options({
+      reportedCount: 2,
+      isError: true,
+      fetchStatus: "fetching",
+    });
+    expect(liveBusySessionCount(refetchingAfterError)).toBe(2);
+    expect(settledBusySessionCount(refetchingAfterError)).toBeNull();
+  });
+
   it("an errored AND stale read still demotes to null (error takes precedence, not that it matters here)", () => {
     expect(
       liveBusySessionCount(

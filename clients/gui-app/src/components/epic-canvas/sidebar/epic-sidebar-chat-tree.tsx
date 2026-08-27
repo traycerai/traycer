@@ -87,7 +87,6 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
-  CHAT_OWNERSHIP,
   CHAT_ORIGIN,
   isChatFilterActive,
   matchesChatOwnershipFilter,
@@ -110,7 +109,6 @@ import {
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
-  useOpenTileContentIds,
 } from "@/stores/epics/canvas/store";
 import {
   isOpenableEpicNodeKind,
@@ -218,11 +216,19 @@ import {
   CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
   combineSidebarVisibleIds,
-  revealArchiveHiddenIds,
   sidebarTreeRootIds,
   useMaybeSidebarBulkSelection,
-  useSidebarArchiveHiddenIds,
 } from "./epic-sidebar-selection";
+import {
+  chatDescendantKind,
+  useChatArchiveHiddenIds,
+  type ChatDescendantStatusKind,
+} from "./use-chat-archive-hidden-ids";
+import {
+  chatFilterEmptyStateDescription,
+  FILTERED_EMPTY_TITLE,
+  useChatFilterMatchIds,
+} from "./epic-sidebar-panel-filters";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -316,7 +322,6 @@ const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
 const EMPTY_CLOUD_CHATS: readonly CloudChatSummary[] = [];
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
-const EMPTY_ALWAYS_VISIBLE_IDS: ReadonlyArray<string> = [];
 const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
 
@@ -339,16 +344,6 @@ function archiveEmptyStateCopy(
       : null,
   };
 }
-
-type ChatDescendantStatusKind =
-  | "failure"
-  | "fork"
-  | "interview"
-  | "approval"
-  | "running"
-  | "background"
-  | "done"
-  | "terminal-failure";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -386,35 +381,6 @@ const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
   "done",
   "terminal-failure",
 ];
-
-/** The ladder kind an activity tier occupies. */
-function activityTierKind(tier: AgentActivityTier): ChatDescendantStatusKind {
-  return tier === "turn" ? "running" : "background";
-}
-
-/**
- * The single tier a descendant chat is counted under - its own highest. The
- * attention precedence goes through the shared `attentionTone`, so
- * failure > interview > approval lives in exactly one place.
- */
-function chatDescendantKind(
-  indicatorState: NotificationIndicatorState,
-  tier: AgentActivityTier | undefined,
-): ChatDescendantStatusKind | null {
-  const tone = attentionTone(indicatorState);
-  if (tone === FAILURE_TONE) return "failure";
-  if (tone === FORK_TONE) return "fork";
-  if (tone === INTERVIEW_TONE) return "interview";
-  if (tone === APPROVAL_TONE) return "approval";
-  // Terminal failure is demoted only for the exact chat's own glyph, where a
-  // newer live turn/Done is a stronger statement of current state. Once this
-  // chat is rolled into a collapsed parent it is a distinct failed child and
-  // must remain attention-priority over a sibling's activity or completion.
-  if (terminalFailureTone(indicatorState, "gui") !== null) return "failure";
-  if (tier !== undefined) return activityTierKind(tier);
-  if (indicatorState.unreadDone) return "done";
-  return null;
-}
 
 /**
  * Rollup over a collapsed parent's hidden chat descendants: the
@@ -582,38 +548,6 @@ function usePanelRootIds(
 }
 
 /**
- * Nodes the active interface and ownership filters MATCH - the raw matches, with
- * no ancestor expansion. Every local agent is owned by the viewer;
- * collaborators' agents arrive only as cloud rows. `null` when neither filter is
- * active.
- *
- * Ancestor expansion is deliberately NOT done here. A path ancestor is a
- * rendering concession, not a match, and expanding before combining with search
- * would let one narrowing's concession satisfy the other's predicate - see
- * {@link intersectMatchIds}.
- */
-function useChatFilterMatchIds(epicId: string): ReadonlySet<string> | null {
-  const filter = useChatFilter(epicId);
-  const liveRecords = useEpicArtifactRecords();
-  return useMemo(() => {
-    if (!isChatFilterActive(filter)) return null;
-    const includeLocal = matchesChatOwnershipFilter(true, filter.ownership);
-    return new Set(
-      liveRecords.flatMap((record): string[] =>
-        includeLocal &&
-        CHATS_TREE_FILTER(record.type) &&
-        (filter.origin === CHAT_ORIGIN.All ||
-          (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
-          (filter.origin === CHAT_ORIGIN.Tui &&
-            record.type === "terminal-agent"))
-          ? [record.id]
-          : [],
-      ),
-    );
-  }, [filter, liveRecords]);
-}
-
-/**
  * Whether a cloud row survives the archive filter.
  *
  * The row carries its own `isArchived`, so this is the same question the local
@@ -648,18 +582,6 @@ function cloudRowMatchesOwnershipFilter(
   filter: ChatFilter,
 ): boolean {
   return matchesChatOwnershipFilter(chat.isOwnedByViewer, filter.ownership);
-}
-
-function chatFilterEmptyStateDescription(filter: ChatFilter): string {
-  const interfaceActive = filter.origin !== CHAT_ORIGIN.All;
-  const ownershipActive = filter.ownership !== CHAT_OWNERSHIP.All;
-  if (interfaceActive && !ownershipActive) {
-    return "The Interface filter is hiding the other agents.";
-  }
-  if (ownershipActive && !interfaceActive) {
-    return "The Ownership filter is hiding the other agents.";
-  }
-  return "The current filters are hiding the other agents.";
 }
 
 // Panel body composes sort/filter/expansion/selection/pending-create hooks in
@@ -748,7 +670,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
   // tree, so it answers both axes directly.
   const chatFilter = useChatFilter(epicId);
-  const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   const canSetVisibility = useCloudChatVisibilitySupported();
   // Epic-session-bound like every other sharing fact in this tree: the
@@ -798,40 +719,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
   const [notificationIndicators, setNotificationIndicators] =
     useState<SurfaceNotificationIndicators>(EMPTY_INDICATOR_STATE_RESPONSE);
-  const openTileContentIds = useOpenTileContentIds(tabId);
-  const activityTiers = useEpicAgentActivityTiers();
-  const appLocalNotificationRows = useAppLocalNotificationsStore(
-    (state) => state.byId,
-  );
-  const alwaysVisibleIds = useMemo((): ReadonlyArray<string> => {
-    if (archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Unarchived) {
-      return EMPTY_ALWAYS_VISIBLE_IDS;
-    }
-    return indicatorChatIds.filter((chatId) => {
-      if (openTileContentIds.has(chatId)) return true;
-      const indicatorState = selectNotificationIndicatorState(
-        { byId: appLocalNotificationRows },
-        { epicId, chatId },
-        null,
-        notificationIndicators,
-      );
-      return (
-        chatDescendantKind(indicatorState, activityTiers.get(chatId)) !== null
-      );
-    });
-  }, [
-    activityTiers,
-    appLocalNotificationRows,
-    archiveVisibility,
+  const archiveHiddenIds = useChatArchiveHiddenIds({
     epicId,
-    indicatorChatIds,
+    tabId,
+    chatIds: indicatorChatIds,
     notificationIndicators,
-    openTileContentIds,
-  ]);
-  const archiveHiddenIds = useMemo(
-    () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
-    [baseArchiveHiddenIds, alwaysVisibleIds, tree],
-  );
+  });
 
   // Two independent narrowings, kept separate on purpose. `filterRootIds` is
   // the interface/ownership filter result and feeds the "no matches" empty
@@ -1159,7 +1052,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No matches for the current filters."
+        title={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(chatFilter)}
         testId="epic-chat-sidebar-filter-empty"
       />
@@ -1420,10 +1313,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const renamePending = anyMutationPending([
-    renameChat.isPending,
-    renameTerminalAgent.isPending,
-  ]);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = anyMutationPending([
@@ -1589,7 +1478,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   }, [canMutate, nodeName]);
 
   const commitRename = useCallback(() => {
-    if (renamePending) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1599,26 +1487,68 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
+    // Settle the editor on COMMIT, not on the ack — same contract as the
+    // artifact tree and as `useInlineRename`, which both tab strips rename
+    // through. The overlay below is the feedback; a failure toasts and rolls
+    // back. This also closes a real hole in the arms that follow: the
+    // no-RPC-arm `else` retired the stamp and left the input open forever,
+    // because the only `setIsRenaming(false)` lived in the success callback.
+    setIsRenaming(false);
+    // DOC-RESIDENT terminal agents keep the direct doc write - see the same
+    // branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a
+    // row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`),
+    // so the overlay path would only ever roll back.
+    if (artifactType === "terminal-agent") {
+      const agents = epicHandle.store.getState().tuiAgents.byId;
+      if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+          renameArtifactInTab(tabId, nodeId, trimmed);
+        }
+        return;
+      }
+    }
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do. That write no-opped for every registry-backed row — which
+    // post chats-off-YJS is most of this tree — so these renames had no local
+    // feedback at all. Rationale and the promise-carried retire contract live
+    // in `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    const landed = (): void => {
+      retire("landed");
+      // The tab snapshot only on settlement - it is a persisted fallback with
+      // no rollback path, so a speculative write would preserve a rejected
+      // title across restarts - and only while this is still the LATEST
+      // stamped rename for the node: settles are unordered, and an older ack
+      // landing last must not overwrite the newer snapshot. See
+      // `use-rename-canvas-tab.ts`.
+      if (
+        requestId === null ||
+        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+      ) {
+        renameArtifactInTab(tabId, nodeId, trimmed);
+      }
+    };
+    const failed = (): void => {
+      retire("failed");
+    };
     if (artifactType === "chat") {
-      renameChat.mutate(
-        { epicId, chatId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameChat
+        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+        .then(landed, failed);
     } else if (artifactType === "terminal-agent") {
-      renameTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameTerminalAgent
+        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+        .then(landed, failed);
+    } else {
+      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
+      // would never land; drop it outright.
+      retire("failed");
     }
   }, [
     artifactType,
@@ -1629,14 +1559,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameArtifactInTab,
     renameChat,
     renameTerminalAgent,
-    renamePending,
     renameValue,
     tabId,
   ]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (renamePending) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename();
@@ -1645,7 +1573,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename, renamePending],
+    [commitRename],
   );
 
   const performDelete = () => {
@@ -1728,7 +1656,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onRenameValueChange={setRenameValue}
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
-      renamePending={renamePending}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
@@ -1776,7 +1703,6 @@ interface ChatNodeShellProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1878,7 +1804,6 @@ function ChatNodeShellBody(
     onRenameValueChange,
     onCommitRename,
     onRenameKeyDown,
-    renamePending,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1967,7 +1892,6 @@ function ChatNodeShellBody(
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
             isArchived={archiveRow.isArchived}
@@ -2433,7 +2357,6 @@ interface ChatRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
   readonly isArchived: boolean;
@@ -2450,7 +2373,6 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renamePending,
     nodeName,
     nodeId,
   } = props;
@@ -2489,18 +2411,10 @@ function ChatRenameRow(props: ChatRenameRowProps) {
             }}
             onBlur={onBlur}
             onKeyDown={onKeyDown}
-            disabled={renamePending}
             className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
             aria-label={`Rename ${nodeName}`}
             data-testid={`epic-sidebar-rename-input-${nodeId}`}
           />
-          {renamePending ? (
-            <AgentSpinningDots
-              className="shrink-0 text-muted-foreground"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
         </div>
       </div>
     </div>

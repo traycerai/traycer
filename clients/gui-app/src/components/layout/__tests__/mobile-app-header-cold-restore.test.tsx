@@ -8,6 +8,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -15,6 +16,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import {
   __getOpenEpicRegistryForTests,
@@ -46,12 +48,12 @@ vi.mock("@/components/notifications/mobile-notifications-button", () => ({
     <button type="button" aria-label="Notifications" />
   ),
 }));
-const updateTitleMutateSpy = vi.hoisted(() =>
-  vi.fn<(vars: { epicDelta: { title: string } }) => void>(),
+const updateTitleMutateAsyncSpy = vi.hoisted(() =>
+  vi.fn<(vars: { epicDelta: { title: string } }) => Promise<void>>(),
 );
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
-    mutate: updateTitleMutateSpy,
+    mutateAsync: updateTitleMutateAsyncSpy,
     isPending: false,
   }),
 }));
@@ -77,7 +79,7 @@ function registerSession(title: string): OpenEpicStoreHandle {
     onAuthError: null,
   });
   handle.store.setState({
-    epic: { title, updatedAt: 1, isTitleEditedByUser: false },
+    epic: { title, updatedAt: 1 },
     permissionRole: "owner",
   });
   __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
@@ -133,7 +135,14 @@ function renderRestoredAtLanding(): void {
     routeTree,
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  render(<RouterProvider router={router} />);
+  // `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
+  // success arm's cloud-cache patch; the mocked mutation hook used to hide
+  // that dependency.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 /**
@@ -149,7 +158,8 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     useMobileHeaderStore.setState({ rightActions: null });
     useTabsStore.setState({ items: [], activeItemId: null });
     __getOpenEpicRegistryForTests().disposeAll();
-    updateTitleMutateSpy.mockClear();
+    updateTitleMutateAsyncSpy.mockClear();
+    updateTitleMutateAsyncSpy.mockResolvedValue(undefined);
     restoreEpicTabLayout();
   });
 
@@ -241,14 +251,19 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     fireEvent.change(input, { target: { value: "Renamed on the phone" } });
     fireEvent.blur(input);
 
-    expect(updateTitleMutateSpy).toHaveBeenCalledTimes(1);
+    expect(updateTitleMutateAsyncSpy).toHaveBeenCalledTimes(1);
+    // Flush the retire `.then` arm before the manual echo below, so the
+    // "landed" retire and the doc-echo overlay resolution happen in the
+    // documented order rather than racing.
+    await act(async () => {
+      await Promise.resolve();
+    });
     // The committed title landing in the epic doc is what the live session
     // projects back; the host round trip is the mocked half.
     handle.store.setState({
       epic: {
         title: "Renamed on the phone",
         updatedAt: 2,
-        isTitleEditedByUser: true,
       },
     });
 

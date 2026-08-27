@@ -4,6 +4,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { streamSupportMatrix } from "./__fixtures__/stream-support-matrix";
 
 /**
@@ -37,13 +38,12 @@ import { streamSupportMatrix } from "./__fixtures__/stream-support-matrix";
  *     against today's registry - i.e. no method's canonical has regressed
  *     below its baseline.
  *
- * v1 streams RECONNECT on a mismatched major rather than bridging across it
- * (`canBridgeStream` in `stream-compat.ts` has no cross-major bridge). Today no
- * stream method has bumped major since `host-v1.0.0` (only additive minors:
- * `terminal.subscribe` -> 1.2, `chat.subscribe` -> 1.1), so both directions are
- * green. If a future major bump makes a baselined method fail here, that
- * failure is doing its job - it means that method needs the same
- * release-coordination decision a name drop would, not a silent merge.
+ * Canonical-major skew bridges when both peers' installed-major advertisements
+ * intersect (`canBridgeStream` uses that intersection), while a legacy entry
+ * with no `supportedMajors` still means its canonical major only. The frozen
+ * fixture therefore keeps the host-v1.0.0 baseline useful: a future current
+ * major can still bridge it when major 1 remains installed. If no major is
+ * shared, the invariant fails and exposes a real release-compatibility break.
  *
  * This test only READS `hostStreamRpcRegistry` and the committed fixture -
  * it never regenerates or writes anything. Regenerate the fixture via
@@ -51,7 +51,10 @@ import { streamSupportMatrix } from "./__fixtures__/stream-support-matrix";
  * header and `RELEASE-INVARIANT.md` for the append procedure).
  */
 describe("two-sided release invariant: current stream registry vs stream support matrix", () => {
-  const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+  const currentManifest = buildStreamManifest(
+    hostStreamRpcRegistry,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
 
   it.each(streamSupportMatrix)(
     "forward-compat: every $version method still bridges from today's registry",

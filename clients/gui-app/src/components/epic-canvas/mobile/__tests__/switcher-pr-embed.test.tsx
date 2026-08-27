@@ -69,9 +69,10 @@ vi.mock("@/hooks/pr/use-pr-list-subscription", () => ({
   },
 }));
 
-// `PrRow` pulls the per-epic Y.doc-backed owner-label chain, which has nothing
-// to do with the embed wiring; stub it to a button that still fires the REAL
-// `onOpen` the panel built.
+// `PrRow` pulls the per-epic owner-label chain (titles off
+// `OpenEpicState.chats`, which needs a live `OpenEpicStoreHandle`), and that
+// has nothing to do with the embed wiring; stub it to a button that still
+// fires the REAL `onOpen` the panel built.
 vi.mock("@/components/epic-canvas/pr/pr-row", () => ({
   PrRow: (props: {
     readonly entry: {
