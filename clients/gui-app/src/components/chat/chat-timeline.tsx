@@ -37,6 +37,7 @@ import {
   type StableTranscriptListRowsState,
 } from "./chat-stable-rows";
 import { ChatTranscriptPlaceholderRow } from "./chat-transcript-placeholder-row";
+import type { ChatTranscriptRowHeightMemory } from "./chat-transcript-row-height-memory";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 import {
   useChatTimelineFollowLatch,
@@ -186,6 +187,16 @@ export interface ChatTimelineInitialScrollAnchor {
   readonly viewPosition: number;
 }
 
+/**
+ * The part of LegendList's `onItemSizeChanged` payload this component reads.
+ * Declared locally because the library types it inline on the prop rather than
+ * exporting it; a narrower parameter is assignable to the wider callback.
+ */
+interface ChatTimelineItemSizeInfo {
+  readonly size: number;
+  readonly itemData: TranscriptListRow;
+}
+
 export interface ChatTimelineProps {
   /**
    * The rows to draw, hydrated bodies and placeholders together.
@@ -249,6 +260,13 @@ export interface ChatTimelineProps {
   readonly resolveSuppressedEndLanding?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
+  /**
+   * Where this transcript's measured row heights are kept, so a placeholder for
+   * a row the list has already drawn stands at the height that row really
+   * takes. `null` on the legacy line, which holds every body and never draws a
+   * placeholder at all.
+   */
+  readonly rowHeightMemory?: ChatTranscriptRowHeightMemory | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
   readonly onItemSizeChanged?: () => void;
   /** Fires for every mounted virtual row, including cached equal-size rows. */
@@ -296,6 +314,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
+  rowHeightMemory = null,
   onItemSizeChanged,
   onRowMount,
   onListMetricsChange,
@@ -362,16 +381,23 @@ export const ChatTimeline = memo(function ChatTimeline({
     [onVisibleRowRangeChange],
   );
 
-  // Stable renderItem - no closure deps. ChatTimelineRow reads shared state
-  // from ChatTimelineRowCtx, which propagates through LegendList's memo.
+  // Stable renderItem: `rowHeightMemory` is a mount-lifetime object, not a
+  // value that changes as rows are measured, so naming it as a dep does not
+  // cost the identity this callback is kept stable for. ChatTimelineRow reads
+  // shared state from ChatTimelineRowCtx, which propagates through
+  // LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: TranscriptListRow }) =>
       item.kind === "placeholder" ? (
-        <ChatTranscriptPlaceholderRow entry={item.entry} ordinal={item.ordinal} />
+        <ChatTranscriptPlaceholderRow
+          entry={item.entry}
+          ordinal={item.ordinal}
+          heightMemory={rowHeightMemory}
+        />
       ) : (
         <ChatTimelineRow message={item.model} />
       ),
-    [],
+    [rowHeightMemory],
   );
 
   const handleScroll = useCallback(() => {
@@ -383,10 +409,24 @@ export const ChatTimeline = memo(function ChatTimeline({
   // layout are two of the real LegendList maintain triggers that never
   // re-enter this component's render - consult the latch right here, at the
   // actual callback boundary, not through a prop the library reads later.
-  const handleItemSizeChanged = useCallback(() => {
-    followLatch.followEndIfPermitted();
-    onItemSizeChanged?.();
-  }, [followLatch, onItemSizeChanged]);
+  const handleItemSizeChanged = useCallback(
+    (info: ChatTimelineItemSizeInfo) => {
+      // Only a HYDRATED row's measurement says anything true about how tall
+      // that row is. A placeholder measures at whatever height the memory just
+      // told it to stand at, so recording one would be the memory reading its
+      // own estimate back in as evidence for that estimate.
+      if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
+        rowHeightMemory.recordMeasuredHeight({
+          rowId: info.itemData.key,
+          ordinal: info.itemData.ordinal,
+          height: info.size,
+        });
+      }
+      followLatch.followEndIfPermitted();
+      onItemSizeChanged?.();
+    },
+    [followLatch, onItemSizeChanged, rowHeightMemory],
+  );
 
   const handleMetricsChange = useCallback(
     (metrics: { readonly headerSize: number; readonly footerSize: number }) => {
@@ -640,7 +680,10 @@ function useCommittedKeySequenceChanged(
   );
 
   useLayoutEffect(() => {
-    committedChatTimelineKeysCache.set(listRef, transcriptListKeySequence(rows));
+    committedChatTimelineKeysCache.set(
+      listRef,
+      transcriptListKeySequence(rows),
+    );
   }, [listRef, rows]);
 
   return keySequenceChanged;

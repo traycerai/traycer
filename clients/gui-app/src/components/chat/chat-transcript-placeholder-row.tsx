@@ -2,6 +2,7 @@ import { memo } from "react";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { cn } from "@/lib/utils";
 import { placeholderRowHeight } from "@/components/chat/chat-transcript-placeholder-height";
+import type { ChatTranscriptRowHeightMemory } from "@/components/chat/chat-transcript-row-height-memory";
 
 /**
  * A row the transcript knows exists but holds no body for.
@@ -11,18 +12,33 @@ import { placeholderRowHeight } from "@/components/chat/chat-transcript-placehol
  * the viewport has something to report when the reader scrolls into unhydrated
  * history. It is deliberately quiet: a skeleton shimmer at every unvisited
  * ordinal would make an ordinary scroll look like a chat that is broken.
+ *
+ * "Roughly the right height" is the whole difficulty, and it is
+ * `heightMemory`'s job rather than this component's - see that module. The
+ * height is read once per mount and never subscribed to: a placeholder that
+ * corrected itself while the reader was looking at it would be the same jump
+ * this is here to avoid.
  */
 
 interface ChatTranscriptPlaceholderRowProps {
   readonly entry: RowSkeletonEntry | null;
   readonly ordinal: number;
+  /**
+   * What this transcript has measured so far. `null` on a surface with no
+   * memory of its own, which falls back to the raw byte estimate.
+   */
+  readonly heightMemory: ChatTranscriptRowHeightMemory | null;
 }
 
 function ChatTranscriptPlaceholderRowImpl({
   entry,
   ordinal,
+  heightMemory,
 }: ChatTranscriptPlaceholderRowProps): React.JSX.Element {
-  const height = placeholderRowHeight(entry);
+  const height =
+    heightMemory === null
+      ? placeholderRowHeight(entry)
+      : heightMemory.placeholderHeight(entry);
   // A human user row is the one kind whose text the skeleton carries, so it is
   // the one kind that can say anything truthful about itself before it loads.
   const preview =

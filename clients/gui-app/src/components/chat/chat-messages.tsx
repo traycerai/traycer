@@ -26,6 +26,11 @@ import {
   visibleOrdinalRange,
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  createChatTranscriptRowHeightMemory,
+  type ChatTranscriptRowHeightMemory,
+} from "@/components/chat/chat-transcript-row-height-memory";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -188,6 +193,8 @@ export type ChatMessageScrollRequest =
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const EMPTY_ROW_INDEX_BY_KEY: ReadonlyMap<string, number> = new Map();
+/** Stable identity, so the legacy line's skeleton hand-off stays a no-op. */
+const EMPTY_ROW_SKELETON: readonly (RowSkeletonEntry | undefined)[] = [];
 const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
@@ -1002,6 +1009,27 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     null,
   );
   const chatTimelineRef = useRef<LegendListRef | null>(null);
+  // Per mounted transcript, exactly like the row-stability caches: row ids are
+  // chat-scoped, and a memory that outlived its tile would hold heights
+  // measured at a width this one may not share.
+  // `useState` with a lazy initializer, not a ref: render READS this to hand it
+  // to the timeline, and a ref read during render is exactly what
+  // `react-hooks/refs` forbids. Same shape as `restoredTabState` above - a
+  // value computed once for the mount and never set again.
+  const [rowHeightMemory] = useState<ChatTranscriptRowHeightMemory>(() =>
+    createChatTranscriptRowHeightMemory(),
+  );
+  const rowSkeleton = transcriptWindow?.skeleton ?? EMPTY_ROW_SKELETON;
+  // The skeleton is how a measured row is matched back to the `byteLength` it
+  // was estimated from. A layout effect rather than a render-time call: this
+  // writes, and the memory must not be advanced by a render React discards.
+  // LegendList measures inside its OWN layout effect, which runs before this
+  // one, so the first commit's measurements land before the memory has a
+  // skeleton to match them against - `observeSkeleton` back-fills exactly
+  // those on its next call, which is what that pass is for.
+  useLayoutEffect(() => {
+    rowHeightMemory.observeSkeleton(rowSkeleton);
+  }, [rowHeightMemory, rowSkeleton]);
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
@@ -2589,6 +2617,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             resolveSuppressedEndLanding={resolveSuppressedEndLanding}
             navigationHighlightedMessageId={navigationHighlightedMessageId}
+            rowHeightMemory={rowHeightMemory}
             onItemSizeChanged={onChatTimelineItemSizeChanged}
             onRowMount={onChatTimelineRowMount}
             onListMetricsChange={onListMetricsChange}
