@@ -253,7 +253,7 @@ describe("runWorktreeCleanup on a current host", () => {
     // A decline is `deleted: false`, not a thrown failure - both are failures
     // for the tally, and neither stops its siblings.
     callbacks.onTargetComplete("/wt/declined", false);
-    callbacks.onTargetFailed("/wt/busy", "worktree is busy");
+    callbacks.onTargetFailed("/wt/busy", "worktree is busy", undefined);
     callbacks.onCommandComplete({
       requestedCount: 3,
       deletedCount: 1,
