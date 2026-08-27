@@ -80,7 +80,8 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
 /**
  * The mobile tab switcher: a drag-dismissable `vaul` bottom sheet whose
  * category bar mirrors the desktop left-panel registry and whose content region
- * shows the active category - flat lists for Agents/Terminals/Artifacts, the
+ * shows the active category - the desktop chat tree for Agents, flat lists for
+ * Terminals/Artifacts, the
  * shared comments panel for Comments, and the embedded desktop File-tree /
  * Git-diff / Pull-requests / Sharing panel bodies for the rest. Creating is a
  * row inside the category that owns the kind, not a sheet-level control.
@@ -152,8 +153,9 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
 
   const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
 
-  // Close-on-open for the embedded panel bodies. The flat lists close the sheet
-  // explicitly (they own the open call), but the File-tree / Git-diff /
+  // Close-on-open for the embedded panel bodies. The row categories close the
+  // sheet explicitly - the flat lists own their open call, and the Agents tree
+  // closes through its `ChatTreeSurface` - but the File-tree / Git-diff /
   // Pull-requests bodies open a tile through their own internal navigation -
   // which we do not fork - so instead watch the shown tile. Close ONLY when the
   // newly-shown tile is an embed-originated kind (a file-tree tap ->
@@ -161,7 +163,7 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   // tap -> `pr-detail`). A background chat/terminal/artifact open (agent
   // handoff, remote-delete re-resolve, cross-window nav on the shared canvas
   // store) also changes the shown tile, but must NOT close the sheet under the
-  // user mid-browse - those flat-list opens close via their own `onClose`.
+  // user mid-browse - those row opens close via their own `onClose`.
   const canvas = useEpicCanvas(tabId);
   const shownTile = useMemo(
     () => selectMobileTile(canvas)?.ref ?? null,
@@ -244,10 +246,10 @@ interface SwitcherCategoryBodyProps {
 }
 
 /**
- * Content-region registry: flat lists for the row-per-item categories; the
- * shared comments panel for Comments; embedded desktop panel bodies for File
- * tree, Git diff, Pull requests and Sharing. The flat lists call `onClose` on
- * selection; the embeds rely on the sheet's active-tile watcher, and the
+ * Content-region registry: the desktop chat tree for Agents, flat lists for the
+ * other row-per-item categories; the shared comments panel for Comments;
+ * embedded desktop panel bodies for File tree, Git diff, Pull requests and
+ * Sharing. The row categories call `onClose` on selection; the embeds rely on the sheet's active-tile watcher, and the
  * categories that open no tile - Sharing, and Comments, where expanding a thread
  * is reading rather than navigating - simply keep the sheet open.
  */

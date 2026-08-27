@@ -379,7 +379,7 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     unmount();
   });
 
-  it("marks shared rows checkable-unchecked and busy/unresolved rows disabled", async () => {
+  it("marks shared rows checkable-unchecked, in-use checkable-unchecked, and unresolved rows disabled", async () => {
     const probed = [
       entry({
         worktreePath: "/wt/shared",
@@ -414,7 +414,7 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     });
     expect(byPath.get("/wt/busy")).toMatchObject({
       defaultChecked: false,
-      disabled: true,
+      disabled: false,
       note: "in-use",
     });
     expect(byPath.get("/wt/probing")).toMatchObject({

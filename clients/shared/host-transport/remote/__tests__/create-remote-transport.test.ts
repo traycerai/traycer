@@ -37,6 +37,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
       },
     },
     requestId: () => "req-1",
+    proactiveWakeEligible: true,
     evidence: NO_TRANSPORT_EVIDENCE,
   });
 }

@@ -14,6 +14,7 @@ import {
   useIsActiveTile,
 } from "@/stores/epics/canvas/store";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useChatTreeSurface } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import {
   makePublishedChatTileRef,
   publishedChatTileId,
@@ -100,6 +101,12 @@ export function EpicSidebarCloudChatRow(
   // strictly better than routing every reachable-owner chat to a stale
   // read-only copy. An unreachable owner keeps the locked published copy.
   const navigateNested = useEpicNestedFocusNavigation();
+  // Cloud rows sit in the same tree a mounting surface wraps, so they owe it
+  // the same post-open call a local row makes - otherwise tapping a remote or
+  // published-copy chat on the phone opens its tile behind a sheet that never
+  // closes. On the TAP path only, exactly as the local row does it: the
+  // promote-on-double-click path does not call it there either.
+  const surface = useChatTreeSurface();
   const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTilePreviewInTabFocusTarget,
   );
@@ -164,12 +171,14 @@ export function EpicSidebarCloudChatRow(
         instanceId: uuidv4(),
       }),
     );
+    if (surface !== null) surface.onRowActivated();
   }, [
     openRef,
     navigateNested,
     props.epicId,
     props.tabId,
     prepareOpenTilePreviewInTabFocusTarget,
+    surface,
   ]);
 
   const openPermanent = useCallback(() => {

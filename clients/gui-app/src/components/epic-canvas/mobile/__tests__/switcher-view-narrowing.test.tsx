@@ -1,13 +1,8 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
-import {
-  CHAT_ORIGIN,
-  CHAT_OWNERSHIP,
-  useLeftPanelStore,
-} from "@/stores/epics/left-panel-store";
-import { SORT_DIRECTION, SORT_FIELD } from "@/lib/epic-sort";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { SORT_FIELD } from "@/lib/epic-sort";
 import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 
 /**
@@ -154,14 +149,6 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
 const EPIC_ID = "epic-1";
 const PROPS = { epicId: EPIC_ID, tabId: "tab-1", onClose: () => {} };
 
-function agentRecord(
-  id: string,
-  name: string,
-  type: "chat" | "terminal-agent",
-): TestRecord {
-  return { id, name, type, status: null, hostId: "host-A" };
-}
-
 function artifactRecord(
   id: string,
   name: string,
@@ -176,12 +163,6 @@ function seedArtifacts(entries: ReadonlyArray<TestArtifact>): void {
     allIds: entries.map((entry) => entry.id),
     byId: Object.fromEntries(entries.map((entry) => [entry.id, entry])),
   };
-}
-
-function renderedAgentNames(): readonly string[] {
-  return screen
-    .queryAllByTestId(/^switcher-agent-row-/)
-    .map((node) => node.textContent);
 }
 
 function renderedArtifactNames(): readonly string[] {
@@ -206,166 +187,6 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
-
-describe("switcher Agents narrowing", () => {
-  it("orders by the epic's chat sort, and re-orders when it changes", () => {
-    holder.records = [
-      agentRecord("a-1", "Alpha", "chat"),
-      agentRecord("a-2", "Bravo", "chat"),
-      agentRecord("a-3", "Charlie", "terminal-agent"),
-    ];
-    const view = render(<SwitcherAgentsList {...PROPS} />);
-    // Fixture `updatedAt` ascends with index, and the default mode is
-    // most-recently-updated first.
-    expect(renderedAgentNames()).toEqual(["Charlie", "Bravo", "Alpha"]);
-
-    useLeftPanelStore.getState().setChatSortField(EPIC_ID, SORT_FIELD.Name);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual(["Charlie", "Bravo", "Alpha"]);
-
-    useLeftPanelStore.getState().toggleChatSortDirection(EPIC_ID);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(useLeftPanelStore.getState().chatSortByEpicId[EPIC_ID]).toEqual({
-      field: SORT_FIELD.Name,
-      direction: SORT_DIRECTION.Asc,
-    });
-    expect(renderedAgentNames()).toEqual(["Alpha", "Bravo", "Charlie"]);
-  });
-
-  it("distinguishes the two sort directions in the trigger's accessible name", () => {
-    // The count badge is aria-hidden and the ordering has no badge at all, so
-    // this label is the ONLY channel carrying the direction. Naming the field
-    // without it would leave ascending and descending indistinguishable.
-    holder.records = [agentRecord("a-1", "Alpha", "chat")];
-    useLeftPanelStore.getState().setChatSortField(EPIC_ID, SORT_FIELD.Name);
-    const view = render(<SwitcherAgentsList {...PROPS} />);
-    expect(
-      screen.getByLabelText("Filter agents, ordered by Name descending"),
-    ).toBeDefined();
-
-    useLeftPanelStore.getState().toggleChatSortDirection(EPIC_ID);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(
-      screen.getByLabelText("Filter agents, ordered by Name ascending"),
-    ).toBeDefined();
-  });
-
-  it("narrows to one interface when the Interface facet is set", () => {
-    holder.records = [
-      agentRecord("a-1", "Alpha", "chat"),
-      agentRecord("a-2", "Bravo", "terminal-agent"),
-    ];
-    const view = render(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toHaveLength(2);
-
-    useLeftPanelStore.getState().setChatOrigin(EPIC_ID, CHAT_ORIGIN.Tui);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual(["Bravo"]);
-
-    useLeftPanelStore.getState().setChatOrigin(EPIC_ID, CHAT_ORIGIN.Gui);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual(["Alpha"]);
-  });
-
-  it("narrows by title as the user types, and clears back", () => {
-    holder.records = [
-      agentRecord("a-1", "Refactor the parser", "chat"),
-      agentRecord("a-2", "Ship the release", "chat"),
-    ];
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toHaveLength(2);
-
-    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
-      target: { value: "parser" },
-    });
-    expect(renderedAgentNames()).toEqual(["Refactor the parser"]);
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear agent search" }));
-    expect(renderedAgentNames()).toHaveLength(2);
-  });
-
-  it("intersects search with the filter rather than letting either win", () => {
-    holder.records = [
-      agentRecord("a-1", "Release notes", "chat"),
-      agentRecord("a-2", "Release build", "terminal-agent"),
-    ];
-    useLeftPanelStore.getState().setChatOrigin(EPIC_ID, CHAT_ORIGIN.Tui);
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual(["Release build"]);
-
-    // Matches both titles; only the row surviving the Interface filter stays.
-    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
-      target: { value: "Release" },
-    });
-    expect(renderedAgentNames()).toEqual(["Release build"]);
-
-    // Matches only the row the filter excludes, so nothing survives.
-    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
-      target: { value: "notes" },
-    });
-    expect(renderedAgentNames()).toEqual([]);
-  });
-
-  it("says which control emptied the list, and never that the epic is empty", () => {
-    holder.records = [agentRecord("a-1", "Alpha", "chat")];
-    const view = render(<SwitcherAgentsList {...PROPS} />);
-
-    useLeftPanelStore.getState().setChatOrigin(EPIC_ID, CHAT_ORIGIN.Tui);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(
-      screen.getByText("No matches for the current filters."),
-    ).toBeDefined();
-    expect(
-      screen.getByText("The Interface filter is hiding the other agents."),
-    ).toBeDefined();
-
-    // A query that matches nothing is reported as a SEARCH failure even under
-    // an active filter - blaming the filter would aim the user at the wrong
-    // control - and the filter is named only as a possible second cause.
-    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
-      target: { value: "zzzz" },
-    });
-    expect(screen.getByText("No agents match your search.")).toBeDefined();
-    expect(
-      screen.getByText("The current filters may also be hiding matches."),
-    ).toBeDefined();
-  });
-
-  it("mounts the sidebar's own empty states, with search owning over filter", () => {
-    // Same component, ids and precedence as the desktop panel: an epic with
-    // nothing gets the "yet" state; a query that matches nothing owns the empty
-    // state even under an active filter, because blaming the filter for an
-    // unmatched query aims the user at the wrong control.
-    const view = render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("epic-chat-sidebar-empty")).toBeDefined();
-
-    holder.records = [agentRecord("a-1", "Alpha", "chat")];
-    useLeftPanelStore.getState().setChatOrigin(EPIC_ID, CHAT_ORIGIN.Tui);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).toBeDefined();
-
-    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
-      target: { value: "zzzz" },
-    });
-    expect(screen.getByTestId("epic-chat-sidebar-search-empty")).toBeDefined();
-    expect(screen.queryByTestId("epic-chat-sidebar-filter-empty")).toBeNull();
-  });
-
-  it("still applies an Ownership filter set from the sidebar, and explains it", () => {
-    // The facet has no control on this surface - every local agent is the
-    // viewer's own - but the store key is shared, so a desktop-set value must
-    // still narrow here rather than being silently ignored.
-    holder.records = [agentRecord("a-1", "Alpha", "chat")];
-    useLeftPanelStore
-      .getState()
-      .setChatOwnership(EPIC_ID, CHAT_OWNERSHIP.Others);
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(renderedAgentNames()).toEqual([]);
-    expect(
-      screen.getByText("The Ownership filter is hiding the other agents."),
-    ).toBeDefined();
-  });
-});
 
 describe("switcher Artifacts narrowing", () => {
   it("narrows by status and by kind, and names the cause when empty", () => {

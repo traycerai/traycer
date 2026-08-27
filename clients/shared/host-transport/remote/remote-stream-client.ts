@@ -82,13 +82,19 @@ export class RemoteStreamClient<
   }
 
   /**
-   * Wakes THIS client's session and no other (see {@link IRemoteSession.wake}).
+   * Reconnects THIS client's session and no other (see
+   * {@link IRemoteSession.wake} / {@link IRemoteSession.forceReconnect}).
    *
    * There is no endpoint to re-resolve - a remote session's attach address is
-   * the relay's fixed WS URL, never a per-host one that moves on respawn - so
-   * this does not force a re-dial the way the local client's `reconnectAll`
-   * does; it forwards the caller's demand to the session's own resume/backoff
-   * loop, which cannot otherwise tell that the wait it armed has gone stale.
+   * the relay's fixed WS URL, never a per-host one that moves on respawn - but
+   * `probeFirst` still names two genuinely different demands. Probe-first
+   * forwards to the session's own wake: poke the socket, re-dial only on a
+   * failed verdict, pull a stale backoff wait forward. Forced
+   * (`probeFirst: false`) is a caller declaring the current socket not worth
+   * probing - a person tapping Retry now, an endpoint-change sweep - and it
+   * drops the socket and re-dials with no backoff delay. It used to be
+   * flattened into `wake`, which made Retry-now a spectator to the very 10s
+   * probe window the person was trying to cut short.
    *
    * Scope is the whole point, and it is why this is NOT the cache-wide sweep.
    * The caller here is asking about a connection it can name - a user tapping
@@ -102,12 +108,12 @@ export class RemoteStreamClient<
    * has released inherits that view's ownership guard and this becomes a no-op
    * rather than hurrying a session nobody holds.
    */
-  reconnectAll(reason: string, _options: ReconnectAllOptions): void {
-    // `probeFirst` is not consulted: `wake` IS probe-first by construction
-    // (the session pokes the socket's keepalive and re-dials only on a failed
-    // verdict), and the forced flavour has nothing to force here - there is no
-    // endpoint to re-resolve, per the contract note above.
-    this.session.wake(reason);
+  reconnectAll(reason: string, options: ReconnectAllOptions): void {
+    if (options.probeFirst) {
+      this.session.wake(reason, options.wakeProbe);
+    } else {
+      this.session.forceReconnect(reason);
+    }
   }
 
   /**

@@ -1105,6 +1105,21 @@ describe("WorkspaceFolderRows", () => {
 });
 
 describe("WorkspaceSummaryTrigger", () => {
+  it("shows a pending indicator for an uncommitted draft", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceSummaryTrigger
+          items={[item({})]}
+          readOnly={false}
+          bindingResolved
+          draftPending
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("workspace-summary-draft")).toBeTruthy();
+    expect(screen.getByLabelText("Uncommitted workspace draft")).toBeTruthy();
+  });
+
   it("summarizes the primary folder and extra count", () => {
     render(
       <TooltipProvider>
