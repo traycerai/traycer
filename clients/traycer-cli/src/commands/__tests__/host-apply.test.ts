@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApplyHostOutcome } from "../../installer/apply";
 
 // `host apply`'s success contract: exit 0 means the staged bytes COMMITTED,
-// not that the host is running them. `converged` is the flag that separates
-// the two without re-deriving it from three fields - see `../host-apply.ts`.
+// not that the host is running them. `activation` reports what happened to
+// the service afterwards, without ever claiming health - see the naming note
+// on `activationOf` in `../host-apply.ts`.
 
 const mocks = vi.hoisted(() => ({
   outcome: null as ApplyHostOutcome | null,
@@ -86,8 +87,12 @@ function runApply(outcome: ApplyHostOutcome): Promise<{
   })(fakeCtx());
 }
 
-describe("host apply - converged", () => {
-  it("is true only when the committed bytes are confirmed running", async () => {
+describe("host apply - activation", () => {
+  // "requested", not "converged": `runningActivated` only means the post-swap
+  // start returned, and `launchctl kickstart` returns as soon as launchd
+  // ACCEPTS the request - an unspawnable job answers success. Calling this
+  // `converged: true` published a health claim nothing here ever checked.
+  it("is 'requested' when the post-swap start was accepted - never a health claim", async () => {
     const result = await runApply({
       outcome: "applied",
       record: record("1.3.0"),
@@ -102,15 +107,18 @@ describe("host apply - converged", () => {
       postSwapError: null,
     });
 
-    expect(result.data).toMatchObject({ outcome: "applied", converged: true });
+    expect(result.data).toMatchObject({
+      outcome: "applied",
+      activation: "requested",
+    });
     expect(result.exitCode).toBe(0);
   });
 
   // The whole reason this command stays exit 0: a post-swap service failure is
   // a committed apply that did not converge, and Desktop reads exactly this
-  // envelope. The flag - and the human line - have to say so unmistakably,
+  // envelope. The field - and the human line - have to say so unmistakably,
   // because the exit code cannot.
-  it("is false, at exit 0, when the swap committed but the service did not come back", async () => {
+  it("is 'failed', at exit 0, when the swap committed but the service did not come back", async () => {
     const result = await runApply({
       outcome: "applied",
       record: record("1.3.0"),
@@ -125,22 +133,54 @@ describe("host apply - converged", () => {
       postSwapError: "launchctl kickstart failed",
     });
 
-    expect(result.data).toMatchObject({ outcome: "applied", converged: false });
+    expect(result.data).toMatchObject({
+      outcome: "applied",
+      activation: "failed",
+    });
     expect(result.exitCode).toBe(0);
     expect(result.human ?? "").toContain("NOT running");
     expect(result.human ?? "").toContain("traycer host doctor");
   });
 
-  // A no-op commits nothing and never probes the running host, so `false`
-  // here would report a healthy, already-running install as unconverged on
-  // evidence the command does not have. Three states, because there are three.
+  // Committed, but nothing was started: `--no-service`, or the Desktop-managed
+  // macOS path whose `afterSwap` deliberately sets `postSwapAction: "none"` and
+  // leaves activation to Desktop's next SMAppService register cycle. Distinct
+  // from "failed" - nothing went wrong, the start simply belongs to someone
+  // else - and an operator who cannot tell them apart will go looking for a
+  // fault that does not exist.
+  it("is 'not-attempted' when the swap committed but no start was run", async () => {
+    const result = await runApply({
+      outcome: "applied",
+      record: record("1.3.0"),
+      previous: record("1.2.0"),
+      runningActivated: false,
+      installGeneration: "gen-1",
+      serviceLifecycle: {
+        priorServiceState: "externally-managed",
+        stoppedBeforeSwap: false,
+        postSwapAction: "none",
+      },
+      postSwapError: null,
+    });
+
+    expect(result.data).toMatchObject({
+      outcome: "applied",
+      activation: "not-attempted",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.human ?? "").toContain("NOT running");
+  });
+
+  // A no-op commits nothing and never probes the running host, so `failed`
+  // here would report a healthy, already-running install as broken on
+  // evidence the command does not have.
   it("is null for a no-op, which never probes the running host", async () => {
     const result = await runApply({
       outcome: "no-op",
       installedVersion: "1.3.0",
     });
 
-    expect(result.data).toMatchObject({ outcome: "no-op", converged: null });
+    expect(result.data).toMatchObject({ outcome: "no-op", activation: null });
     expect(result.exitCode).toBe(0);
   });
 
@@ -154,7 +194,7 @@ describe("host apply - converged", () => {
 
     expect(result.data).toMatchObject({
       outcome: "stage-fingerprint-mismatch",
-      converged: null,
+      activation: null,
     });
   });
 });

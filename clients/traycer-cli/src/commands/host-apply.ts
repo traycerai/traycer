@@ -35,8 +35,9 @@ import { withCliLock } from "../store/cli-lock";
 // when the updated host does not come back. A caller that wants "the host is
 // running the new version or tell me it isn't" wants `host update`; a caller
 // that wants "commit these bytes and report what happened" wants this. Both
-// commands state that in their help; `converged` below makes the distinction
-// readable from the payload without re-deriving it from three fields.
+// commands state that in their help; `activation` below makes the distinction
+// readable from the payload without re-deriving it from three fields - and is
+// carefully NOT called "converged", because nothing here probes health.
 export interface HostApplyArgs {
   readonly force: boolean;
   readonly noService: boolean;
@@ -66,18 +67,19 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
           onProgress: (info) => ctx.progress(info),
         }),
     );
-    const converged = isConverged(outcome);
+    const activation = activationOf(outcome);
     ctx.runtime.logger.info("Host apply command completed", {
       environment: ctx.runtime.environment,
       outcome: outcome.outcome,
-      converged,
+      activation,
     });
     return {
       // Additive sibling on the existing payload: every field callers already
-      // read is untouched, and `converged` is the single flag that answers
-      // "is the host running the applied bytes?" - the question exit 0 does
-      // NOT answer here. See the success-contract note above.
-      data: { ...outcome, converged },
+      // read is untouched, and `activation` collapses the three fields that
+      // answer "what happened to the service after the swap?" into one - the
+      // question exit 0 does NOT answer here. See the success-contract note
+      // above, and `activationOf` for why it is not called "converged".
+      data: { ...outcome, activation },
       human: humanSummary(outcome),
       exitCode: 0,
     };
@@ -85,19 +87,38 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
 }
 
 /**
- * Did this apply leave the host running the bytes it committed?
+ * What happened to the SERVICE after the bytes committed - deliberately not
+ * "is the host healthy?", which this command never asks.
  *
- * `null`, NOT `false`, for every outcome that committed nothing. A `no-op`
- * (nothing staged, install already current) and a `stage-fingerprint-mismatch`
- * both return without probing or touching the running host, so this command
- * holds no evidence either way - and a healthy, already-running installation
- * reported as `converged: false` is a claim it never made. Three states,
- * because there are three: converged, demonstrably not converged, and not
- * asked.
+ * Naming this `converged` would have been the overclaim. `runningActivated`
+ * means the post-swap start/restart returned without throwing, and on macOS
+ * `launchctl kickstart` returns as soon as launchd ACCEPTS the request - a job
+ * that is registered but unspawnable answers success (the same "requested, not
+ * started" caveat `service/index.ts` records for `agentStartRequested`). So
+ * the strongest honest value here is "requested".
+ *
+ *   - `requested`      the post-swap start/restart was accepted. NOT proof the
+ *                      host is serving; `traycer host update` health-probes,
+ *                      and `traycer host status` answers it directly.
+ *   - `failed`         the post-swap start/restart threw (`postSwapError`).
+ *                      Bytes are committed and the host is not coming back on
+ *                      its own.
+ *   - `not-attempted`  committed, but no start ran - `--no-service`, or the
+ *                      Desktop-managed macOS path, which defers activation to
+ *                      Desktop's next SMAppService register cycle.
+ *   - `null`           nothing was committed (`no-op`,
+ *                      `stage-fingerprint-mismatch`), so there is no
+ *                      activation to report. NOT `failed`: those outcomes
+ *                      never touch or probe the running host, and reporting a
+ *                      failure for a healthy, already-current install would be
+ *                      a claim this command never made.
  */
-function isConverged(outcome: ApplyHostOutcome): boolean | null {
+type ApplyActivation = "requested" | "failed" | "not-attempted" | null;
+
+function activationOf(outcome: ApplyHostOutcome): ApplyActivation {
   if (outcome.outcome !== "applied") return null;
-  return outcome.postSwapError === null && outcome.runningActivated;
+  if (outcome.postSwapError !== null) return "failed";
+  return outcome.runningActivated ? "requested" : "not-attempted";
 }
 
 function humanSummary(outcome: ApplyHostOutcome): string {
