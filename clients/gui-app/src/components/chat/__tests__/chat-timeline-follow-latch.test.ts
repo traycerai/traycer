@@ -207,10 +207,17 @@ const DEFAULT_FOLLOW_LATCH_OPTIONS = {
 interface FakeListRef {
   readonly current: LegendListRef;
   readonly scrollToEnd: Mock<() => Promise<void>>;
+  readonly scrollToOffset: Mock<
+    (params: {
+      readonly offset: number;
+      readonly animated?: boolean;
+    }) => Promise<void>
+  >;
 }
 
 function makeFakeListRef(node: HTMLDivElement): FakeListRef {
   const scrollToEnd = vi.fn((): Promise<void> => Promise.resolve());
+  const scrollToOffset = vi.fn((): Promise<void> => Promise.resolve());
   const current: LegendListRef = {
     clearCaches: notImplemented,
     flashScrollIndicators: notImplemented,
@@ -225,12 +232,12 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     scrollToEnd,
     scrollToIndex: notImplemented,
     scrollToItem: notImplemented,
-    scrollToOffset: notImplemented,
+    scrollToOffset,
     setItemSize: notImplemented,
     setScrollProcessingEnabled: notImplemented,
     setVisibleContentAnchorOffset: notImplemented,
   };
-  return { current, scrollToEnd };
+  return { current, scrollToEnd, scrollToOffset };
 }
 
 describe("useChatTimelineFollowLatch", () => {
@@ -347,6 +354,109 @@ describe("useChatTimelineFollowLatch", () => {
     shim.setGeometry(node, { scrollHeight: 1800 });
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(3);
+  });
+
+  it("supersedes a deferred end correction when the reader scrolls away", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    let runDeferredEnd = (): void => undefined;
+    listRef.scrollToEnd.mockImplementation(
+      () =>
+        new Promise<void>(() => {
+          runDeferredEnd = (): void => {
+            shim.setGeometry(node, { scrollTop: 1000 });
+            fireNativeScroll(node);
+          };
+        }),
+    );
+    listRef.scrollToOffset.mockImplementation(({ offset }): Promise<void> => {
+      runDeferredEnd = (): void => undefined;
+      shim.setGeometry(node, { scrollTop: offset });
+      return Promise.resolve();
+    });
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    // LegendList can queue this correction while a data/layout pass settles.
+    shim.setGeometry(node, { scrollTop: 900 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    shim.setGeometry(node, { scrollTop: 1000 });
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    shim.setGeometry(node, { scrollTop: 467 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    // A stale queued end command must not execute after the reader has parked.
+    runDeferredEnd();
+    expect(node.scrollTop).toBe(467);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("supersedes a deferred end correction before its coalesced strict-bottom report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    let runDeferredEnd = (): void => undefined;
+    listRef.scrollToEnd.mockImplementation(
+      () =>
+        new Promise<void>(() => {
+          runDeferredEnd = (): void => {
+            shim.setGeometry(node, { scrollTop: 1000 });
+            fireNativeScroll(node);
+          };
+        }),
+    );
+    listRef.scrollToOffset.mockImplementation(({ offset }): Promise<void> => {
+      runDeferredEnd = (): void => undefined;
+      shim.setGeometry(node, { scrollTop: offset });
+      return Promise.resolve();
+    });
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    shim.setGeometry(node, { scrollTop: 900 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+
+    // Native scroll delivery is still queued; the compositor has already
+    // parked the reader away from the tail.
+    shim.setGeometry(node, { scrollTop: 467 });
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+
+    // If the pending LegendList token is still live, this restores the
+    // strict edge and coalesces as a native strict-bottom report, which
+    // would re-latch follow. Arm-time supersede must cancel it first.
+    runDeferredEnd();
+    fireNativeScroll(node);
+    expect(node.scrollTop).toBe(467);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
   it("ends a bounded correction burst without inventing reader departure", () => {
