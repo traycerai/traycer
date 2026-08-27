@@ -112,6 +112,7 @@ const fixtures = vi.hoisted(() => {
     startLoginSuccess: false,
     startLoginData: undefined as StartLoginData | undefined,
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
+    awaitLoginReset: vi.fn(),
     // Modelled for the same reason `startLogin`'s are: the component derives
     // its "did not authenticate" row message from the mutation RESULT rather
     // than from local state, so a mock that carried only `mutate` would leave
@@ -156,6 +157,14 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
     isPending: false,
     isSuccess: fixtures.awaitLoginSuccess,
     data: fixtures.awaitLoginData,
+    // Modelled as the real one behaves - clearing the result - rather than as a
+    // bare spy, so a test can assert the CONSEQUENCE (no stale verdict on the
+    // next attempt) instead of merely that a function was called.
+    reset: () => {
+      fixtures.awaitLoginReset();
+      fixtures.awaitLoginSuccess = false;
+      fixtures.awaitLoginData = undefined;
+    },
   }),
 }));
 
@@ -212,6 +221,7 @@ function resetFixtures(): void {
   fixtures.startLoginSuccess = false;
   fixtures.startLoginData = undefined;
   fixtures.awaitLoginMutate.mockReset();
+  fixtures.awaitLoginReset.mockReset();
   fixtures.awaitLoginSuccess = false;
   fixtures.awaitLoginData = undefined;
   fixtures.setEnabledMutate.mockReset();
@@ -631,6 +641,35 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
 
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not carry a settled verdict into an attempt that never started", () => {
+    // The two messages are only mutually exclusive because each attempt RESETS
+    // the await mutation. Without that, attempt 1's completion outlives it: a
+    // retry whose `startLogin` comes back `started: false` never calls
+    // `awaitLogin`, ends pending, and the row renders "did not start" AND "did
+    // not complete" together - the second describing an attempt the user has
+    // already moved on from.
+    const view = startSignInAttempt(false);
+    settleWith(view, { state: null });
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+
+    // Retry, this time declined by the host.
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({ started: false });
+    });
+    fixtures.startLoginSuccess = true;
+    fixtures.startLoginData = { started: false };
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+
+    expect(fixtures.awaitLoginReset).toHaveBeenCalled();
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].textContent).toContain("did not start");
   });
 
   it("hides the previous verdict while a fresh attempt is running", () => {

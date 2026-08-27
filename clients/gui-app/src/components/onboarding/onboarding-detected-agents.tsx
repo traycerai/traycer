@@ -289,13 +289,23 @@ function SignInToEnableButton(props: {
   // `startLogin.mutate` does not touch `awaitLogin`, so its `data` would
   // otherwise linger across the retry it is no longer about.
   //
-  // Mutually exclusive with `declined` by construction: a login that never
-  // started never reaches `awaitLogin`, so only one of the two can be true.
+  // Mutually exclusive with `declined`, but only because `onSignIn` RESETS the
+  // await mutation before each attempt. Without that reset the two are not
+  // exclusive at all across attempts: `awaitLogin` keeps the previous
+  // completion, so an attempt whose `startLogin` came back `started: false`
+  // would end pending having never called `awaitLogin`, and the row would
+  // render "did not start" and "did not complete" together - the second one
+  // describing an attempt the user had already moved on from.
   const notAuthenticated =
     !isPending &&
     awaitLogin.isSuccess &&
     awaitLogin.data.state?.auth.status !== "authenticated";
   const onSignIn = (providerId: ProviderId): void => {
+    // Scope the await result to THIS attempt. `startLogin.mutate` resets its
+    // own result and so clears `declined` on its own; `awaitLogin` is a
+    // separate mutation that nothing else touches, so its verdict has to be
+    // dropped explicitly or it outlives the attempt it belongs to.
+    awaitLogin.reset();
     // Start, then await the honest completion edge, then ENABLE.
     //
     // That third step is not a convenience, it is the whole contract: signing
