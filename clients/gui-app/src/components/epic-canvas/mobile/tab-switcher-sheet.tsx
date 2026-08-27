@@ -190,7 +190,28 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   if (!isMobile) return null;
 
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={onOpenChange}>
+    // `repositionInputs={false}` disables vaul's iOS scroll lock
+    // (`preventScrollMobileSafari`), which otherwise makes the embedded Pierre
+    // trees unscrollable in every direction. That lock stores
+    // `getScrollParent(e.target)` on touchstart and, when it resolves to the
+    // document, cancels every subsequent `touchmove` from a non-passive
+    // capture-phase listener. A touch inside a shadow root RETARGETS to the
+    // host, and `getScrollParent` climbs `parentElement`, which does not cross
+    // the boundary - so for a tree whose scroller is shadow-internal the walk
+    // finds nothing scrollable and takes the cancel-everything branch. The flat
+    // lists were never affected because their scrollers are ordinary light DOM.
+    //
+    // The durable fix belongs upstream (resolve the target through
+    // `composedPath()[0]`); this prop is the interim. It also turns off vaul's
+    // iOS input repositioning, which is why the filter field's focus behaviour
+    // is verified on device rather than assumed - if the keyboard covers it,
+    // the honest patch is a `scrollIntoView` on OUR input.
+    <Drawer
+      direction="bottom"
+      open={open}
+      onOpenChange={onOpenChange}
+      repositionInputs={false}
+    >
       <DrawerContent
         data-mobile-shell-touch-scope=""
         data-testid="mobile-tab-switcher-sheet"
