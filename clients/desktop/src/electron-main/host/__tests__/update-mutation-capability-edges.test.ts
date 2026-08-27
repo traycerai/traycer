@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
 import {
@@ -204,5 +204,44 @@ describe("writeSubstrateOwnerWithAttempt", () => {
     ).rejects.toMatchObject({ verdict: "not-issued" });
 
     await expect(stat(layout.substrateFile)).rejects.toThrow();
+  });
+
+  it("leaves no .substrate temp behind when the publishing rename cannot land", async () => {
+    // The temp name carries a pid and a timestamp, so a failure that skips the
+    // unlink leaks a NEW file every time rather than overwriting the last —
+    // and launch-time backfill retries this publication, so they accumulate in
+    // the host root.
+    //
+    // The rename is obstructed the same way the tombstone suite obstructs its
+    // own, which reaches the throw AFTER the temp exists. That ordering is the
+    // whole point: a failure before the write has nothing to clean up.
+    const layout = await freshLayout();
+    await mkdir(layout.substrateFile, { recursive: true });
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir: layout.rootDir,
+        reason: "substrate-rename-obstructed-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "desktop-activation-maintenance",
+      },
+      async (capability) =>
+        writeSubstrateOwnerWithAttempt(
+          capability,
+          layout,
+          "smappservice",
+          "rename-obstructed",
+        ).then(
+          () => "resolved",
+          () => "rejected",
+        ),
+    );
+
+    expect(outcome).toMatchObject({ kind: "ran", result: "rejected" });
+    const leaked = (await readdir(dirname(layout.substrateFile))).filter(
+      (entry) => entry.startsWith(".substrate.") && entry.endsWith(".tmp"),
+    );
+    expect(leaked).toEqual([]);
   });
 });

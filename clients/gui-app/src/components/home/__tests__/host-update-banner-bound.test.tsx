@@ -1198,6 +1198,29 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       expect(applyStaged).not.toHaveBeenCalled();
     });
 
+    it("retries by ACTIVATING when the host is DOWN — the packaged-macOS post-bootout case the routing exists for", async () => {
+      // `deriveActivationState` returns `unavailable`, not a debt state, when
+      // there is no running runtime identity — i.e. when the host is down,
+      // which is exactly what a packaged-macOS activation failing after bootout
+      // leaves behind. `ACTIVATION_DEBT_STATES` deliberately excludes it, so
+      // routing this retry off debt sent the one case it was added for to
+      // `applyStaged`, against a stage the failed attempt had already consumed.
+      const { applyStaged, activateInstalled } =
+        failedAttemptWithControllerStatus({
+          ...UP_TO_DATE_STATUS,
+          updateReady: false,
+          activation: "unavailable",
+        });
+      await findPhaseText();
+      fireEvent.click(
+        await screen.findByTestId("host-update-banner-operation-retry"),
+      );
+      await waitFor(() => {
+        expect(activateInstalled).toHaveBeenCalledTimes(1);
+      });
+      expect(applyStaged).not.toHaveBeenCalled();
+    });
+
     it("still retries by APPLYING when a stage is genuinely ready (update-over-debt priority)", async () => {
       const { applyStaged, activateInstalled } =
         failedAttemptWithControllerStatus({

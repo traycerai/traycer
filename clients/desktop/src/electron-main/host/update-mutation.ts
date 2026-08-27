@@ -324,6 +324,15 @@ export async function publishRestartTombstoneWithAttempt(
     // it as a kept promise and proceed to bootout.
     const ageMs = Date.now() - requestedAtMs;
     if (ageMs > TOMBSTONE_FLUSH_DEADLINE_MS) {
+      // THE SECOND early return past the outer `catch`, and it needs the same
+      // cleanup the flush-failure arm above got for Finding 6. That fix was
+      // applied to the arm the reviewer reproduced; this one has the identical
+      // shape — a `return` from inside the `try`, so the `catch` that unlinks
+      // `temp` never runs — and the temp name carries a pid and a timestamp, so
+      // every stale-flush leaves a NEW `.stop-intent.<pid>.<time>.tmp` rather
+      // than overwriting the last one. A host that keeps missing the freshness
+      // window accumulates one per restart attempt, forever.
+      await rm(temp, { force: true }).catch(() => undefined);
       return {
         kind: "not-published",
         cause: `restart tombstone went stale during flush (${ageMs}ms)`,
@@ -449,19 +458,32 @@ export async function writeSubstrateOwnerWithAttempt(
     `.substrate.${process.pid}.${Date.now()}.tmp`,
   );
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(
-    temp,
-    `${JSON.stringify({
-      v: SUBSTRATE_RECORD_VERSION,
-      active,
-      since: new Date().toISOString(),
-      reason,
-      attestation: null,
-    })}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
-  await requireLiveCapability(capability, layout.rootDir);
-  await rename(temp, target);
+  // Cleaned up on EVERY failing exit, matching `stampUpdateDispatchAck` and
+  // `lifecycle-probe`'s writer. The capability re-check between the write and
+  // the rename is the throw that matters: losing the capability there is the
+  // documented reason this function exists in this shape, so it is a path the
+  // design EXPECTS to take, and it left `.substrate.<pid>.<time>.tmp` behind
+  // every time. Launch-time backfill retries the publication, so those
+  // accumulate in the host root — the name is unique per attempt, so nothing
+  // ever overwrites an earlier one.
+  try {
+    await writeFile(
+      temp,
+      `${JSON.stringify({
+        v: SUBSTRATE_RECORD_VERSION,
+        active,
+        since: new Date().toISOString(),
+        reason,
+        attestation: null,
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await requireLiveCapability(capability, layout.rootDir);
+    await rename(temp, target);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
   await requireLiveCapability(capability, layout.rootDir);
 }
 

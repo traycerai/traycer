@@ -220,7 +220,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   // Update-over-debt priority (Tech Plan): a ready update supersedes
   // activation debt outright, since applying the new bytes activates them.
-  const { showUpdate, showDebt, offeredVersion, installedVersion } =
+  const { showUpdate, showDebt, hostDown, offeredVersion, installedVersion } =
     deriveOfferedVersion(status);
   const snoozed =
     terminalOutcome === null &&
@@ -382,29 +382,34 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
             setForceRestartRequested(true);
           }}
           onOperationRetry={() => {
-            // The same action the controller lane takes, ROUTED THE SAME WAY —
-            // which is the part that was missing. Every other retry in this
-            // file picks its mutation from the intent (`onTerminalRetry` off
-            // `terminalOutcome.intent`, `onAction` off `showUpdate`,
-            // `resolveForceAction` off `busy`); this one hard-coded apply.
-            //
             // A `failed` view does not carry the phase it failed in — the
             // projection's `failed` arms set `lastKnownKind: null` — so the
             // attempt itself cannot say whether bytes still need applying or
-            // only activating. The controller lane can, and already does: an
-            // attempt that got as far as installing leaves the machine in
-            // activation debt, and re-running `applyStaged` there asks the host
-            // to apply a stage the failed attempt already consumed.
+            // only activating, and the controller lane has to decide.
             //
-            // `showDebt` is defined as `!updateReady && <debt>`, so this keeps
-            // the update-over-debt priority intact: a genuinely ready stage
-            // still routes to apply.
+            // Activate when the machine owes an activation OR when the host is
+            // DOWN. The second half is the fix: `showDebt` is
+            // `!updateReady && activation ∈ {pendingActivation,
+            // activationUnknown}`, and `deriveActivationState` returns
+            // `unavailable` — in neither set — whenever there is no running
+            // runtime identity. A packaged-macOS activation that fails after
+            // bootout leaves exactly that state, so the one case this routing
+            // was added for took the apply arm and re-ran `applyStaged` against
+            // a stage the failed attempt had already consumed. The recovery
+            // button did not recover, on a machine whose host was not running.
             //
-            // The fallback is unchanged and still the reason this is safe: if
-            // nothing is staged the mutation says so through the
-            // terminal-outcome branch, which is a truthful answer rather than a
-            // dead button.
-            if (showDebt) {
+            // `hostDown` is a SEPARATE flag rather than a wider
+            // `ACTIVATION_DEBT_STATES`, because that set also gates banner
+            // visibility and `unavailable` is the ordinary state during every
+            // healthy swap — widening it would raise a debt banner on each
+            // restart.
+            //
+            // Apply stays the default for everything else, including a healthy
+            // `activated` host with no ready stage: an attempt that failed
+            // during download has nothing staged to activate, and apply is the
+            // retry that re-runs the download. Routing that case to activate
+            // would restart an already-correct host to no purpose.
+            if (showDebt || hostDown) {
               runActivate(false);
               return;
             }
@@ -819,6 +824,8 @@ function resolveForceAction(
 function deriveOfferedVersion(status: HostControllerStatus | undefined): {
   readonly showUpdate: boolean;
   readonly showDebt: boolean;
+  /** Retry routing only — never banner visibility. See `onOperationRetry`. */
+  readonly hostDown: boolean;
   readonly offeredVersion: string | null;
   readonly installedVersion: string | null;
 } {
@@ -826,6 +833,7 @@ function deriveOfferedVersion(status: HostControllerStatus | undefined): {
     return {
       showUpdate: false,
       showDebt: false,
+      hostDown: false,
       offeredVersion: null,
       installedVersion: null,
     };
@@ -833,6 +841,14 @@ function deriveOfferedVersion(status: HostControllerStatus | undefined): {
   const showUpdate = status.updateReady;
   const showDebt =
     !status.updateReady && ACTIVATION_DEBT_STATES.has(status.activation);
+  // NOT part of `showDebt`, and deliberately separate from it.
+  //
+  // `ACTIVATION_DEBT_STATES` gates banner VISIBILITY across several surfaces,
+  // and `unavailable` is the ordinary state during every healthy swap window —
+  // widening that set would raise a debt banner every time a host restarts.
+  // This flag is consumed by exactly one thing: which mutation a retry of an
+  // ALREADY-FAILED attempt should dispatch. See `onOperationRetry`.
+  const hostDown = !status.updateReady && status.activation === "unavailable";
   let offeredVersion: string | null = null;
   if (showUpdate) {
     offeredVersion = status.stagedVersion;
@@ -842,6 +858,7 @@ function deriveOfferedVersion(status: HostControllerStatus | undefined): {
   return {
     showUpdate,
     showDebt,
+    hostDown,
     offeredVersion,
     installedVersion: status.installedVersion,
   };
