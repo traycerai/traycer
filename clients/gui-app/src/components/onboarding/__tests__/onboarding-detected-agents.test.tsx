@@ -5,7 +5,9 @@ import {
   fireEvent,
   render,
   screen,
+  type RenderResult,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 
 type StartLoginData = { readonly started: boolean };
@@ -111,6 +113,7 @@ const fixtures = vi.hoisted(() => {
     startLoginData: undefined as StartLoginData | undefined,
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
     setEnabledMutate: vi.fn<SetEnabledMutate>(),
+    setEnabledPending: false,
     toastError: vi.fn(),
   };
 });
@@ -126,7 +129,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 
 vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   useProvidersSetEnabled: () => ({
-    isPending: false,
+    isPending: fixtures.setEnabledPending,
     mutate: fixtures.setEnabledMutate,
   }),
 }));
@@ -201,18 +204,27 @@ function resetFixtures(): void {
   fixtures.startLoginData = undefined;
   fixtures.awaitLoginMutate.mockReset();
   fixtures.setEnabledMutate.mockReset();
+  fixtures.setEnabledPending = false;
   fixtures.toastError.mockReset();
 }
 
-/** Render the codex row and drive it to the point where the login started. */
-function startSignInAttempt(): void {
+/**
+ * Render the codex row and drive it to the point where the login started.
+ *
+ * `strict` renders under `<StrictMode>`, which is how the desktop and mobile
+ * dev builds actually mount this act - and the one place an effect runs
+ * setup -> cleanup -> setup.
+ */
+function startSignInAttempt(strict: boolean): RenderResult {
   fixtures.providers = [fixtures.signInProvider];
-  render(<OnboardingDetectedAgents />);
+  const tree = <OnboardingDetectedAgents />;
+  const view = render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   fireEvent.click(signInButton());
   const [, startOptions] = latestStartLoginCall();
   act(() => {
     startOptions.onSuccess({ started: true });
   });
+  return view;
 }
 
 describe("OnboardingDetectedAgents", () => {
@@ -451,7 +463,7 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     // to enable" complete a successful sign-in and then silently not enable.
     vi.useFakeTimers();
     try {
-      startSignInAttempt();
+      startSignInAttempt(false);
       expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(1);
 
       act(() => {
@@ -488,7 +500,7 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
   it("spends the shared re-poll budget and then stops, without enabling", () => {
     vi.useFakeTimers();
     try {
-      startSignInAttempt();
+      startSignInAttempt(false);
       // One completion per await: the initial one plus each re-poll. The last
       // iteration is the one whose completion finds the budget spent.
       for (
@@ -524,7 +536,7 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     // is still running has already answered this question.
     vi.useFakeTimers();
     try {
-      startSignInAttempt();
+      startSignInAttempt(false);
       act(() => {
         latestAwaitLoginOptions().onSuccess({
           state: { auth: { status: "unauthenticated" }, authPending: true },
@@ -542,5 +554,62 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Two ways the button can look done while it is not: an unmount latch that
+// StrictMode leaves stuck on, and a spinner that stops at the AUTHENTICATION
+// boundary rather than the enable this button actually promises.
+describe("SignInToEnableButton pending lifecycle", () => {
+  afterEach(resetFixtures);
+
+  it("still enables under StrictMode, whose effects run setup - cleanup - setup", () => {
+    // The dev builds mount this act inside `<StrictMode>`, so the unmount
+    // latch is set by that first throwaway cleanup. A latch that is only ever
+    // SET would then make every completion return early for the life of the
+    // button - the sign-in completes and the provider silently stays off,
+    // exactly where a developer would be looking at it.
+    startSignInAttempt(true);
+
+    act(() => {
+      latestAwaitLoginOptions().onSuccess({
+        state: { auth: { status: "authenticated" }, authPending: false },
+      });
+    });
+
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      enabled: true,
+      profileAction: null,
+    });
+  });
+
+  it("stays pending through the enable, not just through the authentication", () => {
+    // `providers.setEnabled` is the parent's mutation and the row only flips
+    // once its refresh lands, so between those two moments the button would
+    // otherwise re-arm - long enough for a second press to spawn a redundant
+    // login child for a provider already being turned on.
+    const view = startSignInAttempt(false);
+
+    act(() => {
+      latestAwaitLoginOptions().onSuccess({
+        state: { auth: { status: "authenticated" }, authPending: false },
+      });
+    });
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      fixtures.setEnabledPending = true;
+    });
+    view.rerender(<OnboardingDetectedAgents />);
+    expect(signInButton()).toHaveProperty("disabled", true);
+
+    // ...and it comes back if the enable fails, so a failed mutation cannot
+    // strand the row with a dead button.
+    act(() => {
+      fixtures.setEnabledPending = false;
+    });
+    view.rerender(<OnboardingDetectedAgents />);
+    expect(signInButton()).toHaveProperty("disabled", false);
   });
 });

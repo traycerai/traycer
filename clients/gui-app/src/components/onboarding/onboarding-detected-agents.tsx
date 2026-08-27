@@ -205,9 +205,12 @@ function providerNeedsSignInToEnable(
  */
 function SignInToEnableButton(props: {
   readonly state: ProviderCliState;
+  /** True while the parent's `providers.setEnabled` is in flight - see
+   *  `isPending` below for why this button has to know. */
+  readonly enablementPending: boolean;
   readonly onEnable: (providerId: ProviderId) => void;
 }) {
-  const { state, onEnable } = props;
+  const { state, enablementPending, onEnable } = props;
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   // Browser OAuth opens a browser on the machine running the host, so it is
@@ -228,7 +231,14 @@ function SignInToEnableButton(props: {
   // enablement the user never sees at worst.
   const repollTimerRef = useRef<number | null>(null);
   const unmountedRef = useRef(false);
+  // Cleared on every effect RUN, not just at declaration: StrictMode's dev
+  // double-invoke is setup -> cleanup -> setup, so a latch only ever set would
+  // stay on for the life of a mounted button and make every completion and
+  // re-poll return early - the sign-in would complete and never enable, in
+  // exactly the builds a developer tests onboarding in. Same reason, and the
+  // same shape, as the Settings login flow's own latch.
   useEffect(() => {
+    unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
       if (repollTimerRef.current !== null) {
@@ -237,7 +247,18 @@ function SignInToEnableButton(props: {
       }
     };
   }, []);
-  const isPending = startLogin.isPending || awaitLogin.isPending || settling;
+  // Pending until the ADVERTISED action is done, which is the enable, not the
+  // authentication: `providers.setEnabled` is the parent's mutation, so
+  // without its flag this button re-arms in the window between a successful
+  // login and the row flipping enabled - long enough for a second press to
+  // spawn a redundant login child for a provider that is already being turned
+  // on. The parent's flag is shared across rows, exactly like the enable
+  // switches it already drives.
+  const isPending =
+    startLogin.isPending ||
+    awaitLogin.isPending ||
+    settling ||
+    enablementPending;
   // The RPC succeeded but the host declined to start the login, so the
   // provider tooling is the limiting factor, not auth - the same outcome
   // Settings names `failureMessages.notStarted`, and the one edge that could
@@ -485,6 +506,7 @@ export function OnboardingDetectedAgents() {
             {providerNeedsSignInToEnable(state, installDetected) ? (
               <SignInToEnableButton
                 state={state}
+                enablementPending={setEnabled.isPending}
                 onEnable={(providerId) => {
                   handleSetEnabled(providerId, true);
                 }}
