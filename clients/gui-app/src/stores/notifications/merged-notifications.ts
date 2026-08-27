@@ -1404,7 +1404,7 @@ export function rowFromCloudFeedRow(
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
-    row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+    row.presentation.epicTitle ?? row.presentation.chatTitle ?? fallback.title;
   const providerPackAttribution = parseProviderPackNotificationAttribution(
     row.entry.payload,
   );
