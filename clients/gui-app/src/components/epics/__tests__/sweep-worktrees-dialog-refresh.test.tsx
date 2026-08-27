@@ -117,11 +117,13 @@ describe("SweepWorktreesDialog refresh", () => {
     expect(screen.getByText("traycer/refresh")).toBeTruthy();
     expect(screen.queryByText("Checking worktrees…")).toBeNull();
     expect(screen.getByTestId("sweep-worktrees-checked-at")).toBeTruthy();
-    expect(
-      screen.getByTestId("sweep-worktrees-checkbox").hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen.getByTestId("sweep-worktrees-confirm").hasAttribute("disabled"),
-    ).toBe(true);
+    const checkbox = screen.getByTestId<HTMLButtonElement>(
+      "sweep-worktrees-checkbox",
+    );
+    const confirm = screen.getByTestId<HTMLButtonElement>(
+      "sweep-worktrees-confirm",
+    );
+    expect(checkbox.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
   });
 });
