@@ -282,12 +282,39 @@ export type HostStatusUpdateOperation = z.infer<
 /**
  * What this host can do with schema-v2 attempt evidence.
  *
- * Consumers MUST fail closed on `null` (§9.1: Desktop verifies host
- * transaction capability before a local apply/activation). That is also why
- * this is nullable rather than a fabricated `{ authority: "legacy" }` in the
- * v1.2→v1.3 upgrade: an old peer said nothing, and "said nothing" is not the
- * same claim as "told us it runs the legacy authority", even when both lead a
- * correct consumer to the same refusal.
+ * ## The fail-closed obligation, and exactly what it is scoped to
+ *
+ * §9.1: "Desktop must verify host transaction capability before local
+ * apply/activation" — but read the sentence it lives in. That list is prefixed
+ * "**Before new execution is enabled for a cohort**", and the same section
+ * continues: "an incapable or unverifiable combination **continues the legacy
+ * path only while the new authority is disabled**". §9.2 stages it the same
+ * way: the compatibility release ships capability REPORTING "without changing
+ * execution".
+ *
+ * So the obligation attaches to operations that run under the NEW attempt
+ * authority. It is not a gate on today's legacy apply/activation, and wiring it
+ * there would invert the plan: every pre-1.3 host — which today is the entire
+ * deployed fleet — reports `null` here, so a `null`-refuses gate on the current
+ * path would refuse to update precisely the hosts §9.1 says must continue on
+ * the legacy path.
+ *
+ * The gate therefore arms with the cohort, at
+ * `desktop/.../update-executor-cohort.ts`, which is statically
+ * `{kind:"shadow", reason:"disabled"}` today. Until that flips, `null` here is
+ * consumed as evidence (it is carried on `FleetUpdateWireObservation`) and
+ * gates nothing — which is the correct behaviour for this stage, not a missing
+ * consumer.
+ *
+ * An earlier revision of this comment said only "Consumers MUST fail closed on
+ * `null`" with no scope, and a reviewer reasonably read it as a promise about
+ * the current apply path. The scope is the whole content of the rule, so it is
+ * stated here rather than left to the plan reference.
+ *
+ * Nullable rather than a fabricated `{ authority: "legacy" }` in the v1.2→v1.3
+ * upgrade: an old peer said nothing, and "said nothing" is not the same claim
+ * as "told us it runs the legacy authority", even when both lead a correct
+ * consumer to the same refusal.
  *
  * It doubles as the one derivable test for "does this peer speak the attempt
  * protocol at all", which is what keeps `updateOperation: null` from

@@ -43,6 +43,31 @@ export type DesktopUpdateExecutorCohortVerdict =
       readonly substrate: Extract<HostServiceSubstrate, "smappservice">;
     };
 
+/**
+ * ## What the cutover MUST bring with it
+ *
+ * §9.1 lists the preconditions for enabling new execution for a cohort, and one
+ * of them has no consumer today BY DESIGN — recorded here because this function
+ * is the only place that can arm it:
+ *
+ * > Desktop must verify host transaction capability before local
+ * > apply/activation.
+ *
+ * `host.status@1.3`'s `updateTransaction` is that capability. It is currently
+ * carried as evidence (`FleetUpdateWireObservation.transaction`) and gates
+ * nothing, which is correct while this returns `shadow`: §9.1 requires an
+ * unverifiable combination to CONTINUE the legacy path while the new authority
+ * is disabled, and every pre-1.3 host — today, the whole deployed fleet —
+ * reports `null` here. A gate wired now would refuse to update exactly those
+ * hosts.
+ *
+ * So when this function starts returning `eligible`, the same change must make
+ * `applyStaged`/`activateInstalled` refuse a host whose `updateTransaction` is
+ * `null` or whose `authority` is not `attempt`, for the cohort it just enabled.
+ * Enabling the cohort without that gate reopens the mixed-version race the
+ * signal exists to close — one legacy and one new authority, concurrently,
+ * which §9.1 forbids outright.
+ */
 export function decideDesktopUpdateExecutorCohort(
   _substrate: HostServiceSubstrate,
 ): DesktopUpdateExecutorCohortVerdict {

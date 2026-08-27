@@ -217,7 +217,7 @@ async function observeHostUpdate(input: {
   }
   const borrowed = await readUpdateStatusOverBorrowedSession({
     hostId: input.hostId,
-    nowMs: Date.now(),
+    now: () => Date.now(),
     abortSignal: input.abortSignal,
   });
   if (borrowed !== null) return borrowed;

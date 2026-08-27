@@ -30,7 +30,24 @@ import {
  */
 export async function readUpdateStatusOverBorrowedSession(input: {
   readonly hostId: string;
-  readonly nowMs: number;
+  /**
+   * Read AFTER the queued round trip, never before it.
+   *
+   * A `nowMs` number here was stamped at CALL time, which is upstream of the
+   * `runWithFleetReadSlot` gate below. That gate admits four reads at a time,
+   * so on a fleet with more borrowable hosts than slots the later ones wait
+   * behind whole round trips — and then stamped an `observedAtMs` from before
+   * the wait, describing data as older than it is. `freshUntilMs` derives from
+   * the same instant, so a host on the active cadence (~2s) could be handed a
+   * deadline that had already passed when its read returned: stale on arrival,
+   * every round, for every host past the fourth.
+   *
+   * A function rather than a number is what makes the timestamp unforgeable
+   * here — there is no instant available to the caller that would be correct.
+   * The canonical leg already holds this discipline by reading the cache
+   * entry's own `dataUpdatedAt`; this is the borrowed leg keeping it too.
+   */
+  readonly now: () => number;
   readonly abortSignal: AbortSignal | null;
 }): Promise<FleetUpdateObservation | null> {
   const borrowed = tryAcquireReadyRemoteSession<HostRpcRegistry>(input.hostId);
@@ -54,7 +71,8 @@ export async function readUpdateStatusOverBorrowedSession(input: {
     return observationFromStatus({
       hostId: input.hostId,
       status,
-      nowMs: input.nowMs,
+      // Stamped here, after the slot wait AND the round trip.
+      nowMs: input.now(),
     });
   } catch {
     // Every failure mode lands here and all of them mean the same thing: we

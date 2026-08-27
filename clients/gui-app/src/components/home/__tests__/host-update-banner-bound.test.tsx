@@ -1198,13 +1198,28 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       expect(applyStaged).not.toHaveBeenCalled();
     });
 
-    it("retries by ACTIVATING when the host is DOWN — the packaged-macOS post-bootout case the routing exists for", async () => {
+    it("retries by ACTIVATING while the host reads unavailable and the live view still says failed", async () => {
+      // SCOPE, stated because it is narrower than it looks. This covers the
+      // window where the controller already reports `activation: "unavailable"`
+      // (no running runtime identity) while the LIVE attempt view is still
+      // `failed` — the interval right after a packaged-macOS activation fails
+      // and takes the host down with it.
+      //
+      // It does NOT cover the SUSTAINED host-down state. Once the live read
+      // expires, `useLocalHostUpdateOperation` falls back to the durable
+      // record, which `projectFleetUpdateView` projects as `kind: "unknown"`
+      // with `lastKnownKind: "failed"` — and Retry renders only for
+      // `view.kind === "failed"`, so this callback is not reachable there at
+      // all. That gap is real and is recorded rather than fixed here; binding a
+      // local host below is what keeps this test inside the window it names,
+      // and removing that binding would not extend the fix, it would just stop
+      // rendering the button.
+      //
       // `deriveActivationState` returns `unavailable`, not a debt state, when
-      // there is no running runtime identity — i.e. when the host is down,
-      // which is exactly what a packaged-macOS activation failing after bootout
-      // leaves behind. `ACTIVATION_DEBT_STATES` deliberately excludes it, so
-      // routing this retry off debt sent the one case it was added for to
-      // `applyStaged`, against a stage the failed attempt had already consumed.
+      // there is no running runtime identity. `ACTIVATION_DEBT_STATES`
+      // deliberately excludes it, so routing this retry off debt sent even this
+      // window to `applyStaged`, against a stage the failed attempt had already
+      // consumed.
       const { applyStaged, activateInstalled } =
         failedAttemptWithControllerStatus({
           ...UP_TO_DATE_STATUS,

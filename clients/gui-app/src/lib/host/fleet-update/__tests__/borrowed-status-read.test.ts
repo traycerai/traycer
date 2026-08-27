@@ -225,7 +225,7 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
 
     const readPromise = readUpdateStatusOverBorrowedSession({
       hostId,
-      nowMs: Date.now(),
+      now: () => Date.now(),
       abortSignal: null,
     });
 
@@ -243,6 +243,56 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
     expect(session.sendUnaryCalls).toBe(1);
     expect(observation).not.toBeNull();
     expect(observation?.hostId).toBe(hostId);
+
+    holders.slice(1).forEach((gate) => {
+      gate.resolve();
+    });
+    await Promise.all(holderRuns);
+    owner.close();
+  });
+
+  it("stamps observedAtMs AFTER the queue wait, not at call time", async () => {
+    // The defect this pins: with more borrowable hosts than gate slots, a
+    // later read waits behind whole round trips and then stamped a timestamp
+    // taken before the wait. `freshUntilMs` derives from that same instant, so
+    // an actively-updating host on the ~2s cadence could receive a deadline
+    // that had already expired by the time its read returned.
+    //
+    // The clock only advances while the read is QUEUED, so a call-time stamp
+    // and a post-read stamp are distinguishable by construction.
+    const holders = Array.from({ length: FLEET_MAX_CONCURRENT_READS }, () =>
+      deferred<void>(),
+    );
+    const holderRuns = holders.map((gate) =>
+      runWithFleetReadSlot(() => gate.promise),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const hostId = "host-stamp-after-queue";
+    const session = readySession();
+    const owner = acquireRemoteSession(remoteIdentity(hostId), () => session);
+
+    const CALL_TIME_MS = 1_000_000;
+    const QUEUE_WAIT_MS = 5_000;
+    let clock = CALL_TIME_MS;
+    const readPromise = readUpdateStatusOverBorrowedSession({
+      hostId,
+      now: () => clock,
+      abortSignal: null,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    // Time passes WHILE the read is stuck behind the gate.
+    clock = CALL_TIME_MS + QUEUE_WAIT_MS;
+    holders[0].resolve();
+    const observation = await readPromise;
+
+    expect(observation?.observedAtMs).toBe(CALL_TIME_MS + QUEUE_WAIT_MS);
+    // Stated as the inequality the defect violates, so this still fails if the
+    // stamp drifts back upstream by some other route.
+    expect(observation?.observedAtMs).toBeGreaterThan(CALL_TIME_MS);
 
     holders.slice(1).forEach((gate) => {
       gate.resolve();
