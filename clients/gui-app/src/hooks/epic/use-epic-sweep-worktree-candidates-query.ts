@@ -47,8 +47,9 @@ export interface EpicSweepWorktreeRow {
   readonly note: EpicSweepRowNote | null;
   /**
    * T2 holder inventory when a test (or a later `listHolders` provider)
-   * supplies it. Empty in production until T7 populates a listing; the
-   * shared disclosure renders nothing for an empty list.
+   * supplies it. Empty in production until T7 populates a listing; Sweep
+   * treats an in-use row with an empty list as unknown and discloses a
+   * generic stop line rather than authorizing silently.
    */
   readonly holders: readonly WorktreeBusyHolder[];
 }

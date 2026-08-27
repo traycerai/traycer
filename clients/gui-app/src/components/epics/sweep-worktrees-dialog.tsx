@@ -25,6 +25,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
 import {
@@ -41,6 +42,14 @@ import { useCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
 const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
+
+/**
+ * Generic stop consequence when an in-use row has no named holder inventory
+ * (production until T7's `listHolders` provider). Loud, through the same
+ * disclosure surface as a working holder — never silent authorization.
+ */
+export const UNKNOWN_IN_USE_STOP_LABEL =
+  "Background work on this worktree will be stopped (details unavailable on this host)";
 
 interface SweepWorktreesDialogProps {
   /**
@@ -140,9 +149,28 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     epicIds === null ? null : [...new Set(epicIds)].sort().join(",");
   const [previousSelectionKey, setPreviousSelectionKey] =
     useState(selectionKey);
-  if (selectionKey !== previousSelectionKey) {
+  const [previousInUseByPath, setPreviousInUseByPath] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
+  const selectionRetargeted = selectionKey !== previousSelectionKey;
+  if (selectionRetargeted) {
     setPreviousSelectionKey(selectionKey);
     setCheckOverrides(new Map());
+    setPreviousInUseByPath(new Map());
+  }
+  const inUseTransition = takeInUseFalseToTrueTransition(
+    previousInUseByPath,
+    rows,
+    isPending,
+    selectionRetargeted,
+  );
+  if (inUseTransition !== null) {
+    setPreviousInUseByPath(inUseTransition.nextInUseByPath);
+    if (inUseTransition.droppedForcePaths.length > 0) {
+      setCheckOverrides(
+        withoutOverridePaths(checkOverrides, inUseTransition.droppedForcePaths),
+      );
+    }
   }
   // Read from the mutation cache, not this instance: the dialog is mounted
   // per surface (History row and task-status strip each render their own), so
@@ -156,9 +184,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     return checkOverrides.get(row.entry.worktreePath) ?? row.defaultChecked;
   };
   const checkedRows = rows.filter(isRowChecked);
-  const selectedInUseHolders = checkedRows.flatMap((row) =>
-    row.entry.inUse ? row.holders : [],
-  );
+  const selectedInUseHolders = disclosureHoldersForCheckedRows(checkedRows);
   // Only THIS dialog's own run disables the whole form; a sweep of some other
   // Task's worktrees just removes its own paths from selection above.
   const isSweeping = sweepMutation.isPending;
@@ -348,6 +374,85 @@ function SweepWorktreesCheckedAtText(props: {
       Workspace snapshot · {relative}
     </span>
   );
+}
+
+function inUseByPathFromRows(
+  rows: ReadonlyArray<EpicSweepWorktreeRow>,
+): ReadonlyMap<string, boolean> {
+  const next = new Map<string, boolean>();
+  for (const row of rows) {
+    next.set(row.entry.worktreePath, row.entry.inUse);
+  }
+  return next;
+}
+
+function inUseByPathEqual(
+  left: ReadonlyMap<string, boolean>,
+  right: ReadonlyMap<string, boolean>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [path, inUse] of right) {
+    if (left.get(path) !== inUse) return false;
+  }
+  return true;
+}
+
+function takeInUseFalseToTrueTransition(
+  previousInUseByPath: ReadonlyMap<string, boolean>,
+  rows: ReadonlyArray<EpicSweepWorktreeRow>,
+  isPending: boolean,
+  selectionRetargeted: boolean,
+): {
+  readonly nextInUseByPath: ReadonlyMap<string, boolean>;
+  readonly droppedForcePaths: readonly string[];
+} | null {
+  // Skip in-flight empty snapshots so a later inUse false→true still
+  // compares against the last proven idle value, not "path unseen".
+  if (selectionRetargeted || isPending) return null;
+  const nextInUseByPath = inUseByPathFromRows(rows);
+  if (inUseByPathEqual(previousInUseByPath, nextInUseByPath)) return null;
+  const droppedForcePaths: string[] = [];
+  for (const [path, inUse] of nextInUseByPath) {
+    if (inUse && previousInUseByPath.get(path) === false) {
+      droppedForcePaths.push(path);
+    }
+  }
+  return { nextInUseByPath, droppedForcePaths };
+}
+
+function withoutOverridePaths(
+  overrides: ReadonlyMap<string, boolean>,
+  paths: readonly string[],
+): ReadonlyMap<string, boolean> {
+  const next = new Map(overrides);
+  let changed = false;
+  for (const path of paths) {
+    if (next.delete(path)) changed = true;
+  }
+  return changed ? next : overrides;
+}
+
+function unknownInUseHolder(row: EpicSweepWorktreeRow): WorktreeBusyHolder {
+  return {
+    ownerRef: {
+      epicId: "",
+      ownerKind: "chat",
+      ownerId: row.entry.worktreePath,
+    },
+    holdKind: "active-run-cwd",
+    activity: "working",
+    label: UNKNOWN_IN_USE_STOP_LABEL,
+  };
+}
+
+function disclosureHoldersForCheckedRows(
+  rows: ReadonlyArray<EpicSweepWorktreeRow>,
+): readonly WorktreeBusyHolder[] {
+  return rows.flatMap((row) => {
+    if (!row.entry.inUse) return [];
+    if (row.holders.length > 0) return row.holders;
+    return [unknownInUseHolder(row)];
+  });
 }
 
 /**

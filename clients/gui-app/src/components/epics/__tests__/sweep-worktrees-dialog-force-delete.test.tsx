@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 
@@ -52,7 +58,10 @@ vi.mock("@/components/worktree/worktree-pr-metadata", () => ({
   WorktreePrPills: () => null,
 }));
 
-import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
+import {
+  SweepWorktreesDialog,
+  UNKNOWN_IN_USE_STOP_LABEL,
+} from "@/components/epics/sweep-worktrees-dialog";
 
 function worktreeEntry(
   over: Partial<WorktreeHostEntryV14> & { readonly worktreePath: string },
@@ -162,5 +171,115 @@ describe("SweepWorktreesDialog in-use force-delete", () => {
         },
       ],
     });
+  });
+
+  it("discloses a generic stop line when an in-use row has no holder inventory, then still force-sweeps", () => {
+    const busy = worktreeEntry({
+      worktreePath: "/wt/busy",
+      branch: "feat-busy",
+      inUse: true,
+    });
+    testState.rows = [
+      {
+        entry: busy,
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use",
+        holders: [],
+      },
+    ];
+
+    render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    );
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain(UNKNOWN_IN_USE_STOP_LABEL);
+    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
+    expect(testState.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      worktrees: [
+        {
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          stopOwners: true,
+        },
+      ],
+    });
+  });
+
+  it("drops a checked override when an idle row refreshes to in-use, then re-select discloses", async () => {
+    const idle = {
+      entry: worktreeEntry({
+        worktreePath: "/wt/flip",
+        branch: "feat-flip",
+        inUse: false,
+      }),
+      tier: "merged" as const,
+      defaultChecked: false,
+      disabled: false,
+      note: null,
+      holders: [],
+    };
+    testState.rows = [idle];
+
+    const { rerender } = render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const checkbox = () =>
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-flip" });
+
+    fireEvent.click(checkbox());
+    expect(checkbox().getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByTestId("teardown-disclosure")).toBeNull();
+
+    testState.rows = [
+      {
+        ...idle,
+        entry: worktreeEntry({
+          worktreePath: "/wt/flip",
+          branch: "feat-flip",
+          inUse: true,
+        }),
+        tier: "in-use",
+        note: "in-use",
+        holders: [],
+      },
+    ];
+    rerender(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(checkbox().getAttribute("aria-checked")).toBe("false");
+    });
+    expect(screen.queryByTestId("teardown-disclosure")).toBeNull();
+
+    fireEvent.click(checkbox());
+    expect(checkbox().getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain(UNKNOWN_IN_USE_STOP_LABEL);
   });
 });
