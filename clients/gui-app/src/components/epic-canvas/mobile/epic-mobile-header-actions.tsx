@@ -15,6 +15,8 @@ import {
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 
@@ -94,12 +96,37 @@ export function MobileEpicHeaderTitle(props: {
       // to the session's host - an app-wide client pointed elsewhere during
       // a host switch would ack a rename the session can never echo, leaving
       // the landed stamp masking the real title until expiry (and renaming
-      // the wrong host's copy). A session with no serving client right now,
-      // or no session at all, falls back to the app-wide mutation - all this
-      // surface ever had before sessions carried a host.
-      const sessionClient =
-        handle === null ? null : getEpicSessionHandleHostClient(handle);
-      if (sessionClient !== null) {
+      // the wrong host's copy).
+      //
+      // NO session at all is the only case that falls back to the app-wide
+      // mutation - all this surface ever had before sessions carried a host,
+      // and with no handle there is no stamp to strand either. A REGISTERED
+      // session whose serving client is momentarily gone (a disconnect, a
+      // host transition) is UNREACHABLE, not app-wide. Substituting there is
+      // exactly the request swap `epicRenameClient` exists to refuse -
+      // "rename the epic on host B" and "rename it on whichever machine this
+      // window happens to be pointed at" are different requests - and it
+      // refuses by returning `null` for this precise case, after which
+      // `tab-strip-item.tsx` drops the stamp and reports. Parity is the whole
+      // point of this control, so the two halves of the 768px contract have
+      // to REFUSE alike, not merely route alike.
+      if (handle !== null) {
+        const sessionClient = getEpicSessionHandleHostClient(handle);
+        if (sessionClient === null) {
+          // No RPC ever fired, so nothing can land this stamp - drop it.
+          retire("failed");
+          reportableErrorToast(
+            "Couldn't reach the host to rename the epic.",
+            undefined,
+            {
+              title: "Could not rename Epic",
+              message: "The host was unavailable.",
+              code: null,
+              source: "Epic mobile header",
+            },
+          );
+          return;
+        }
         const hostId = sessionClient.getActiveHostId();
         const userId = sessionClient.getRequestContextUserId();
         void sessionClient
@@ -109,6 +136,16 @@ export function MobileEpicHeaderTitle(props: {
           .then(
             () => {
               retire("landed");
+              // Emitted here because this arm BYPASSES `useEpicUpdateTitle`,
+              // whose own `onSuccess` is where the event otherwise comes from
+              // (`use-epic-title-mutation.ts`). Without it the event fires on
+              // the app-wide fallback and nowhere else - so it would go
+              // missing precisely when a session is live, which is the normal
+              // case, and read downstream as mobile renames falling off a
+              // cliff rather than as a routing change.
+              Analytics.getInstance().track(AnalyticsEvent.TaskRenamed, {
+                source: "direct_ui",
+              });
               toast.success("Epic renamed");
               if (userId === null) return;
               updateEpicTitleInCloudTaskCaches(
