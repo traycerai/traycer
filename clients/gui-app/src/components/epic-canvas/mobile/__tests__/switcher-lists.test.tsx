@@ -98,6 +98,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => holder.records,
   useEpicActiveAgentIds: () => holder.workingAgentIds,
   useEpicAgentActivityTiers: () => holder.activityTiers,
+  // Read by the archive rule the Show facet brings with it.
+  useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
   useEpicChatHarnessId: () => null,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useEpicPermissionRole: () => holder.role,
@@ -122,6 +124,12 @@ vi.mock("@/lib/epic-selectors", () => ({
       ]),
     ),
   }),
+}));
+// The archive rule asks which tiles are open, so an archived-but-open row is
+// never hidden. Partial mock: everything else in the canvas store stays real.
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useOpenTileContentIds: () => new Set<string>(),
 }));
 vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
   useIsActiveEpicArtifact: (_tabId: string, id: string) =>

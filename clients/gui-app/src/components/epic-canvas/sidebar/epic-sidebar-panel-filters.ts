@@ -17,7 +17,8 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { ChatFilter } from "@/stores/epics/left-panel-store";
-import { useEpicArtifactRecords } from "@/lib/epic-selectors";
+import { useEpicArtifactRecords, useEpicTreeIndex } from "@/lib/epic-selectors";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import {
   isArtifactUnread,
@@ -138,4 +139,45 @@ export function useArtifactFilterMatchIds(
     }
     return matches;
   }, [filter, artifacts, readState, epicId]);
+}
+
+/** One artifact a "mark all as read" pass would advance, and to what. */
+export interface ArtifactReadTarget {
+  readonly id: string;
+  readonly updatedAt: number;
+}
+
+/**
+ * The unread artifacts a panel's "Mark all as read" would clear. Read state is
+ * renderer-side, so this walks the projection rather than asking the host.
+ */
+export function useUnreadArtifactReadTargets(
+  epicId: string,
+): ReadonlyArray<ArtifactReadTarget> {
+  const records = useEpicArtifactRecords();
+  const tree = useEpicTreeIndex();
+  const readState = useArtifactReadStateStore(
+    useShallow((s) => ({
+      seedAtByEpic: s.seedAtByEpic,
+      lastSeenByArtifact: s.lastSeenByArtifact,
+    })),
+  );
+  return useMemo(
+    () =>
+      records.flatMap((record) => {
+        if (!isEpicArtifactKind(record.type)) return [];
+        if (!Object.hasOwn(tree.nodeById, record.id)) return [];
+        const node = tree.nodeById[record.id];
+        return isArtifactUnread({
+          epicId,
+          artifactId: record.id,
+          updatedAt: node.updatedAt,
+          seedAtByEpic: readState.seedAtByEpic,
+          lastSeenByArtifact: readState.lastSeenByArtifact,
+        })
+          ? [{ id: record.id, updatedAt: node.updatedAt }]
+          : [];
+      }),
+    [epicId, readState, records, tree],
+  );
 }

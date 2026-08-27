@@ -13,20 +13,29 @@ import {
 import {
   ArtifactDetailContent,
   ChatInterfaceDetail,
+  ChatOwnershipDetail,
+  ChatShowDetail,
   OrderingDetail,
   ViewMenuBadge,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-view-menu-details";
 import {
   ARTIFACT_DETAIL_LABELS,
+  archiveVisibilityLabel,
   CHAT_DETAIL_LABELS,
   viewTriggerLabel,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-view-menu-shared";
+import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
+import { useArtifactReadStateStore } from "@/stores/epics/artifact-read-state-store";
+import { useUnreadArtifactReadTargets } from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
 import { CHAT_SORT_FIELDS, type SortField } from "@/lib/epic-sort";
 import {
   artifactFilterCount,
   chatFilterCount,
+  DEFAULT_CHAT_ARCHIVE_VISIBILITY,
   isArtifactFilterActive,
+  isChatFilterActive,
   isSortModeActive,
+  useChatArchiveVisibility,
   useArtifactFilter,
   useArtifactSort,
   useChatFilter,
@@ -107,47 +116,41 @@ function SwitcherFacetLabel(props: { readonly children: ReactNode }) {
  * filter and sort the desktop sidebar does - so a narrowing picked on a phone
  * is the narrowing the sidebar shows, and neither surface owns a private copy.
  *
- * Carries Ordering and Interface. The sidebar's other two Agents facets are
- * absent, each for a reason that is about this surface rather than about the
- * facet:
- *
- * - **Ownership** sorts local agents from collaborators'. Every LOCAL agent is
- *   the viewer's own - a collaborator's arrives as a cloud row - and this list
- *   renders local records only. So "Mine" would select exactly what "All" does
- *   and "Others" would empty the list every time, on every epic. The control
- *   is only meaningful once cloud rows reach this surface.
- * - **Show** (archive visibility) needs more than the visibility flag to be
- *   correct: the sidebar pairs it with a reveal rule that keeps an archived
- *   agent visible while it is open, working, or unread. Shipping the control
- *   without that rule would silently hide agents the sidebar shows.
- *
- * "Reset view" is absent because it clears archive visibility too, so here it
- * would reset a facet the user cannot see.
- *
- * Both still APPLY when set from the sidebar - they are the same per-epic
- * store keys, and this list narrows through the same match set - so a phone
- * showing nothing under a desktop-set Ownership filter says so in its empty
- * state rather than pretending the epic is empty.
+ * Carries the sidebar's Agents facets, in the sidebar's order.
  */
 export function SwitcherAgentsViewMenu(props: { readonly epicId: string }) {
   const { epicId } = props;
   const filter = useChatFilter(epicId);
   const sort = useChatSort(epicId);
   const setChatOrigin = useLeftPanelStore((state) => state.setChatOrigin);
+  const setChatOwnership = useLeftPanelStore((state) => state.setChatOwnership);
+  const setChatArchiveVisibility = useLeftPanelStore(
+    (state) => state.setChatArchiveVisibility,
+  );
+  const resetChatView = useLeftPanelStore((state) => state.resetChatView);
   const setChatSortField = useLeftPanelStore((state) => state.setChatSortField);
   const toggleChatSortDirection = useLeftPanelStore(
     (state) => state.toggleChatSortDirection,
   );
   const filterCount = chatFilterCount(filter);
+  const archiveVisibility = useChatArchiveVisibility(epicId);
+  const canArchive = useChatArchiveSupported();
+  const archiveVisibilityChanged =
+    archiveVisibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+  const active =
+    isChatFilterActive(filter) ||
+    archiveVisibilityChanged ||
+    isSortModeActive(sort);
   return (
     <SwitcherViewMenuShell
       label={viewTriggerLabel({
         base: "Filter agents",
         filterCount,
         sort,
-        // Archive visibility has no control on this surface; a label naming a
-        // value the user cannot reach here would be noise, not information.
-        visibilityLabel: null,
+        visibilityLabel:
+          canArchive && archiveVisibilityChanged
+            ? archiveVisibilityLabel(archiveVisibility)
+            : null,
       })}
       filterCount={filterCount}
       testId="switcher-agents-view-menu"
@@ -158,12 +161,45 @@ export function SwitcherAgentsViewMenu(props: { readonly epicId: string }) {
         onFieldChange={(field) => setChatSortField(epicId, field)}
         onToggleDirection={() => toggleChatSortDirection(epicId)}
       />
+      {canArchive ? (
+        <>
+          <DropdownMenuSeparator />
+          <SwitcherFacetLabel>{CHAT_DETAIL_LABELS.show}</SwitcherFacetLabel>
+          <ChatShowDetail
+            archiveVisibility={archiveVisibility}
+            setArchiveVisibility={(visibility) =>
+              setChatArchiveVisibility(epicId, visibility)
+            }
+          />
+        </>
+      ) : null}
       <DropdownMenuSeparator />
       <SwitcherFacetLabel>{CHAT_DETAIL_LABELS.interface}</SwitcherFacetLabel>
       <ChatInterfaceDetail
         filterOrigin={filter.origin}
         setChatOrigin={(origin) => setChatOrigin(epicId, origin)}
       />
+      <DropdownMenuSeparator />
+      <SwitcherFacetLabel>{CHAT_DETAIL_LABELS.ownership}</SwitcherFacetLabel>
+      <ChatOwnershipDetail
+        filterOwnership={filter.ownership}
+        setChatOwnership={(ownership) => setChatOwnership(epicId, ownership)}
+      />
+      {active ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            data-testid="switcher-agents-reset-view"
+            onSelect={(event) => {
+              event.preventDefault();
+              resetChatView(epicId);
+            }}
+          >
+            <RotateCcw className="size-4" />
+            Reset view
+          </DropdownMenuItem>
+        </>
+      ) : null}
     </SwitcherViewMenuShell>
   );
 }
@@ -194,6 +230,8 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
   const resetArtifactView = useLeftPanelStore(
     (state) => state.resetArtifactView,
   );
+  const unreadArtifacts = useUnreadArtifactReadTargets(epicId);
+  const markRead = useArtifactReadStateStore((state) => state.markRead);
   const filterCount = artifactFilterCount(filter);
   const active = isArtifactFilterActive(filter) || isSortModeActive(sort);
   const detailProps = {
@@ -231,6 +269,18 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
       <DropdownMenuSeparator />
       <SwitcherFacetLabel>{ARTIFACT_DETAIL_LABELS.read}</SwitcherFacetLabel>
       <ArtifactDetailContent detail="read" {...detailProps} />
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        disabled={unreadArtifacts.length === 0}
+        data-testid="switcher-artifacts-mark-all-read"
+        onSelect={() => {
+          unreadArtifacts.forEach((artifact) => {
+            markRead(epicId, artifact.id, artifact.updatedAt);
+          });
+        }}
+      >
+        Mark all as read
+      </DropdownMenuItem>
       {active ? (
         <>
           <DropdownMenuSeparator />

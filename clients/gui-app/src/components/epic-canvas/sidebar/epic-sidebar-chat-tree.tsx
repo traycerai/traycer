@@ -109,7 +109,6 @@ import {
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
-  useOpenTileContentIds,
 } from "@/stores/epics/canvas/store";
 import {
   isOpenableEpicNodeKind,
@@ -217,11 +216,14 @@ import {
   CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
   combineSidebarVisibleIds,
-  revealArchiveHiddenIds,
   sidebarTreeRootIds,
   useMaybeSidebarBulkSelection,
-  useSidebarArchiveHiddenIds,
 } from "./epic-sidebar-selection";
+import {
+  chatDescendantKind,
+  useChatArchiveHiddenIds,
+  type ChatDescendantStatusKind,
+} from "./use-chat-archive-hidden-ids";
 import {
   chatFilterEmptyStateDescription,
   FILTERED_EMPTY_TITLE,
@@ -320,7 +322,6 @@ const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
 const EMPTY_CLOUD_CHATS: readonly CloudChatSummary[] = [];
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
-const EMPTY_ALWAYS_VISIBLE_IDS: ReadonlyArray<string> = [];
 const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
 
@@ -343,16 +344,6 @@ function archiveEmptyStateCopy(
       : null,
   };
 }
-
-type ChatDescendantStatusKind =
-  | "failure"
-  | "fork"
-  | "interview"
-  | "approval"
-  | "running"
-  | "background"
-  | "done"
-  | "terminal-failure";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -390,35 +381,6 @@ const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
   "done",
   "terminal-failure",
 ];
-
-/** The ladder kind an activity tier occupies. */
-function activityTierKind(tier: AgentActivityTier): ChatDescendantStatusKind {
-  return tier === "turn" ? "running" : "background";
-}
-
-/**
- * The single tier a descendant chat is counted under - its own highest. The
- * attention precedence goes through the shared `attentionTone`, so
- * failure > interview > approval lives in exactly one place.
- */
-function chatDescendantKind(
-  indicatorState: NotificationIndicatorState,
-  tier: AgentActivityTier | undefined,
-): ChatDescendantStatusKind | null {
-  const tone = attentionTone(indicatorState);
-  if (tone === FAILURE_TONE) return "failure";
-  if (tone === FORK_TONE) return "fork";
-  if (tone === INTERVIEW_TONE) return "interview";
-  if (tone === APPROVAL_TONE) return "approval";
-  // Terminal failure is demoted only for the exact chat's own glyph, where a
-  // newer live turn/Done is a stronger statement of current state. Once this
-  // chat is rolled into a collapsed parent it is a distinct failed child and
-  // must remain attention-priority over a sibling's activity or completion.
-  if (terminalFailureTone(indicatorState, "gui") !== null) return "failure";
-  if (tier !== undefined) return activityTierKind(tier);
-  if (indicatorState.unreadDone) return "done";
-  return null;
-}
 
 /**
  * Rollup over a collapsed parent's hidden chat descendants: the
@@ -708,7 +670,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
   // tree, so it answers both axes directly.
   const chatFilter = useChatFilter(epicId);
-  const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   const canSetVisibility = useCloudChatVisibilitySupported();
   // Epic-session-bound like every other sharing fact in this tree: the
@@ -758,40 +719,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
   const [notificationIndicators, setNotificationIndicators] =
     useState<SurfaceNotificationIndicators>(EMPTY_INDICATOR_STATE_RESPONSE);
-  const openTileContentIds = useOpenTileContentIds(tabId);
-  const activityTiers = useEpicAgentActivityTiers();
-  const appLocalNotificationRows = useAppLocalNotificationsStore(
-    (state) => state.byId,
-  );
-  const alwaysVisibleIds = useMemo((): ReadonlyArray<string> => {
-    if (archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Unarchived) {
-      return EMPTY_ALWAYS_VISIBLE_IDS;
-    }
-    return indicatorChatIds.filter((chatId) => {
-      if (openTileContentIds.has(chatId)) return true;
-      const indicatorState = selectNotificationIndicatorState(
-        { byId: appLocalNotificationRows },
-        { epicId, chatId },
-        null,
-        notificationIndicators,
-      );
-      return (
-        chatDescendantKind(indicatorState, activityTiers.get(chatId)) !== null
-      );
-    });
-  }, [
-    activityTiers,
-    appLocalNotificationRows,
-    archiveVisibility,
+  const archiveHiddenIds = useChatArchiveHiddenIds({
     epicId,
-    indicatorChatIds,
+    tabId,
+    chatIds: indicatorChatIds,
     notificationIndicators,
-    openTileContentIds,
-  ]);
-  const archiveHiddenIds = useMemo(
-    () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
-    [baseArchiveHiddenIds, alwaysVisibleIds, tree],
-  );
+  });
 
   // Two independent narrowings, kept separate on purpose. `filterRootIds` is
   // the interface/ownership filter result and feeds the "no matches" empty

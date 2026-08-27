@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { MessagesSquare, SearchX } from "lucide-react";
+import { Archive, MessagesSquare, SearchX } from "lucide-react";
 import { SwitcherAgentIcon } from "@/components/epic-canvas/mobile/switcher-agent-icon";
 import {
   SwitcherListHeader,
@@ -22,6 +22,7 @@ import {
   intersectMatchIds,
 } from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
 import { CHATS_TREE_FILTER } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
+import { useChatArchiveHiddenIds } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import {
   isChatFilterActive,
   useChatFilter,
@@ -94,7 +95,7 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
     useChatFilterMatchIds(epicId),
     searchMatchIds,
   );
-  const agents = useNarrowedSwitcherRecords(
+  const ordered = useNarrowedSwitcherRecords(
     filtered,
     narrowedMatchIds,
     useChatSort(epicId),
@@ -120,7 +121,27 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
     chatIds: indicatorChatIds,
     enabled: indicatorChatIds.length > 0,
   });
-
+  // Archive hiding rides the sidebar's own paired rule, not a bare flag: in the
+  // default view an archived agent that is open, working, or unread stays
+  // visible, because hiding the row someone is looking at loses the thing it is
+  // asking about. Indicators are handed over rather than re-fetched so the
+  // reveal reads exactly what the rows read.
+  const archiveHiddenIds = useChatArchiveHiddenIds({
+    epicId,
+    tabId,
+    chatIds: indicatorChatIds,
+    notificationIndicators: indicators,
+  });
+  const agents = useMemo(
+    () =>
+      archiveHiddenIds.size === 0
+        ? ordered
+        : ordered.filter((record) => !archiveHiddenIds.has(record.id)),
+    [ordered, archiveHiddenIds],
+  );
+  // Told apart from a filter emptying the list: an all-archived epic is not the
+  // filters' doing, and the sidebar says so with its own state.
+  const archiveHidEverything = ordered.length > 0 && agents.length === 0;
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
       <div className="flex min-h-0 flex-1 flex-col">
@@ -153,6 +174,7 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
           {agents.length === 0 ? (
             <SwitcherAgentsEmpty
               hasAnyAgents={filtered.length > 0}
+              archiveHidEverything={archiveHidEverything}
               searchActive={searchQuery.trim().length > 0}
               filter={chatFilter}
             />
@@ -185,9 +207,20 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
  */
 function SwitcherAgentsEmpty(props: {
   readonly hasAnyAgents: boolean;
+  readonly archiveHidEverything: boolean;
   readonly searchActive: boolean;
   readonly filter: ChatFilter;
 }) {
+  if (props.archiveHidEverything) {
+    return (
+      <SidebarPanelEmptyState
+        icon={Archive}
+        title="No unarchived agents."
+        description="Change Show in the view menu to see archived agents."
+        testId="epic-chat-sidebar-archived-empty"
+      />
+    );
+  }
   if (!props.hasAnyAgents) {
     return (
       <SidebarPanelEmptyState
