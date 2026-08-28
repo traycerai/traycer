@@ -224,7 +224,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     isError: false,
     checkedAt: null,
     canRefresh: true,
-    refresh: () => Promise.resolve(),
+    refresh: () => Promise.resolve([]),
   }),
 }));
 
@@ -234,6 +234,14 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
     mutate: () => {},
   }),
   useSweepingWorktreePaths: () => new Set<string>(),
+}));
+
+vi.mock("@/components/settings/panels/use-worktree-task-titles", () => ({
+  useWorktreeTaskTitles: () => new Map<string, string>(),
+}));
+
+vi.mock("@/lib/worktree/teardown-agent-names", () => ({
+  useTeardownAgentNames: () => new Map<string, string>(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
