@@ -90,7 +90,14 @@ export function ChatAccumulatedChangesPanel(
     () =>
       opener === null ||
       restore.activeTurnStatus !== null ||
-      restore.undeliveredChangeCount > 0 ||
+      // EXACT completeness, not the clamped count. A revert that lowers the
+      // host's total while the replacement index-0 summary chunk is dropped
+      // leaves MORE summaries than the count, so `undeliveredChangeCount`
+      // clamps to `0` and reads as a finished stream - and during the watchdog
+      // recovery window this action would capture reverted, stale paths into a
+      // durable bundle. `accumulatedSummarySetComplete` is the predicate that
+      // can tell an overshoot from a finished stream; the count cannot.
+      !restore.accumulatedSetComplete ||
       // Nothing reviewable. Offering the action anyway opens a tile with no
       // sections at all, which reads as a failure rather than as "these
       // changes have no contents to diff".
@@ -101,7 +108,7 @@ export function ChatAccumulatedChangesPanel(
       filePaths,
       opener,
       restore.activeTurnStatus,
-      restore.undeliveredChangeCount,
+      restore.accumulatedSetComplete,
     ],
   );
   // Every row arrives carrying its own `+/-`: derived from contents on the
@@ -109,11 +116,18 @@ export function ChatAccumulatedChangesPanel(
   // for a file the active turn is still writing. The panel used to diff two
   // file bodies per row per render to get here.
   const totals = useMemo(() => aggregateCounts(changes), [changes]);
-  const hasUndoable = changes.some((change) => change.undoable);
   // The header counts what "Undo all" would touch, which is the host's whole
   // set - not the prefix of it that has arrived. The rows below fill in as
   // their summaries land.
   const undelivered = restore.undeliveredChangeCount;
+  // A non-zero `undelivered` means the host holds files this control WOULD
+  // revert, whatever the delivered prefix contains. Reading only `changes`
+  // renders the panel with the button disabled under "Nothing here can be
+  // reverted." while `undelivered` files sit behind it - and Line 255 already
+  // treats the same non-zero value as "the set is a prefix", so the two
+  // controls contradicted each other about one state.
+  const hasUndoable =
+    changes.some((change) => change.undoable) || undelivered > 0;
   const fileCount = changes.length + undelivered;
   const artifactCount = useMemo(
     () => changes.filter((change) => change.artifact && change.undoable).length,
@@ -252,7 +266,11 @@ export function ChatAccumulatedChangesPanel(
         // `null` while the set is a prefix: the opt-out defaults to CHECKED and
         // "Undo all" reverts every file the host holds, so a count taken from
         // the rows on screen would understate what is being opted out of.
-        artifactCount={undelivered > 0 ? null : artifactCount}
+        artifactCount={
+          undelivered > 0 || !restore.accumulatedSetComplete
+            ? null
+            : artifactCount
+        }
         onConfirm={(revertArtifacts) => {
           restore.revertFileChanges(null, null, revertArtifacts);
           setConfirmUndoAll(false);

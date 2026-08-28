@@ -864,6 +864,36 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     expect(rows[1].createdAt).toBe(4_000);
   });
 
+  it("anchors a live event to its own host window when the opening is cold", () => {
+    // `onEventAppended` seats a live setup event and `hydratedRecords`
+    // publishes it at once, so a lifecycle whose opening events are still
+    // unhydrated is partitioned from its LATER events alone - and stamped at
+    // their timestamp, which is past the host's `createdAt`.
+    //
+    // Matching on equality alone reads that as a lifecycle the host has never
+    // published and numbers it past the end of the list, so the card computes a
+    // row id the skeleton never published, its ordinal is suppressed, and it
+    // draws unplaced at the tail - while the ordinal reserved for it stays
+    // empty.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 5_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    // The HOST's number and the HOST's createdAt - both are row-id material.
+    expect(rows[0].windowIndex).toBe(0);
+    expect(rows[0].createdAt).toBe(1_000);
+  });
+
   it("does not leak the merged window's triggering message onto the second half", () => {
     // The anchor a card pins to. Carried over from the merged local window it
     // would pin the SECOND card above the FIRST card's message - above a

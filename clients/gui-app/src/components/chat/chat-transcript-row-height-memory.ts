@@ -78,12 +78,13 @@ import {
  * closer than the byte estimate it replaced, so this deliberately does not
  * carry an invalidation channel for it.
  *
- * WIDTH is the one staleness that does get a channel, because it fails the
+ * LAYOUT BASIS is the staleness that does get a channel, because it fails the
  * argument that excuses the others: a rewritten body makes one entry a little
- * wrong, while a resize makes every entry wrong at once and in the same
- * direction, and the surviving number is no longer "closer than the estimate"
- * - a height measured in a narrow tile is arbitrarily far from the same row's
- * height in a wide one. See {@link ChatTranscriptRowHeightMemory.observeWidth}.
+ * wrong, while a resize or a type-size change makes every entry wrong at once
+ * and in the same direction, and the surviving number is no longer "closer than
+ * the estimate" - a height measured in a narrow tile, or at a smaller font, is
+ * arbitrarily far from the same row's height in a wide one. See
+ * {@link ChatTranscriptRowHeightMemory.observeLayoutBasis}.
  *
  * Nothing here is React state. Heights are hints consumed at mount, so a
  * changed factor must never re-render a mounted transcript; the next

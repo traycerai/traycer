@@ -792,3 +792,154 @@ describe("decorating events in the body fingerprint", () => {
     );
   });
 });
+
+/** True when any UTF-16 unit is a surrogate without its partner. */
+function hasUnpairedSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    const isHigh = unit >= 0xd800 && unit <= 0xdbff;
+    const isLow = unit >= 0xdc00 && unit <= 0xdfff;
+    if (!isHigh && !isLow) continue;
+    if (isLow) return true; // a low half reached before its high half
+    const next = text.charCodeAt(index + 1);
+    if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+    index += 1;
+  }
+  return false;
+}
+
+describe("the preview stays well-formed UTF-16", () => {
+  /** An emoji is one code point and TWO UTF-16 units. */
+  const EMOJI = "\u{1F600}";
+
+  it("never ends on a lone high surrogate at the cap", () => {
+    // The loop appends one UNIT per iteration and stops at the cap, so a pair
+    // straddling it leaves the high half behind at exactly `maxUnits` - where a
+    // length-guarded slice sees nothing to do. The frame's UTF-8 encode then
+    // substitutes U+FFFD and the minimap label shows a replacement character.
+    const filler = "x".repeat(ROW_SKELETON_PREVIEW_MAX_CHARS - 1);
+    const entries = buildRowSkeleton(
+      {
+        messages: [
+          humanUserMessage({
+            messageId: "m-1",
+            timestamp: 1,
+            text: `${filler}${EMOJI}tail`,
+          }),
+        ],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+
+    const preview = entries[0].preview ?? "";
+    expect(preview.length).toBeLessThanOrEqual(ROW_SKELETON_PREVIEW_MAX_CHARS);
+    // The assertion that matters: no unpaired surrogate anywhere. Written out
+    // rather than via `toWellFormed()`, which would be doing the same scan with
+    // a runtime that may not have it.
+    expect(hasUnpairedSurrogate(preview)).toBe(false);
+  });
+
+  it("keeps a pair that fits whole", () => {
+    // The bound: trimming must not eat a surrogate pair the cap had room for.
+    const entries = buildRowSkeleton(
+      {
+        messages: [
+          humanUserMessage({
+            messageId: "m-1",
+            timestamp: 1,
+            text: `hi ${EMOJI}`,
+          }),
+        ],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+
+    expect(entries[0].preview).toContain(EMOJI);
+  });
+});
+
+/**
+ * # The turn's IMAGE RESOLUTION record is part of the fingerprint too
+ *
+ * Third member of the family the two blocks above establish: something a row
+ * renders that no field of its skeleton entry can see.
+ * `image_resolution.updated` rewrites the message-level `imageResolutions`
+ * array and touches no content block, so a settled hydrated row whose image has
+ * just resolved - or just failed - rebuilds byte-identically. No `updated` is
+ * emitted, and the client keeps showing the old consent/error state until it
+ * reconnects.
+ */
+describe("image resolutions in the body fingerprint", () => {
+  function sliceEntryWithResolutions(
+    imageResolutions: ReadonlyArray<Record<string, unknown>>,
+  ) {
+    const assistant = messageSchema.parse({
+      ...assistantMessage({
+        messageId: "m-assistant",
+        timestamp: 10,
+        text: "see ![alt](https://example.test/i.png)",
+        usage: null,
+      }),
+      imageResolutions: [...imageResolutions],
+    });
+    const entries = buildRowSkeleton(
+      {
+        messages: [assistant],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+    const slice = entries.find((entry) => entry.role === "assistant");
+    expect(slice).toBeDefined();
+    return slice!;
+  }
+
+  const pending = {
+    source: "https://example.test/i.png",
+    canonicalSource: "https://example.test/i.png",
+    width: null,
+    height: null,
+    state: "consent-required",
+    attachmentHash: null,
+    mediaType: null,
+  };
+  const resolved = {
+    source: "https://example.test/i.png",
+    canonicalSource: "https://example.test/i.png",
+    width: 640,
+    height: 480,
+    state: "resolved",
+    attachmentHash: "a".repeat(64),
+    mediaType: "image/png",
+  };
+
+  it("moves the digest when an image resolves without any block changing", () => {
+    const before = sliceEntryWithResolutions([pending]);
+    const after = sliceEntryWithResolutions([resolved]);
+
+    // Sanity: nothing else about the row moved. This is the whole finding -
+    // every compared field is identical and the row still renders differently.
+    expect(before.rowId).toBe(after.rowId);
+    expect(before.createdAt).toBe(after.createdAt);
+    expect(before.byteLength).toBe(after.byteLength);
+    expect(before.preview).toBe(after.preview);
+
+    expect(before.bodyDigest).not.toBe(after.bodyDigest);
+  });
+
+  it("leaves byteLength alone, because the record belongs to the turn", () => {
+    // Same rule the decorating events follow: shared by every slice, so
+    // charging it per row would over-report a steered turn's height.
+    expect(sliceEntryWithResolutions([resolved]).byteLength).toBe(
+      sliceEntryWithResolutions([pending]).byteLength,
+    );
+  });
+});

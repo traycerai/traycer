@@ -604,15 +604,6 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
 }
 
 /**
- * Decorating event ids per turn, in event order.
- *
- * Keyed on `turnId` because that is what the renderer's folds key on. An event
- * with no `turnId` decorates nothing and is skipped - it is chat-level state,
- * and chat-level state rides the snapshot rather than a row. The pause
- * lifecycle is the one exception, and it is correlated rather than keyed; see
- * {@link PAUSE_OPEN_EVENT_TYPES}.
- */
-/**
  * Turn keys whose checkpoint has a file a LATER checkpoint touches again.
  *
  * Computed here, over the whole event log, because the renderer cannot: it
@@ -656,6 +647,15 @@ export function turnKeysWithLaterOverlappingChanges(
 
 const EMPTY_TURN_KEYS: ReadonlySet<string> = new Set<string>();
 
+/**
+ * Decorating event ids per turn, in event order.
+ *
+ * Keyed on `turnId` because that is what the renderer's folds key on. An event
+ * with no `turnId` decorates nothing and is skipped - it is chat-level state,
+ * and chat-level state rides the snapshot rather than a row. The pause
+ * lifecycle is the one exception, and it is correlated rather than keyed; see
+ * {@link PAUSE_OPEN_EVENT_TYPES}.
+ */
 export function decoratingEventIdsByTurn(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, readonly string[]> {

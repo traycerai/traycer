@@ -415,6 +415,53 @@ function auxRebroadcast(input: {
   };
 }
 
+/**
+ * A skeleton whose ordinals 10-12 are ONE steered turn: two assistant slices
+ * with the steer bubble between them. Every other ordinal stays an ordinary
+ * user row, so the turn has a real boundary on both sides.
+ */
+const TURN_ROW_IDS: ReadonlyMap<number, string> = new Map([
+  [10, "assistant:t-9:part:0"],
+  [11, "steer:q-9"],
+  [12, "assistant:t-9:part:1"],
+]);
+
+function turnSkeletonChunk(): Parameters<
+  ChatStreamCallbacks["onSkeletonChunk"]
+>[0] {
+  const chunk = skeletonChunk(0, 40, true);
+  return {
+    ...chunk,
+    chunk: {
+      ...chunk.chunk,
+      entries: chunk.chunk.entries.map((entry, ordinal) => {
+        const rowId = TURN_ROW_IDS.get(ordinal);
+        return rowId === undefined ? entry : { ...entry, rowId };
+      }),
+    },
+  };
+}
+
+/** A `range` answering a NAMED request with the row ids the skeleton names. */
+function turnRangeAnswering(
+  requestId: string,
+  fromOrdinal: number,
+  toOrdinal: number,
+  messages: readonly Message[],
+): Parameters<ChatStreamCallbacks["onRange"]>[0] {
+  const answer = rangeAnswering(requestId, fromOrdinal, toOrdinal);
+  return {
+    ...answer,
+    range: {
+      ...answer.range,
+      rowIds: answer.range.rowIds.map(
+        (rowId, index) => TURN_ROW_IDS.get(fromOrdinal + index) ?? rowId,
+      ),
+      messages: [...messages],
+    },
+  };
+}
+
 function hydrateTail(harness: ViewportHarness): void {
   harness.callbacks().onWindowedSnapshot(
     snapshot({
@@ -672,8 +719,9 @@ describe("chat session viewport hydration: review fixes", () => {
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
       const slowRequestId = harness.lastRangeRequestId();
 
+      // Past the timeout, so the slow request is no longer the one holding the
+      // dedup slot - which is the state this case is about.
       vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
-      const requestsBefore = harness.rangeRequests.length;
 
       // A reindex lands while BOTH requests are outstanding. It supersedes the
       // timed-out one as much as the current one.
@@ -688,15 +736,27 @@ describe("chat session viewport hydration: review fixes", () => {
 
       harness.callbacks().onRange(rangeAnswering(slowRequestId, 10, 20));
 
-      // Nothing seated, so the span is still a gap: a report inside it asks
-      // again rather than rendering a superseded body.
-      expect(harness.rangeRequests.length).toBeGreaterThan(requestsBefore - 1);
-      harness.handle.store
-        .getState()
-        .reportVisibleTranscriptRange({ fromOrdinal: 12, toOrdinal: 18 });
-      expect(
-        harness.rangeRequests.length + harness.resnapshotCount(),
-      ).toBeGreaterThan(requestsBefore);
+      // Asserted on the WINDOW, because the two request-count assertions that
+      // used to stand here could not fail. `rangeRequests.length` is compared
+      // against a number read from that same growing array, and the follow-up
+      // was satisfied by the `reindexed` frame's own resnapshot whether or not
+      // the late answer was seated.
+      //
+      // What actually has to hold is that nothing was seated: the superseded
+      // body must not be holding these rows, so the span is still a gap.
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
+      // Recovery is the resnapshot the reindex already asked for, and it is
+      // asserted rather than assumed. Note what must NOT be asserted here: a
+      // further `reportVisibleTranscriptRange` mints nothing, because the
+      // resnapshot latch suppresses a duplicate while one is outstanding. A
+      // "it asks again" assertion would therefore have to be written loosely
+      // enough to pass on traffic the reindex itself produced - which is how
+      // the two assertions this replaced came to be unfalsifiable.
+      expect(harness.handle.store.getState().transcriptWindow.invalidated).toBe(
+        true,
+      );
+      expect(harness.resnapshotCount()).toBeGreaterThan(0);
     } finally {
       harness.handle.dispose();
       vi.useRealTimers();
@@ -1110,6 +1170,103 @@ describe("chat session viewport hydration: a range answered out of order", () =>
       // them would buy a round trip and nothing else. `discards a late answer
       // whose rows a reindex invalidated` is the case where the record earns
       // its keep and the answer IS dropped.
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("discards an answer carrying the records of a SIBLING row the frame rewrote", () => {
+    // The ordinals a request asked for are not the rows its answer can be stale
+    // in. A range serves a row from its TURN's shared records, so an answer for
+    // slice 0 carries the same message record slice 1 renders from - and an
+    // `updated` naming only slice 1 leaves an ordinal-keyed intersection empty.
+    //
+    // Seating it covers slice 0 with pre-update records while slice 1, which
+    // need never be visible, is the only row anything would re-ask for.
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.callbacks().onSkeletonChunk(turnSkeletonChunk());
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const sliceRequestId = harness.lastRangeRequestId();
+
+      // Rewrites the SIBLING slice, outside [10, 11).
+      harness.callbacks().onIndexChanged(
+        indexChanged({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 12,
+                  entry: {
+                    ...skeletonEntry(12),
+                    rowId: "assistant:t-9:part:1",
+                    byteLength: 4096,
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness
+        .callbacks()
+        .onRange(
+          turnRangeAnswering(sliceRequestId, 10, 11, [
+            userMessage("shared-turn-record", 10),
+          ]),
+        );
+
+      // Asserted on the WINDOW, not on a request count: the failure this pins
+      // is a body that seats and then renders forever, and a count says
+      // nothing about which bodies are held.
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("still seats an answer when the rewritten row shares no turn with it", () => {
+    // The bound. Widening to the turn must not become "discard whatever is in
+    // flight": a rewritten user row elsewhere in the transcript shares no
+    // records with this answer, and dropping it would cost a round trip per
+    // unrelated edit.
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.callbacks().onSkeletonChunk(turnSkeletonChunk());
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const sliceRequestId = harness.lastRangeRequestId();
+
+      harness.callbacks().onIndexChanged(
+        indexChanged({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [{ type: "updated", entries: [updatedEntry(30)] }],
+        }),
+      );
+
+      harness
+        .callbacks()
+        .onRange(
+          turnRangeAnswering(sliceRequestId, 10, 11, [
+            userMessage("shared-turn-record", 10),
+          ]),
+        );
+
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
     } finally {

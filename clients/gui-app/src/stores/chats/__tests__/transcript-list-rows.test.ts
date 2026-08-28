@@ -85,6 +85,7 @@ function windowOf(input: {
     epoch: 1,
     rowCount: input.rowCount,
     indexRevision: 1,
+    indexRevisionRebuilding: false,
     skeleton: input.skeleton,
     skeletonComplete: input.skeletonComplete,
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,

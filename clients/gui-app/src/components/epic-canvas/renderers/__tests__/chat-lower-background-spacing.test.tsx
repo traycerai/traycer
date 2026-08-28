@@ -93,6 +93,7 @@ const RESTORE_CONTEXT: ChatRestoreContextValue = {
   restoreCheckpoint: () => null,
   accumulatedFileChanges: [],
   undeliveredChangeCount: 0,
+  accumulatedSetComplete: true,
   revertFileChanges: () => null,
 };
 

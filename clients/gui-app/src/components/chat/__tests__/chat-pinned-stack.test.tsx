@@ -158,6 +158,7 @@ function baseRestore(
     restoreCheckpoint: vi.fn().mockReturnValue(null),
     accumulatedFileChanges: changes,
     undeliveredChangeCount: 0,
+    accumulatedSetComplete: true,
     revertFileChanges: vi.fn().mockReturnValue(null),
   };
 }

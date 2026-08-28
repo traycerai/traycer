@@ -180,7 +180,15 @@ describe("indexChangeFits", () => {
     // an `updated` in ONE frame, and two deltas that each fit on their own can
     // exceed the threshold together. Measuring per member would pass a frame
     // the relay then reclassifies onto the BULK lane.
-    const half = Math.ceil(INDEX_CHANGE_MAX_BYTES / 2 / 220);
+    // MEASURED, not guessed. A 200-char-preview entry encodes to roughly 310
+    // bytes, so the literal 220 that used to sit here made both assertions hold
+    // by luck: the pair landed near 1.41x the budget and one change near 0.70x.
+    // Any move in the preview cap, in `bodyDigest`, or in any other entry field
+    // shifts that ratio and breaks one direction with nothing to say why.
+    const measuredEntryBytes = encodedEntriesBytes([
+      entry("row-measure", "x".repeat(200)),
+    ]);
+    const half = Math.ceil(INDEX_CHANGE_MAX_BYTES / 2 / measuredEntryBytes);
     const appended: ChatIndexChange = {
       type: "appended",
       entries: Array.from({ length: half }, (unused, index) =>

@@ -116,7 +116,16 @@ function windowAtRevision(revision: number): TranscriptWindow {
       messages: [userMessage("m-0", 0)],
     }),
   );
-  return { ...hydrated, indexRevision: revision };
+  // `indexRevisionRebuilding: false` because this models a client that has
+  // ALREADY reached `revision` - which only happens by applying frames, and
+  // every applied frame spends the rebuild boundary. Leaving it armed would
+  // model a client permanently exempt from the direction rules these suites
+  // exist to pin, so every steady-state case below would pass vacuously.
+  return {
+    ...hydrated,
+    indexRevision: revision,
+    indexRevisionRebuilding: false,
+  };
 }
 
 describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)", () => {
@@ -295,7 +304,12 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     expect(result.spans.length).toBe(heldSpanCount);
   });
 
-  it("LESS than the held revision (a straggler serialized before an applied delta) is accepted without invalidating", () => {
+  it("LESS than the held revision, with no rebuild between, is REFUSED whole", () => {
+    // This assertion used to read "accepted without invalidating", and it was
+    // silent on the held revision - which is the only part that matters. A
+    // straggler describes an index the host has moved past, so taking any of
+    // its transcript half is a rewind: the revision, the `rowCount`, and a tail
+    // seated at the newest `servedAt` that would outrank the copy held here.
     const window = windowAtRevision(5);
     const heldSpanCount = window.spans.length;
     expect(heldSpanCount).toBeGreaterThan(0);
@@ -307,8 +321,219 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
       tail: { fromOrdinal: 10, messages: [], events: [] },
     });
 
-    expect(result.invalidated).toBe(false);
-    expect(result.spans.length).toBe(heldSpanCount);
+    // Referential identity: nothing of the transcript half was taken. The
+    // snapshot's AUXILIARY half is applied by the caller regardless, because
+    // those fields are last-write-wins and self-correct on the next broadcast.
+    expect(result).toBe(window);
+  });
+
+  /**
+   * ## The two readings of a LOWER non-null revision, driven rather than argued
+   *
+   * The test above pins that such a snapshot is accepted; it says nothing about
+   * what the held REVISION does next, which is the whole question. Both
+   * readings below are reachable, and they want opposite behaviour - so they
+   * are driven together, and whichever way the rule lands the repo enforces the
+   * disagreement rather than a comment claiming one of them cannot happen.
+   */
+  it("REWIND: refusing the straggler is what keeps the next delta applicable", () => {
+    const window = windowAtRevision(5);
+
+    const straggler = applyWindowedSnapshot(window, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 3,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+    expect(straggler.indexRevision).toBe(5);
+
+    // The host's counter never went back, so its next delta is 6 - the
+    // immediate successor of what this client actually holds. Against a window
+    // rewound to 3 it would not have been, and a VALID index would have been
+    // declared lost.
+    const next = applyIndexChange(straggler, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 6,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0-rewritten", 0) }],
+        },
+      ],
+    });
+
+    expect(next.invalidated).toBe(false);
+    expect(next.indexRevision).toBe(6);
+  });
+
+  it("ADOPTION: a host-side counter restart resyncs through the null boundary", () => {
+    // The other reading, and why Codex's remedy - "ignore the transcript
+    // portion of a lower-revision snapshot" - cannot simply be taken.
+    //
+    // Driven as the host actually produces it. A restart meets a FRESH
+    // subscriber, whose index state is not `held`, so the snapshot is stamped
+    // `null` and the whole skeleton is restreamed BEFORE any concrete revision
+    // arrives (`chat-session-manager.ts:34710-34717`). The epoch does not move:
+    // a fresh `TranscriptViewCache` starts at 0 and a chat that never reindexed
+    // is already there, so the client keeps its window and the host's revision
+    // is genuinely below the one held.
+    const window = { ...windowAtRevision(5), epoch: 0 };
+
+    const announced = applyWindowedSnapshot(window, {
+      epoch: 0,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+    // The held revision survives the announcement itself - the restream carries
+    // no revision to replace it with.
+    expect(announced.indexRevision).toBe(5);
+
+    const restreamed = applySkeletonChunk(announced, {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 10),
+      isFinal: true,
+    });
+
+    const resynced = applyWindowedSnapshot(restreamed, {
+      epoch: 0,
+      rowCount: 10,
+      indexRevision: 0,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+
+    // Adopted DOWNWARD, which only the boundary makes legitimate.
+    expect(resynced.indexRevision).toBe(0);
+    expect(resynced.invalidated).toBe(false);
+
+    const next = applyIndexChange(resynced, {
+      epoch: 0,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0-rewritten", 0) }],
+        },
+      ],
+    });
+
+    // Applied, not dropped. Had the window kept 5, `applyIndexChange`'s
+    // `indexRevision <= window.indexRevision` guard would have discarded this
+    // delta - and every delta until the host climbed past 5.
+    expect(next.invalidated).toBe(false);
+    expect(next.indexRevision).toBe(1);
+  });
+
+  it("EXPIRY: the boundary exempts exactly ONE frame, then gap detection is live", () => {
+    // A suppression with no pinned lifetime is how a one-frame allowance
+    // becomes a standing hole. The frame AFTER the rebuild is compared
+    // normally, so a genuine loss is still caught.
+    const announced = applyWindowedSnapshot(windowAtRevision(5), {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+    const resynced = applyWindowedSnapshot(announced, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 2,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+    expect(resynced.indexRevision).toBe(2);
+
+    // Second frame, same rebuild: a revision that ran AHEAD is a lost delta
+    // again, not another free adoption.
+    const ahead = applyWindowedSnapshot(resynced, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 7,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+    expect(ahead.invalidated).toBe(true);
+
+    // And a straggler is refused again rather than adopted.
+    expect(
+      applyWindowedSnapshot(resynced, {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 1,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      }),
+    ).toBe(resynced);
+  });
+
+  it("RE-ARMS at a void, so the resnapshot that follows can resync downward", () => {
+    // Checked rather than assumed: a void takes its shape from
+    // `emptyTranscriptWindow()`, which is armed - so the client comes out of an
+    // H-path invalidation with no counter it trusts, exactly as it comes out of
+    // construction. Were it to come out DISARMED, a void followed by a
+    // restarted host would leave the resnapshot's lower revision refused, which
+    // is the failure this whole flag exists to prevent, reached by the one path
+    // that looks like it has already been handled.
+    const voided = applyIndexChange(windowAtRevision(5), {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 9, // non-consecutive: a loss, so the coordinate voids
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0-rewritten", 0) }],
+        },
+      ],
+    });
+    expect(voided.invalidated).toBe(true);
+
+    const resynced = applyWindowedSnapshot(voided, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 0,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+
+    expect(resynced.indexRevision).toBe(0);
+  });
+
+  it("EXPIRY: a delta spends the boundary too, so the next one is compared", () => {
+    // The delta path reaches the boundary whenever a delta arrives before the
+    // next aux snapshot does, which is ordinary.
+    const announced = applyWindowedSnapshot(windowAtRevision(5), {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+
+    const adopted = applyIndexChange(announced, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0-rewritten", 0) }],
+        },
+      ],
+    });
+    expect(adopted.indexRevision).toBe(1);
+    expect(adopted.invalidated).toBe(false);
+
+    // Spent. A non-consecutive revision is a loss again.
+    const skipped = applyIndexChange(adopted, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 5,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0-again", 0) }],
+        },
+      ],
+    });
+    expect(skipped.invalidated).toBe(true);
   });
 });
 

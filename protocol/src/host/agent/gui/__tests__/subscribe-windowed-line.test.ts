@@ -607,8 +607,17 @@ describe("chatIndexChangeSchema", () => {
   });
 
   it("rejects an entry missing a required skeleton field", () => {
+    // Through `chatIndexChangeSchema`, not `rowSkeletonEntrySchema` directly:
+    // this suite is about the DELTA, and the question is whether its `appended`
+    // arm still composes the entry schema. Parsing the entry on its own leaves
+    // that composition untested and would keep passing if the arm stopped.
     const withoutRowId = { createdAt: 1000, role: "user", byteLength: 10 };
-    expect(rowSkeletonEntrySchema.safeParse(withoutRowId).success).toBe(false);
+    expect(
+      chatIndexChangeSchema.safeParse({
+        type: "appended",
+        entries: [withoutRowId],
+      }).success,
+    ).toBe(false);
   });
 });
 

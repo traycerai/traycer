@@ -211,6 +211,65 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     expect(screen.getByText("4 files changed")).not.toBeNull();
   });
 
+  it("withholds Review all on an OVERSHOOT, which the undelivered count reads as 0", () => {
+    // The case `undeliveredChangeCount` structurally cannot report. A revert
+    // lowers the host's authoritative total while the client still holds the
+    // previous summary array - the replacement index-0 chunk was dropped - so
+    // the delivered set is LONGER than the count and the clamp turns that into
+    // `0`. Read as "complete", this action captures reverted, stale paths into
+    // a durable bundle during the watchdog recovery window.
+    renderPanel({
+      changes: [fileChange("/repo/src/app.ts")],
+      activeTurnStatus: null,
+      opener: {
+        segment: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        cumulative: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        hash: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        cumulativeBundle: vi.fn(() => vi.fn()),
+      },
+      undeliveredChangeCount: 0,
+      accumulatedSetComplete: false,
+    });
+
+    expect(screen.queryByTestId("accumulated-review-all")).toBeNull();
+  });
+
+  it("offers Review all once the set agrees with the host's count", () => {
+    // The bound: the gate must not be permanently closed by the new predicate.
+    renderPanel({
+      changes: [fileChange("/repo/src/app.ts")],
+      activeTurnStatus: null,
+      opener: {
+        segment: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        cumulative: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        hash: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        cumulativeBundle: vi.fn(() => vi.fn()),
+      },
+      undeliveredChangeCount: 0,
+      accumulatedSetComplete: true,
+    });
+
+    expect(screen.queryByTestId("accumulated-review-all")).not.toBeNull();
+  });
+
+  it("does not claim nothing is revertible while the host holds undelivered files", () => {
+    // The panel mounts on the COUNT, so it can render with an empty delivered
+    // prefix. `hasUndoable` read only the delivered rows, so in that state the
+    // button was disabled under "Nothing here can be reverted." while "Undo
+    // all" would in fact revert every file the host holds - and the artifact
+    // opt-out beside it was already treating the same non-zero value as "the
+    // set is a prefix". Two controls, one state, opposite claims.
+    renderPanel({
+      changes: [],
+      activeTurnStatus: null,
+      opener: null,
+      undeliveredChangeCount: 4,
+    });
+
+    const undoAll = screen.getByTestId("accumulated-undo-all");
+    expect(undoAll.getAttribute("disabled")).toBeNull();
+  });
+
   it("drops the artifact count from Undo all while the set is a prefix", () => {
     renderPanel({
       changes: [
@@ -239,6 +298,7 @@ function renderPanel(input: {
   readonly activeTurnStatus: ChatRestoreContextValue["activeTurnStatus"];
   readonly opener: ChatSnapshotDiffOpener | null;
   readonly undeliveredChangeCount?: number;
+  readonly accumulatedSetComplete?: boolean;
 }) {
   return render(
     <TooltipProvider delayDuration={0}>
@@ -247,6 +307,12 @@ function renderPanel(input: {
           restore={{
             ...baseRestore(input.changes, input.activeTurnStatus),
             undeliveredChangeCount: input.undeliveredChangeCount ?? 0,
+            // Mirrors the real relationship for the ordinary case - a prefix is
+            // incomplete - while letting a test drive the OVERSHOOT, where the
+            // count clamps to 0 and only this flag can tell the difference.
+            accumulatedSetComplete:
+              input.accumulatedSetComplete ??
+              (input.undeliveredChangeCount ?? 0) === 0,
           }}
           separated={false}
           scrollRegionMaxHeightClass="max-h-96"
@@ -265,6 +331,7 @@ function baseRestore(
     currentUserId: "owner-1",
     activeHostId: "host-1",
     activeTurnStatus,
+    accumulatedSetComplete: true,
     localSnapshotsClearedAt: null,
     restore: null,
     restoreActionPending: false,

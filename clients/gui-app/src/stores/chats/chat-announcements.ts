@@ -254,13 +254,23 @@ export function useChatAnnouncements(
       const next = observed.get(message.id);
       if (next === undefined) continue;
       const prior = previous.get(message.id);
+      const candidate = announcementKindFor(prior, next);
+      // ANNOUNCEABLE first, then the exemption - and the order is the whole
+      // fix. A cold-rewritten row that first hydrates while still RUNNING has
+      // no announcement to make, so spending its exemption here buys nothing
+      // and costs the announcement it exists for: when that row later completes
+      // while evicted, its next hydration finds the claim already consumed,
+      // takes the history path, and the completion is never announced.
+      //
+      // `claimColdRewrite` writes as it tests, so it cannot be called
+      // speculatively.
+      if (candidate === null) continue;
       if (prior === undefined && hydrating && !claimColdRewrite(message.id)) {
         continue;
       }
-      const candidate = announcementKindFor(prior, next);
       // Last announceable row wins: a batch that settles one turn while
       // appending the next running one announces the settled turn.
-      if (candidate !== null) kind = candidate;
+      kind = candidate;
     }
     if (kind === null) return;
     sequenceRef.current += 1;

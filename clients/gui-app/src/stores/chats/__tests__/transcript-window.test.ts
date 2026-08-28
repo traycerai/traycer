@@ -10,6 +10,7 @@ import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/
 import {
   appendLiveRecords,
   MAX_LIVE_EVENTS,
+  SPAN_MERGE_MAX_BYTES,
   applyIndexChange,
   applyRangeResponse,
   applySkeletonChunk,
@@ -1181,7 +1182,7 @@ describe("reading a long chat upward from the tail", () => {
       (span) => span.fromOrdinal + span.rowIds.length >= window.rowCount,
     );
     expect(tailSpan).toBeDefined();
-    expect(tailSpan?.bytes).toBeLessThanOrEqual(1024 * 1024);
+    expect(tailSpan?.bytes).toBeLessThanOrEqual(SPAN_MERGE_MAX_BYTES);
   });
 
   it("evicts the cold scrollback behind the tail instead of protecting all of it", () => {
@@ -1833,6 +1834,117 @@ describe("one record across several spans", () => {
         },
       ],
     });
+    expect(rewritten.spans.map((span) => span.fromOrdinal)).toEqual([0]);
+  });
+
+  /**
+   * One turn's rows across ordinals 4-6, with only the FIRST slice hydrated.
+   *
+   * `assistant:t-1:part:0` (4), its steer bubble `steer:q-1` (5), and
+   * `assistant:t-1:part:1` (6). Ordinals 0-3 and 7-9 are ordinary user rows, so
+   * the turn has a real boundary on both sides.
+   */
+  function turnWithOnlyTheFirstSliceHydrated(): TranscriptWindow {
+    const entries = skeletonEntries(0, 10);
+    entries[4] = skeletonEntry("assistant:t-1:part:0", 4);
+    entries[5] = skeletonEntry("steer:q-1", 5);
+    entries[6] = skeletonEntry("assistant:t-1:part:1", 6);
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      }),
+      { epoch: 1, fromOrdinal: 0, entries, isFinal: true },
+    );
+    // The range that served slice 0 carried the TURN's shared record, which is
+    // the same record slice 1 renders from.
+    return spanCarrying(seeded, {
+      fromOrdinal: 4,
+      rowIds: ["assistant:t-1:part:0"],
+      messages: [messageWithText(userMessage("shared", 5), "old")],
+    });
+  }
+
+  it("drops a sibling slice's copy when the rewritten row is NOT hydrated", () => {
+    // The case the containing-span seed cannot see. Nothing holds ordinal 6, so
+    // there is no span to collect stale record ids FROM - and the span at
+    // ordinal 4 holds the very record the host just rewrote. Left behind it is
+    // the only copy, under a row the planner sees as covered.
+    const window = turnWithOnlyTheFirstSliceHydrated();
+    expect(window.spans).toHaveLength(1);
+
+    const rewritten = applyIndexChange(window, {
+      epoch: 1,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [
+            { ordinal: 6, entry: skeletonEntry("assistant:t-1:part:1", 6) },
+          ],
+        },
+      ],
+    });
+
+    expect(rewritten.spans).toHaveLength(0);
+    // A gap is the whole point: the drop is a repair only if something re-asks.
+    expect(
+      transcriptHydrationGaps(rewritten, { fromOrdinal: 4, toOrdinal: 5 }),
+    ).toEqual([{ fromOrdinal: 4, toOrdinal: 5 }]);
+  });
+
+  it("stops at the turn boundary rather than invalidating the transcript", () => {
+    // The other half, and the one that would make this rule too expensive to
+    // keep: widening must not walk past the user rows that bound the turn, or
+    // every streaming `updated` would drop every span in the chat.
+    const window = spanCarrying(turnWithOnlyTheFirstSliceHydrated(), {
+      fromOrdinal: 0,
+      rowIds: ["row-0", "row-1"],
+      messages: [userMessage("m-0", 1)],
+    });
+
+    const rewritten = applyIndexChange(window, {
+      epoch: 1,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [
+            { ordinal: 6, entry: skeletonEntry("assistant:t-1:part:1", 6) },
+          ],
+        },
+      ],
+    });
+
+    expect(rewritten.spans.map((span) => span.fromOrdinal)).toEqual([0]);
+  });
+
+  it("widens nothing for a rewritten USER row, which shares no turn", () => {
+    // `rowRecordIds` gives a user row its own message and nothing else, so the
+    // conservative widening must not fire here - it would cost a discard and a
+    // refetch on the most common `updated` there is.
+    const window = spanCarrying(windowWithSkeleton(10), {
+      fromOrdinal: 0,
+      rowIds: ["row-0", "row-1"],
+      messages: [userMessage("m-0", 1)],
+    });
+
+    const rewritten = applyIndexChange(window, {
+      epoch: 1,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 5, entry: skeletonEntry("row-5", 5) }],
+        },
+      ],
+    });
+
     expect(rewritten.spans.map((span) => span.fromOrdinal)).toEqual([0]);
   });
 });

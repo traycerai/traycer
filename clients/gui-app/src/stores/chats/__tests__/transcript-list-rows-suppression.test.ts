@@ -90,6 +90,7 @@ function windowOf(
     epoch: 1,
     rowCount,
     indexRevision: 1,
+    indexRevisionRebuilding: false,
     skeleton,
     skeletonComplete: true,
     skeletonStreamCoveredThrough: rowCount,

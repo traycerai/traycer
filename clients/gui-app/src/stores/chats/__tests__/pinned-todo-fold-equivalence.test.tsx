@@ -16,10 +16,9 @@ import {
 // The shared half of the fold, from protocol. It used to be a cross-repo
 // relative path into `traycer-host/`, which resolves only in the internal
 // monorepo - so this corpus was silently unrunnable in a standalone OSS clone,
-// i.e. exactly where it needs to run. `foldPinnedTodo`/`contentBlocksById` are
-// host-owned (`traycer-host/`, a sibling checkout of this submodule, not a
-// package `traycer/` itself depends on). This is the one place that boundary
-// is crossed - see the module doc below for why.
+// i.e. exactly where it needs to run. Now that the fold lives in
+// `@traycer/protocol`, this suite is an ordinary in-package import and runs
+// anywhere the package does.
 import {
   contentBlocksById,
   foldPinnedTodo,
@@ -28,25 +27,19 @@ import {
 /**
  * # Pinned-todo fold: renderer/host equivalence
  *
- * `foldPinnedTodo` (`traycer-host/src/domain/chat/chat-pinned-todo-fold.ts`) is
- * a HAND-PORTED mirror of this renderer's `derivePinnedTodo`
- * (`chat-pinned-todos.ts`), not a call into shared `@traycer/protocol` code the
- * way `latestForkableAssistantMessageId` is (see `fork-boundary-equivalence.test.tsx`,
- * whose shape this file otherwise follows) - the host module's own doc comment
- * says as much: "when the segmentization extraction lands, this module should
- * be deleted and both sides should call the moved fold. Until then a change to
- * the renderer's fold has to be mirrored here."
+ * `foldPinnedTodo` lives in `@traycer/protocol`
+ * (`persistence/chat-transcript/pinned-todo-fold.ts`), so this suite imports it
+ * exactly as `fork-boundary-equivalence.test.tsx` imports
+ * `latestForkableAssistantMessageId` - no repo boundary is crossed and no
+ * sibling checkout is required. The prose here used to describe the pre-move
+ * state (a hand-ported host mirror, reachable only from the internal monorepo)
+ * and contradicted the import above it.
  *
- * `traycer-host/` and `traycer/` are separate git repositories in normal
- * operation - this test crosses that boundary deliberately (the import above),
- * on the strength of the fact that both checkouts share one filesystem tree in
- * this internal-repo build and `chat-pinned-todo-fold.ts` itself imports only
- * `@traycer/protocol` types/helpers, no host-only (Node/SQLite/etc.) code. This
- * is a stopgap, not a pattern: it only works while a developer has BOTH repos
- * checked out side by side, and it would need the actual shared-derivation
- * extraction (the fold moving into `@traycer/protocol`) to be something a
- * standalone `traycer/` clone can run in CI. Do not extend this pattern to
- * other modules without that extraction landing first.
+ * The debt that REMAINS is narrower, and is why this equivalence suite still
+ * earns its keep: the renderer and the host each keep their own fold, and only
+ * the shared half moved. Until the segmentization extraction lands, a change to
+ * the renderer's fold still has to be reflected on the other side - which is
+ * what these cases catch.
  *
  * Each case below runs one fixture through BOTH the renderer's REAL projection
  * (`useRenderedMessages` -> `planAssistantTurnRows` -> steer-row splitting ->

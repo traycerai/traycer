@@ -31,6 +31,18 @@ export interface ChatRestoreContextValue {
    * rather than imply otherwise - "Undo all" reverts the host's whole set.
    */
   readonly undeliveredChangeCount: number;
+  /**
+   * Whether the delivered summary set AGREES with the host's authoritative
+   * count - `accumulatedSummarySetComplete`, carried rather than re-derived.
+   *
+   * Distinct from `undeliveredChangeCount === 0`, and that distinction is the
+   * whole reason it is here: the count clamps at zero, so an OVERSHOOT (a
+   * revert lowered the host's count while the client still holds the previous
+   * summary array, because the replacement index-0 chunk was dropped) reports
+   * `0` and reads as complete. Any gate that decides whether the set can be
+   * ACTED on - reviewed, bundled, counted as definitive - must read this.
+   */
+  readonly accumulatedSetComplete: boolean;
   /** Revert files to their first-in-chat snapshot. `fromMessageId === null`
    * scopes to the whole chat; `filePaths === null` reverts every file.
    * `revertArtifacts === false` excludes artifact changes from the revert. */

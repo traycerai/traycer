@@ -92,6 +92,27 @@ describe("mergeCumulativeDiffs", () => {
     });
   });
 
+  it("keeps loading while paths the summary stream has not reached remain", () => {
+    // Every other case passes `undeliveredPaths: 0`, so the branch this input
+    // exists for was uncovered. A path the stream has not reached yet is
+    // outstanding for the same reason a query in flight is: presenting the
+    // delivered subset as a whole bundle is the failure being prevented.
+    expect(
+      mergeCumulativeDiffs({
+        filePaths: ["/a.ts"],
+        inline: [],
+        fetchable: [],
+        fetches: [],
+        undeliveredPaths: 2,
+      }),
+    ).toEqual({
+      resolved: [],
+      isLoading: true,
+      stale: false,
+      failed: false,
+    });
+  });
+
   it("resolves a fetched body", () => {
     expect(
       mergeCumulativeDiffs({

@@ -63,6 +63,7 @@ import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-se
 import {
   accumulatedChangeRows,
   hostAccumulatedChangeRows,
+  accumulatedSummarySetComplete,
   undeliveredHostChangeCount,
 } from "@/lib/chat/accumulated-change-rows";
 import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
@@ -970,8 +971,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       );
       return;
     }
-    // Resolved, so nothing is owed on its behalf any more.
-    requestTranscriptOrdinal(null);
     if (target.kind === "block") {
       scrollToBlock(
         target.blockId,
@@ -1735,6 +1734,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     hostChangeCount: state.accumulatedFileChangeCount,
     deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
   });
+  // Carried BESIDE the count rather than derived from it downstream, because
+  // the two answer different questions and differ in exactly the case that
+  // matters. `undeliveredChangeCount` clamps at zero, so an OVERSHOOT - a
+  // revert lowering the host's count while the client still holds the previous
+  // summary array - reports `0`, which every gate reads as "complete".
+  const accumulatedSetComplete = accumulatedSummarySetComplete({
+    windowed: windowedTranscript,
+    hostChangeCount: state.accumulatedFileChangeCount,
+    deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
+  });
   const restoreContext = useMemo(
     () => ({
       accessRole: state.access?.role ?? null,
@@ -1755,11 +1764,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       restoreCheckpoint: chatActions.restoreCheckpoint,
       accumulatedFileChanges,
       undeliveredChangeCount,
+      accumulatedSetComplete,
       revertFileChanges: chatActions.revertFileChanges,
     }),
     [
       accumulatedFileChanges,
       undeliveredChangeCount,
+      accumulatedSetComplete,
       activeHostId,
       composerActiveTurnStatus,
       chatActions.restoreCheckpoint,

@@ -167,11 +167,16 @@ interface AlignedSetupCardWindow {
  * ## Which local window belongs to which host window
  *
  * Matched on `createdAt` walking both lists in order, which is sound because
- * both are chronological and the local one is a SUBSEQUENCE of the host's: a
- * local window is a set of the host's own window's events, so it anchors at the
- * same earliest timestamp. Walking rather than a map lookup is what makes two
- * lifecycles stamped in the same millisecond map one-to-one instead of both
- * resolving to the first.
+ * both are chronological and the local one is a SUBSEQUENCE of the host's.
+ * Walking rather than a map lookup is what makes two lifecycles stamped in the
+ * same millisecond map one-to-one instead of both resolving to the first.
+ *
+ * Being a subsequence does NOT make the timestamps agree, and assuming it did
+ * was a defect. A local window anchors at the earliest event the SLICE holds,
+ * which is the host's own `createdAt` only when the slice reaches back that
+ * far. A live setup event for a lifecycle whose opening is still cold gives a
+ * window stamped later than the host's, matching nothing - so the equality test
+ * needs a second answer for "no match", below.
  *
  * ## Two deliberate asymmetries
  *
@@ -183,8 +188,54 @@ interface AlignedSetupCardWindow {
  * A local window the host's list does not name draws one anyway, numbered past
  * the end of that list. That is the genuinely new lifecycle whose events
  * arrived as live deltas after the last snapshot: the host has not published it
- * yet, and its next partition will append it at exactly that index.
+ * yet, and its next partition will append it at exactly that index. It is
+ * recognised by sitting after a host window the slice DID supply; one sitting
+ * after an EMPTY host window is that window's cold-opening tail instead, and is
+ * anchored to it rather than numbered past the end.
  */
+/**
+ * Distribute one local window's events across the host windows it covers.
+ *
+ * Extracted from {@link alignToWholeLog} rather than inlined, because the two
+ * are different questions - which host window a local one anchors at, and where
+ * each of its events lands - and keeping them in one body put that function
+ * over the complexity ceiling. Returns the FURTHEST host window reached, which
+ * is where the caller's forward cursor resumes.
+ *
+ * Each event goes to the last host window that had started by the time it was
+ * stamped, never earlier than the anchor. A host window stamped in the SAME
+ * millisecond as the anchor cannot take anything, and that guard is
+ * load-bearing rather than defensive: without it the anchor's own earliest
+ * event - the one whose timestamp IS the anchor - would shift to the sibling,
+ * leaving the anchor with an empty bucket and drawing no card for it at all.
+ * Two lifecycles a millisecond apart have no timestamp boundary to be split on,
+ * so that pair stays merged exactly as it was before this alignment existed,
+ * which is a degradation and not a loss.
+ */
+function bucketWindowEvents(input: {
+  readonly window: SetupCardWindow;
+  readonly wholeLog: ReadonlyArray<SetupCardWindowIdentity>;
+  readonly anchor: number;
+  readonly held: ChatEvent[][];
+}): number {
+  const { window, wholeLog, anchor, held } = input;
+  const anchoredAt = wholeLog[anchor].createdAt;
+  let furthest = anchor;
+  for (const event of window.events) {
+    let target = anchor;
+    while (
+      target + 1 < wholeLog.length &&
+      wholeLog[target + 1].createdAt <= event.timestamp &&
+      wholeLog[target + 1].createdAt > anchoredAt
+    ) {
+      target += 1;
+    }
+    held[target].push(event);
+    if (target > furthest) furthest = target;
+  }
+  return furthest;
+}
+
 function alignToWholeLog(
   local: ReadonlyArray<SetupCardWindow>,
   wholeLog: ReadonlyArray<SetupCardWindowIdentity>,
@@ -215,42 +266,44 @@ function alignToWholeLog(
     ) {
       cursor += 1;
     }
-    if (
-      cursor >= wholeLog.length ||
-      wholeLog[cursor].createdAt !== window.createdAt
-    ) {
+    const exactMatch =
+      cursor < wholeLog.length &&
+      wholeLog[cursor].createdAt === window.createdAt;
+    // A local window that matches no host `createdAt` is one of two very
+    // different things, and treating both as "new" is what puts a card at the
+    // tail of the transcript.
+    //
+    // The subsequence argument above holds only while the slice contains the
+    // lifecycle's EARLIEST event. It need not: `onEventAppended` seats a live
+    // setup event in `liveEvents`, and `hydratedRecords` publishes it straight
+    // away, so a lifecycle whose opening events are still cold is partitioned
+    // locally from its LATER events alone - and stamps the window at their
+    // timestamp, which is past the host's.
+    //
+    // The two cases look identical in this function's INPUTS, so the
+    // discriminator is what the walk has already done: whether the host window
+    // just behind this one still has no events at all. A genuinely new
+    // lifecycle sits after a host window the slice DID supply (that is what
+    // moved the cursor past it), while a cold-opening tail sits after the very
+    // window it belongs to - which is empty precisely because its events are
+    // the ones that did not arrive. The cursor only moves forward, so an empty
+    // bucket here can no longer be filled by anything else.
+    //
+    // Not `hasCreatingEvent`: a lifecycle can legitimately open on
+    // `setup.running`, so its absence does not mean the opening is missing.
+    const orphanAnchor =
+      !exactMatch && cursor > 0 && held[cursor - 1].length === 0
+        ? cursor - 1
+        : null;
+    if (!exactMatch && orphanAnchor === null) {
       live.push(window);
       continue;
     }
-    // This local window anchors at `cursor` and may cover the host windows
-    // AFTER it too, when the boundaries separating them are outside the slice.
-    // Each event goes to the last host window that had started by the time it
-    // was stamped, never earlier than the anchor.
-    //
-    // A host window stamped in the SAME millisecond as the anchor cannot take
-    // anything, and that guard is load-bearing rather than defensive: without
-    // it the anchor's own earliest event - the one whose timestamp IS the
-    // anchor - would shift to the sibling, leaving the anchor with an empty
-    // bucket and drawing no card for it at all. Two lifecycles a millisecond
-    // apart have no timestamp boundary to be split on, so that pair stays
-    // merged exactly as it was before this alignment existed, which is a
-    // degradation and not a loss.
-    const anchor = cursor;
-    const anchoredAt = wholeLog[anchor].createdAt;
-    let furthest = anchor;
-    for (const event of window.events) {
-      let target = anchor;
-      while (
-        target + 1 < wholeLog.length &&
-        wholeLog[target + 1].createdAt <= event.timestamp &&
-        wholeLog[target + 1].createdAt > anchoredAt
-      ) {
-        target += 1;
-      }
-      held[target].push(event);
-      if (target > furthest) furthest = target;
-    }
-    cursor = furthest + 1;
+    // This local window anchors here and may cover the host windows AFTER it
+    // too, when the boundaries separating them are outside the slice - see
+    // {@link bucketWindowEvents}.
+    const anchor = exactMatch ? cursor : (orphanAnchor ?? cursor);
+    cursor = bucketWindowEvents({ window, wholeLog, anchor, held }) + 1;
   }
 
   const fromHost = wholeLog.flatMap<AlignedSetupCardWindow>(

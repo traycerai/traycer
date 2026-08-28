@@ -54,7 +54,15 @@ describe("chat find coverage message", () => {
 
   it("groups a long chat's digits", () => {
     // These counts run to five figures on the chats this feature exists for.
-    expect(chatFindCoverageMessage(12_400)).toContain("12,400 older messages");
+    //
+    // The expectation is DERIVED, not the `en-US` literal it used to be:
+    // `chatFindCoverageMessage` calls `toLocaleString()` with no locale
+    // deliberately - the grouping a reader sees should be the reader's - and
+    // Vitest pins no locale, so a runtime defaulting to `de-DE` ("12.400") or
+    // `hi-IN` ("12,400" only by coincidence) failed a correct implementation.
+    expect(chatFindCoverageMessage(12_400)).toContain(
+      `${(12_400).toLocaleString()} older messages`,
+    );
   });
 });
 

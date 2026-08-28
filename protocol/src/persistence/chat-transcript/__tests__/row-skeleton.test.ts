@@ -37,12 +37,15 @@ describe("rowSkeletonEntrySchema", () => {
     // The pre-projection shape. Kept as a test because the failure it guards
     // against is silent: a producer still emitting `{kind, id}` would parse as
     // "missing rowId" only if `rowId` is genuinely required.
+    // Built FROM `MINIMAL` with only `rowId` removed, so the parse can fail for
+    // exactly one reason. The old fixture also omitted `bodyDigest`, so it
+    // would have kept passing on that alone if `rowId` ever became optional -
+    // and the guard this comment describes would have stopped guarding.
+    const { rowId: _removed, ...withoutRowId } = MINIMAL;
     const result = rowSkeletonEntrySchema.safeParse({
+      ...withoutRowId,
       kind: "message",
       id: "m-1",
-      createdAt: 100,
-      role: "user",
-      byteLength: 42,
     });
 
     expect(result.success).toBe(false);

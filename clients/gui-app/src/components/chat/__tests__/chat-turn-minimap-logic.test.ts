@@ -180,6 +180,7 @@ describe("chatTurnMinimapItems caching", () => {
       epoch: 1,
       rowCount: entries.length,
       indexRevision: 1,
+      indexRevisionRebuilding: false,
       skeleton: entries,
       skeletonComplete: true,
       // Fully delivered: the prefix reached the end of the index.
@@ -264,5 +265,28 @@ describe("chatTurnMinimapItems caching", () => {
 
     expect(second).not.toBe(first);
     expect(second.map((item) => item.messageId)).toEqual(["r-0", "pending-1"]);
+  });
+
+  it("re-derives when a PLACED row is dropped by renderer suppression", () => {
+    // The case the trailing-unplaced key cannot see. `rendered` is post-filter:
+    // the pinned-todo pass drops an assistant row whose only segments were
+    // lifted into the dock, and that decision comes from the live turn - so it
+    // flips per token while the window's identity holds still.
+    //
+    // Reusing the derive here is not a stale label, it is a stale INDEX: the
+    // items cache list positions, so every turn below the omitted row would
+    // scroll to the wrong place.
+    const window = windowWith(skeleton);
+    const rows = listRowsFor(window, "reply");
+    const first = chatTurnMinimapItems({ rows, window });
+
+    // Same window, same trailing unplaced run (there is none) - only the
+    // assistant row has gone.
+    const suppressed = rows.filter((row) => row.key !== "r-1");
+    expect(suppressed.length).toBe(rows.length - 1);
+
+    const second = chatTurnMinimapItems({ rows: suppressed, window });
+
+    expect(second).not.toBe(first);
   });
 });

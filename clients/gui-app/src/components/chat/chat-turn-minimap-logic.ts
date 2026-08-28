@@ -346,6 +346,30 @@ function deriveChatTurnMinimapItems(
  * every ordinal-less row AFTER all the placed ones, so this walks back from the
  * end and stops at the first placed row rather than scanning the transcript.
  */
+/**
+ * What must move for the derive to re-run, beyond the window's own identity.
+ *
+ * `rows.length` is here because a PLACED row can leave the list without the
+ * window changing at all: `rendered` is post-filter, and the pinned-todo pass
+ * drops an assistant row whose only segments were lifted into the dock
+ * (`transcript-list-rows.ts` documents this as OMITTED, not placeholder'd).
+ * That state is decided by the live turn, which folds into `messages` alone -
+ * exactly the churn the window's identity is stable across - so the suppression
+ * can flip per token while `TranscriptWindow` identity and the trailing
+ * unplaced keys both hold still.
+ *
+ * The items cache LIST indexes (`rowIndex` / `endRowIndex`, see their doc), so
+ * reusing a derive across that flip points `positionAtIndex` one row past every
+ * turn below the omitted one - the rail's marks slide against the transcript
+ * with nothing on screen to explain it.
+ *
+ * Both halves are bounded: the length is a number, and the unplaced keys are
+ * the trailing run only.
+ */
+function deriveCacheKey(rows: ReadonlyArray<TranscriptListRow>): string {
+  return `${rows.length}:${unplacedRowKeys(rows)}`;
+}
+
 function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
   let key = "";
   for (let index = rows.length - 1; index >= 0; index -= 1) {
@@ -403,8 +427,13 @@ const lastDeriveByRows = new WeakMap<
  *   `updated` and rebuilds the window;
  * - which ordinals a renderer policy withholds is decided by the models the
  *   spans hold, and those arrive in range responses, which rebuild the window;
- * - rows the index has not placed are the one input the window does not
- *   version, so their keys are compared directly. They are bounded.
+ * - rows the index has not placed are an input the window does not version, so
+ *   their keys are compared directly. They are bounded.
+ *
+ * Two inputs escape the window, not one, and the second is easy to miss
+ * because it moves a row the window DOES version: a placed row can be dropped
+ * from `rows` outright by the pinned-todo pass, which reads the live turn and
+ * therefore moves per token. `deriveCacheKey` carries both.
  *
  * The legacy line has no window and no ordinals, so it keys on the `rows` array
  * itself - which is exactly the memo this replaced, and bounded there because
@@ -422,7 +451,7 @@ export function chatTurnMinimapItems(input: {
     lastDeriveByRows.set(rows, items);
     return items;
   }
-  const key = unplacedRowKeys(rows);
+  const key = deriveCacheKey(rows);
   const cached = lastDeriveByWindow.get(window);
   if (cached !== undefined && cached.key === key) return cached.items;
   const items = deriveChatTurnMinimapItems(rows);

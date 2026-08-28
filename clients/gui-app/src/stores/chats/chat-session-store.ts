@@ -50,6 +50,7 @@ import {
   isTailHydrated,
   mapWindowMessages,
   planTranscriptHydration,
+  recordSharingOrdinals,
   streamWindowMessage,
   touchTranscriptRange,
   updateWindowMessage,
@@ -2949,18 +2950,41 @@ export function createChatSessionStoreWithNotificationDependencies(
      * Record that a delta invalidated bodies a range request is still waiting
      * for.
      *
-     * Reads the SAME predicate {@link applyIndexChange} folds with
-     * ({@link bodyInvalidatingOrdinals}) rather than re-deriving "which
-     * ordinals does this frame stale" from `changes` here - a second copy of
-     * that rule would drift from the one that decides which spans to drop, and
-     * the two disagreeing is exactly the state this guards against.
+     * Reads the SAME predicates {@link applyIndexChange} folds with
+     * ({@link bodyInvalidatingOrdinals}, then {@link recordSharingOrdinals})
+     * rather than re-deriving "which ordinals does this frame stale" from
+     * `changes` here - a second copy of that rule would drift from the one that
+     * decides which spans to drop, and the two disagreeing is exactly the state
+     * this guards against.
+     *
+     * ## An ordinal is not the unit a response is stale in
+     *
+     * The ordinals a request ASKED for are not the rows its answer can carry a
+     * stale copy of. A range serves a row from its turn's shared records, so a
+     * response for slice 10 generated before an `updated` for sibling slice 12
+     * seats that turn's pre-update records - and an intersection on requested
+     * ordinals is empty, so the answer is accepted. Slice 10 is then covered,
+     * slice 12 need not be visible, and nothing refetches either.
+     *
+     * So the frame's ordinals are widened to the turn before they are matched
+     * against a range. The widening is deliberately conservative: superseding a
+     * request that would have been fine costs one discard and one refetch,
+     * while accepting one that was not costs a body no gap will ever re-ask
+     * for.
      */
     const supersedeInFlightHydration = (input: {
       readonly epoch: number;
       readonly changes: readonly ChatIndexChange[];
     }): void => {
       if (outstandingHydrationRequests.size === 0) return;
-      const invalidated = bodyInvalidatingOrdinals(input.changes);
+      const bodyInvalidated = bodyInvalidatingOrdinals(input.changes);
+      // Against the window as the requests were framed against it - this runs
+      // before the fold, and an `updated` never renumbers a row, so the turn a
+      // widened ordinal belongs to is the same either side of it.
+      const invalidated =
+        bodyInvalidated === "all"
+          ? bodyInvalidated
+          : recordSharingOrdinals(get().transcriptWindow, bodyInvalidated);
       // EVERY outstanding request, not just the one holding the dedup slot. A
       // reindex invalidates whatever is in the air, and after a timeout the
       // slot no longer names the request whose answer is most likely to land

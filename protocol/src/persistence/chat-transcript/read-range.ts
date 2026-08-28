@@ -270,6 +270,22 @@ function encodedElementBytes(value: string): number {
   return utf8ByteLength(JSON.stringify(value)) + ELEMENT_SEPARATOR_BYTES;
 }
 
+/** The `:` between a JSON object key and its value, plus the `,` after it. */
+const MEMBER_SEPARATOR_BYTES = 2;
+
+/**
+ * A string's cost as one object KEY: its encoding, plus both separators.
+ *
+ * Distinct from {@link encodedElementBytes} because `rowContext` serializes as
+ * an OBJECT keyed by row id, not as an array - so each retained entry pays for
+ * a `:` as well as a `,`. Charging it as an array element undercharges every
+ * context-bearing row by exactly one byte, which the range's envelope reserve
+ * absorbs and the tail's HARD ceiling does not.
+ */
+function encodedMemberKeyBytes(value: string): number {
+  return utf8ByteLength(JSON.stringify(value)) + MEMBER_SEPARATOR_BYTES;
+}
+
 function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high);
 }
@@ -351,7 +367,7 @@ export function sliceTranscriptRange(
     const hasContext = Object.keys(context).length > 0;
     if (hasContext) {
       cost +=
-        encodedElementBytes(rows[ordinal].rowId) +
+        encodedMemberKeyBytes(rows[ordinal].rowId) +
         utf8ByteLength(JSON.stringify(context));
     }
     for (const messageId of needed.messageIds) {
@@ -477,7 +493,7 @@ export function sliceTranscriptTail(
     const hasContext = Object.keys(context).length > 0;
     if (hasContext) {
       cost +=
-        encodedElementBytes(rows[ordinal].rowId) +
+        encodedMemberKeyBytes(rows[ordinal].rowId) +
         utf8ByteLength(JSON.stringify(context));
     }
     for (const messageId of needed.messageIds) {

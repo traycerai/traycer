@@ -134,10 +134,28 @@ function collapsedPreview(text: string): string | undefined {
  * point. Mirrors the minimap's own slice.
  */
 function sliceWholeCodePoints(text: string, maxUnits: number): string {
-  if (text.length <= maxUnits) return text;
-  const cut = text.slice(0, maxUnits);
-  const last = cut.charCodeAt(cut.length - 1);
-  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+  const cut = text.length <= maxUnits ? text : text.slice(0, maxUnits);
+  return dropTrailingHighSurrogate(cut);
+}
+
+/**
+ * Drop a lone high surrogate left at the end of a truncated string.
+ *
+ * Applied to a string that is already SHORT ENOUGH as well as to one that was
+ * cut, and that is the whole point. `collapsedPreview` appends one UTF-16 unit
+ * per iteration and stops at `out.length >= ROW_SKELETON_PREVIEW_MAX_CHARS`, so
+ * a surrogate pair straddling the cap leaves `out` ending on its high half at
+ * exactly the cap - and a length test then reports nothing to do.
+ *
+ * The result would be an ill-formed preview that still PARSES, because the
+ * schema caps length and says nothing about well-formedness: the frame's UTF-8
+ * encode substitutes U+FFFD, and the minimap draws a replacement character in
+ * the row's label.
+ */
+function dropTrailingHighSurrogate(text: string): string {
+  if (text.length === 0) return text;
+  const last = text.charCodeAt(text.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
 }
 
 /** The role a row RENDERS as - not the role of the record behind it. */
@@ -234,14 +252,17 @@ function contextFingerprint(context: TranscriptRowContext): string {
     setupWindowIsActive: context.setupWindowIsActive ?? null,
     completedSteer: context.completedSteer ?? null,
   };
-  return JSON.stringify([
-    fields.legacyRowAnchorAt,
-    fields.sessionAnchor,
-    fields.hasLaterOverlappingChanges,
-    fields.setupWindowIndex,
-    fields.setupWindowIsActive,
-    fields.completedSteer,
-  ]);
+  // DERIVED from `fields`, not a second list beside it. The mapped type forces
+  // every context field into the object above, but it cannot reach a
+  // hand-written array - so a field added there and omitted here used to
+  // compile silently and simply stop being fingerprinted, which is the exact
+  // failure the guard is described as preventing.
+  //
+  // `Object.values` follows insertion order for string keys, and the literal
+  // above fixes that order, so the digest is stable across builds. Reordering
+  // the literal changes every row's digest and costs one `updated` per row on
+  // upgrade - the same price any fingerprint change carries.
+  return JSON.stringify(Object.values(fields));
 }
 
 function rowBodyFingerprint(
@@ -292,6 +313,36 @@ function rowBodyFingerprint(
     }
   };
 
+  /**
+   * The turn's durable IMAGE RESOLUTION record, digest-only.
+   *
+   * Third member of the same family as the context and the decorating events:
+   * something a row renders that no field of its skeleton entry can see.
+   * `image_resolution.updated` rewrites the message-level `imageResolutions`
+   * array and changes no content block, so a settled hydrated row whose consent
+   * or error state has just been resolved rebuilds to a byte-identical entry -
+   * no `updated`, and the client shows the superseded state until it reconnects.
+   *
+   * The WHOLE array, not the entries this slice's blocks reference. Entries are
+   * keyed by image `source`, and mapping a source back to a block means
+   * re-deriving the renderer's own scan here - a second copy of that rule, in
+   * the module whose entire job is to be the one place the fingerprint is
+   * decided. Every slice of the turn is invalidated instead, which is exactly
+   * what the decorating events already do and for the same reason. The cost is
+   * bounded: this record moves once per image resolved, not per token.
+   *
+   * Digest-only for the decorating events' reason - the record is shared by
+   * every slice, so charging it per row would over-report a steered turn's
+   * height several times over.
+   */
+  const absorbImageResolutions = (messageIds: readonly string[]): void => {
+    for (const messageId of messageIds) {
+      const message = lookup.messagesById.get(messageId);
+      if (message === undefined || message.role !== "assistant") continue;
+      pushContentFingerprint(digest, JSON.stringify(message.imageResolutions));
+    }
+  };
+
   const absorbBlocks = (blockIds: readonly string[]): void => {
     for (const blockId of blockIds) {
       const block = blocksById.get(blockId);
@@ -327,6 +378,7 @@ function rowBodyFingerprint(
       // of them would over-estimate a steered turn's height several times over.
       // The digest has no such additivity to protect - it only has to move.
       absorbEvents(source.decoratingEventIds);
+      absorbImageResolutions(source.messageIds);
       break;
     case "steer":
       // BOTH, summed: `rowRecordIds` serves the turn's records and the steered

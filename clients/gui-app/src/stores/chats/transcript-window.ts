@@ -9,6 +9,10 @@ import type {
   ChatTranscriptWindow,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  assistantRowTurnKey,
+  queueSteerRowId,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
@@ -169,6 +173,62 @@ export interface TranscriptWindow {
    * row's span is protected from eviction, so nothing refetched it either.
    */
   readonly indexRevision: number;
+  /**
+   * Whether the next CONCRETE revision may legitimately be lower than the held
+   * one - i.e. whether a rebuild boundary has been crossed since it was set.
+   *
+   * ## Why the direction of a revision is not self-describing
+   *
+   * `indexRevision` is continuous within one host-side index, and the client
+   * leans on that twice: a revision that skips means a delta was lost, and a
+   * revision at or below the held one means a duplicate or a straggler
+   * (`applyIndexChange`). Both readings assume the counter this client holds
+   * and the counter the host is sending from are the SAME counter.
+   *
+   * A rebuild is exactly where they stop being the same. The counter is
+   * per-VIEW - `TranscriptViewCache` starts `epoch = 0, indexRevision = 0` and
+   * advances the epoch only when `rowIdsPreserveOrdinals` fails BETWEEN TWO
+   * READS of one instance, so a fresh instance's first read never advances it.
+   * A host restart therefore hands a chat that has never been reindexed a fresh
+   * counter at the SAME epoch, which is not a rebase: the client keeps its
+   * window (it resets one only for a fresh store or the windowed->legacy
+   * downgrade) and the host's revision is genuinely below the one held.
+   *
+   * Without this flag one assignment has to serve two opposite cases, and it
+   * gets one of them wrong whichever way it is written:
+   *
+   * - adopt the lower number, and a REORDERED older snapshot rewinds a valid
+   *   index, so the host's next delta is misclassified as a gap and voids it;
+   * - refuse it, and after a restart every delta the fresh host sends is at or
+   *   below the held revision, so `applyIndexChange` discards each one until
+   *   the host's counter climbs past a number it knows nothing about.
+   *
+   * ## The boundary is announced, and the host guarantees it
+   *
+   * `chat-session-manager.ts:34710-34717` stamps a snapshot's revision as
+   * `subscriber.windowedIndex.state.kind === "held" ? state.indexRevision
+   * : null`. A restart necessarily meets a FRESH subscriber, whose state is not
+   * `held` - so every full-skeleton restream is announced by `null` before any
+   * concrete revision, and a concrete revision only ever rides a frame to a
+   * subscriber the host already believes is in sync. That makes `null` a sound
+   * discriminator rather than a heuristic: armed here, the first concrete
+   * revision from EITHER applier is adopted as the new baseline whatever its
+   * direction, and disarms the flag.
+   *
+   * Armed at construction, at every rebase, and at every void, because each of
+   * those is a client with no counter it can trust yet.
+   *
+   * ## What this does NOT defend
+   *
+   * A reordered snapshot is only reachable because the snapshot's byte bound is
+   * unenforced: `windowedSnapshotFitsFrame` exists and no producer calls it, so
+   * an oversized snapshot can cross `BULK_QOS_BODY_THRESHOLD_BYTES` and be
+   * reclassified onto the bulk lane, where it can pass an interactive delta.
+   * Enforcing that bound is the host's job. This guard is not belt-and-braces
+   * for it: a client talks to hosts older than any such fix, so the skew
+   * defense has to live here regardless.
+   */
+  readonly indexRevisionRebuilding: boolean;
   /** Disjoint and sorted by `fromOrdinal`. */
   readonly spans: readonly HydratedSpan[];
   /**
@@ -280,7 +340,7 @@ export const TRANSCRIPT_WINDOW_MAX_BYTES = 8 * 1024 * 1024;
  * so a single response stays one span and the budget divides into enough
  * spans to have an eviction ORDER at all.
  */
-const SPAN_MERGE_MAX_BYTES = 1024 * 1024;
+export const SPAN_MERGE_MAX_BYTES = 1024 * 1024;
 
 /**
  * How many rows to hydrate when a snapshot arrives with an EMPTY tail.
@@ -311,6 +371,12 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     skeletonComplete: false,
     skeletonStreamCoveredThrough: 0,
     indexRevision: 0,
+    // ARMED, not clear. A window with no counter behind it must adopt the first
+    // concrete revision it is given rather than compare against a zero it never
+    // received. A fresh subscription meets a fresh subscriber and is announced
+    // by `null` anyway, so this is the robust default rather than a second
+    // mechanism.
+    indexRevisionRebuilding: true,
     spans: [],
     liveMessages: [],
     liveEvents: [],
@@ -893,6 +959,31 @@ function insertSpan(
  * the new epoch name different rows, so every held body is unaddressable and
  * every skeleton entry is stale.
  */
+/**
+ * How a snapshot's revision relates to the one this window holds.
+ *
+ * Extracted so {@link applyWindowedSnapshot} states the three outcomes once
+ * rather than re-deriving each from the same four conjuncts; the reasoning for
+ * each is at the call site and on
+ * {@link TranscriptWindow.indexRevisionRebuilding}.
+ */
+type SnapshotRevisionVerdict = "straggler" | "gap" | "current";
+
+function classifySnapshotRevision(
+  window: TranscriptWindow,
+  indexRevision: number | null,
+  rebased: boolean,
+): SnapshotRevisionVerdict {
+  // A rebase replaces the coordinate space outright, and `null` announces a
+  // rebuild - neither is a comparison against the held counter.
+  if (rebased || indexRevision === null) return "current";
+  // One frame's exemption after a rebuild boundary: the counter behind this
+  // frame may not be the counter the window holds.
+  if (window.indexRevisionRebuilding) return "current";
+  if (indexRevision < window.indexRevision) return "straggler";
+  return indexRevision > window.indexRevision ? "gap" : "current";
+}
+
 export function applyWindowedSnapshot(
   window: TranscriptWindow,
   input: {
@@ -961,10 +1052,36 @@ export function applyWindowedSnapshot(
   //
   // Per-view retains. Per-subscriber and per-stream reset. That is the whole
   // rule, and it is a fact about the host rather than a convention here.
-  const missedDeltas =
-    !rebased &&
-    input.indexRevision !== null &&
-    input.indexRevision > window.indexRevision;
+  // A same-epoch snapshot BEHIND the revision this client has already applied,
+  // with no rebuild between them, is describing an index the host has since
+  // moved past - it can only have arrived late. Its TRANSCRIPT half is refused
+  // whole: taking the revision rewinds a valid index, so the host's next delta
+  // reads as a gap and voids it, and the same branch would adopt the older
+  // `rowCount` and seat an older tail at the newest `servedAt`, outranking the
+  // copy the client correctly holds.
+  //
+  // Its AUXILIARY half is still applied, by the caller, and that asymmetry is
+  // the point rather than an oversight: the aux fields are last-write-wins and
+  // every subsequent broadcast rewrites them, so an old one costs a frame of
+  // staleness. The index has no such self-correction - that is the whole reason
+  // this revision exists - so a rewind there is permanent.
+  //
+  // Two aux paths were checked against that claim rather than assumed to fit
+  // it. `accumulatedFileChangeSummaries` is ACCUMULATED from chunks rather than
+  // carried on the snapshot, and its generation reset is keyed on a `null`
+  // revision, so a straggler cannot touch either. The one that does regress is
+  // `clearResnapshotRequest()`, which the caller runs unconditionally on the
+  // reasoning that "a fresh snapshot IS the answer an invalidated window was
+  // waiting for" - untrue of a late one. It self-corrects: refusing this frame
+  // leaves `invalidated` standing, so the caller's `requestPlannedHydration()`
+  // asks again, and the cost is one redundant resnapshot rather than a stall.
+  const verdict = classifySnapshotRevision(
+    window,
+    input.indexRevision,
+    rebased,
+  );
+  if (verdict === "straggler") return window;
+  const missedDeltas = verdict === "gap";
   const base: TranscriptWindow =
     rebased || missedDeltas
       ? {
@@ -972,6 +1089,9 @@ export function applyWindowedSnapshot(
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
+          // A concrete revision here IS the new baseline, so the flag the
+          // spread armed is spent. `null` leaves it armed for the restream.
+          indexRevisionRebuilding: input.indexRevision === null,
           invalidated: missedDeltas,
           clock,
         }
@@ -990,7 +1110,15 @@ export function applyWindowedSnapshot(
           // client that reset to 0 would read the very next delta as a gap
           // (`revision !== held + 1`), invalidate, resnapshot, receive `null`
           // again, and reset again, forever.
+          //
+          // While REBUILDING this adopts whatever the host sends, including a
+          // lower number: the boundary said the counter may have restarted, and
+          // this frame is the first authority on where it restarted at.
           indexRevision: input.indexRevision ?? window.indexRevision,
+          // Spent by a concrete revision, re-armed by another rebuild. Exactly
+          // one concrete frame is exempt from the direction rules, so the
+          // suppression cannot outlive the boundary that granted it.
+          indexRevisionRebuilding: input.indexRevision === null,
           // RE-DERIVED, never carried, and FALSE outright at a rebuild.
           //
           // Two different losses, one field. A same-epoch snapshot can raise
@@ -1308,6 +1436,86 @@ export function bodyInvalidatingOrdinals(
   return ordinals;
 }
 
+/** The `steer:` row-id prefix, taken from the builder rather than restated. */
+const STEER_ROW_ID_PREFIX = queueSteerRowId("");
+
+/** The turn an ordinal's row belongs to, or `null` if the skeleton cannot say. */
+function turnKeyAt(window: TranscriptWindow, ordinal: number): string | null {
+  const entry = window.skeleton[ordinal];
+  return entry === undefined ? null : assistantRowTurnKey(entry.rowId);
+}
+
+/**
+ * Widen an `updated`'s ordinals to every row its rewritten RECORDS can reach.
+ *
+ * ## Why an ordinal is the wrong unit here, in both readers
+ *
+ * A row is served from its TURN's shared records (`rowRecordIds` hands an
+ * assistant slice the whole turn's `messageIds`, and a steer row the turn's
+ * records plus its own steered message). So a record rewritten under ordinal 12
+ * is held by every row of that turn - and `updated` names only the rows whose
+ * skeleton ENTRY moved, which is the rows whose own blocks changed. The other
+ * slices of the same turn hold a stale copy of the same record while looking
+ * untouched.
+ *
+ * {@link dropSpansForUpdatedOrdinals} already computes a record reach, but it
+ * seeds that reach from the spans CONTAINING an updated ordinal - so when the
+ * rewritten row is not hydrated there is no containing span, the seed set is
+ * empty, and a sibling span holding the same turn's records is kept. The store's
+ * in-flight ledger has the same shape one step earlier: it intersects on the
+ * ordinals a request ASKED for, so a request for a sibling slice is not
+ * superseded and its answer seats pre-update records that nothing refetches.
+ *
+ * Both readers therefore widen through here, for the reason
+ * {@link bodyInvalidatingOrdinals} is shared: a second copy of "which rows does
+ * this frame stale" would drift from the one deciding which spans to drop.
+ *
+ * ## The walk is bounded by the TURN, not by the transcript
+ *
+ * A turn's rows are contiguous, so this expands outward from each updated
+ * ordinal while the row belongs to the same turn - never a scan of the
+ * skeleton. That bound is load-bearing rather than incidental: an `updated`
+ * arrives for the streaming row on every token batch, so an O(rowCount) reach
+ * here would be O(history) work per token on a 20k-row chat, which is the cost
+ * this whole line exists to delete.
+ *
+ * A steer row is crossed because it carries the turn's records too, and its row
+ * id (`steer:<queueItemId>`) does not name the turn - so it cannot be matched,
+ * only walked through. Crossing one costs at most a redundant refetch of rows
+ * belonging to a neighbouring turn; refusing to cross one costs a stale body
+ * with no gap behind it, which nothing repairs. The walk still terminates at
+ * the user row that separates two turns.
+ *
+ * A row whose entry has not been delivered yet answers `null` and widens
+ * nothing - the client has no way to know its turn, and inventing one would be
+ * a guess about rows it has never seen.
+ */
+export function recordSharingOrdinals(
+  window: TranscriptWindow,
+  ordinals: readonly number[],
+): readonly number[] {
+  if (ordinals.length === 0) return ordinals;
+  const widened = new Set<number>(ordinals);
+  for (const ordinal of ordinals) {
+    const turnKey = turnKeyAt(window, ordinal);
+    if (turnKey === null) continue;
+    for (const step of [-1, 1]) {
+      for (
+        let probe = ordinal + step;
+        probe >= 0 && probe < window.rowCount;
+        probe += step
+      ) {
+        const entry = window.skeleton[probe];
+        if (entry === undefined) break;
+        const sameTurn = assistantRowTurnKey(entry.rowId) === turnKey;
+        if (!sameTurn && !entry.rowId.startsWith(STEER_ROW_ID_PREFIX)) break;
+        widened.add(probe);
+      }
+    }
+  }
+  return [...widened];
+}
+
 /**
  * The window a frame has just proved unusable: void, at the frame's own
  * coordinates.
@@ -1437,9 +1645,17 @@ export function applyIndexChange(
   // A revision that is not GREATER is a duplicate or a reordered straggler
   // rather than a gap: applying it again is what the atomic-frame rule already
   // forbids, so it is dropped rather than treated as loss.
-  if (input.indexRevision <= window.indexRevision) return window;
-  if (input.indexRevision !== window.indexRevision + 1) {
-    return voidedTranscriptWindow(window, input);
+  //
+  // Both readings below compare against a counter this window is assumed to
+  // share with the sender, so both are suspended for exactly one frame after a
+  // rebuild boundary - the delta path reaches that boundary whenever a delta
+  // arrives before the next aux snapshot does, which is ordinary. See
+  // {@link TranscriptWindow.indexRevisionRebuilding}.
+  if (!window.indexRevisionRebuilding) {
+    if (input.indexRevision <= window.indexRevision) return window;
+    if (input.indexRevision !== window.indexRevision + 1) {
+      return voidedTranscriptWindow(window, input);
+    }
   }
 
   const skeleton = [...window.skeleton];
@@ -1472,6 +1688,10 @@ export function applyIndexChange(
     skeleton,
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
+    // Spent: this delta's revision is now the baseline the next one is
+    // compared against, whether it was adopted under the boundary or earned by
+    // being the immediate successor.
+    indexRevisionRebuilding: false,
     // A delta that grew the index past what the client has assembled means the
     // skeleton is no longer complete, even though it was.
     //
@@ -1492,7 +1712,14 @@ export function applyIndexChange(
         : window.skeletonStreamCoveredThrough,
     clock: window.clock + 1,
   };
-  return dropSpansForUpdatedOrdinals(next, invalidated);
+  // Widened to the turn BEFORE the reach is computed: the containing-span seed
+  // below is exact only when the rewritten row is hydrated, and a sibling slice
+  // holding the same turn's records is the case where it is not. See
+  // {@link recordSharingOrdinals}.
+  return dropSpansForUpdatedOrdinals(
+    next,
+    recordSharingOrdinals(next, invalidated),
+  );
 }
 
 /**
@@ -1519,11 +1746,24 @@ export function applyIndexChange(
  *
  * The reach is therefore computed rather than assumed: the containing spans are
  * found by ordinal, their record ids are collected, and any span holding one of
- * those ids goes with them. That is exact - the union of the stale spans'
- * records is precisely what the host just superseded - and it terminates,
- * because the trigger is one `updated` frame rather than a seat. Every dropped
- * span's rows become gaps the planner re-requests, which is the price every
- * other invalidation here pays.
+ * those ids goes with them. It terminates, because the trigger is one `updated`
+ * frame rather than a seat. Every dropped span's rows become gaps the planner
+ * re-requests, which is the price every other invalidation here pays.
+ *
+ * ## That seed is exact only while the rewritten row is HYDRATED
+ *
+ * Read alone it is not enough, and the gap is silent. The record ids come from
+ * the spans CONTAINING an updated ordinal - so when the rewritten row has no
+ * span, the seed set is empty, nothing is found to share, and a sibling slice
+ * of the same turn keeps its stale copy of the very records the host rewrote.
+ * That is the case this function was written to fix, arriving by the one route
+ * its own geometry cannot see.
+ *
+ * The caller closes it by widening the ordinals to the turn first
+ * ({@link recordSharingOrdinals}), which is a question about the SKELETON and
+ * therefore answerable for a row this client has never hydrated. The two steps
+ * compose rather than overlap: the widening finds the rows that may share, the
+ * seed below finds what they actually hold.
  *
  * The cost lands where it is cheapest: an `updated` almost always names the
  * streaming row at the tail, whose span the next snapshot re-seeds inline.

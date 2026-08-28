@@ -173,18 +173,29 @@ export type MentionAttachment =
   | EntityMentionAttachment
   | GithubMentionAttachment;
 
-const ARTIFACT_CONTEXT_TYPES: ReadonlyArray<EpicArtifactKind> = [
-  "spec",
-  "ticket",
-  "story",
-  "review",
-];
+/** Same shape and same reason as {@link GIT_TYPES} - a subset would compile. */
+const ARTIFACT_CONTEXT_TYPES: Readonly<Record<EpicArtifactKind, true>> = {
+  spec: true,
+  ticket: true,
+  story: true,
+  review: true,
+};
 
-const GIT_TYPES: ReadonlyArray<WorkspaceMentionGitType> = [
-  "against_uncommitted_changes",
-  "against_branch",
-  "against_commit",
-];
+/**
+ * A RECORD keyed by the union, not an array of it.
+ *
+ * `ReadonlyArray<WorkspaceMentionGitType>` accepts any SUBSET, so the header's
+ * claim that importing the wire type keeps this list from drifting was not
+ * something the annotation could enforce: a new member added to the enum
+ * compiled here unchanged and then decoded to `null` in `gitTypeValue`, which
+ * drops the chip's attachment and its plain-text projection with no error
+ * anywhere. Keyed by the union, omitting one is a compile error.
+ */
+const GIT_TYPES: Readonly<Record<WorkspaceMentionGitType, true>> = {
+  against_uncommitted_changes: true,
+  against_branch: true,
+  against_commit: true,
+};
 
 export function mentionAttachmentFromAttrs(
   attrs: Record<string, unknown> | undefined,
@@ -449,8 +460,12 @@ function artifactKindValue(value: unknown): EpicArtifactKind | null {
   return isArtifactContextType(value) ? value : null;
 }
 
+function isGitType(value: unknown): value is WorkspaceMentionGitType {
+  return typeof value === "string" && Object.hasOwn(GIT_TYPES, value);
+}
+
 function gitTypeValue(value: unknown): WorkspaceMentionGitType | null {
-  return GIT_TYPES.find((gitType) => gitType === value) ?? null;
+  return isGitType(value) ? value : null;
 }
 
 function statusValue(value: unknown): string | number | null {
@@ -459,5 +474,7 @@ function statusValue(value: unknown): string | number | null {
 }
 
 function isArtifactContextType(value: unknown): value is EpicArtifactKind {
-  return ARTIFACT_CONTEXT_TYPES.some((contextType) => contextType === value);
+  return (
+    typeof value === "string" && Object.hasOwn(ARTIFACT_CONTEXT_TYPES, value)
+  );
 }

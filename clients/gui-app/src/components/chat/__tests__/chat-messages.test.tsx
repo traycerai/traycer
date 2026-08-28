@@ -768,6 +768,8 @@ interface RenderChatMessagesOptions {
   readonly baselineEpoch?: number;
   /** `ChatSessionState.transcriptHydrationSequence`; see `ChatMessages`. */
   readonly hydrationSequence?: number;
+  /** `ChatSessionState.coldRewrittenMessageIds`; see `ChatMessages`. */
+  readonly coldRewrittenMessageIds?: ReadonlySet<string>;
   /** Test-only seam: captures the adapter registered by ChatMessages. */
   readonly tileFindContext?: TileFindContextValue;
 }
@@ -776,6 +778,7 @@ interface ChatMessagesRenderState {
   messages: ReadonlyArray<ChatMessageModel>;
   baselineEpoch: number;
   hydrationSequence: number;
+  coldRewrittenMessageIds: ReadonlySet<string>;
   /** Mutable: a chat is auto-titled after its first turn and can be renamed. */
   taskTitle: string;
   systemOverlayActive: boolean;
@@ -820,6 +823,9 @@ function initialRenderState(
     // Default 0 for the same reason: no range has seated anything, so every
     // row these tests render arrived live.
     hydrationSequence: options.hydrationSequence ?? 0,
+    // Empty by default: a row is exempt from the history rule only when the
+    // store recorded it as rewritten while cold, which no ordinary test models.
+    coldRewrittenMessageIds: options.coldRewrittenMessageIds ?? new Set(),
     taskTitle: options.taskTitle ?? "Test chat",
     systemOverlayActive: options.systemOverlayActive ?? false,
     scrollRequest: options.scrollRequest ?? null,
@@ -906,7 +912,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           composerOverlayHeight={state.composerOverlayHeight}
           transcriptWindow={null}
           onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
-          coldRewrittenMessageIds={new Set()}
+          coldRewrittenMessageIds={state.coldRewrittenMessageIds}
         />
       </div>
       {options.withSiblingChrome === true ? siblingChrome() : null}
@@ -1623,6 +1629,67 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("keeps a cold-rewrite exemption when the hydrated row is not announceable yet", async () => {
+      // The exemption exists so a row REWRITTEN while evicted is not mistaken
+      // for history when it hydrates. It is single-use, so what it is spent on
+      // matters: a row that first hydrates while still RUNNING has nothing to
+      // announce, and consuming the claim there leaves the completion - the one
+      // announcement it was reserved for - to be read as history and dropped.
+      const rewritten = "cold-rewritten-row";
+      const running: ChatMessageModel = {
+        ...makeMessage(3, "assistant"),
+        id: rewritten,
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [makeMessage(1, "user")],
+        baselineEpoch: 0,
+        hydrationSequence: 0,
+        coldRewrittenMessageIds: new Set([rewritten]),
+        scrollStateKey: "aria-cold-rewrite-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+      const live = document.querySelector('[aria-live="polite"]');
+
+      // First hydration: the row appears, still running. Nothing to say.
+      rerenderWith({
+        hydrationSequence: 1,
+        messages: [makeMessage(1, "user"), running],
+      });
+      await settleLegendList();
+      expect(live?.textContent ?? "").toBe("");
+
+      // It is evicted again - the reader scrolled away and its span was
+      // reclaimed. The row leaves `messages`, so the next pass sees it as
+      // unknown again, which is what puts it back on the exemption path.
+      rerenderWith({
+        hydrationSequence: 2,
+        messages: [makeMessage(1, "user")],
+      });
+      await settleLegendList();
+
+      // It completed while evicted, so it arrives on a LATER hydration already
+      // settled. Its exemption must still be unspent.
+      rerenderWith({
+        hydrationSequence: 3,
+        messages: [
+          makeMessage(1, "user"),
+          {
+            ...running,
+            completedAt: 1_700_000_000_000,
+            runState: null,
+            showCompletionFooter: true,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").not.toBe("");
     });
 
     it("still announces a live turn settling in the commit that hydrates history", async () => {

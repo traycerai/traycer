@@ -6,6 +6,7 @@ import type {
 import {
   compareCanonicalRowOrder,
   eventMaterializesTranscriptRow,
+  notificationAnchorRowSource,
   sortIntoCanonicalRowOrder,
   type CanonicalRowOrderKey,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
@@ -162,6 +163,51 @@ describe("eventMaterializesTranscriptRow", () => {
     });
 
     expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns false for chat.forked with an EMPTY-STRING sourceChatId", () => {
+    // `renderableMetadataString` rejects `""` specifically, and the module doc
+    // names `sourceChatId: ""` as the drift that put bodies under the wrong
+    // rows. The suite covered missing keys and non-string values but never the
+    // empty string, so the rule that exists for the documented failure was the
+    // one rule with no test behind it.
+    const event = makeChatEvent({
+      eventId: "e-empty-chat",
+      type: "chat.forked",
+      timestamp: 1,
+      message: null,
+      metadata: { sourceChatId: "", sourceHostId: "host-1" },
+    });
+
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns false for chat.forked with an EMPTY-STRING sourceHostId", () => {
+    const event = makeChatEvent({
+      eventId: "e-empty-host",
+      type: "chat.forked",
+      timestamp: 1,
+      message: null,
+      metadata: { sourceChatId: "chat-1", sourceHostId: "" },
+    });
+
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("normalizes an EMPTY-STRING send.failed code to null", () => {
+    // The same empty-string rule on the other path it governs. Here `code` is
+    // optional, so `""` does not withhold the row - it must simply not survive
+    // as an empty code the renderer would draw a blank chip for.
+    const event = makeChatEvent({
+      eventId: "e-empty-code",
+      type: "send.failed",
+      timestamp: 1,
+      message: "delivery failed",
+      metadata: { notificationAnchor: true, code: "" },
+    });
+
+    expect(eventMaterializesTranscriptRow(event)).toBe(true);
+    expect(notificationAnchorRowSource(event)?.code).toBeNull();
   });
 
   it("returns true for send.failed with a message and metadata.notificationAnchor === true", () => {
