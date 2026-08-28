@@ -4,9 +4,10 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  worktreeDeleteByPathServerFrameSchema,
+  worktreeDeleteByPathServerFrameSchemaV11,
   type WorktreeDeleteOutputChannel,
 } from "@traycer/protocol/host/worktree-delete-stream";
+import type { WorktreeBusyHolders } from "@traycer/protocol/framework/worktree-busy-holders";
 import type {
   WorktreeDeleteBatchOutputChannel,
   WorktreeDeleteBatchPhase,
@@ -48,12 +49,6 @@ const MAX_BACKOFF_MS = 30_000;
 
 export interface WorktreeDeleteCommandOpts {
   readonly worktreePath: string;
-  // The delete is destructive, so it is a capability boundary - not merely a
-  // hidden command - in the readonly agent surface. Commander's `hidden` flag
-  // still runs the action when the subcommand is typed explicitly, so the
-  // command itself refuses up front (before any network/stream work) when this
-  // is true. Resolved from `TRAYCER_AGENT_CLI_SURFACE` at registration.
-  readonly readonlySurface: boolean;
 }
 
 /**
@@ -61,8 +56,14 @@ export interface WorktreeDeleteCommandOpts {
  * (busy-check -> teardown script -> `git worktree remove`). Teardown/remove
  * output is relayed live as it streams; the terminal frame carries the final
  * `deleted` flag, and a failure (busy path, unexpected host error) surfaces as
- * a clean non-zero CliError. Hidden in the `readonly` CLI surface (registered
- * like `agent create`).
+ * a clean non-zero CliError.
+ *
+ * The delete is destructive, so it is a capability boundary in the readonly
+ * agent surface, not merely a hidden command. That refusal is no longer made
+ * here: `READONLY_REFUSED_COMMANDS` lists `worktree delete`, and `withRunner`
+ * enforces the whole table before any command body runs (CLI-019). One
+ * mechanism covers this command and every gated agent mutation, so nothing
+ * reaches this function on a readonly surface.
  *
  * On a host that has `worktree.deleteBatchByPath` this runs as a ONE-TARGET
  * command, so the CLI's delete queues on the same host-wide scheduler as every
@@ -73,15 +74,6 @@ export function buildWorktreeDeleteCommand(
   opts: WorktreeDeleteCommandOpts,
 ): CommandFn {
   return async (ctx) => {
-    if (opts.readonlySurface) {
-      throw cliError({
-        code: CLI_ERROR_CODES.FORBIDDEN,
-        message:
-          "traycer: worktree delete is not available in the readonly agent surface - remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
-        details: null,
-        exitCode: 1,
-      });
-    }
     const worktreePath = opts.worktreePath.trim();
     if (worktreePath.length === 0) {
       throw cliError({
@@ -250,7 +242,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason),
+            error: deleteFailedCliError(reason, null),
           }),
         // With one target this normally arrives after its terminal frame and
         // is a no-op under the settled guard. It matters when it does NOT: an
@@ -266,7 +258,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason),
+            error: deleteFailedCliError(reason, null),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
         onConnectionStatus: (
@@ -328,7 +320,15 @@ async function runLegacyDeleteStream(
       act();
     };
     session.onServerFrame((envelope) => {
-      const parsed = worktreeDeleteByPathServerFrameSchema.safeParse(envelope);
+      // The CANONICAL v1.1 frame, not the v1.0 base schema. v1.1 added
+      // `holders` to the `failed` arm - the typed inventory naming which chats
+      // and terminal agents still hold the worktree. It is declared
+      // `.optional().catch(undefined)` so that adding it could never reject an
+      // older envelope, which also means a v1.0 decode drops it silently
+      // instead of failing: the busy refusal kept its prose `reason` and lost
+      // the one part a caller could act on.
+      const parsed =
+        worktreeDeleteByPathServerFrameSchemaV11.safeParse(envelope);
       if (!parsed.success) return;
       const frame = parsed.data;
       switch (frame.kind) {
@@ -350,7 +350,9 @@ async function runLegacyDeleteStream(
           finish(() => resolve(frame.deleted));
           return;
         case "failed":
-          finish(() => reject(deleteFailedCliError(frame.reason)));
+          finish(() =>
+            reject(deleteFailedCliError(frame.reason, frame.holders ?? null)),
+          );
           return;
         case "pong":
           return;
@@ -437,11 +439,25 @@ function relayOutput(
 }
 
 /** The host reported this delete as failed, with a displayable reason. */
-function deleteFailedCliError(reason: string): CliError {
+/**
+ * `holders` is the host's typed inventory of what still holds the worktree,
+ * present only on a busy refusal from a v1.1+ host (`null` otherwise). It rides
+ * `details` so `--json` callers get the structured list, and the human message
+ * names the holders rather than leaving "worktree is busy" for the user to
+ * investigate by hand.
+ */
+function deleteFailedCliError(
+  reason: string,
+  holders: WorktreeBusyHolders | null,
+): CliError {
+  const named =
+    holders === null || holders.length === 0
+      ? ""
+      : ` Held by ${holders.map((holder) => holder.label).join(", ")}.`;
   return cliError({
     code: CLI_ERROR_CODES.UNEXPECTED,
-    message: `traycer: worktree delete failed - ${reason}`,
-    details: null,
+    message: `traycer: worktree delete failed - ${reason}${named}`,
+    details: holders === null ? null : { holders },
     exitCode: 1,
   });
 }

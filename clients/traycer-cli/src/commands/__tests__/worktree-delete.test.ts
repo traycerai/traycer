@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildWorktreeDeleteCommand } from "../worktree-delete";
 import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
-import type { CommandContext } from "../../runner/runner";
+import type { CommandContext, CommandResult } from "../../runner/runner";
 import type { ProgressInfo } from "../../runner/output";
 import type { StreamCloseReason } from "../../../../shared/host-transport/i-stream-session";
 import type { StreamMethodSupport } from "../../../../shared/host-transport/ws-stream-client";
@@ -158,33 +158,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("buildWorktreeDeleteCommand readonly guard", () => {
-  it("refuses in the readonly surface before any auth/endpoint/stream work", async () => {
-    await expect(
-      buildWorktreeDeleteCommand({
-        worktreePath: "/wt/x",
-        readonlySurface: true,
-      })(ctx),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
-
-    expect(resolveHostAuthMock).not.toHaveBeenCalled();
-    expect(resolveEndpointMock).not.toHaveBeenCalled();
-    expect(hoisted.subscribeMock).not.toHaveBeenCalled();
-  });
-});
+// The readonly-surface refusal moved out of this command: `worktree delete` is
+// now one entry in `READONLY_REFUSED_COMMANDS`, enforced for every gated
+// command in `withRunner` before the body runs. Its coverage lives with that
+// gate, in `__tests__/readonly-surface-gate.test.ts`.
 
 describe("buildWorktreeDeleteCommand input validation", () => {
   it("rejects an empty --path before any network call", async () => {
     await expect(
       buildWorktreeDeleteCommand({
         worktreePath: "   ",
-        readonlySurface: false,
       })(ctx),
     ).rejects.toBeInstanceOf(CliError);
     await expect(
       buildWorktreeDeleteCommand({
         worktreePath: "",
-        readonlySurface: false,
       })(ctx),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
 
@@ -197,7 +185,6 @@ describe("buildWorktreeDeleteCommand command shape", () => {
   it("opens ONE start-mode command carrying a uuid and the single target", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -228,7 +215,6 @@ describe("buildWorktreeDeleteCommand command shape", () => {
     const recorded: ProgressInfo[] = [];
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(jsonCtx(recorded));
 
     await waitForSessions(1);
@@ -293,7 +279,6 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
   it("fails non-zero on a drop before a terminal frame, with no re-subscribe", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -335,7 +320,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("resolves deleted=true on a target.complete frame", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -356,7 +340,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("resolves deleted=false with a non-zero exit when the host removed nothing", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -375,7 +358,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps a target.failed frame to a CliError carrying the host's reason", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -396,7 +378,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps a command.failed frame to a CliError carrying the host's reason", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -418,7 +399,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     // per-target frames are replayed, so the counts are the whole answer.
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -438,7 +418,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps an UNAUTHORIZED fatal close to an auth-rejected CliError", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -461,7 +440,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps an INCOMPATIBLE fatal close to a host-incompatible CliError", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -487,7 +465,6 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     hoisted.state.methodSupport = "unsupported";
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -523,7 +500,6 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
   it("does not fall back after a fatal close that is not an unsupported method", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -543,5 +519,101 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     // Exactly one subscribe: a delete that may have half-happened is never
     // re-issued on the older method.
     expect(hoisted.state.sessions).toHaveLength(1);
+  });
+});
+
+/**
+ * Drives the command past the `worktree.deleteBatchByPath` compatibility
+ * check into the released `worktree.deleteByPath@1.1` fallback stream and
+ * returns that session, mirroring the "older-host fallback" setup above.
+ */
+async function startLegacyFallback(): Promise<{
+  readonly pending: Promise<CommandResult>;
+  readonly legacy: FakeSession;
+}> {
+  hoisted.state.methodSupport = "unsupported";
+  const pending = buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(ctx);
+
+  await waitForSessions(1);
+  commandSession().statusHandler?.("closed", {
+    kind: "fatalError",
+    details: {
+      code: "INCOMPATIBLE",
+      reason: "host does not offer worktree.deleteBatchByPath",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+  await waitForSessions(2);
+  return { pending, legacy: hoisted.state.sessions[1]! };
+}
+
+describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
+  // The v1.0 -> v1.1 diff on `worktree.deleteByPath` is an OPTIONAL `holders`
+  // field added to the `failed` arm - `worktreeBusyHoldersWireFieldSchema` is
+  // `.optional().catch(undefined)`, so a stale v1.0 decode does not fail, it
+  // silently drops the field. A busy refusal kept its prose `reason` and lost
+  // the only actionable part. Because the difference is optional-on-one-arm,
+  // a `ZodType<...>` compile-time constraint alone would NOT have caught a
+  // call site still naming the v1.0 schema - this is exactly the case the
+  // runtime canonical-identity backstop exists for (see
+  // `host-rpc.test.ts`'s "canonical stream frame pairing" suite).
+  it("surfaces holders from a v1.1 failed frame in details and the human message", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      holders: [
+        {
+          ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "Chat: fix flaky test",
+        },
+        {
+          ownerRef: {
+            epicId: "e1",
+            ownerKind: "terminal-agent",
+            ownerId: "t1",
+          },
+          holdKind: "terminal-agent-pty",
+          activity: "idle",
+          label: "Terminal agent: refactor",
+        },
+      ],
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining(
+        "Held by Chat: fix flaky test, Terminal agent: refactor.",
+      ),
+      details: {
+        holders: [
+          expect.objectContaining({ label: "Chat: fix flaky test" }),
+          expect.objectContaining({ label: "Terminal agent: refactor" }),
+        ],
+      },
+    });
+  });
+
+  it("keeps today's back-compat wording when an older host's failed frame omits holders", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: "traycer: worktree delete failed - worktree is busy",
+      details: null,
+    });
   });
 });
