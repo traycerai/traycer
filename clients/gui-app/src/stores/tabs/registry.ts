@@ -221,12 +221,12 @@ export function tabEpicId(tab: HeaderTab): string | null {
 /**
  * Opens `tab` in a new desktop window via the per-kind descriptor's
  * `openInNewWindow` method. Caller MUST guard on `tab.canOpenInNewWindow`
- * first - kinds that do not support new-window (e.g., draft) implement
- * the method as a no-op for exhaustiveness.
+ * first - a kind that does not support new-window implements the method
+ * as a no-op for exhaustiveness.
  *
- * The kind-specific logic (ownership MOVE for epic, `requestNew(route)`
- * for system tabs) lives in the kind module's descriptor. This dispatch
- * is mechanical delegation only.
+ * The kind-specific logic (ownership MOVE for epic, record MOVE + image
+ * handoff for draft, `requestNew(route)` for system tabs) lives in the kind
+ * module's descriptor. This dispatch is mechanical delegation only.
  */
 export function tabOpenInNewWindow(
   tab: HeaderTab,

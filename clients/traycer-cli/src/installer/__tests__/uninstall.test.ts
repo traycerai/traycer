@@ -10,9 +10,31 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { noopLogger } from "../../logger";
 import { hostPidMetadataPath } from "../../store/paths";
-import { removeHostPidMetadataForPurge } from "../uninstall";
+import {
+  removeHostPidMetadataForPurge,
+  removeHostPidMetadataForPurgeWithVerifier,
+} from "../uninstall";
 
 describe("removeHostPidMetadataForPurge", () => {
+  it("propagates capability loss before pid metadata removal", async () => {
+    let removeCalls = 0;
+    const verify = async (): Promise<void> => {
+      throw new Error("mutation authority lost");
+    };
+
+    await expect(
+      removeHostPidMetadataForPurgeWithVerifier(
+        "dev",
+        noopLogger,
+        async () => {
+          removeCalls += 1;
+        },
+        verify,
+      ),
+    ).rejects.toThrow("mutation authority lost");
+    expect(removeCalls).toBe(0);
+  });
+
   it("continues when locked pid metadata cannot be removed", async () => {
     const receivedPaths: string[] = [];
 
@@ -87,6 +109,7 @@ vi.mock("../../store/paths", async () => {
 });
 
 const ENV: Environment = "production";
+const testMutationVerifier = async (): Promise<void> => undefined;
 
 function sampleInstallRecordJson(version: string): Record<string, unknown> {
   return {
@@ -131,6 +154,7 @@ describe("uninstallHost", () => {
     const result = await uninstallHost({
       environment: ENV,
       purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
     });
 
     expect(result.removedInstallDir).toBe(true);
@@ -149,6 +173,7 @@ describe("uninstallHost", () => {
     const result = await uninstallHost({
       environment: ENV,
       purgeChannelRuntime: true,
+      verifyMutationCapability: testMutationVerifier,
     });
 
     expect(result.removedStagedDir).toBe(true);
@@ -166,6 +191,7 @@ describe("uninstallHost", () => {
     const result = await uninstallHost({
       environment: ENV,
       purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
     });
 
     expect(result.removedStagedDir).toBe(true);

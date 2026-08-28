@@ -334,6 +334,7 @@ function installRecord(version: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath: "/opt/traycer/host",
+    executableSha256: null,
   };
 }
 

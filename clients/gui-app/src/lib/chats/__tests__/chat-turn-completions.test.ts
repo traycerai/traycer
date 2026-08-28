@@ -146,6 +146,7 @@ describe("toChatTurnPhase", () => {
                   type: "doc",
                   content: [{ type: "paragraph" }],
                 },
+                browserAnnotations: [],
               },
               sender: { type: "user", userId: "user-1" },
               settings: {

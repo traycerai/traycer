@@ -9,7 +9,7 @@
  * hand-rolling per-kind parse/serialize.
  */
 import type { DesktopJsonValue } from "@/lib/windows/types";
-import type { EpicCanvasTileRef } from "../types";
+import type { EpicArtifactRef, EpicCanvasTileRef, EpicNodeRef } from "../types";
 import { isTileKind, type TileKindId } from "../tile-kinds";
 import type { TileKindToRefMap } from "../tile-kind-types";
 import {
@@ -17,6 +17,7 @@ import {
   terminalTileSchema,
   workspaceFileTileSchema,
 } from "./artifact-tile";
+import { browserSessionTileSchema } from "./browser-tile";
 import { gitDiffTileSchema } from "./git-diff-tile";
 import { snapshotDiffTileSchema } from "./snapshot-diff-tile";
 import { managedCommandOutputTileSchema } from "./managed-command-output-tile";
@@ -44,6 +45,7 @@ const TILE_SCHEMAS: TileSchemaRegistry = {
   story: recordBackedArtifactTileSchema,
   review: recordBackedArtifactTileSchema,
   terminal: terminalTileSchema,
+  "browser-session": browserSessionTileSchema,
   "workspace-file": workspaceFileTileSchema,
   "git-diff": gitDiffTileSchema,
   "snapshot-diff": snapshotDiffTileSchema,
@@ -84,11 +86,51 @@ export function serializeTileRef(ref: EpicCanvasTileRef): DesktopJsonValue {
   return serializeWithSchema(ref.type, ref);
 }
 
-/** True when the kind is backed by a Y.Doc artifact record. */
+/**
+ * True when the kind is backed by a Y.Doc artifact record - and narrows to the
+ * ref type those kinds carry, so callers stop re-asserting it.
+ *
+ * The narrowing is honest rather than a dressed-up cast: `RecordBackedTileRef`
+ * is derived from the SAME registry the flag is read from, so a kind that flips
+ * `isRecordBacked` and a kind whose ref changes both move the predicate's
+ * result type with them.
+ */
 export function isTileRefRecordBacked(ref: {
   readonly type: unknown;
-}): boolean {
+}): ref is RecordBackedTileRef {
   if (typeof ref.type !== "string") return false;
   if (!isTileKind(ref.type)) return false;
   return TILE_SCHEMAS[ref.type].isRecordBacked;
+}
+
+/** Refs of the kinds registered with `isRecordBacked: true`. */
+type RecordBackedTileRef = TileKindToRefMap[RecordBackedTileKindId];
+
+type RecordBackedTileKindId = {
+  [K in TileKindId]: TileKindToRefMap[K] extends EpicArtifactRef ? K : never;
+}[TileKindId];
+
+/**
+ * The tile kinds whose ref is an Epic NODE - a chat/artifact, a terminal, or a
+ * workspace file. Derived from `TileKindToRefMap` rather than spelled out as a
+ * `||` ladder over kind literals, so a new node-backed kind is covered the
+ * moment it is registered and a non-node kind cannot be added by hand.
+ */
+const EPIC_NODE_TILE_KINDS: { readonly [K in EpicNodeTileKindId]: true } = {
+  chat: true,
+  "terminal-agent": true,
+  spec: true,
+  ticket: true,
+  story: true,
+  review: true,
+  terminal: true,
+  "workspace-file": true,
+};
+
+type EpicNodeTileKindId = {
+  [K in TileKindId]: TileKindToRefMap[K] extends EpicNodeRef ? K : never;
+}[TileKindId];
+
+export function isEpicNodeTileRef(ref: EpicCanvasTileRef): ref is EpicNodeRef {
+  return ref.type in EPIC_NODE_TILE_KINDS;
 }

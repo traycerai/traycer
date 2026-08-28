@@ -78,6 +78,8 @@ import {
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { PaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
 export interface TileSurfaceIdentity {
   readonly instanceId: string;
@@ -110,6 +112,7 @@ export interface TileSurfacePaneActivation {
 
 export interface TileSurfaceServices {
   readonly openEpicHandle: OpenEpicStoreHandle;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   /**
    * The publishing slot's OWN plain placeholder element - the geometry
    * coordinator's `ResizeObserver`-observed anchor, positioned/sized exactly

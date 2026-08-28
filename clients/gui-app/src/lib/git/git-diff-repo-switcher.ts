@@ -6,7 +6,7 @@ import {
   worktreeFolderRowBadge,
   type WorktreeFolderRowBadge,
 } from "@/lib/worktree/worktree-folder-disabled-reason";
-import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { isWorkspaceResolvePending } from "@traycer-clients/shared/worktree/worktree-row-state";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 
 export interface GitDiffRepoSelection {

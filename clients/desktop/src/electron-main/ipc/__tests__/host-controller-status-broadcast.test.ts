@@ -29,6 +29,7 @@ function fakeStatus(
     updateReady: false,
     activation: "activated",
     reachable: true,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: new Date().toISOString(),
   };

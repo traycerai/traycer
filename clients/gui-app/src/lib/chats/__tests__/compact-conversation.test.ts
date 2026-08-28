@@ -30,7 +30,11 @@ function queuedItem(queueItemId: string, messageId: string): ChatQueuedItem {
     kind: "prompt",
     queueItemId,
     messageId,
-    message: { kind: "user", content: { type: "doc", content: [] } },
+    message: {
+      kind: "user",
+      content: { type: "doc", content: [] },
+      browserAnnotations: [],
+    },
     sender: { type: "user", userId: "u1" },
     settings: {
       harnessId: "claude",

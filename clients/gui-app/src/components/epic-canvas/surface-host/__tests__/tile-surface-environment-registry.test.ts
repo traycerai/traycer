@@ -96,6 +96,7 @@ function environment(
       // integration is slice 5).
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+      hostClient: null,
       geometryAnchorElement: document.createElement("div"),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
@@ -272,6 +273,7 @@ describe("tile surface environment registry", () => {
         services: {
           openEpicHandle:
             {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+          hostClient: null,
           geometryAnchorElement: sourceAnchor,
           panePortalContainer: null,
           isPaneFocusedNow: () => false,
@@ -606,6 +608,7 @@ describe("tile surface environment registry", () => {
       services: {
         openEpicHandle:
           {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+        hostClient: null,
         geometryAnchorElement: document.createElement("div"),
         panePortalContainer: portal,
         isPaneFocusedNow,

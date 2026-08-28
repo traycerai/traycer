@@ -80,18 +80,30 @@ import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
+import {
+  parseHostMaintenanceLeaseTarget,
+  runHostMaintenanceLease,
+  type HostMaintenanceLeaseAdmission,
+} from "./commands/host-maintenance-lease";
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
+import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { runHostCapabilities } from "./host/capabilities";
+import {
+  openForegroundConsole,
+  resolveForegroundStartMode,
+} from "./host/foreground-console";
 import { hostStatusCommand } from "./commands/host-status";
 import { buildHostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
+import { buildHostUpdateVerifyCommand } from "./commands/host-update-verify";
 import { buildHostUpdateCommand } from "./commands/host-update";
 import { buildLinkPhoneCommand } from "./commands/link-phone";
 import { buildLoginCommand } from "./commands/login";
 import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
+import { serviceStartCommand } from "./commands/service-start";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { buildWhoamiCommand } from "./commands/whoami";
@@ -150,6 +162,33 @@ function expectRequiredPositional(
     details: null,
     exitCode: 1,
   });
+}
+
+/**
+ * `--attempt-adoption <nonce>` - the child half of Ticket 05's adoption
+ * protocol (Ruling 1).
+ *
+ * Hidden, because no human runs it: the only thing that passes it is a
+ * packaged-macOS executor that already holds `update-attempt.lock` and is
+ * spawning this command as one step INSIDE its own segment. Without it the
+ * child would contend for a lock its own parent holds, wait out the timeout,
+ * and fail the segment that spawned it.
+ *
+ * A nonce names a proof file; the parent's lock token never travels on argv,
+ * which `ps` exposes. Absent, expired, or unusable all fall back to ordinary
+ * acquisition, so every solo invocation behaves exactly as it did before this
+ * option existed.
+ */
+function attemptAdoptionOption(): Option {
+  return new Option(
+    "--attempt-adoption <nonce>",
+    "Internal: adopt a parent update segment's live attempt lock instead of acquiring",
+  ).hideHelp();
+}
+
+function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
+  const value = opts.attemptAdoption;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function parsePortArg(value: string): number | null {
@@ -430,9 +469,9 @@ export function buildProgramWithAgentRoles(
   const cliVersion = resolveCliVersion(readonlyEnv());
   // Commander resolves the root's built-in `--version` before any child
   // option. `installHostUpdateVersionParser` below rewrites only the exact
-  // `host update --version X` spelling to a hidden local flag, preserving the
-  // root's established version output and every other command's normal
-  // positional/global-option parsing.
+  // `host update --version X` spelling to that command's registered
+  // `--release` option, preserving the root's established version output and
+  // every other command's normal positional/global-option parsing.
   program
     .name("traycer")
     .description(
@@ -534,9 +573,9 @@ function rewriteHostUpdateVersion(
     ) {
       return token;
     }
-    if (token === "--version") return "--host-update-version";
+    if (token === "--version") return "--release";
     return token.startsWith("--version=")
-      ? `--host-update-version=${token.slice("--version=".length)}`
+      ? `--release=${token.slice("--version=".length)}`
       : token;
   });
 }
@@ -796,11 +835,20 @@ function registerHostCommands(program: Command): void {
   // not switch to the shared NDJSON runner. We still call `addRunnerFlags(...)`
   // so commander accepts the shared globals (`--json`, `--quiet`, …) when
   // they appear AFTER `host start`.
+  //
+  // It stays a FOREGROUND supervisor, and the description says so rather than
+  // hiding the command. Every service definition already on a machine
+  // executes this exact command path, and the CLI slot it points at is
+  // replaced independently of the definition - so "start in the background
+  // and return" cannot become the meaning of bare `host start` without a
+  // migration invariant that does not exist yet. `host service start` is the
+  // background action; this is the supervisor, and the foreground console
+  // below is what stops an interactive invocation from looking hung.
   addRunnerFlags(
     host
       .command("start")
       .description(
-        "Bootstrap and supervise the host (used by launchd / systemd)",
+        "Run the host in the foreground and supervise it until it exits (this is also the entrypoint launchd / systemd / Scheduled Tasks invoke). Blocks; press Ctrl-C to stop. To start the background service and return, use 'traycer host service start'.",
       )
       .option(
         "--cwd <path>",
@@ -824,6 +872,12 @@ function registerHostCommands(program: Command): void {
       )
       .addOption(
         new Option(
+          "--adoption-nonce <nonce>",
+          "Internal: service-launch adoption nonce",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
           "--transition-id <id>",
           "Internal: lifecycle transition id",
         ).hideHelp(),
@@ -833,27 +887,127 @@ function registerHostCommands(program: Command): void {
           "--probe-nonce <nonce>",
           "Internal: lifecycle probe nonce",
         ).hideHelp(),
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "Foreground behaviour:",
+          "  Interactive runs print a banner naming the host log and how to stop, then",
+          "  stay quiet. They do NOT mirror the log: writing it from this process would",
+          "  block the supervisor's own event loop on a slow or flow-stopped terminal and",
+          "  could stop Ctrl-C reaching the host. Use 'traycer host logs --follow' in",
+          "  another terminal to watch it.",
+          "  Ordinary service-manager starts, non-TTY runs and --quiet print nothing",
+          "  human-readable, exactly as before (--quiet suppresses human output, not the",
+          "  --json event - that is what --no-progress is for, matching the runner).",
+          "  One exception, by design: a Windows Scheduled Task registered before the",
+          "  launcher was hidden holds a console and carries no identity flag, so it is",
+          "  indistinguishable from a person and gets the banner. That is one short",
+          "  write, not a stream.",
+          "  --json emits one structured lifecycle progress event and never raw log lines,",
+          "  and --no-progress suppresses that event too.",
+          "  The host writes to one log either way - see 'traycer host logs'.",
+          "",
+        ].join("\n"),
       ),
-  ).action(async (opts) => {
+  ).action(async (...actionArgs: unknown[]) => {
+    // `optsWithGlobals()` rather than the local opts bag, for the same reason
+    // `host capabilities` uses it: `--json` / `--quiet` are also declared
+    // globally by `addRunnerFlags(program)`, and commander binds a token that
+    // appears BEFORE the command path to the root option, leaving the
+    // subcommand's copy unset. This command owns its own lifecycle instead of
+    // going through the runner, so nothing else resolves them for it.
+    const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
+    const opts = command.optsWithGlobals() as Record<string, unknown>;
     const logger = createCliLogger(config.environment);
+    const serviceLabel =
+      typeof opts.serviceLabel === "string" ? opts.serviceLabel : null;
+    const transitionId =
+      typeof opts.transitionId === "string" ? opts.transitionId : null;
+    const probeNonce =
+      typeof opts.probeNonce === "string" ? opts.probeNonce : null;
+    const adoptionNonce =
+      typeof opts.adoptionNonce === "string" ? opts.adoptionNonce : null;
+    const mode = resolveForegroundStartMode({
+      // Any identity flag means a registered service definition produced this
+      // invocation. Positive evidence, checked before any inference about the
+      // terminal - a service manager must never have the host log duplicated
+      // into its own stdout.
+      serviceManaged:
+        serviceLabel !== null ||
+        transitionId !== null ||
+        probeNonce !== null ||
+        adoptionNonce !== null,
+      json: opts.json === true,
+      quiet: opts.quiet === true,
+      // Commander materialises `--no-progress` as `progress: false`, matching
+      // `extractRunnerFlags`' own reading of the same option.
+      noProgress: opts.progress === false,
+      interactive: process.stdout.isTTY === true,
+    });
     logger.info("Host supervisor command invoked", {
       environment: config.environment,
       hasCwdOverride: typeof opts.cwd === "string",
+      foregroundMode: mode,
     });
-    await runHostStart(
-      hostStartOptionsFromCommand({
-        environment: config.environment,
-        cwd: typeof opts.cwd === "string" ? opts.cwd : null,
-        serviceLabel:
-          typeof opts.serviceLabel === "string" ? opts.serviceLabel : null,
-        transitionId:
-          typeof opts.transitionId === "string" ? opts.transitionId : null,
-        probeNonce:
-          typeof opts.probeNonce === "string" ? opts.probeNonce : null,
-      }),
+    // Opened BEFORE `runHostStart`, which is the point: the first thing that
+    // command does is a chain of awaits (probe authority, incumbent check,
+    // target resolution, download-free but not instant) and then a spawn it
+    // waits on forever. The banner has to precede all of it.
+    const foreground = openForegroundConsole(
+      { environment: config.environment, mode },
       {},
     );
+    try {
+      await runHostStart(
+        hostStartOptionsFromCommand({
+          environment: config.environment,
+          cwd: typeof opts.cwd === "string" ? opts.cwd : null,
+          serviceLabel,
+          adoptionNonce,
+          transitionId,
+          probeNonce,
+        }),
+        {
+          // The supervisor's exit is deliberately a bare synchronous
+          // `process.exit` (see runner/exit.ts on why it does not route
+          // through `finishAndExit`). Closing here keeps that property while
+          // making sure the last log lines before shutdown - the ones a person
+          // watching a Ctrl-C most wants - are drained synchronously rather
+          // than lost with the pending poll.
+          exit: (code) => {
+            foreground.close();
+            process.exit(code);
+          },
+        },
+      );
+    } finally {
+      // Unreached on the ordinary path (the `exit` above ends the process),
+      // and that is exactly why it is here: `runHostStart` can also leave by
+      // THROWING, and a mirror left polling would hold the event loop open
+      // while the entry's own terminator tries to end the process.
+      foreground.close();
+    }
   });
+
+  // The service wrapper obtains this opaque value immediately before it execs
+  // `host start`. It is raw stdout by design: launchd/systemd/VBScript use it
+  // as an argv capability, not a runner envelope.
+  host
+    .command("adoption-nonce", { hidden: true })
+    .requiredOption("--service-label <label>", "Internal: owning service label")
+    .action(async (opts) => {
+      const nonce = await readHostStartAdoptionNonce(
+        config.environment,
+        typeof opts.serviceLabel === "string" ? opts.serviceLabel : "",
+      );
+      if (nonce === null) {
+        process.exitCode = 1;
+        return;
+      }
+      writeStdout(`${nonce}\n`);
+    });
 
   // The capability contract emitted service definitions probe before they
   // pass an argument their (possibly N-1) CLI slot may not understand. NOT
@@ -890,6 +1044,70 @@ function registerHostCommands(program: Command): void {
         writeStdout(response.stdout);
       }
       process.exitCode = response.exitCode;
+    });
+
+  // Deliberately not routed through the normal runner: this process keeps
+  // its attempt + CLI locks live while the internal root scripts issue a
+  // versioned stdin/stdout protocol. Any older CLI lacks both this command
+  // and the advertised capability token, so scripts fail closed.
+  host
+    .command("maintenance-lease", { hidden: true })
+    .requiredOption(
+      "--admission <kind>",
+      "Internal: root-maintenance admission policy",
+    )
+    .requiredOption(
+      "--host-home <path>",
+      "Internal: canonical target host home",
+    )
+    .requiredOption("--service-uid <uid>", "Internal: target GUI service uid")
+    .action(async (opts) => {
+      const admission =
+        opts.admission === "desktop-activation-maintenance" ||
+        opts.admission === "uninstall-maintenance"
+          ? (opts.admission as HostMaintenanceLeaseAdmission)
+          : null;
+      if (admission === null) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: "invalid maintenance lease admission",
+          })}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const target = parseHostMaintenanceLeaseTarget(
+        opts.hostHome,
+        opts.serviceUid,
+      );
+      if (target === null) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: "invalid target-bound maintenance lease context",
+          })}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        await runHostMaintenanceLease(config.environment, admission, target);
+      } catch (err) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: err instanceof Error ? err.message : String(err),
+          })}\n`,
+        );
+        process.exitCode = 1;
+      }
     });
 
   withRunner(
@@ -940,11 +1158,20 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Restart even if the host has work in progress: skip the cooperative shutdown claim and kill the host process. Running terminal sessions and in-flight agent work are killed.",
+      )
+      // Hidden: the Desktop force-restart path, which must never leave the
+      // host stopped without a relaunch - see commands/host-restart.ts.
+      .addOption(
+        new Option(
+          "--defer-if-parked",
+          "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
+        ).hideHelp(),
       ),
     (opts) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
+        deferIfParked: opts.deferIfParked === true,
       }),
   );
 
@@ -968,12 +1195,13 @@ function registerHostCommands(program: Command): void {
     host
       .command("install")
       .description(
-        "Install a host version from the registry (defaults to latest), or a local archive with --from",
+        "Install a host version from the registry (defaults to latest), or a local archive with --from, then register the OS service and start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, and provisions the started host's credential (best effort). Use --no-service-register for bytes only.",
       )
-      // Keep the published installer spelling stable. The update command uses
-      // `--version` because the host's cloud/RPC spawners already use that
-      // exact contract; the entrypoint rewrites only that command path to its
-      // hidden local parser flag before Commander handles the argv.
+      // Keep the published installer spelling stable. `host update` registers
+      // the same `--release` option and additionally accepts `--version` as a
+      // compatibility alias, because the host's cloud/RPC spawners already use
+      // that exact contract; the entrypoint rewrites only that command path
+      // before Commander handles the argv.
       .option(
         "--release <version>",
         "Registry version to install (defaults to 'latest'). Mutually exclusive with --from.",
@@ -992,7 +1220,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--no-service-register",
-        "Install the host without registering it as an OS service (the caller registers the service).",
+        "Bytes only (not supported on Windows): install the host without registering, starting, or stopping any OS service, and skip the sign-in prompt. No new host is started - and because nothing is stopped either, a host that was already running keeps serving the OLD bytes until it exits or you stop it. The actor that later starts the service owns the sign-in question.",
       )
       .option(
         "--force",
@@ -1005,6 +1233,29 @@ function registerHostCommands(program: Command): void {
           "--if-idle",
           "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before the service stop",
         ).hideHelp(),
+      )
+      .addOption(attemptAdoptionOption())
+      .addHelpText(
+        "after",
+        [
+          "",
+          "What a plain install does, in order:",
+          "  1. Offers browser sign-in when signed out (skipped in --json, CI and non-TTY runs, which warn and continue).",
+          "  2. Downloads, verifies and extracts the new bytes.",
+          "  3. Stops the running host, swaps the install, then registers/reloads and starts the OS service.",
+          "  4. Provisions the started host's credential (best effort; failures are warnings).",
+          "There is no rollback if the post-swap start fails: the new bytes stay installed and",
+          "'traycer host doctor' reports the non-readiness.",
+          "",
+          "macOS with Traycer Desktop managing the host differs in step 3. Traycer Desktop",
+          "keeps ownership of the registration - nothing here rewrites or removes it - and a",
+          "busy host still refuses the install. But a host that cannot be asked to stop is",
+          "swapped under anyway, and the CLI then asks Desktop's existing agent registration",
+          "to start or restart. That request being accepted is not the same as the host being",
+          "ready, and a host that survived the swap keeps serving the old bytes until it",
+          "restarts. Run 'traycer host status' to see which version is actually live.",
+          "",
+        ].join("\n"),
       ),
     (opts) => {
       const explicitVersion =
@@ -1028,6 +1279,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostInstallCommand({
+          attemptAdoption: attemptAdoptionNonce(opts),
           // Registry path defaults to "latest" when neither flag is set.
           // For --from installs the value is unused (the archive supplies
           // the version), but the underlying command contract still wants
@@ -1080,7 +1332,8 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
-      ),
+      )
+      .addOption(attemptAdoptionOption()),
     (opts) => {
       const explicitVersion =
         typeof opts.release === "string" && opts.release.length > 0
@@ -1100,6 +1353,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostEnsureCommand({
+          attemptAdoption: attemptAdoptionNonce(opts),
           versionRequest: explicitVersion,
           fromPath,
           enableLinger: opts.linger !== false,
@@ -1116,7 +1370,9 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("apply")
-      .description("Apply the staged host update over the current install")
+      .description(
+        "Apply the staged host update over the current install. Succeeds once the bytes are committed - it does not promise the host came back; use 'traycer host update' for a single command that fails when the updated host is unhealthy.",
+      )
       .option(
         "--force",
         "Apply even if the host has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
@@ -1135,6 +1391,28 @@ function registerHostCommands(program: Command): void {
           "--no-service",
           "Internal: skip the busy check and service stop/start; rejected on Windows",
         ).hideHelp(),
+      )
+      .addOption(attemptAdoptionOption())
+      .addHelpText(
+        "after",
+        [
+          "",
+          "Success contract:",
+          "  Exit 0 means the staged bytes were committed. It does NOT mean the host is",
+          "  running them: a post-swap service start that fails is reported as a successful",
+          "  'applied' result carrying postSwapError, and there is no rollback.",
+          "  `activation` in the result says what happened to the service:",
+          "    requested       the start/restart was accepted - NOT proof the host is serving",
+          "    failed          it threw; run 'traycer host doctor'",
+          "    not-attempted   no start was run at all (--no-service, or a non-bootstrap",
+          "                    caller against an unregistered service). NOT Desktop-managed",
+          "                    macOS - that path does request a start and reports 'requested'",
+          "    null            nothing was committed (no-op / stage mismatch)",
+          "  Nothing here health-probes. 'traycer host update' is the composite that stages,",
+          "  applies, health-checks, and exits non-zero when the host does not come back;",
+          "  'traycer host status' answers 'is it running?' directly.",
+          "",
+        ].join("\n"),
       ),
     (opts) =>
       buildHostApplyCommand({
@@ -1145,7 +1423,42 @@ function registerHostCommands(program: Command): void {
           typeof opts.expectedStageFingerprint === "string"
             ? opts.expectedStageFingerprint
             : null,
+        attemptAdoption: attemptAdoptionNonce(opts),
       }),
+  );
+
+  withRunner(
+    host
+      .command("update-verify", { hidden: true })
+      .description(
+        "Internal: claim and terminalize a Desktop-owned packaged-macOS activation after its restart. Dispatched by Desktop, which holds no capability here - this is a first-class claimant with its own lock and its own lock-scoped evidence.",
+      )
+      .requiredOption("--attempt-id <id>", "Attempt identity being verified")
+      .requiredOption("--generation <n>", "Expected attempt generation")
+      .requiredOption("--sequence <n>", "Expected attempt sequence")
+      .requiredOption("--target-version <version>", "Expected target version"),
+    // Validation lives INSIDE the returned command so the refusal flows
+    // through the runner's CliError handling (typed code + exit path) instead
+    // of escaping the factory and reaching the entrypoint as UNEXPECTED.
+    (opts) => (ctx) => {
+      const generation = parsePositiveIntegerArg(String(opts.generation));
+      const sequence = parsePositiveIntegerArg(String(opts.sequence));
+      if (generation === null || sequence === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host update-verify: --generation and --sequence must be positive whole numbers",
+          details: { generation: opts.generation, sequence: opts.sequence },
+          exitCode: 1,
+        });
+      }
+      return buildHostUpdateVerifyCommand({
+        attemptId: String(opts.attemptId),
+        generation,
+        sequence,
+        targetVersion: String(opts.targetVersion),
+      })(ctx);
+    },
   );
 
   withRunner(
@@ -1185,7 +1498,8 @@ function registerHostCommands(program: Command): void {
       .requiredOption(
         "--observed-runtime-version <version>",
         "pid.json's version (runtime stamp) for the observed fresh process",
-      ),
+      )
+      .addOption(attemptAdoptionOption()),
     (opts) => {
       return async (ctx) => {
         const observedPid =
@@ -1202,6 +1516,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostStampRuntimeCommand({
+          attemptAdoption: attemptAdoptionNonce(opts),
           expectedInstallGeneration:
             typeof opts.expectedInstallGeneration === "string"
               ? opts.expectedInstallGeneration
@@ -1224,36 +1539,83 @@ function registerHostCommands(program: Command): void {
     host
       .command("update")
       .description(
-        "Update the installed host to a registry version (defaults to latest)",
+        "Update the installed host to a registry version (defaults to latest); when an update is applied it also checks that a host is answering afterwards",
       )
-      .addOption(
-        new Option(
-          "--host-update-version <version>",
-          "Update to this exact registry version",
-        ).hideHelp(),
+      // A REAL registered option, spelled like `host install` / `host ensure`.
+      // The version target used to exist only as free-form help text backed by
+      // a hidden parse flag, so it was invisible to schema introspection and
+      // produced errors naming an internal spelling. `--version <version>`
+      // stays supported as the published compatibility syntax: the entrypoint
+      // rewrites that one token, on this one command path, to `--release`
+      // before Commander parses - see `rewriteHostUpdateVersion`. It cannot be
+      // registered directly, because Commander resolves the root's built-in
+      // `--version` before any child option.
+      .option(
+        "--release <version>",
+        "Registry version to update to (defaults to the latest compatible release)",
       )
       .option(
         "--force",
         "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
-      // The option users actually type is `--version <version>`, rewritten to
-      // the hidden spelling above before Commander parses (root `--version`
-      // owns that token otherwise). Registering it for real would hand the
-      // token back to the collision, so the public syntax is documented here
-      // instead - without this the command advertises "a registry version"
-      // and gives no way to name one.
+      // Hidden: the host resolver's dispatch-ACK correlation nonce (Ticket 07
+      // §5.2.8). A nonce and never a token - it grants nothing, which is why
+      // argv is a legitimate carrier. Not a user-facing switch.
+      .addOption(
+        new Option(
+          "--ack-nonce <nonce>",
+          "Internal: correlation nonce for the dispatching host's ACK wait",
+        ).hideHelp(),
+      )
       .addHelpText(
         "after",
-        "\nVersion selection:\n  --version <version>  Update to this exact registry version\n",
+        [
+          "",
+          "Version selection:",
+          "  --version <version>  Compatibility alias for --release; both name an exact",
+          "                       registry version. Prefer --release.",
+          "",
+          "Success contract:",
+          "  When an update is actually applied, exit 0 means a host came back healthy:",
+          "  it stages, applies, then health-checks, and a host that commits cleanly but",
+          "  does not come back exits non-zero with E_HOST_UPDATE_HEALTH_CHECK_FAILED and is",
+          "  NOT rolled back. An install already at the target version is a no-op that",
+          "  changes nothing and does NOT re-check the running host - use",
+          "  'traycer host status' if you need to know it is up. The probe checks that the",
+          "  recorded pid is alive and its port accepts - it does not compare versions, so on",
+          "  the Desktop-managed macOS degraded path a surviving old host can satisfy it;",
+          "  'traycer host status' reports which version is actually serving.",
+          "  'traycer host apply' is the lower-level half that reports an unconverged swap",
+          "  as a successful result.",
+          "",
+        ].join("\n"),
       ),
-    (opts) =>
-      buildHostUpdateCommand({
-        force: opts.force === true,
-        versionRequest:
-          typeof opts.hostUpdateVersion === "string"
-            ? opts.hostUpdateVersion
-            : null,
-      }),
+    (opts) => {
+      const release = typeof opts.release === "string" ? opts.release : null;
+      return async (ctx) => {
+        // An EXPLICIT empty target is a mistake, not a request for latest.
+        // `--version=`, `--release=` and an unset shell variable
+        // (`--release "$PIN"`) all arrive here as "", and treating that as
+        // "resolve latest" would silently update a machine the caller meant
+        // to pin. The hidden-flag version of this option passed "" through to
+        // SemVer validation, which rejected it; keep that refusal, with a
+        // message that names the flag.
+        if (release !== null && release.length === 0) {
+          throw cliError({
+            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+            message:
+              "host update: --release (or its --version alias) needs a version; pass one, or omit the flag entirely to update to the latest release",
+            details: { release },
+            exitCode: 1,
+          });
+        }
+        return buildHostUpdateCommand({
+          force: opts.force === true,
+          versionRequest: release,
+          ackNonce: typeof opts.ackNonce === "string" ? opts.ackNonce : null,
+        })(ctx);
+      };
+    },
   );
 
   withRunner(
@@ -1289,8 +1651,47 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("uninstall")
-      .description("Remove the installed host and optionally the OS service")
-      .option("--all", "Also deregister the OS service"),
+      .description(
+        "Remove the installed and staged host bytes. By default nothing else is touched: the OS service stays registered and a running host keeps running. Use --all to deregister the service and stop the host as well.",
+      )
+      .option(
+        "--all",
+        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. The stop is cooperative and best-effort: a host that denies or outlives the shutdown claim is left running, and its pid metadata and log are preserved rather than purged.",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "What is left behind:",
+          "  default  Installed + staged host bytes and the install record are removed.",
+          "           On Windows a RUNNING host locks its own install directory, so the",
+          "           removal of the bytes can fail there while the record is still deleted -",
+          "           check `removedInstallDir` in the result, and stop the host first if you",
+          "           need the directory gone.",
+          "           The OS service stays REGISTERED and is not stopped, so a running host",
+          "           serves until it exits and the surviving registration then has no valid",
+          "           install to launch. Recover with 'traycer host install', or clean up with",
+          "           'traycer host service uninstall'.",
+          "  --all    Deregistration REQUESTED, the host asked to stand down, and the bytes",
+          "           removed. No platform can verify a registration is actually GONE, so",
+          "           this reports the request plus what the readback saw: a positive",
+          "           `serviceRegistrationRetained` means it is definitely still there, and",
+          "           null means nothing could confirm either way.",
+          "           WINDOWS: deregistration force-kills the host process tree",
+          "           first - there is no busy check, so running terminal sessions and",
+          "           in-flight agent work are lost. macOS/Linux: the stop is cooperative and",
+          "           best-effort, so a host that denies the claim or outlives it keeps",
+          "           serving while the bytes are removed anyway, with its pid metadata and",
+          "           log preserved by this command. `hostStillRunning` in the result (and",
+          "           the summary line) reports what the probe could establish; it is null",
+          "           when nothing could be. Re-run with 'traycer host stop --force' if a",
+          "           host is still up. Runtime state is never purged here - removing it is",
+          "           only safe once the supervisor is confirmed stopped, which needs a",
+          "           backend completion contract that does not exist yet.",
+          "Neither mode touches your data or credentials under ~/.traycer.",
+          "",
+        ].join("\n"),
+      ),
     (opts) =>
       buildHostUninstallCommand({
         all: opts.all === true,
@@ -1378,6 +1779,14 @@ function registerHostCommands(program: Command): void {
       .option(
         "--port <port>",
         "Port that PID is holding, as reported by 'traycer host doctor'. Requires --pid.",
+      )
+      // Same contract as `host restart --defer-if-parked`; this command
+      // reaches the identical stop-only branch from the port repair.
+      .addOption(
+        new Option(
+          "--defer-if-parked",
+          "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
+        ).hideHelp(),
       ),
     (opts) => {
       const pid =
@@ -1417,6 +1826,7 @@ function registerHostCommands(program: Command): void {
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
+        deferIfParked: opts.deferIfParked === true,
       });
     },
   );
@@ -1464,9 +1874,28 @@ export function hostStartOptionsFromCommand(input: {
   readonly environment: typeof config.environment;
   readonly cwd: string | null;
   readonly serviceLabel: string | null;
+  readonly adoptionNonce: string | null;
   readonly transitionId: string | null;
   readonly probeNonce: string | null;
 }): RunHostStartOptions {
+  if (
+    input.adoptionNonce !== null &&
+    (input.serviceLabel === null ||
+      input.transitionId !== null ||
+      input.probeNonce !== null)
+  ) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host start adoption nonce requires a service label and cannot be combined with a probe",
+      details: {
+        serviceLabelProvided: input.serviceLabel !== null,
+        transitionIdProvided: input.transitionId !== null,
+        probeNonceProvided: input.probeNonce !== null,
+      },
+      exitCode: 1,
+    });
+  }
   const probeValues = [
     input.serviceLabel,
     input.transitionId,
@@ -1485,6 +1914,7 @@ export function hostStartOptionsFromCommand(input: {
       environment: input.environment,
       cwd: input.cwd,
       serviceLabel: input.serviceLabel,
+      adoptionNonce: input.adoptionNonce,
     };
   }
   if (
@@ -1520,16 +1950,18 @@ function registerServiceCommands(host: Command): void {
   // "starts/stops it" because registering or deregistering is never only a
   // bookkeeping edit - the OS starts the host on install and stops it on
   // uninstall.
-  const service = host
-    .command("service")
-    .description(
-      "Set up, check, or remove the background registration that keeps the host running (registering starts it; deregistering stops it)",
-    );
+  const service = host.command("service").description(
+    // Keeps CLI-005's user-goal phrasing from main and adds the `start`
+    // action this branch introduces, which main's copy predates.
+    "Set up, start, check, or remove the background registration that keeps the host running (registering starts it; deregistering stops it)",
+  );
 
   withRunner(
     service
       .command("install")
-      .description("Register the OS service for the current environment")
+      .description(
+        "Register the OS service for the current environment AND start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, then provisions the started host's credential (best effort).",
+      )
       .option(
         "--no-linger",
         "Linux only (ignored on macOS/Windows): skip 'loginctl enable-linger'",
@@ -1541,50 +1973,84 @@ function registerServiceCommands(host: Command): void {
       .option(
         "--takeover",
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
-      ),
+      )
+      .addOption(attemptAdoptionOption()),
     (opts) =>
       buildServiceInstallCommand({
+        attemptAdoption: attemptAdoptionNonce(opts),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
       }),
   );
 
+  // The public background start, and the answer to "why does `host start`
+  // never return?". `host start` is the foreground supervisor every
+  // registered service definition executes and cannot change meaning without
+  // breaking definitions already on machines, so the missing action is added
+  // beside the other service verbs instead - see commands/service-start.ts.
+  withRunner(
+    service
+      .command("start")
+      .description(
+        "Start the registered OS service in the background and return (the host keeps running after this command exits). Needs an existing registration; if the start fails and none is found, it points you at 'traycer host service install'.",
+      ),
+    () => serviceStartCommand,
+  );
+
   withRunner(
     service
       .command("status")
-      .description("Show the OS service registration + running state"),
+      .description(
+        "Show the OS service registration + running state. Read-only: never registers, starts, or repairs anything.",
+      ),
     () => serviceStatusCommand,
   );
 
   withRunner(
     service
       .command("uninstall")
-      .description("Deregister the OS service for the current environment"),
+      .description(
+        "Deregister the OS service for the current environment. Deregistration also asks the supervised host to stop, but that is best-effort: on Linux and Windows the teardown commands tolerate their own failures, so a host can survive it - check with 'traycer host status'. The installed host bytes are kept; use 'traycer host uninstall' to remove those.",
+      ),
     () => serviceUninstallCommand,
   );
 }
 
 function registerCliCommands(program: Command): void {
-  const cli = program
-    .command("cli")
-    .description(
-      "Update the 'traycer' command itself, or point it at a binary you installed by hand",
-    );
+  const cli = program.command("cli").description(
+    // CLI-005 (#1505) rewrote this parent in user language; CLI-016 needs
+    // the ownership boundary stated here too, since `cli upgrade` refuses
+    // package-manager installs outright. Keep both: their sentence leads,
+    // in their register, and the refusal follows it.
+    "Update the 'traycer' command itself, or point it at a binary you installed by hand. " +
+      "Installs from Homebrew, npm, winget, Scoop, apt or rpm are updated with that package manager instead.",
+  );
 
   withRunner(
     cli
       .command("upgrade")
       .description(
-        "Self-upgrade the CLI binary; stages a pending swap when the live binary is locked",
+        "Download and install the CLI version Traycer's release feed currently publishes, replacing the tracked binary " +
+          "recorded in the CLI install manifest (not necessarily the file you invoked). " +
+          "Only Desktop-installed and manual installs can self-upgrade: Homebrew, npm, winget, Scoop, apt and rpm installs are " +
+          "refused with their manager's upgrade command, so package ownership stays intact. " +
+          "Requires a recorded install - if none exists (for example after moving the binary by hand), run " +
+          "'traycer cli re-anchor --binary-path <path> --installed-version <version>' first. " +
+          // Says "the running host is using it" rather than naming the
+          // supervisor: #1505's CLI-005 pass bans implementation vocabulary
+          // from rendered help, and its full-help test enforces that.
+          "When the file is in use - usually because the host is running from it - the new binary is staged and " +
+          "finalized on a later 'traycer host restart'; a restart retries the swap rather than guaranteeing it, and any staged " +
+          "upgrade that is still outstanding is reported by 'traycer host doctor'.",
       )
       .option(
         "--dry-run",
-        "Resolve the target version without staging or replacing",
+        "Report the version and download URL that would be installed, without downloading the binary, staging or replacing anything (the release feed itself is still fetched)",
       )
       .option(
         "--target <version>",
-        "Override the target version (defaults to latest)",
+        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets and cannot install older versions, so this asserts which build you expect rather than selecting one",
       ),
     (opts) =>
       buildCliUpgradeCommand({
@@ -1639,7 +2105,11 @@ function registerCliCommands(program: Command): void {
     cli
       .command("re-anchor")
       .description(
-        "Point Traycer's upgrade tracking at a CLI binary you installed or moved by hand, so future 'cli upgrade' runs update the right file. Use after manually relocating or replacing the binary.",
+        "Point Traycer's upgrade tracking at a CLI binary you installed or moved by hand, so future 'cli upgrade' runs update the right file. " +
+          "Use after manually relocating or replacing the binary, or when 'cli upgrade' reports no recorded install. " +
+          "Records the install as manual and clears any pending upgrade; it does not move the binary, and the version you pass is " +
+          "recorded as given - it is never checked against the binary. Refreshing Traycer's copy of the binary is best-effort: a " +
+          "failure there is reported but does not fail the command.",
       )
       .requiredOption(
         "--binary-path <path>",
@@ -1649,7 +2119,7 @@ function registerCliCommands(program: Command): void {
       // `--version` collision (see `cli mark-source`).
       .requiredOption(
         "--installed-version <version>",
-        "Version reported by the binary",
+        "Version this binary reports; recorded as given and never verified by running it",
       ),
     (opts) =>
       buildCliReAnchorCommand({

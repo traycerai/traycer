@@ -37,11 +37,55 @@
 // earlier ones, each write's own callback is captured and chained, and
 // `flushStdio()` awaits the accumulated tail rather than probing the stream.
 //
-// Writes still go through `process.stdout` / `process.stderr` rather than a
+// Queued writes go through `process.stdout` / `process.stderr` rather than a
 // raw `fs.writeSync(1, ...)`: that keeps the stream the rest of the codebase
-// (and its tests) observes as the single output seam.
+// (and its tests) observes as the single output seam. The one exception is
+// `writeStdoutSync` below, for the supervisor whose exit cannot await a
+// flush - it still lives here so the seam stays one module.
+
+import { writeSync } from "node:fs";
 
 const FLUSH_TIMEOUT_MS = 10_000;
+
+/**
+ * Bound for the EAGAIN retry in `writeStdoutSync`. A non-blocking pipe can
+ * refuse a write; the bound keeps a wedged reader from hanging a supervisor
+ * start rather than letting it spin forever.
+ */
+const MAX_SYNC_WRITE_RETRIES = 1_000;
+
+/**
+ * SYNCHRONOUS stdout, for the one caller whose exit cannot await a flush.
+ *
+ * Everything else in this module queues and relies on `flushStdio()` before
+ * exit. `traycer host start` cannot: its exit is a bare `process.exit` by
+ * design (see runner/exit.ts on why the supervisor does not route through the
+ * terminator), so anything still queued is simply lost. Its fast paths - the
+ * incumbent-declined and invalid-probe branches - exit within milliseconds of
+ * writing the banner or the `--json` lifecycle event, which is exactly the
+ * output an operator or an automation consumer is waiting on.
+ *
+ * Deliberately lives here rather than in the caller: this module's whole
+ * premise is that every byte this CLI writes to stdout goes through one seam.
+ */
+export function writeStdoutSync(chunk: Buffer): void {
+  let written = 0;
+  let attempts = 0;
+  while (written < chunk.length && attempts < MAX_SYNC_WRITE_RETRIES) {
+    try {
+      written += writeSync(1, chunk, written, chunk.length - written);
+    } catch (cause) {
+      const code =
+        typeof cause === "object" && cause !== null && "code" in cause
+          ? (cause as { readonly code: unknown }).code
+          : null;
+      // Anything but a "try again" is unrecoverable here - a closed or broken
+      // pipe has no reader left to serve.
+      if (code !== "EAGAIN") return;
+      attempts += 1;
+    }
+  }
+}
 
 // Tail of the write-completion chain per descriptor. Replaced on every write,
 // so resolved links are collectable and a long-running `host logs --follow`

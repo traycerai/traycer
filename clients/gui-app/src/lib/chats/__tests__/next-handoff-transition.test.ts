@@ -107,7 +107,7 @@ describe("nextHandoffTransition", () => {
           clientActionId: "action-1",
           messageId: "message-1",
           acceptedAt: 1000,
-          restoreContent: null,
+          restore: null,
           sender: null,
           settings: null,
           accountContext: null,
@@ -137,6 +137,7 @@ describe("nextHandoffTransition", () => {
       message: {
         kind: "user",
         content: CONTENT,
+        browserAnnotations: [],
       },
       timestamp: 1000,
       sessionAnchor: null,
@@ -157,6 +158,7 @@ describe("nextHandoffTransition", () => {
       failedSendRestoration: {
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         reason: "Rejected",
         displacedReason: "Rejected",
         stated: false,
@@ -178,6 +180,7 @@ describe("nextHandoffTransition", () => {
       failedSendRestoration: {
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         reason: "Rejected",
         displacedReason: "Rejected",
         stated: false,
@@ -187,6 +190,7 @@ describe("nextHandoffTransition", () => {
       kind: "restoreAndAckFailed",
       clientActionId: "action-1",
       content: CONTENT,
+      browserAnnotations: [],
     });
   });
 
@@ -195,6 +199,7 @@ describe("nextHandoffTransition", () => {
       failedSendRestoration: {
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         reason: "Rejected",
         displacedReason: "Rejected",
         stated: false,
@@ -204,6 +209,7 @@ describe("nextHandoffTransition", () => {
       kind: "restoreAndAckFailed",
       clientActionId: "action-1",
       content: CONTENT,
+      browserAnnotations: [],
     });
   });
 });

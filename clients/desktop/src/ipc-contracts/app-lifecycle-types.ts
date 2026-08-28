@@ -70,6 +70,14 @@ export interface FreshUnsyncedSnapshotResponse {
   readonly snapshot: UnsyncedEditsSnapshot;
 }
 
+export interface BrowserHandoffDrainRequest {
+  readonly requestId: string;
+}
+
+export interface BrowserHandoffDrainResponse {
+  readonly requestId: string;
+}
+
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 
 export interface AppLifecycleBridge {
@@ -83,6 +91,12 @@ export interface AppLifecycleBridge {
   ): Disposable;
   respondFreshUnsyncedSnapshot(
     reply: FreshUnsyncedSnapshotResponse,
+  ): Promise<void>;
+  onDrainBrowserHandoffs(
+    handler: (request: BrowserHandoffDrainRequest) => void,
+  ): Disposable;
+  respondBrowserHandoffsDrained(
+    reply: BrowserHandoffDrainResponse,
   ): Promise<void>;
   /**
    * Every Epic holding work that can never sync, across ALL windows.

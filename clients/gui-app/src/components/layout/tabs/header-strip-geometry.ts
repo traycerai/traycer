@@ -7,10 +7,9 @@
  * dnd-kit's autoScroll can move it without pointer input. Render transforms are
  * subtracted from slot measurements to recover stable layout-space geometry.
  */
-import {
-  HEADER_MERGE_BAND_PX,
-  type StripDragGeometry,
-  type StripSlot,
+import type {
+  StripDragGeometry,
+  StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
@@ -104,9 +103,6 @@ export function measureHeaderStripGeometry(input: {
     grabOffsetX: input.pointerX - (originX + source.contentLeft),
     sourceInitialLeft: originX + source.contentLeft,
     sourceWidth: source.width,
-    // Header tabs pair into splits, so they carry a merge band. Tile strips
-    // pass TILE_MERGE_BAND_PX (0) instead.
-    mergeBandPx: HEADER_MERGE_BAND_PX,
     stripTop: stripRect.top,
     stripBottom: stripRect.bottom,
   };

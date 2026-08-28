@@ -211,7 +211,12 @@ describe("ticket 15 dual-key scroll cache", () => {
       offset: 0,
     });
     expect(peekSavedChatTabState(id) !== null).toBe(true);
-    expect(restoreChatTabState(id, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        id,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "following-end",
       anchorMessageId: null,
       anchorIndex: null,
@@ -225,7 +230,12 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorIndex: 2,
       offset: 48,
     });
-    expect(restoreChatTabState(id, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        id,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[2]?.id,
       anchorIndex: 2,
@@ -248,7 +258,12 @@ describe("ticket 15 dual-key scroll cache", () => {
     // New open mints a fresh tileInstanceId for the same (epic, chat).
     const reopened = chatIdIdentity("reopen-new");
     expect(peekSavedChatTabState(reopened) !== null).toBe(true);
-    expect(restoreChatTabState(reopened, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        reopened,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[3]?.id,
       anchorIndex: 3,
@@ -277,18 +292,29 @@ describe("ticket 15 dual-key scroll cache", () => {
     });
 
     // While both stay open, each tab-key restores its own entry.
-    expect(restoreChatTabState(viewA, messages).anchorMessageId).toBe(
-      messages[1]?.id,
-    );
-    expect(restoreChatTabState(viewB, messages).anchorMessageId).toBe(
-      messages[4]?.id,
-    );
+    expect(
+      restoreChatTabState(
+        viewA,
+        messages.map((message) => message.id),
+      ).anchorMessageId,
+    ).toBe(messages[1]?.id);
+    expect(
+      restoreChatTabState(
+        viewB,
+        messages.map((message) => message.id),
+      ).anchorMessageId,
+    ).toBe(messages[4]?.id);
 
     // Last writer was viewB - a brand-new third view of the same chat
     // restores viewB's durable entry after both tab-keys are gone.
     evictChatTabState([viewA.tileInstanceId, viewB.tileInstanceId]);
     const third = chatIdIdentity("reopen-new");
-    expect(restoreChatTabState(third, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        third,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[4]?.id,
       anchorIndex: 4,
@@ -311,7 +337,10 @@ describe("ticket 15 dual-key scroll cache", () => {
     // of the same chat also restores.
     expect(peekSavedChatTabState(id) !== null).toBe(true);
     expect(
-      restoreChatTabState(chatIdIdentity("reopen-new"), messages).mode,
+      restoreChatTabState(
+        chatIdIdentity("reopen-new"),
+        messages.map((message) => message.id),
+      ).mode,
     ).toBe("free-scrolling");
   });
 
@@ -336,7 +365,12 @@ describe("ticket 15 dual-key scroll cache", () => {
     expect(isChatKeyTombstoned(chatTabPersistenceChatKey(id))).toBe(true);
 
     const reopened = identity("reopen-new", EPIC, DELETE_SINGLE_CHAT);
-    expect(restoreChatTabState(reopened, messages).mode).toBe("following-end");
+    expect(
+      restoreChatTabState(
+        reopened,
+        messages.map((message) => message.id),
+      ).mode,
+    ).toBe("following-end");
     expect(peekSavedChatTabState(reopened) !== null).toBe(false);
 
     // Terminal regardless of who writes DURABLE state after the delete -
@@ -372,7 +406,12 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorIndex: -3,
       offset: 40,
     });
-    expect(restoreChatTabState(id, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        id,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[0]?.id,
       anchorIndex: 0,
@@ -387,7 +426,12 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorIndex: 99,
       offset: 40,
     });
-    expect(restoreChatTabState(id, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        id,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[4]?.id,
       anchorIndex: 4,
@@ -402,7 +446,12 @@ describe("ticket 15 dual-key scroll cache", () => {
       anchorIndex: 2,
       offset: 16,
     });
-    expect(restoreChatTabState(id, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        id,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[2]?.id,
       anchorIndex: 2,
@@ -439,7 +488,10 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     });
     evictChatTabState([closed.tileInstanceId]);
     expect(
-      restoreChatTabState(chatIdIdentity("reopen-new"), messages).offset,
+      restoreChatTabState(
+        chatIdIdentity("reopen-new"),
+        messages.map((message) => message.id),
+      ).offset,
     ).toBe(7);
   });
 
@@ -1025,7 +1077,12 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
     // a manual promote call - wins on every registry, not B's, even though
     // B ALSO wrote and closed.
     const reopenedA = identity("close-order-reopen", epicId, chatId);
-    expect(restoreChatTabState(reopenedA, messages)).toEqual({
+    expect(
+      restoreChatTabState(
+        reopenedA,
+        messages.map((message) => message.id),
+      ),
+    ).toEqual({
       mode: "free-scrolling",
       anchorMessageId: messages[1]?.id,
       anchorIndex: 1,

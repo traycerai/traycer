@@ -221,6 +221,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly migration = null;
   readonly hostManagement = null;
   readonly hostTray = null;
+  readonly browserView = null;
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;

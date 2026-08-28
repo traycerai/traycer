@@ -13,7 +13,7 @@ import type {
   HostGetInstallationInfoResponse,
   HostServiceDeregisterResponse,
   HostServiceRegisterResponse,
-  HostUpdateInstallResponse,
+  HostUpdateInstallResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
@@ -574,8 +574,16 @@ export function useHostServiceDeregister(
  */
 export function useHostUpdateInstall(
   client: HostClient<HostRpcRegistry> | null,
+  // The @1.1 response type, which is what this client's registry negotiates
+  // and therefore what callers actually receive. Annotating the @1.0 type here
+  // used to compile only by accident: `attemptId` is an EXTRA property, and an
+  // arm with extra properties stays assignable to the arm without them. The
+  // `dispatch-indeterminate` arm is a new discriminant rather than a new field,
+  // so it is not assignable to anything in @1.0 and the annotation stopped
+  // being quietly wrong and started being loudly wrong — which is the better
+  // failure, and the reason to name the version explicitly now.
 ): UseMutationResult<
-  HostUpdateInstallResponse,
+  HostUpdateInstallResponseV11,
   HostRpcError,
   { readonly version: string; readonly force: boolean },
   HostOverviewMutationContext
@@ -622,6 +630,35 @@ export function useHostUpdateInstall(
       // actually updating rather than whichever one the picker has reached.
       onSuccess: (response, _variables, context) => {
         if (context.hostId === null) return;
+        // AN UNRESOLVED DISPATCH IS ITS OWN ANSWER, and it is handled before
+        // the refusal test below rather than falling into it.
+        //
+        // Both branches release the latch, so this arm could be left to the
+        // `!== accepted && !== already-updating` test and would behave
+        // correctly today. It is written out anyway because that test's comment
+        // says "no swap was dispatched" — which is the one thing
+        // `dispatch-indeterminate` explicitly does not claim. A future reader
+        // reconciling the arm with that comment would reasonably conclude the
+        // arm was mis-filed and move it in with the armed outcomes, which is
+        // precisely the mistake the O3 ruling forbids: the latch is a 60s
+        // lockout, it belongs to `accepted` alone, and arming it over an
+        // outcome that is not an acceptance freezes the controls a person needs
+        // for a minute over a dispatch nobody can attribute.
+        //
+        // It also does something the refusal branch does not: it REFRESHES
+        // `host.status`. An update may well be running — we simply cannot tie
+        // it to this call — and observation through `updateOperation` is the
+        // negotiated route to that fact, so the read that would reveal it has
+        // to be re-armed rather than skipped.
+        if (response.outcome === "dispatch-indeterminate") {
+          useHostServiceWriteLatchStore
+            .getState()
+            .releaseUpdateInstallAccepted(context.hostId);
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
+          });
+          return;
+        }
         if (
           response.outcome !== "accepted" &&
           response.outcome !== "already-updating"

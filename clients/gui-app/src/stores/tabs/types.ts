@@ -3,6 +3,7 @@ import type { NavigateOptions } from "@tanstack/react-router";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type { TAB_KINDS } from "@/stores/tabs/registry";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
+import type { DraftNewWindowFlow } from "@/components/layout/hooks/use-draft-open-in-new-window";
 import type { EpicNewWindowFlow } from "@/components/layout/hooks/use-epic-open-in-new-window";
 
 /**
@@ -220,11 +221,11 @@ export interface TabKindDescriptor<K extends HeaderTabKind> {
   ) => boolean;
   /**
    * Opens this tab in a new desktop window. Caller MUST first guard on
-   * `tab.canOpenInNewWindow` - kinds that do not support new-window
-   * (e.g. draft) implement this as a no-op for exhaustiveness.
+   * `tab.canOpenInNewWindow` - a kind that does not support new-window
+   * implements this as a no-op for exhaustiveness.
    *
-   * Receives runtime dependencies (`bridge`, `epicFlow`) the kind needs;
-   * unused fields are ignored. The strip dispatches through the
+   * Receives runtime dependencies (`bridge`, `epicFlow`, `draftFlow`) the
+   * kind needs; unused fields are ignored. The strip dispatches through the
    * `tabOpenInNewWindow` seam in `registry.ts`, which delegates to this
    * method per kind so kind-specific logic stays in the kind module.
    */
@@ -252,8 +253,11 @@ export interface TabKindDescriptor<K extends HeaderTabKind> {
  *    kinds like history/settings).
  *  - `epicFlow` carries the epic-specific MOVE flow (ownership claim +
  *    unsynced-edits gate). Other kinds ignore this field.
+ *  - `draftFlow` carries the draft MOVE flow (per-window record relocation +
+ *    image-byte handoff). Other kinds ignore this field.
  */
 export interface OpenInNewWindowDeps {
   readonly bridge: DesktopWindowsBridge;
   readonly epicFlow: EpicNewWindowFlow;
+  readonly draftFlow: DraftNewWindowFlow;
 }

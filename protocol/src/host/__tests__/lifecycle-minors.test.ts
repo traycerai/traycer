@@ -29,18 +29,23 @@ import {
 import {
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
+  worktreeDeleteRequestSchemaV12,
+  worktreeHoldersChangedErrorDetailsSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   worktreeDeleteByPathOpenRequestSchema,
   worktreeDeleteByPathOpenRequestSchemaV11,
+  worktreeDeleteByPathOpenRequestSchemaV12,
   worktreeDeleteByPathServerFrameSchema,
   worktreeDeleteByPathServerFrameSchemaV11,
+  worktreeDeleteByPathServerFrameSchemaV12,
 } from "@traycer/protocol/host/worktree-delete-stream";
 
 const V10 = { major: 1, minor: 0 } as const;
 const V11 = { major: 1, minor: 1 } as const;
+const V12 = { major: 1, minor: 2 } as const;
 
 const holder = {
   ownerRef: {
@@ -53,10 +58,19 @@ const holder = {
   label: "Chat is mid-turn",
 };
 
+const HOLDERS_REVISION_DIGEST = "a".repeat(64);
+
 describe("WORKTREE_BUSY typed holders", () => {
   it("parses a full holder and round-trips", () => {
     const parsed = worktreeBusyHolderSchema.parse(holder);
     expect(worktreeBusyHolderSchema.parse(parsed)).toEqual(parsed);
+  });
+
+  it("accepts an optional holderId and round-trips it", () => {
+    const withId = { ...holder, holderId: "chat:chat-1" };
+    const parsed = worktreeBusyHolderSchema.parse(withId);
+    expect(parsed.holderId).toBe("chat:chat-1");
+    expect(worktreeBusyHolderSchema.parse(holder).holderId).toBeUndefined();
   });
 
   it("accepts a WORKTREE_BUSY envelope without holders (old host)", () => {
@@ -74,6 +88,17 @@ describe("WORKTREE_BUSY typed holders", () => {
       holders: [holder],
     });
     expect(parsed.holders).toEqual([holder]);
+    expect(parsed.holdersRevision).toBeUndefined();
+  });
+
+  it("accepts holdersRevision on a WORKTREE_BUSY envelope", () => {
+    const parsed = worktreeBusyErrorDetailsSchema.parse({
+      code: "WORKTREE_BUSY",
+      message: "Worktree is in use by an active agent or terminal.",
+      holders: [holder],
+      holdersRevision: "rev-1",
+    });
+    expect(parsed.holdersRevision).toBe("rev-1");
   });
 
   it("keeps holders on the current error envelope", () => {
@@ -81,8 +106,10 @@ describe("WORKTREE_BUSY typed holders", () => {
       code: "WORKTREE_BUSY",
       message: "busy",
       holders: [holder],
+      holdersRevision: HOLDERS_REVISION_DIGEST,
     });
     expect(parsed.holders).toEqual([holder]);
+    expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
   });
 
   it("sanitizes malformed holders on the WS and mux error envelopes", () => {
@@ -155,9 +182,11 @@ describe("WORKTREE_BUSY typed holders", () => {
       code: "WORKTREE_BUSY",
       message: "busy",
       holders: [holder],
+      holdersRevision: "rev-1",
     });
     expect(parsed).toEqual({ code: "WORKTREE_BUSY", message: "busy" });
     expect(parsed).not.toHaveProperty("holders");
+    expect(parsed).not.toHaveProperty("holdersRevision");
   });
 });
 
@@ -204,8 +233,8 @@ describe("terminal.subscribe@1.6 viewer intent", () => {
 describe("worktree.delete@1.1 stopOwners", () => {
   const deleteRegistry = hostRpcRegistry["worktree.delete"];
 
-  it("is registered as latest minor 1", () => {
-    expect(deleteRegistry[1].latestMinor).toBe(1);
+  it("is registered as latest minor 2", () => {
+    expect(deleteRegistry[1].latestMinor).toBe(2);
   });
 
   it("defaults absent stopOwners to false", () => {
@@ -250,10 +279,105 @@ describe("worktree.delete@1.1 stopOwners", () => {
   });
 });
 
+describe("worktree.delete@1.2 expectedHoldersRevision", () => {
+  const deleteRegistry = hostRpcRegistry["worktree.delete"];
+
+  it("1.1 body parses as 1.2 with expectedHoldersRevision absent", () => {
+    const parsed = worktreeDeleteRequestSchemaV12.parse({
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: true,
+    });
+    expect(parsed.stopOwners).toBe(true);
+    expect(parsed.expectedHoldersRevision).toBeUndefined();
+  });
+
+  it("accepts expectedHoldersRevision", () => {
+    const parsed = worktreeDeleteRequestSchemaV12.parse({
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.expectedHoldersRevision).toBe(HOLDERS_REVISION_DIGEST);
+  });
+
+  it("rejects a present-empty expectedHoldersRevision", () => {
+    const parsed = worktreeDeleteRequestSchemaV12.safeParse({
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: "",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a non-digest expectedHoldersRevision", () => {
+    const parsed = worktreeDeleteRequestSchemaV12.safeParse({
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: "rev-abc",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects expectedHoldersRevision when stopOwners is false", () => {
+    const parsed = worktreeDeleteRequestSchemaV12.safeParse({
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: false,
+      expectedHoldersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("upgrades a 1.1 request with expectedHoldersRevision absent", () => {
+    const upgraded = upgradeRequestToVersion(deleteRegistry, V11, V12, {
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: true,
+    });
+    expect(worktreeDeleteRequestSchemaV12.parse(upgraded)).toEqual(upgraded);
+    expect(upgraded.expectedHoldersRevision).toBeUndefined();
+    expect(upgraded.stopOwners).toBe(true);
+  });
+
+  it("1.1 request schema strips expectedHoldersRevision (old-host degrade)", () => {
+    const parsed = worktreeDeleteRequestSchemaV11.parse({
+      epicId: "e1",
+      workspacePath: "/repo",
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: "rev-abc",
+    });
+    expect(parsed).not.toHaveProperty("expectedHoldersRevision");
+  });
+
+  it("parses a WORKTREE_HOLDERS_CHANGED envelope with holders and revision", () => {
+    const parsed = worktreeHoldersChangedErrorDetailsSchema.parse({
+      code: "WORKTREE_HOLDERS_CHANGED",
+      message: "holders changed",
+      holders: [{ ...holder, holderId: "chat:chat-1" }],
+      holdersRevision: "rev-abc",
+    });
+    expect(parsed.code).toBe("WORKTREE_HOLDERS_CHANGED");
+    expect(parsed.holders).toHaveLength(1);
+    expect(parsed.holders?.[0]?.holderId).toBe("chat:chat-1");
+    expect(parsed.holdersRevision).toBe("rev-abc");
+  });
+});
+
 describe("worktree.deleteByPath@1.1 stopOwners + failed holders", () => {
-  it("is registered as latest minor 1", () => {
+  it("is registered as latest minor 2", () => {
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
-      1,
+      2,
     );
   });
 
@@ -317,6 +441,120 @@ describe("worktree.deleteByPath@1.1 stopOwners + failed holders", () => {
   });
 });
 
+describe("worktree.deleteByPath@1.2 expectedHoldersRevision", () => {
+  it("1.1 open body parses as 1.2 with expectedHoldersRevision absent", () => {
+    const parsed = worktreeDeleteByPathOpenRequestSchemaV12.parse({
+      worktreePath: "/wt",
+      stopOwners: true,
+    });
+    expect(parsed.stopOwners).toBe(true);
+    expect(parsed.expectedHoldersRevision).toBeUndefined();
+  });
+
+  it("accepts expectedHoldersRevision on the open request", () => {
+    const parsed = worktreeDeleteByPathOpenRequestSchemaV12.parse({
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.expectedHoldersRevision).toBe(HOLDERS_REVISION_DIGEST);
+  });
+
+  it("rejects a present-empty expectedHoldersRevision on the open request", () => {
+    const parsed = worktreeDeleteByPathOpenRequestSchemaV12.safeParse({
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: "",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a non-digest expectedHoldersRevision on the open request", () => {
+    const parsed = worktreeDeleteByPathOpenRequestSchemaV12.safeParse({
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: "rev-abc",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects expectedHoldersRevision when stopOwners is false on the open request", () => {
+    const parsed = worktreeDeleteByPathOpenRequestSchemaV12.safeParse({
+      worktreePath: "/wt",
+      stopOwners: false,
+      expectedHoldersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("1.1 open schema strips expectedHoldersRevision", () => {
+    const parsed = worktreeDeleteByPathOpenRequestSchemaV11.parse({
+      worktreePath: "/wt",
+      stopOwners: true,
+      expectedHoldersRevision: "rev-abc",
+    });
+    expect(parsed).not.toHaveProperty("expectedHoldersRevision");
+  });
+
+  it("1.2 failed frame accepts HOLDERS_CHANGED code with holders and revision", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.parse({
+      kind: "failed",
+      reason: "holders changed",
+      code: "WORKTREE_HOLDERS_CHANGED",
+      holders: [{ ...holder, holderId: "chat:chat-1" }],
+      holdersRevision: HOLDERS_REVISION_DIGEST,
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.code).toBe("WORKTREE_HOLDERS_CHANGED");
+      expect(parsed.holders?.[0]?.holderId).toBe("chat:chat-1");
+      expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+    }
+  });
+
+  it("1.2 failed frame sanitizes a non-digest holdersRevision to absent", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.parse({
+      kind: "failed",
+      reason: "holders changed",
+      holdersRevision: "rev-abc",
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.holdersRevision).toBeUndefined();
+    }
+  });
+
+  it("1.1 failed frame strips holdersRevision (old-client degrade)", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV11.parse({
+      kind: "failed",
+      reason: "holders changed",
+      holdersRevision: "rev-abc",
+      holders: [holder],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed).not.toHaveProperty("holdersRevision");
+    }
+  });
+
+  it("1.1 failed frame strips the 1.2 code (old-client degrade)", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV11.parse({
+      kind: "failed",
+      reason: "holders changed",
+      code: "WORKTREE_HOLDERS_CHANGED",
+      holders: [holder],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed).not.toHaveProperty("code");
+    }
+  });
+});
+
 describe("worktree.listHolders@1.0", () => {
   const listHoldersRegistry = hostRpcRegistry["worktree.listHolders"];
 
@@ -359,6 +597,7 @@ describe("worktree.listHolders@1.0", () => {
   it("response accepts an empty holders list (unknown path/owner)", () => {
     const parsed = worktreeListHoldersResponseSchema.parse({ holders: [] });
     expect(parsed.holders).toEqual([]);
+    expect(parsed.holdersRevision).toBeUndefined();
   });
 
   it("response accepts T2 holders", () => {
@@ -366,5 +605,21 @@ describe("worktree.listHolders@1.0", () => {
       holders: [holder],
     });
     expect(parsed.holders).toEqual([holder]);
+  });
+
+  it("response accepts a digest holdersRevision", () => {
+    const parsed = worktreeListHoldersResponseSchema.parse({
+      holders: [holder],
+      holdersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+  });
+
+  it("response rejects a non-digest holdersRevision", () => {
+    const parsed = worktreeListHoldersResponseSchema.safeParse({
+      holders: [holder],
+      holdersRevision: "rev-abc",
+    });
+    expect(parsed.success).toBe(false);
   });
 });
