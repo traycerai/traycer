@@ -317,13 +317,56 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(reread.pendingUpgrade).toBeNull();
   });
 
-  it("on 'swap-failed' marker, preserves pendingUpgrade and returns the helper's error message", async () => {
+  it("on 'swap-failed' marker with a non-null serviceStartError, preserves both the swap error AND the service-start error (Codex P2 regression - the marker is deleted as it's read, so this is the only durable record of why the host is still down)", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writeFileSync(liveBinaryPath, "live-bytes");
     writeFileSync(stagedBinaryPath, "staged-bytes");
     const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: "schtasks /Run failed: service already stopped",
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swap-failed");
+    if (outcome.status === "applied-swap-failed") {
+      expect(outcome.errorMessage).toContain("Access denied");
+      expect(outcome.serviceStartError).toBe(
+        "schtasks /Run failed: service already stopped",
+      );
+    }
+    expect(existsSync(markerPath)).toBe(false);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.pendingUpgrade).not.toBeNull();
+    expect(reread.pendingUpgrade.version).toBe("1.5.0");
+    expect(reread.version).toBe("1.4.0");
+  });
+
+  it("on 'swap-failed' marker with serviceStartError: null, reconciles with serviceStartError null (no fabricated value)", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    writeManifest({
       liveBinaryPath,
       stagedBinaryPath,
       version: "1.5.0",
@@ -349,12 +392,91 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(outcome.status).toBe("applied-swap-failed");
     if (outcome.status === "applied-swap-failed") {
       expect(outcome.errorMessage).toContain("Access denied");
+      expect(outcome.serviceStartError).toBeNull();
+    }
+  });
+
+  it("on 'swap-failed' marker with serviceStartError omitted entirely, reconciles with serviceStartError null rather than undefined", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    // No `serviceStartError` key at all - the marker schema's `isPostFinalizeMarker`
+    // accepts absent alongside string/null.
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "MoveFileEx error 5: Access denied",
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swap-failed");
+    if (outcome.status === "applied-swap-failed") {
+      expect(outcome.serviceStartError).toBeNull();
+    }
+  });
+
+  it("on 'swap-failed' marker whose manifest no longer has a pendingUpgrade, still preserves serviceStartError (the separate null-manifest/no-pending return site, easy to miss)", async () => {
+    // Same marker, but the manifest side has already moved on - either
+    // another finalize path beat this reconcile to it, or the manifest
+    // was rewritten. This exercises `reconcilePostFinalizeMarker`'s OTHER
+    // "swap-failed" return site (the one inside the
+    // `manifest === null || manifest.pendingUpgrade === null` branch),
+    // not the one the tests above cover.
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify({
+        version: "1.5.0",
+        installedAt: "2026-05-11T00:00:00Z",
+        binaryPath: join(workHome, "bin", "traycer"),
+        source: "manual",
+        pendingUpgrade: null,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const markerPath = join(cliDir, "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: join(workHome, "bin", "traycer"),
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: "schtasks /Run failed: service already stopped",
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swap-failed");
+    if (outcome.status === "applied-swap-failed") {
+      expect(outcome.errorMessage).toContain("Access denied");
+      expect(outcome.serviceStartError).toBe(
+        "schtasks /Run failed: service already stopped",
+      );
     }
     expect(existsSync(markerPath)).toBe(false);
-    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(reread.pendingUpgrade).not.toBeNull();
-    expect(reread.pendingUpgrade.version).toBe("1.5.0");
-    expect(reread.version).toBe("1.4.0");
   });
 
   it("on 'parent-still-alive' marker, preserves pendingUpgrade and reports the outcome", async () => {

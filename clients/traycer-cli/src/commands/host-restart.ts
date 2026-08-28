@@ -260,7 +260,12 @@ function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
     case "applied-swapped":
       return `prior helper finalised cli upgrade ${reconcile.previousVersion} → ${reconcile.version}; `;
     case "applied-swap-failed":
-      return `prior helper swap failed (${reconcile.errorMessage}); `;
+      // Surface the service-start failure when there was one: the marker
+      // is gone after reconciliation, so this line is the last chance to
+      // say why the host was left down rather than merely un-upgraded.
+      return reconcile.serviceStartError !== null
+        ? `prior helper swap failed (${reconcile.errorMessage}) and could not restart the service (${reconcile.serviceStartError}); `
+        : `prior helper swap failed (${reconcile.errorMessage}); `;
     case "applied-parent-still-alive":
       return "prior helper timed out waiting for CLI exit; ";
     case "marker-invalid":
