@@ -435,7 +435,9 @@ export function buildProgramWithAgentRoles(
   // positional/global-option parsing.
   program
     .name("traycer")
-    .description("Traycer CLI - auth, host supervisor, and config surface")
+    .description(
+      "Traycer CLI - sign in, run the Traycer host on this machine, and work with the agents in a Task",
+    )
     .version(cliVersion);
 
   // Global runner flags so `traycer --json <subcommand>` works even when
@@ -634,9 +636,16 @@ function registerAuthCommands(program: Command): void {
     program
       .command("login")
       .description("Sign in to Traycer via your browser")
-      .option(
-        "--token <token>",
-        "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+      // Hidden per the house convention for `"Internal:"` options: the payload
+      // is produced by the Traycer Desktop app's own sign-in and piped on
+      // stdin, so there is nothing a person at a terminal can usefully type
+      // here. Its contract is pinned by `commands/__tests__/login-token.test.ts`
+      // rather than by help text.
+      .addOption(
+        new Option(
+          "--token <token>",
+          "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+        ).hideHelp(),
       ),
     (opts) =>
       buildLoginCommand({
@@ -667,7 +676,14 @@ function registerAuthCommands(program: Command): void {
 }
 
 function registerHostCommands(program: Command): void {
-  const host = program.command("host").description("Manage the local host");
+  // Names what the group actually spans, because the children differ enormously
+  // in consequence: reads (status, logs, available) sit beside commands that
+  // download and swap bytes, register an OS service, or kill a running host.
+  const host = program
+    .command("host")
+    .description(
+      "Install, run, update, and troubleshoot the Traycer host on this machine",
+    );
 
   // `host start` is the long-running supervisor invoked by service
   // manifests (launchd / systemd-user / Windows Scheduled Task) as
@@ -744,7 +760,13 @@ function registerHostCommands(program: Command): void {
   // see host/capabilities.ts.
   host
     .command("capabilities")
-    .description("Print the capability tokens this CLI supports")
+    // Says out loud that `--json` means something different here. Every other
+    // command's `--json` is the runner's NDJSON event stream; this one prints a
+    // single JSON document, because its readers are a /bin/sh script and a
+    // VBScript launcher rather than an event consumer.
+    .description(
+      "Print the capability tokens this CLI supports. Raw output for scripts: plain text or a single JSON document plus an exit code, not the NDJSON event stream other commands emit with --json.",
+    )
     .option("--json", "Print the capability document as JSON")
     .option(
       "--has <capability>",
@@ -786,7 +808,21 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("restart")
-      .description("Restart the host service")
+      // The CLI-upgrade clause is not padding: a restart is where a pending
+      // self-upgrade is finalised (`upgrade/finalize-helper.ts`), so this host
+      // command can replace the `traycer` binary itself. Someone restarting the
+      // host to clear a hang deserves to know that before their CLI version
+      // changes under them.
+      //
+      // "attempts"/"may" rather than "completes", because the finalize is
+      // explicitly non-fatal: a missing staged binary, a still-locked binary on
+      // a read-only install, or a Windows helper that only gets SCHEDULED all
+      // return exit 0 with the pending upgrade retained. Promising completion
+      // would be the same false-status defect this PR removes elsewhere; the
+      // human result already reports which of those actually happened.
+      .description(
+        "Restart the host service. If a CLI self-upgrade is waiting to be applied, this also attempts to finalize it, which may replace the 'traycer' binary.",
+      )
       // Hidden: the CLI-owned activation mode (desktop controller's
       // idle-gated restart cycle), not a user-facing switch - see
       // commands/host-restart.ts.
@@ -1222,12 +1258,22 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      .command("free-port-and-restart", { hidden: true })
+      // Public, unlike its kill-only sibling below: `host doctor` prints this
+      // exact command line - PID and port filled in - as the fix for a port
+      // conflict, so a user is asked to type it. A command the CLI tells
+      // people to run has to be in the CLI's own help.
+      .command("free-port-and-restart")
       .description(
-        "Terminate a foreign PID holding the host port and restart the service (internal - invoked by Doctor)",
+        "Kill the process holding the host's port, then restart the host - the fix 'traycer host doctor' prints for a port conflict. Pass --pid and --port together; the PID is re-checked against the port and nothing is killed if it no longer owns it. With neither flag this only restarts the host.",
       )
-      .option("--pid <pid>", "PID of the conflicting process to terminate")
-      .option("--port <port>", "Port the foreign process is bound to"),
+      .option(
+        "--pid <pid>",
+        "PID of the process holding the port, as reported by 'traycer host doctor'. Requires --port.",
+      )
+      .option(
+        "--port <port>",
+        "Port that PID is holding, as reported by 'traycer host doctor'. Requires --pid.",
+      ),
     (opts) => {
       const pid =
         typeof opts.pid === "string" ? parsePositiveIntegerArg(opts.pid) : null;
@@ -1251,6 +1297,27 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
+      // Both or neither. The handler already refuses `--pid` without `--port`
+      // (it cannot verify ownership without the port), but `--port` alone used
+      // to fall through to a bare restart: no kill attempted, exit 0, and human
+      // output reporting a successful restart. That was survivable while this
+      // command was hidden and only Desktop's controller drove it - it passes
+      // both flags or neither - but `host doctor` now prints this spelling for
+      // a person to type, and a half-typed line must not report success for a
+      // repair it never attempted.
+      //
+      // Bare (neither flag) stays legal: Desktop's `HostController` appends
+      // `--pid`/`--port` conditionally, so `["host","free-port-and-restart"]`
+      // is a live machine call.
+      if (pid === null && port !== null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host free-port-and-restart: --port requires --pid - the PID is what gets terminated, and it is re-checked against the port first. Run 'traycer host doctor' for the filled-in command, or pass neither flag (or use 'traycer host restart') to restart without killing anything.",
+          details: { pid: null, port },
+          exitCode: 1,
+        });
+      }
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
@@ -1260,9 +1327,14 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
+      // Stays hidden where `free-port-and-restart` above went public, and the
+      // difference is who is asked to run it: nothing prints this spelling for
+      // a person to type. It is the half-repair Desktop's host controller
+      // drives when it owns the restart itself, and leaving the port freed but
+      // the host down is not an outcome to hand a user.
       .command("free-port", { hidden: true })
       .description(
-        "Terminate a foreign PID holding the host port, without restarting the service (internal - invoked by Doctor)",
+        "Internal: terminate a foreign PID holding the host port WITHOUT restarting the host. Machine contract for Desktop's host controller; people use 'traycer host free-port-and-restart'.",
       )
       .requiredOption(
         "--pid <pid>",
@@ -1348,10 +1420,14 @@ export function hostStartOptionsFromCommand(input: {
 }
 
 function registerServiceCommands(host: Command): void {
+  // "status" belongs in the summary because it is a third of this group, and
+  // "starts/stops it" because registering or deregistering is never only a
+  // bookkeeping edit - the OS starts the host on install and stops it on
+  // uninstall.
   const service = host
     .command("service")
     .description(
-      "Register / deregister the OS service that supervises the host",
+      "Set up, check, or remove the background registration that keeps the host running (registering starts it; deregistering stops it)",
     );
 
   withRunner(
@@ -1396,7 +1472,9 @@ function registerServiceCommands(host: Command): void {
 function registerCliCommands(program: Command): void {
   const cli = program
     .command("cli")
-    .description("Manage the installed CLI binary (upgrade, re-anchor)");
+    .description(
+      "Update the 'traycer' command itself, or point it at a binary you installed by hand",
+    );
 
   withRunner(
     cli
@@ -1491,11 +1569,13 @@ function registerCliCommands(program: Command): void {
 function registerConfigCommands(program: Command): void {
   const config = program
     .command("config")
-    .description("Read or write Traycer's machine-local config");
+    .description("Read or change the Traycer settings stored on this machine");
 
   const shell = config
     .command("shell")
-    .description("Shell used for host bootstrap and terminal tabs");
+    .description(
+      "Choose the shell Traycer uses to start the host and to open terminal tabs",
+    );
   withRunner(
     shell
       .command("get")
@@ -1618,7 +1698,9 @@ function registerConfigCommands(program: Command): void {
 
   const env = config
     .command("env")
-    .description("Env vars layered on top of host + terminal env");
+    .description(
+      "Environment variables Traycer adds when it starts the host and opens terminal tabs",
+    );
   withRunner(
     env.command("list").description("List env overrides"),
     () => async (ctx) => buildConfigEnvListCommand()(ctx),
@@ -1683,12 +1765,14 @@ function collectRepeatedOption(
 function registerWorkspaceCommands(program: Command): void {
   const workspace = program
     .command("workspace")
-    .description("Inspect workspace folders");
+    .description("Show the folders an agent in this Task can work in");
 
   withRunner(
     workspace
       .command("list")
-      .description("List workspace folders and Git worktrees for an epic"),
+      .description(
+        "List the folders and Git worktrees bound to this Task, and which agents hold each one",
+      ),
     () => buildWorkspaceListCommand({ epicId: null }),
   );
 }
@@ -1739,8 +1823,14 @@ function registerCommentsCommands(program: Command): void {
       .description(
         "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
       )
-      .argument("[artifactPaths...]", "Absolute artifact paths")
-      .option("--status <status>", "Thread status: all, open, or resolved"),
+      .argument(
+        "[artifactPaths...]",
+        "Artifact paths to list threads for. Absolute, or relative to the current directory (resolved before the request). Omit to list every artifact in this Task.",
+      )
+      .option(
+        "--status <status>",
+        "Thread status: all, open, or resolved (defaults to all)",
+      ),
     (opts, args) =>
       buildCommentsListCommand({
         epicId: null,
@@ -1757,7 +1847,10 @@ function registerCommentsCommands(program: Command): void {
       .description(
         "Set artifact comment threads to open or resolved after addressing or reopening feedback. Prefer telling the user which threads look addressed and letting them decide, unless they have already asked you to resolve threads yourself.",
       )
-      .requiredOption("--artifact <path>", "Absolute artifact path")
+      .requiredOption(
+        "--artifact <path>",
+        "Artifact the threads belong to. Absolute, or relative to the current directory (resolved before the request).",
+      )
       .requiredOption("--status <status>", "Thread status: open or resolved")
       .argument("<threadIds...>", "Thread ids to update"),
     (opts, args) =>
@@ -1785,7 +1878,9 @@ function registerWorktreeCommands(program: Command): void {
   };
   const worktree = program
     .command("worktree")
-    .description("Create, inspect, and remove Git worktree paths");
+    .description(
+      "Create, list, and remove the Git worktrees Traycer manages on this machine",
+    );
 
   withRunner(
     worktree
@@ -1845,7 +1940,7 @@ function registerWorktreeCommands(program: Command): void {
       )
       .option(
         "--carry-uncommitted",
-        "Carry tracked and untracked changes from the source workspace when valid",
+        "Carry tracked and untracked changes from the source workspace when valid. Only with --branch; rejected with --existing.",
       ),
     (opts) =>
       buildWorktreeCreateCommand({
@@ -1889,15 +1984,17 @@ function registerAgentCommands(
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program
     .command("agent")
-    .description("Agent inspection and communication for the calling agent");
+    .description(
+      "List, inspect, message, and manage the other agents in this Task",
+    );
 
   withRunner(
     agent
       .command("list")
-      .description("List every agent in the epic")
+      .description("List every agent in this Task")
       .option(
         "-a, --all",
-        "List all agents in the epic, not just agents belonging to this user",
+        "List all agents in this Task, not just agents belonging to this user",
       ),
     (opts) =>
       buildAgentListCommand({
@@ -2222,14 +2319,14 @@ function registerAgentCommands(
     const role = agent
       .command("role")
       .description(
-        "Claim, list, and relinquish durable Task-local roles for the calling agent",
+        "Claim, list, and relinquish the named roles that record which agent owns what in this Task",
       );
 
     withRunner(
       role
         .command("claim", readonlyHidden)
         .description(
-          "Claim a durable role for the calling agent in this Task's role registry",
+          "Claim a named role for yourself in this Task, so other agents can see who owns what",
         )
         .requiredOption(
           "--role <name>",
@@ -2267,7 +2364,7 @@ function registerAgentCommands(
     withRunner(
       role
         .command("relinquish", readonlyHidden)
-        .description("Relinquish a role claim held by the calling agent")
+        .description("Give up a role you are currently holding in this Task")
         .requiredOption(
           "--claim-id <id>",
           "Claim id to relinquish (see 'traycer agent role list')",
