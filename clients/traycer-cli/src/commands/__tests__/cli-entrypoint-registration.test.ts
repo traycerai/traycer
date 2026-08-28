@@ -34,8 +34,40 @@ const mocks = vi.hoisted(() => ({
     readonly port: number;
     readonly commandName: string;
   }>,
+  serviceControllerCalls: [] as string[],
   progressEvents: [] as ProgressInfo[],
 }));
+
+// `host free-port-and-restart`'s handler calls `createServiceController().restart(...)`
+// once its two guards clear. Mocked so a real (both-flags) parse in this
+// file's "genuinely exercise the index.ts guard" tests below never reaches
+// an actual OS service manager - the restart/lock/attestation plumbing past
+// the guards is exercised for real in `host-free-port-and-restart.test.ts`.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    createServiceController: () => ({
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      status: async () => ({
+        state: "stopped" as const,
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
+      stop: async () => {
+        mocks.serviceControllerCalls.push("stop");
+      },
+      start: async () => {
+        mocks.serviceControllerCalls.push("start");
+      },
+      restart: async () => {
+        mocks.serviceControllerCalls.push("restart");
+      },
+    }),
+  };
+});
 
 vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: async (opts: {
@@ -1133,6 +1165,78 @@ describe("traycer CLI entrypoint registration", () => {
       thrown = err;
     }
     expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  // `host free-port-and-restart` went public because `host doctor` prints
+  // this exact command line as the fix for a port conflict - a half-typed
+  // `--port` alone used to skip the kill entirely, restart the host, and
+  // still exit 0 as if the conflict had been resolved. These four route
+  // through the REAL registered command (`program.parseAsync`, not the
+  // handler in isolation) so the guard added in `index.ts` is genuinely
+  // exercised - `host-free-port-and-restart.test.ts` covers the deeper
+  // lock/kill/restart wiring once the guards clear.
+  it("host free-port-and-restart rejects --port without --pid, naming --pid in the message", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port-and-restart", "--port", "51820"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      message: expect.stringContaining("--pid"),
+    });
+  });
+
+  it("host free-port-and-restart still rejects --pid without --port (pre-existing handler guard, not regressed)", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port-and-restart", "--pid", "4242"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  it("host free-port-and-restart parses and forwards both --pid and --port as integers when both are given", async () => {
+    mocks.freePortKillCalls.length = 0;
+    mocks.serviceControllerCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(
+      ["host", "free-port-and-restart", "--pid", "4242", "--port", "51820"],
+      { from: "user" },
+    );
+
+    expect(mocks.freePortKillCalls).toEqual([
+      { pid: 4242, port: 51820, commandName: "host free-port-and-restart" },
+    ]);
+    expect(mocks.serviceControllerCalls).toEqual(["restart"]);
+  });
+
+  it("host free-port-and-restart parses fine with neither --pid nor --port (Desktop's bare machine call)", async () => {
+    mocks.freePortKillCalls.length = 0;
+    mocks.serviceControllerCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(["host", "free-port-and-restart"], {
+      from: "user",
+    });
+
+    expect(mocks.freePortKillCalls).toEqual([]);
+    expect(mocks.serviceControllerCalls).toEqual(["restart"]);
   });
 
   it.each([
