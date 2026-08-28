@@ -1,12 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // CLI audit CLI-012: `host start`'s foreground console must give an
 // interactive user terminal feedback BEFORE the command does anything that
@@ -23,7 +15,22 @@ import {
 const mocks = vi.hoisted(() => ({
   order: [] as string[],
   startTailCalls: [] as string[],
+  writes: [] as string[],
 }));
+
+// The foreground console writes synchronously through `writeStdoutSync` so its
+// output survives the supervisor's bare `process.exit`; intercept that seam.
+vi.mock("../../runner/std-write", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../runner/std-write")>();
+  return {
+    ...actual,
+    writeStdoutSync: (chunk: Buffer) => {
+      mocks.writes.push(chunk.toString("utf8"));
+      mocks.order.push(`write:${chunk.toString("utf8")}`);
+    },
+  };
+});
 
 import type { RunHostStartDeps, RunHostStartOptions } from "../host-start";
 import type { LogTail, LogTailOptions } from "../../host/log-tail";
@@ -65,26 +72,15 @@ function setIsTty(value: boolean): void {
 
 describe("host start - foreground console wiring", () => {
   let originalIsTty: boolean | undefined;
-  let write: MockInstance;
 
   beforeEach(() => {
     originalIsTty = process.stdout.isTTY;
     mocks.order = [];
     mocks.startTailCalls = [];
-    write = vi
-      .spyOn(process.stdout, "write")
-      .mockImplementation((chunk: unknown, ...rest: unknown[]) => {
-        mocks.order.push(`write:${String(chunk)}`);
-        const callback = rest.find((arg) => typeof arg === "function") as
-          | (() => void)
-          | undefined;
-        if (callback !== undefined) callback();
-        return true;
-      });
+    mocks.writes = [];
   });
 
   afterEach(() => {
-    write.mockRestore();
     setIsTty(originalIsTty === true);
   });
 

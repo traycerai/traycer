@@ -318,12 +318,20 @@ export async function runHostUninstall(
   // reports its single pre-removal probe. Either probe failing yields null,
   // never a negative fact about something this command did not observe.
   const observedService = args.all ? retainedAfterAll : retainedService;
-  // Only macOS answers "is this label registered?" with a real query
-  // (`launchctl print`); the other two infer it from state this command just
-  // mutated or from an error-collapsing probe. So a verified deregistration is
-  // claimed only where it can be.
-  const verifiedDeregistration =
-    serviceUninstalled && registrationClear && process.platform === "darwin";
+  // NO platform can verify this today. macOS looked like the exception, but
+  // `inspectLaunchdOwnership` tolerates non-zero too (a timeout collapses to
+  // "not-loaded") and an unloaded SMAppService record is invisible to it -
+  // which is exactly the record `uninstallService` warns may respawn at next
+  // login on macOS <= 25. Linux re-reads the manifest this command deleted;
+  // Windows maps every `/Query` failure to `not-installed`.
+  //
+  // So the legacy field keeps its REQUEST semantics - the deregistration was
+  // performed and returned - documented rather than silently reinterpreted.
+  // Narrowing it to a verified fact would have made Desktop's
+  // `deregisteredService` projection permanently false, trading an overclaim
+  // for a different wrong answer. The observed truth is the additive
+  // `serviceRegistrationRetained` beside it, and the human copy is keyed on
+  // THAT, so the prose never claims what the readback contradicts.
   const serviceRegistrationRetained =
     observedService === null ? null : observedService.state !== "not-installed";
   // Liveness comes from the endpoint probe on BOTH paths, never from
@@ -333,26 +341,31 @@ export async function runHostUninstall(
   // reports no pid. Reading `state === "running"` therefore answered "false"
   // for a Desktop-managed host that was still serving - after this command had
   // just removed its bytes.
-  const hostStillRunning = liveness === "unknown" ? null : liveness === "live";
+  // After `--all`, only a POSITIVE identity-current probe supports an answer.
+  // `gone` there rests on a boundary metadata read that returns null for four
+  // different reasons - a pre-publication successor, Windows having deleted
+  // the metadata during its own teardown, an EACCES, or malformed JSON - none
+  // of which is death. On the default path nothing was torn down, so `gone`
+  // still means what it says.
+  const hostStillRunning = args.all
+    ? liveness === "live"
+      ? true
+      : null
+    : liveness === "unknown"
+      ? null
+      : liveness === "live";
   return {
     data: {
       removedRecord: result.removedRecord,
       removedInstallDir: result.removedInstallDir,
       removedStagedDir: result.removedStagedDir,
-      // Verified, not merely requested. Desktop's `parseUninstallResult`
-      // projects this straight to `deregisteredService`, so leaving it true
-      // against a readback that says "still registered" published the exact
-      // false outcome the readback had just caught. `null` (the probe could
-      // not answer) is NOT agreement - it stays false, and
-      // `deregisterRequested` carries the attempt.
-      // Deliberately conservative on every platform but macOS. A
-      // `not-installed` readback is NOT a verified absence on Linux (it checks
-      // only the manifest this command just deleted, even if a tolerated
-      // `disable --now` timed out) or on Windows (every `schtasks /Query`
-      // failure, timeout and access denial included, maps to
-      // `not-installed`). Publishing `true` from that would hand Desktop's
-      // `deregisteredService` projection a fact nothing established.
-      serviceUninstalled: verifiedDeregistration,
+      // REQUEST semantics, deliberately - see the note above. Desktop's
+      // `parseUninstallResult` projects this straight to
+      // `deregisteredService`, and no platform can verify the fact today, so
+      // narrowing it would have made that projection permanently false. Read
+      // `serviceRegistrationRetained` for what was actually observed; the
+      // human summary is keyed on that.
+      serviceUninstalled,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       // What the machine is left holding, so an automated caller does not
@@ -367,16 +380,9 @@ export async function runHostUninstall(
       removedVersion: result.removedRecord?.version ?? null,
       // The READBACK, not the request. Saying "deregistered OS service" while
       // the same result reports `serviceRegistrationRetained: true` had the
-      // prose and the payload contradicting each other in one breath - and
-      // `!== true` wrongly counted an unanswerable probe as agreement.
-      // Deliberately conservative on every platform but macOS. A
-      // `not-installed` readback is NOT a verified absence on Linux (it checks
-      // only the manifest this command just deleted, even if a tolerated
-      // `disable --now` timed out) or on Windows (every `schtasks /Query`
-      // failure, timeout and access denial included, maps to
-      // `not-installed`). Publishing `true` from that would hand Desktop's
-      // `deregisteredService` projection a fact nothing established.
-      serviceUninstalled: verifiedDeregistration,
+      // prose and the payload contradicting each other in one breath, and an
+      // unanswerable probe must not count as agreement either.
+      serviceUninstalled: serviceUninstalled && registrationClear,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       serviceRegistrationRetained,
@@ -508,9 +514,7 @@ function humanSummary(args: {
   // needs to know is whether anything is still serving.
   if (args.deregisterRequested) {
     if (args.hostStillRunning === true) {
-      parts.push(
-        "the host is still running - run 'traycer host stop --force' to end it",
-      );
+      parts.push("the host is STILL RUNNING - run 'traycer host stop --force'");
     } else if (args.hostStillRunning === null) {
       parts.push(
         "could not confirm the host stopped - run 'traycer host status', then 'traycer host stop --force' if it is still up",
@@ -518,8 +522,13 @@ function humanSummary(args: {
     } else {
       parts.push("the host stopped");
     }
+    // Deliberately says what THIS command did, not what the machine now
+    // holds. Windows' own teardown removes pid metadata unconditionally after
+    // kills that tolerate their own failure (`platforms/windows.ts`), so a
+    // blanket "runtime was kept" is false there - and correcting that belongs
+    // to the backend quiescence work, not to this summary.
     parts.push(
-      "pid/log runtime was kept (removing it is only safe once the supervisor is confirmed stopped)",
+      "this command did not remove pid/log runtime (that is only safe once the supervisor is confirmed stopped)",
     );
   }
   // Keyed on the READBACK, so a deregistration whose backend call merely
@@ -530,7 +539,9 @@ function humanSummary(args: {
         ? "the OS service is still registered and the running host keeps serving until it exits, after which it cannot be started again - run 'traycer host uninstall --all' to stop and deregister it, or 'traycer host install' to reinstall"
         : "the OS service is still registered and has no install left to launch - run 'traycer host service uninstall' to deregister it, or 'traycer host install' to reinstall",
     );
-  } else if (args.hostStillRunning === true) {
+  } else if (args.hostStillRunning === true && !args.deregisterRequested) {
+    // Only on the default path: the `--all` arm above already said this, and
+    // saying it twice read as two separate problems.
     parts.push(
       "a host is still running and keeps serving until it exits - run 'traycer host stop --force' to end it",
     );

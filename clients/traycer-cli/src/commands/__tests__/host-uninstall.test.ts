@@ -131,11 +131,14 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });
 
-  // A verified deregistration is only claimable where the platform can answer
-  // "is this label registered?" with a real query. macOS can (`launchctl
-  // print`); Linux checks only the manifest this command just deleted, and
-  // Windows collapses every `schtasks /Query` failure into `not-installed`.
-  it("claims a verified deregistration only on platforms that can answer it", async () => {
+  // NO platform can verify deregistration today - macOS's `launchctl print`
+  // probe tolerates non-zero too, and an unloaded SMAppService record is
+  // invisible to it. So the legacy `serviceUninstalled` keeps REQUEST
+  // semantics (Desktop projects it to `deregisteredService`, and narrowing it
+  // to a fact nothing establishes would have made that permanently false),
+  // while the observed truth lives in `serviceRegistrationRetained` beside it
+  // and the human copy is keyed on THAT.
+  it("publishes the deregistration request alongside the observed readback", async () => {
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
@@ -151,7 +154,8 @@ describe("runHostUninstall", () => {
 
     expect(result.data).toMatchObject({
       deregisterRequested: true,
-      serviceUninstalled: process.platform === "darwin",
+      serviceUninstalled: true,
+      serviceRegistrationRetained: false,
     });
   });
 
@@ -210,7 +214,7 @@ describe("runHostUninstall", () => {
       purgedRuntime: false,
       hostStillRunning: true,
     });
-    expect(result.human ?? "").toContain("the host is still running");
+    expect(result.human ?? "").toContain("STILL RUNNING");
     expect(result.human ?? "").toContain("traycer host stop --force");
   });
 
@@ -240,7 +244,6 @@ describe("runHostUninstall", () => {
     // leaving it true against a readback saying "still registered" published
     // the exact false outcome the readback had just caught.
     expect(result.data).toMatchObject({
-      serviceUninstalled: false,
       deregisterRequested: true,
       serviceRegistrationRetained: true,
       retainedServiceState: "stopped",
@@ -273,7 +276,6 @@ describe("runHostUninstall", () => {
     );
 
     expect(result.data).toMatchObject({
-      serviceUninstalled: false,
       deregisterRequested: true,
       serviceRegistrationRetained: null,
       purgedRuntime: false,
@@ -460,15 +462,18 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({
       deregisterRequested: true,
       purgedRuntime: false,
-      // The probe answered "nothing serving", so `false` is earned here.
-      hostStillRunning: false,
+      // NULL after `--all`. `gone` there rests on a boundary metadata read
+      // that returns null for four different reasons - a pre-publication
+      // successor, Windows having deleted the metadata during its own
+      // teardown, an EACCES, or malformed JSON - none of which is death.
+      hostStillRunning: null,
       serviceRegistrationRetained: false,
     });
   });
 
   // The other half of the same rule: a CONFIRMED stop is what gates the
   // runtime purge, so it is also the only evidence that justifies `false`.
-  it("reports hostStillRunning: false when the captured child is positively dead", async () => {
+  it("reports liveness as unknown after --all unless a probe positively finds one", async () => {
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
@@ -485,7 +490,7 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({
       deregisterRequested: true,
       purgedRuntime: false,
-      hostStillRunning: false,
+      hostStillRunning: null,
       serviceRegistrationRetained: false,
     });
   });

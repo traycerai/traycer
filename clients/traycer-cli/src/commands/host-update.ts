@@ -35,10 +35,19 @@ import { withCliLock } from "../store/cli-lock";
 // staged version attached to `details`, rather than the generic
 // `details: null` `assertHostNotBusy` throws on its own.
 //
-// SUCCESS CONTRACT: when an update is actually applied, exit 0 here means the
-// host is RUNNING the requested version. An install already at the target is a
-// no-op that short-circuits before the probe and re-checks nothing - it
-// reports the installed version, not a live one.
+// SUCCESS CONTRACT: when an update is actually applied, exit 0 here means a
+// host came back healthy after the swap. Two limits are deliberate and worth
+// naming rather than overstating:
+//   - an install already at the target short-circuits before the probe and
+//     re-checks nothing; it reports the installed version, not a live one;
+//   - `probeHostHealth` asks "is the recorded pid alive and its port
+//     accepting?" - it does not compare versions. On the Desktop-managed macOS
+//     degraded path a surviving OLD host can answer it, so a healthy probe is
+//     not by itself proof that the applied bytes are the ones serving.
+//     `traycer host status` reports the running version.
+// A version-comparing probe was tried and backed out: pid.json's version can
+// lag a restart, so it turned successful updates into failures - a worse
+// outcome than the narrower claim.
 // The post-apply `probeHostHealth` below is what earns the claim when it runs,
 // and a host that committed cleanly but never came back exits non-zero with
 // `E_HOST_UPDATE_HEALTH_CHECK_FAILED` (no rollback - see the note at the

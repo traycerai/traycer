@@ -1,6 +1,6 @@
 import type { Environment } from "../runner/environment";
 import type { ProgressEvent } from "../runner/output";
-import { writeStdout, writeStdoutBytes } from "../runner/std-write";
+import { writeStdoutSync } from "../runner/std-write";
 import { hostLogPath } from "../store/paths";
 import {
   LOG_TAIL_MAX_MISSING_RETRIES,
@@ -143,8 +143,10 @@ export interface ForegroundConsoleDeps {
 
 export const defaultForegroundConsoleDeps: ForegroundConsoleDeps = {
   logPath: hostLogPath,
-  writeText: writeStdout,
-  writeBytes: writeStdoutBytes,
+  // Synchronous, because this command exits with a bare `process.exit` and a
+  // queued write would be lost - see `writeStdoutSync`.
+  writeText: (text) => writeStdoutSync(Buffer.from(text, "utf8")),
+  writeBytes: writeStdoutSync,
   startTail: startLogTail,
   now: () => new Date().toISOString(),
 };

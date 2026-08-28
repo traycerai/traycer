@@ -328,9 +328,14 @@ describe("startLogTail", () => {
   // only entry check. Emitting then breaks the documented guarantee, lets
   // `host logs --follow` keep writing after its signal cleanup resolved, and
   // can race the foreground console's synchronous drain.
-  it("emits nothing from a read that was already in flight when stop() landed", async () => {
+  //
+  // Written to be deterministic rather than to hit the window by luck: once
+  // ticks are demonstrably running, the append and the stop happen in the same
+  // synchronous block, so nothing can be emitted between them - whatever the
+  // in-flight tick was doing, its delivery must be suppressed.
+  it("emits nothing after stop(), including from a read already in flight", async () => {
     writeFileSync(logPath, "");
-    const { chunks, onBytes } = collector();
+    const { chunks, onBytes, text } = collector();
     tail = startLogTail({
       path: logPath,
       onBytes,
@@ -340,14 +345,16 @@ describe("startLogTail", () => {
       maxMissingRetries: 60,
     });
 
-    // Append, then stop DURING the window the tick is doing its async file
-    // work rather than before it starts.
+    appendFileSync(logPath, "first\n");
+    await waitFor(() => text().includes("first"), 2_000);
+
+    const countAtStop = chunks.length;
     appendFileSync(logPath, "written-then-stopped\n");
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     tail.stop();
 
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 6));
-    expect(chunks).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 8));
+    expect(chunks.length).toBe(countAtStop);
+    expect(text()).not.toContain("written-then-stopped");
   });
 
   it("stop() is idempotent and no bytes are emitted afterwards", async () => {

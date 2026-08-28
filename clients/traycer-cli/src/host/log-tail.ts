@@ -173,11 +173,26 @@ export function startLogTail(options: LogTailOptions): LogTail {
         missingRetries = 0;
         if (establishEofOnFirstRead) {
           // First readable observation after an unreadable start: adopt its
-          // end rather than replaying everything that was already there.
+          // end rather than replaying everything that was already there - and
+          // seed continuity from THIS handle while we have it. Leaving it null
+          // recreated the very gap the construction-time seed closes, one
+          // observation later: an in-place rewrite after this point had no
+          // signal and resumed at the adopted offset.
           offset = stats.size;
           establishEofOnFirstRead = false;
           fileIdentity = stats.ino > 0 ? stats.ino : null;
           continuity = null;
+          const seed = Math.min(stats.size, CONTINUITY_BYTES);
+          if (seed > 0) {
+            const seedBuffer = Buffer.alloc(seed);
+            const seedRead = await handle.read(
+              seedBuffer,
+              0,
+              seed,
+              stats.size - seed,
+            );
+            if (seedRead.bytesRead === seed) continuity = seedBuffer;
+          }
           sawFileMissing = false;
         } else {
           let continuityHolds = true;
@@ -264,6 +279,25 @@ export function startLogTail(options: LogTailOptions): LogTail {
       fd = openSync(options.path, "r");
       const stats = fstatSync(fd);
       const size = stats.size;
+      if (establishEofOnFirstRead) {
+        // The same transition the poll performs. A drain that ran BEFORE the
+        // first async poll ignored this and read from offset 0, replaying the
+        // whole pre-existing log - the opposite of what an unreadable start is
+        // supposed to degrade to.
+        offset = size;
+        establishEofOnFirstRead = false;
+        fileIdentity = stats.ino > 0 ? stats.ino : null;
+        sawFileMissing = false;
+        const seed = Math.min(size, CONTINUITY_BYTES);
+        continuity = null;
+        if (seed > 0) {
+          const seedBuffer = Buffer.alloc(seed);
+          if (readSync(fd, seedBuffer, 0, seed, size - seed) === seed) {
+            continuity = seedBuffer;
+          }
+        }
+        return;
+      }
       // Same replacement rule the poll uses - see `rewindIfReplaced`. A file
       // swapped out between the final poll and this drain is otherwise read
       // from the old offset, silently dropping the new file's prefix on the
