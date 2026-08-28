@@ -175,6 +175,12 @@ describe("serviceStartCommand", () => {
       alreadyRunning: false,
     });
     expect(result.exitCode).toBe(0);
+    // "requested ... a host is now serving", not "started the service". The
+    // post-start readback shares the shortcut's blind spot: it can be
+    // observing a FOREGROUND host while this service's supervisor exited after
+    // finding that incumbent.
+    expect(result.human ?? "").toContain("requested start");
+    expect(result.human ?? "").not.toContain("started service");
   });
 
   // Idempotent like `host stop`, and it gets there by SKIPPING the platform

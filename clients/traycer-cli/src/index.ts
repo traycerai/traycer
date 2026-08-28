@@ -15,6 +15,10 @@ import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-s
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
+import {
+  assertCommandAllowedOnSurface,
+  resolveAgentCliSurface,
+} from "./agent-surface";
 import { resolveCliVersion } from "./cli-version";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
@@ -158,6 +162,24 @@ function parsePortArg(value: string): number | null {
   return parsed !== null && parsed <= 65_535 ? parsed : null;
 }
 
+/**
+ * The invoked command's path under the root program, space-joined
+ * (`agent role claim`). Built from Commander's own parent chain rather than the
+ * argv the user typed, so an alias or an abbreviated path still resolves to the
+ * canonical name the capability table is keyed by.
+ */
+export function commanderCommandPath(command: CommanderCommand): string {
+  const segments: string[] = [];
+  let cursor: CommanderCommand | null = command;
+  // Stop at the root program: it contributes the binary name, not a path
+  // segment (`traycer agent create` is keyed as `agent create`).
+  while (cursor !== null && cursor.parent !== null) {
+    segments.unshift(cursor.name());
+    cursor = cursor.parent;
+  }
+  return segments.join(" ");
+}
+
 function withRunner(
   cmd: CommanderCommand,
   build: (
@@ -169,8 +191,35 @@ function withRunner(
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const positionals = extractActionPositionals(actionArgs);
     const optsBag = command.optsWithGlobals() as Record<string, unknown>;
-    const fn = build(optsBag, positionals);
-    await runCommand(fn, extractRunnerFlags(optsBag));
+    const commandPath = commanderCommandPath(command);
+    // THE capability check for every runner-backed command (CLI-019).
+    //
+    // It runs here, once, rather than in each mutating handler: hiding a
+    // command on the readonly surface is presentation only - Commander still
+    // runs the action when the subcommand is typed explicitly - and a
+    // per-handler guard is a check every new command has to remember. Keyed by
+    // command path off `READONLY_REFUSED_COMMANDS`, so no Commander route to a
+    // gated action skips it.
+    //
+    // A rail, not an authorization boundary: the surface is a variable in the
+    // caller's own environment, so this constrains a cooperative caller, not
+    // one that clears it. See `AgentCliSurface` in `agent-surface.ts`.
+    //
+    // The surface is read at invocation (not at registration) so it reflects
+    // the environment this process was actually launched with, and the check
+    // is wrapped INSIDE the CommandFn so a refusal renders through the runner's
+    // normal error path: NDJSON envelope under `--json`, stderr otherwise, and
+    // a non-zero exit either way. Building `fn` lazily keeps the refusal ahead
+    // of any argument parsing the builder does, so a readonly session is told
+    // it may not do this rather than which flag it also got wrong.
+    const guarded: CommandFn = async (ctx) => {
+      assertCommandAllowedOnSurface(
+        commandPath,
+        resolveAgentCliSurface(readonlyEnv()),
+      );
+      return build(optsBag, positionals)(ctx);
+    };
+    await runCommand(guarded, extractRunnerFlags(optsBag));
   });
 }
 
@@ -199,13 +248,15 @@ export function isTraycerCliEntrypoint(argv1: string | undefined): boolean {
 // existing caller and test looks for them.
 export { LOCAL_CLI_VERSION, resolveCliVersion } from "./cli-version";
 
-export type AgentCliSurface = "full" | "readonly";
-
-export function resolveAgentCliSurface(
-  env: Readonly<Record<string, string | undefined>>,
-): AgentCliSurface {
-  return env.TRAYCER_AGENT_CLI_SURFACE === "readonly" ? "readonly" : "full";
-}
+// The surface type, its resolver, and the readonly capability table live in
+// the leaf `agent-surface.ts` so a command can import the policy without
+// importing this module (which builds the whole program and would close a
+// cycle). Re-exported here because this is where existing callers look.
+export {
+  READONLY_REFUSED_COMMANDS,
+  resolveAgentCliSurface,
+  type AgentCliSurface,
+} from "./agent-surface";
 
 // Construct the full commander program. Exported as a builder so tests
 // can assert command registration (subject of the
@@ -389,7 +440,9 @@ export function buildProgramWithAgentRoles(
   // every other command's normal positional/global-option parsing.
   program
     .name("traycer")
-    .description("Traycer CLI - auth, host supervisor, and config surface")
+    .description(
+      "Traycer CLI - sign in, run the Traycer host on this machine, and work with the agents in a Task",
+    )
     .version(cliVersion);
 
   // Global runner flags so `traycer --json <subcommand>` works even when
@@ -588,9 +641,16 @@ function registerAuthCommands(program: Command): void {
     program
       .command("login")
       .description("Sign in to Traycer via your browser")
-      .option(
-        "--token <token>",
-        "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+      // Hidden per the house convention for `"Internal:"` options: the payload
+      // is produced by the Traycer Desktop app's own sign-in and piped on
+      // stdin, so there is nothing a person at a terminal can usefully type
+      // here. Its contract is pinned by `commands/__tests__/login-token.test.ts`
+      // rather than by help text.
+      .addOption(
+        new Option(
+          "--token <token>",
+          "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+        ).hideHelp(),
       ),
     (opts) =>
       buildLoginCommand({
@@ -621,7 +681,14 @@ function registerAuthCommands(program: Command): void {
 }
 
 function registerHostCommands(program: Command): void {
-  const host = program.command("host").description("Manage the local host");
+  // Names what the group actually spans, because the children differ enormously
+  // in consequence: reads (status, logs, available) sit beside commands that
+  // download and swap bytes, register an OS service, or kill a running host.
+  const host = program
+    .command("host")
+    .description(
+      "Install, run, update, and troubleshoot the Traycer host on this machine",
+    );
 
   // `host start` is the long-running supervisor invoked by service
   // manifests (launchd / systemd-user / Windows Scheduled Task) as
@@ -690,11 +757,11 @@ function registerHostCommands(program: Command): void {
           "  another terminal to watch it.",
           "  Ordinary service-manager starts, non-TTY runs and --quiet print nothing",
           "  human-readable, exactly as before (--quiet suppresses human output, not the",
-          "  --json event - that is what --no-progress is for, matching the runner). Two service starts are not silent, both by design: a Windows task",
-          "  registered before the launcher was hidden holds a console and gets the banner,",
-          "  and a start you deliberately attached to your terminal (launchctl debug",
-          "  --stdout, StandardOutput=tty) mirrors, because that is what you asked for.",
-          "  Otherwise:",
+          "  --json event - that is what --no-progress is for, matching the runner).",
+          "  One exception, by design: a Windows Scheduled Task registered before the",
+          "  launcher was hidden holds a console and carries no identity flag, so it is",
+          "  indistinguishable from a person and gets the banner. That is one short",
+          "  write, not a stream.",
           "  --json emits one structured lifecycle progress event and never raw log lines,",
           "  and --no-progress suppresses that event too.",
           "  The host writes to one log either way - see 'traycer host logs'.",
@@ -783,7 +850,13 @@ function registerHostCommands(program: Command): void {
   // see host/capabilities.ts.
   host
     .command("capabilities")
-    .description("Print the capability tokens this CLI supports")
+    // Says out loud that `--json` means something different here. Every other
+    // command's `--json` is the runner's NDJSON event stream; this one prints a
+    // single JSON document, because its readers are a /bin/sh script and a
+    // VBScript launcher rather than an event consumer.
+    .description(
+      "Print the capability tokens this CLI supports. Raw output for scripts: plain text or a single JSON document plus an exit code, not the NDJSON event stream other commands emit with --json.",
+    )
     .option("--json", "Print the capability document as JSON")
     .option(
       "--has <capability>",
@@ -825,7 +898,21 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("restart")
-      .description("Restart the host service")
+      // The CLI-upgrade clause is not padding: a restart is where a pending
+      // self-upgrade is finalised (`upgrade/finalize-helper.ts`), so this host
+      // command can replace the `traycer` binary itself. Someone restarting the
+      // host to clear a hang deserves to know that before their CLI version
+      // changes under them.
+      //
+      // "attempts"/"may" rather than "completes", because the finalize is
+      // explicitly non-fatal: a missing staged binary, a still-locked binary on
+      // a read-only install, or a Windows helper that only gets SCHEDULED all
+      // return exit 0 with the pending upgrade retained. Promising completion
+      // would be the same false-status defect this PR removes elsewhere; the
+      // human result already reports which of those actually happened.
+      .description(
+        "Restart the host service. If a CLI self-upgrade is waiting to be applied, this also attempts to finalize it, which may replace the 'traycer' binary.",
+      )
       // Hidden: the CLI-owned activation mode (desktop controller's
       // idle-gated restart cycle), not a user-facing switch - see
       // commands/host-restart.ts.
@@ -1383,12 +1470,22 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      .command("free-port-and-restart", { hidden: true })
+      // Public, unlike its kill-only sibling below: `host doctor` prints this
+      // exact command line - PID and port filled in - as the fix for a port
+      // conflict, so a user is asked to type it. A command the CLI tells
+      // people to run has to be in the CLI's own help.
+      .command("free-port-and-restart")
       .description(
-        "Terminate a foreign PID holding the host port and restart the service (internal - invoked by Doctor)",
+        "Kill the process holding the host's port, then restart the host - the fix 'traycer host doctor' prints for a port conflict. Pass --pid and --port together; the PID is re-checked against the port and nothing is killed if it no longer owns it. With neither flag this only restarts the host.",
       )
-      .option("--pid <pid>", "PID of the conflicting process to terminate")
-      .option("--port <port>", "Port the foreign process is bound to"),
+      .option(
+        "--pid <pid>",
+        "PID of the process holding the port, as reported by 'traycer host doctor'. Requires --port.",
+      )
+      .option(
+        "--port <port>",
+        "Port that PID is holding, as reported by 'traycer host doctor'. Requires --pid.",
+      ),
     (opts) => {
       const pid =
         typeof opts.pid === "string" ? parsePositiveIntegerArg(opts.pid) : null;
@@ -1412,6 +1509,27 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
+      // Both or neither. The handler already refuses `--pid` without `--port`
+      // (it cannot verify ownership without the port), but `--port` alone used
+      // to fall through to a bare restart: no kill attempted, exit 0, and human
+      // output reporting a successful restart. That was survivable while this
+      // command was hidden and only Desktop's controller drove it - it passes
+      // both flags or neither - but `host doctor` now prints this spelling for
+      // a person to type, and a half-typed line must not report success for a
+      // repair it never attempted.
+      //
+      // Bare (neither flag) stays legal: Desktop's `HostController` appends
+      // `--pid`/`--port` conditionally, so `["host","free-port-and-restart"]`
+      // is a live machine call.
+      if (pid === null && port !== null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host free-port-and-restart: --port requires --pid - the PID is what gets terminated, and it is re-checked against the port first. Run 'traycer host doctor' for the filled-in command, or pass neither flag (or use 'traycer host restart') to restart without killing anything.",
+          details: { pid: null, port },
+          exitCode: 1,
+        });
+      }
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
@@ -1421,9 +1539,14 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
+      // Stays hidden where `free-port-and-restart` above went public, and the
+      // difference is who is asked to run it: nothing prints this spelling for
+      // a person to type. It is the half-repair Desktop's host controller
+      // drives when it owns the restart itself, and leaving the port freed but
+      // the host down is not an outcome to hand a user.
       .command("free-port", { hidden: true })
       .description(
-        "Terminate a foreign PID holding the host port, without restarting the service (internal - invoked by Doctor)",
+        "Internal: terminate a foreign PID holding the host port WITHOUT restarting the host. Machine contract for Desktop's host controller; people use 'traycer host free-port-and-restart'.",
       )
       .requiredOption(
         "--pid <pid>",
@@ -1509,11 +1632,15 @@ export function hostStartOptionsFromCommand(input: {
 }
 
 function registerServiceCommands(host: Command): void {
-  const service = host
-    .command("service")
-    .description(
-      "Manage the OS service that runs the host in the background: register it (which also starts the host), start it, inspect it, or deregister it (which also stops the host)",
-    );
+  // "status" belongs in the summary because it is a third of this group, and
+  // "starts/stops it" because registering or deregistering is never only a
+  // bookkeeping edit - the OS starts the host on install and stops it on
+  // uninstall.
+  const service = host.command("service").description(
+    // Keeps CLI-005's user-goal phrasing from main and adds the `start`
+    // action this branch introduces, which main's copy predates.
+    "Set up, start, check, or remove the background registration that keeps the host running (registering starts it; deregistering stops it)",
+  );
 
   withRunner(
     service
@@ -1577,7 +1704,9 @@ function registerServiceCommands(host: Command): void {
 function registerCliCommands(program: Command): void {
   const cli = program
     .command("cli")
-    .description("Manage the installed CLI binary (upgrade, re-anchor)");
+    .description(
+      "Update the 'traycer' command itself, or point it at a binary you installed by hand",
+    );
 
   withRunner(
     cli
@@ -1672,11 +1801,13 @@ function registerCliCommands(program: Command): void {
 function registerConfigCommands(program: Command): void {
   const config = program
     .command("config")
-    .description("Read or write Traycer's machine-local config");
+    .description("Read or change the Traycer settings stored on this machine");
 
   const shell = config
     .command("shell")
-    .description("Shell used for host bootstrap and terminal tabs");
+    .description(
+      "Choose the shell Traycer uses to start the host and to open terminal tabs",
+    );
   withRunner(
     shell
       .command("get")
@@ -1799,7 +1930,9 @@ function registerConfigCommands(program: Command): void {
 
   const env = config
     .command("env")
-    .description("Env vars layered on top of host + terminal env");
+    .description(
+      "Environment variables Traycer adds when it starts the host and opens terminal tabs",
+    );
   withRunner(
     env.command("list").description("List env overrides"),
     () => async (ctx) => buildConfigEnvListCommand()(ctx),
@@ -1864,12 +1997,14 @@ function collectRepeatedOption(
 function registerWorkspaceCommands(program: Command): void {
   const workspace = program
     .command("workspace")
-    .description("Inspect workspace folders");
+    .description("Show the folders an agent in this Task can work in");
 
   withRunner(
     workspace
       .command("list")
-      .description("List workspace folders and Git worktrees for an epic"),
+      .description(
+        "List the folders and Git worktrees bound to this Task, and which agents hold each one",
+      ),
     () => buildWorkspaceListCommand({ epicId: null }),
   );
 }
@@ -1920,8 +2055,14 @@ function registerCommentsCommands(program: Command): void {
       .description(
         "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
       )
-      .argument("[artifactPaths...]", "Absolute artifact paths")
-      .option("--status <status>", "Thread status: all, open, or resolved"),
+      .argument(
+        "[artifactPaths...]",
+        "Artifact paths to list threads for. Absolute, or relative to the current directory (resolved before the request). Omit to list every artifact in this Task.",
+      )
+      .option(
+        "--status <status>",
+        "Thread status: all, open, or resolved (defaults to all)",
+      ),
     (opts, args) =>
       buildCommentsListCommand({
         epicId: null,
@@ -1938,7 +2079,10 @@ function registerCommentsCommands(program: Command): void {
       .description(
         "Set artifact comment threads to open or resolved after addressing or reopening feedback. Prefer telling the user which threads look addressed and letting them decide, unless they have already asked you to resolve threads yourself.",
       )
-      .requiredOption("--artifact <path>", "Absolute artifact path")
+      .requiredOption(
+        "--artifact <path>",
+        "Artifact the threads belong to. Absolute, or relative to the current directory (resolved before the request).",
+      )
       .requiredOption("--status <status>", "Thread status: open or resolved")
       .argument("<threadIds...>", "Thread ids to update"),
     (opts, args) =>
@@ -1956,14 +2100,19 @@ function registerCommentsCommands(program: Command): void {
 function registerWorktreeCommands(program: Command): void {
   // `worktree delete` mutates on-disk state, so it is a capability boundary in
   // the readonly agent surface: hidden from help (like `agent create`) AND
-  // guarded at runtime, because Commander's `hidden` flag still runs the action
-  // when the subcommand is typed explicitly. `worktree list` is a read and
-  // stays available in both surfaces.
-  const readonlySurface = resolveAgentCliSurface(readonlyEnv()) === "readonly";
-  const deleteHidden = { hidden: readonlySurface };
+  // refused at runtime, because Commander's `hidden` flag still runs the action
+  // when the subcommand is typed explicitly. The refusal is the shared one -
+  // `worktree delete` is a `READONLY_REFUSED_COMMANDS` entry that `withRunner`
+  // enforces - so only the hiding is decided here. `worktree list` is a read
+  // and stays available in both surfaces.
+  const deleteHidden = {
+    hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+  };
   const worktree = program
     .command("worktree")
-    .description("Create, inspect, and remove Git worktree paths");
+    .description(
+      "Create, list, and remove the Git worktrees Traycer manages on this machine",
+    );
 
   withRunner(
     worktree
@@ -2001,7 +2150,6 @@ function registerWorktreeCommands(program: Command): void {
     (opts) =>
       buildWorktreeDeleteCommand({
         worktreePath: typeof opts.path === "string" ? opts.path : "",
-        readonlySurface,
       }),
   );
 
@@ -2024,7 +2172,7 @@ function registerWorktreeCommands(program: Command): void {
       )
       .option(
         "--carry-uncommitted",
-        "Carry tracked and untracked changes from the source workspace when valid",
+        "Carry tracked and untracked changes from the source workspace when valid. Only with --branch; rejected with --existing.",
       ),
     (opts) =>
       buildWorktreeCreateCommand({
@@ -2043,8 +2191,15 @@ function registerAgentCommands(
   program: Command,
   agentRolesEnabled: boolean,
 ): void {
-  const cliSurface = resolveAgentCliSurface(readonlyEnv());
-  const readonlyHidden = { hidden: cliSurface === "readonly" };
+  // Presentation only, and a WIDER set than the capability boundary: the
+  // readonly surface hides the whole agent-to-agent surface, reads included, so
+  // a session that cannot act is not offered the vocabulary to try. What a
+  // readonly session may not RUN is decided by `READONLY_REFUSED_COMMANDS` and
+  // enforced in `withRunner`, so the hidden reads below stay runnable and the
+  // hidden mutations are refused whether or not they were ever listed.
+  const readonlyHidden = {
+    hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+  };
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
   // Deliberately spells out what OMITTING the option does: omission is its own
   // selection (the remembered last-used profile), not a synonym for 'ambient'.
@@ -2061,15 +2216,17 @@ function registerAgentCommands(
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program
     .command("agent")
-    .description("Agent inspection and communication for the calling agent");
+    .description(
+      "List, inspect, message, and manage the other agents in this Task",
+    );
 
   withRunner(
     agent
       .command("list")
-      .description("List every agent in the epic")
+      .description("List every agent in this Task")
       .option(
         "-a, --all",
-        "List all agents in the epic, not just agents belonging to this user",
+        "List all agents in this Task, not just agents belonging to this user",
       ),
     (opts) =>
       buildAgentListCommand({
@@ -2334,7 +2491,7 @@ function registerAgentCommands(
     agent
       .command("archive", readonlyHidden)
       .description(
-        "Archive or unarchive a GUI chat or terminal agent. Archived agents stay addressable - any later message to them auto-unarchives the record. Archiving a still-working agent is refused; stop it first with 'traycer agent stop', or wait for it to settle. Unarchiving is never gated.",
+        "Archive or unarchive a GUI chat or terminal agent. Archived agents stay addressable - any later message to them auto-unarchives the record. Archiving a still-working agent is refused; stop it first with 'traycer agent stop', or wait for it to settle. That busy check never blocks unarchiving.",
       )
       .requiredOption(
         "--agent-id <id>",
@@ -2394,14 +2551,14 @@ function registerAgentCommands(
     const role = agent
       .command("role")
       .description(
-        "Claim, list, and relinquish durable Task-local roles for the calling agent",
+        "Claim, list, and relinquish the named roles that record which agent owns what in this Task",
       );
 
     withRunner(
       role
         .command("claim", readonlyHidden)
         .description(
-          "Claim a durable role for the calling agent in this Task's role registry",
+          "Claim a named role for yourself in this Task, so other agents can see who owns what",
         )
         .requiredOption(
           "--role <name>",
@@ -2439,7 +2596,7 @@ function registerAgentCommands(
     withRunner(
       role
         .command("relinquish", readonlyHidden)
-        .description("Relinquish a role claim held by the calling agent")
+        .description("Give up a role you are currently holding in this Task")
         .requiredOption(
           "--claim-id <id>",
           "Claim id to relinquish (see 'traycer agent role list')",
@@ -2595,13 +2752,30 @@ function registerAgentCommands(
 // spawns. Like `host start` it owns its own lifecycle and does NOT go
 // through the shared NDJSON runner - `addRunnerFlags` is applied only so
 // the shared globals still parse if present.
+//
+// Because it bypasses the runner, it also bypasses the readonly capability
+// check `withRunner` applies - and it is absent from
+// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
+// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
+// reach: this is a registered command an agent can type, with its own
+// `--agent-id`, so leaving it open does leave a mutation reachable. It is
+// granted because refusing it would break inbox delivery for any session the
+// host spawns a monitor for, and would buy little against a caller who can
+// clear the surface variable anyway. It stays hidden on the readonly surface,
+// as before.
+//
+// It is not read-only, and the description now says so: printing a message
+// durably acknowledges it, and the process maintains this machine's stored
+// credentials for as long as it runs.
 function registerMonitorCommand(program: Command): void {
   addRunnerFlags(
     program
       .command("monitor", {
         hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
       })
-      .description("Stream this agent's inter-agent inbox messages to stdout.")
+      .description(
+        "Stream this agent's inter-agent inbox messages to stdout. Long-running: each message it prints is acknowledged as delivered on the host, and it refreshes this machine's stored Traycer credentials (and provisions a host credential if one is missing) while it runs.",
+      )
       .option(
         "--agent-id <id>",
         "Agent to monitor (defaults to $TRAYCER_AGENT_ID)",

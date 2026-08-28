@@ -23,7 +23,6 @@ import type { HostRpcRegistry } from "@/lib/host";
 // settings seed a brand-new draft; the create path re-keys on the placement
 // host. A pinned landing composer's seed defaults may come from the effective
 // host - a nuance, not a placement leak.
-import { activeHostIdOrNull } from "@/lib/host/runtime";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
@@ -591,7 +590,11 @@ export function useLandingComposerActions(
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
       if (text.trim().length === 0 && !hasImages) return;
-      const draftId = ensureSubmissionDraft(args.draftId, editorContent);
+      const draftId = ensureSubmissionDraft(
+        args.draftId,
+        editorContent,
+        hostId,
+      );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return;
       // The runtime's stored content already reflects the latest edit (every
@@ -921,16 +924,20 @@ export function useLandingComposerActions(
 function ensureSubmissionDraft(
   draftId: string | null,
   content: JsonContent,
+  hostId: string,
 ): string {
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore.getState().createDraft(
     useComposerRunSettingsStore
       .getState()
-      // Through the shared reader - the spine carries no identity after
-      // P4.2, so asking it seeded every draft from the unresolved-host
-      // bucket instead of the effective host's saved run settings.
-      .getGlobalRunSettings(activeHostIdOrNull()),
+      // The placement host is the same one whose workspace is restored below;
+      // a pinned pristine composer must not seed either setting from the
+      // app-wide active host.
+      .getGlobalRunSettings(hostId),
   );
+  useLandingDraftStore
+    .getState()
+    .restoreDraftWorkspaceForHost(createdDraftId, hostId);
   useLandingDraftStore
     .getState()
     .setDraftContent(createdDraftId, content, null);

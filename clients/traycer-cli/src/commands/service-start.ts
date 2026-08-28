@@ -228,7 +228,13 @@ function humanSummary(
   // manager has ACCEPTED the launch, and a job that is registered but
   // unspawnable still reports success there. `host status` is the honest
   // readiness check, so point at it rather than overclaiming here.
+  // "requested ... and a host is now serving", never "started the service".
+  // The post-start readback has the same blind spot as the shortcut above:
+  // Linux and Windows derive `running` from shared pid metadata, so it can be
+  // observing a FOREGROUND host while this service's supervisor exited after
+  // finding that incumbent. What is genuinely known is that the start was
+  // accepted and that something is answering.
   return after?.state === "running"
-    ? `started service '${labelId}'${pid === null ? "" : ` (pid ${pid})`}`
+    ? `requested start for service '${labelId}'; a host is now serving${pid === null ? "" : ` (pid ${pid})`}`
     : `requested start for service '${labelId}'; run 'traycer host status' to confirm the host came up`;
 }
