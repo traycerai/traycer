@@ -597,7 +597,15 @@ function RemoteFolderPickerFooter(props: {
  */
 function PathGroupHeader(props: {
   readonly label: string;
+  /**
+   * The ABSOLUTE shared base. Collapsing happens here rather than in the
+   * caller so the tooltip keeps the raw path while the line abbreviates it —
+   * handing this component an already-collapsed base would make the hover
+   * repeat the visible text and reveal nothing.
+   */
   readonly basePath: string | null;
+  /** Where `~` points, for the visible line only. */
+  readonly homePath: string | null;
   readonly fallback: string;
 }): ReactNode {
   return (
@@ -612,7 +620,7 @@ function PathGroupHeader(props: {
           <span className="shrink-0">{props.label}</span>
           <FilePathTooltip content={props.basePath} side="bottom">
             <StartTruncatedText className="min-w-0 flex-1 font-mono">
-              {props.basePath}
+              {tildeCollapse(props.basePath, props.homePath)}
             </StartTruncatedText>
           </FilePathTooltip>
         </>
@@ -726,7 +734,8 @@ function RemoteFolderPickerRecents(props: {
     <div data-testid="remote-folder-picker-recents" className="pb-3">
       <PathGroupHeader
         label="Recent, under"
-        basePath={base === null ? null : tildeCollapse(base, props.homePath)}
+        basePath={base}
+        homePath={props.homePath}
         fallback="Recent"
       />
       <ul className="flex flex-col">

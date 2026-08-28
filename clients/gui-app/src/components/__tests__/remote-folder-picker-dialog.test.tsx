@@ -1457,5 +1457,32 @@ describe("<RemoteFolderPickerDialog />", () => {
       const upRow = screen.getByTestId("remote-folder-picker-up-row");
       expect(tooltipTextFor(upRow)).toBe("/Users/tester");
     });
+
+    it("the group header hovers to the absolute base, not the ~ it displays", async () => {
+      // A base UNDER the host's home is the case the two collapse steps can
+      // silently agree on: if the header were handed an already-collapsed
+      // base, hover would repeat `~/code` and reveal nothing.
+      recentEntries = [
+        {
+          path: "/Users/tester/code/app",
+          lastOpenedAt: "2026-08-01T00:00:00.000Z",
+        },
+        {
+          path: "/Users/tester/code/api",
+          lastOpenedAt: "2026-07-30T00:00:00.000Z",
+        },
+      ];
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      const header = await screen.findByTestId(
+        "remote-folder-picker-group-header",
+      );
+      expect(header.textContent).toContain("~/code");
+      // The header's label sits outside the trigger, so the tooltip hangs off
+      // the path span within it rather than off the line itself.
+      const trigger = header.querySelector('[data-slot="tooltip-trigger"]');
+      if (trigger === null) throw new Error("group header has no tooltip");
+      expect(tooltipTextFor(trigger)).toBe("/Users/tester/code");
+    });
   });
 });
