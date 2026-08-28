@@ -424,6 +424,19 @@ async function superviseRootMaintenanceExecutor(
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
     buffer += chunk;
+    // Protocol frames are single JSON lines of at most a few KiB; an
+    // executor streaming an unterminated or runaway line is damaged, and
+    // because supervision legitimately spans an unbounded platform
+    // operation, an unbounded `buffer += chunk` is a slow memory exhaustion
+    // rather than a quick failure. Same terminal action as a stdout stream
+    // error below: no frame arriving on that line is deliverable, so
+    // terminate the executor and let the ordinary `close` classification
+    // take the supervised failure arm.
+    if (buffer.length > EXECUTOR_PROTOCOL_BUFFER_LIMIT_BYTES) {
+      buffer = "";
+      child.kill("SIGTERM");
+      return;
+    }
     if (frameDispatchArmed) drainFrames();
   });
   // C is only a liveness publisher, not a capability recipient. Until it
@@ -597,6 +610,11 @@ async function handleRootExecutorRequest(
 // published retain-on-death token stays, so no contender can race the group
 // we failed to prove dead. That wedges THIS lease, not the machine.
 const PROCESS_GROUP_EXIT_DEADLINE_MS = 60_000;
+
+// Executor protocol frames are single JSON lines of at most a few KiB; the
+// bound exists so a damaged executor streaming an unterminated line costs a
+// terminated supervision, never an unbounded accumulation in the CLI.
+const EXECUTOR_PROTOCOL_BUFFER_LIMIT_BYTES = 1024 * 1024;
 
 async function terminateAndReapProcessGroup(groupId: number): Promise<void> {
   try {
