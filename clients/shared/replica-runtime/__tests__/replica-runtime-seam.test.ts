@@ -60,12 +60,12 @@ function cursor(
 
 describe("compareLaneCursors", () => {
   it("orders same-epoch, same-lane cursors by position", () => {
-    expect(compareLaneCursors(cursor("e1", "a", 5), cursor("e1", "a", 10))).toBe(
-      "before",
-    );
-    expect(compareLaneCursors(cursor("e1", "a", 10), cursor("e1", "a", 5))).toBe(
-      "after",
-    );
+    expect(
+      compareLaneCursors(cursor("e1", "a", 5), cursor("e1", "a", 10)),
+    ).toBe("before");
+    expect(
+      compareLaneCursors(cursor("e1", "a", 10), cursor("e1", "a", 5)),
+    ).toBe("after");
     expect(compareLaneCursors(cursor("e1", "a", 5), cursor("e1", "a", 5))).toBe(
       "same",
     );
@@ -83,9 +83,9 @@ describe("compareLaneCursors", () => {
     // through as "after" or "before" if `compareLaneCursors` were ever
     // "fixed" into a lexicographic or numeric comparison instead of an
     // equality check.
-    expect(compareLaneCursors(cursor("e2", "a", 5), cursor("e10", "a", 100))).toBe(
-      "incomparable",
-    );
+    expect(
+      compareLaneCursors(cursor("e2", "a", 5), cursor("e10", "a", 100)),
+    ).toBe("incomparable");
   });
 
   it("is incomparable across differing lanes, never an ordering", () => {
@@ -302,10 +302,22 @@ interface FakeRow {
 }
 
 type FakeEvent =
-  | { readonly kind: "upsert"; readonly rowId: string; readonly revision: number; readonly row: FakeRow }
-  | { readonly kind: "remove"; readonly rowId: string; readonly revision: number };
+  | {
+      readonly kind: "upsert";
+      readonly rowId: string;
+      readonly revision: number;
+      readonly row: FakeRow;
+    }
+  | {
+      readonly kind: "remove";
+      readonly rowId: string;
+      readonly revision: number;
+    };
 
-type FakeProjection = readonly { readonly rowId: string; readonly row: FakeRow }[];
+type FakeProjection = readonly {
+  readonly rowId: string;
+  readonly row: FakeRow;
+}[];
 
 /** A controllable clock/scheduler with no real timers and no DOM. */
 function createFakeEnvironment(): RuntimeEnvironment & {
@@ -313,7 +325,11 @@ function createFakeEnvironment(): RuntimeEnvironment & {
   drainMicrotasks(): void;
 } {
   let nowMs = 0;
-  const pendingTimers: { fireAt: number; callback: () => void; cancelled: boolean }[] = [];
+  const pendingTimers: {
+    fireAt: number;
+    callback: () => void;
+    cancelled: boolean;
+  }[] = [];
   const pendingMicrotasks: (() => void)[] = [];
 
   return {
@@ -360,7 +376,9 @@ function createFakeEnvironment(): RuntimeEnvironment & {
 }
 
 /** A minimal in-memory `Replica<FakeEvent, FakeProjection>` for one records plane. */
-function createFakeReplica(planeId: string): Replica<FakeEvent, FakeProjection> {
+function createFakeReplica(
+  planeId: string,
+): Replica<FakeEvent, FakeProjection> {
   const rows = new Map<string, { revision: number; row: FakeRow }>();
   let disposed = false;
   let currentWatermark: LaneCursor | null = null;
@@ -519,9 +537,14 @@ describe("Replica / LaneAdapter / AdapterHost conformance smoke test", () => {
     expect(adapter.detachReasons).toEqual(["disposed"]);
 
     replica.dispose();
-    expect(replica.apply({ kind: "upsert", rowId: "row-2", revision: 1, row: { label: "x" } })).toEqual(
-      { kind: "ignored", reason: "disposed" },
-    );
+    expect(
+      replica.apply({
+        kind: "upsert",
+        rowId: "row-2",
+        revision: 1,
+        row: { label: "x" },
+      }),
+    ).toEqual({ kind: "ignored", reason: "disposed" });
   });
 });
 
@@ -558,13 +581,23 @@ describe("SessionRegistryPolicy conformance", () => {
   it("is implementable and drives dispose/retain from plane-supplied predicates", () => {
     const policy = createFakeSessionPolicy();
 
-    const dirtySession: FakeSession = { busy: false, clean: false, disposed: false };
+    const dirtySession: FakeSession = {
+      busy: false,
+      clean: false,
+      disposed: false,
+    };
     expect(policy.hasActiveWork(dirtySession)).toBe(false);
     expect(policy.isEvictable(dirtySession)).toBe(false);
     expect(policy.onBeforeDispose(dirtySession, "idle-expired")).toBe("retain");
 
-    const cleanSession: FakeSession = { busy: false, clean: true, disposed: false };
-    expect(policy.onBeforeDispose(cleanSession, "idle-expired")).toBe("dispose");
+    const cleanSession: FakeSession = {
+      busy: false,
+      clean: true,
+      disposed: false,
+    };
+    expect(policy.onBeforeDispose(cleanSession, "idle-expired")).toBe(
+      "dispose",
+    );
     policy.dispose(cleanSession);
     expect(cleanSession.disposed).toBe(true);
   });
@@ -632,7 +665,10 @@ function updateOf(...tokens: readonly string[]): Uint8Array {
  * unsynced-edit tracking a real doc replica would own — the point under test
  * is which event retires it, not how it is set.
  */
-function createFakeDocReplica(planeId: string): Replica<DocReplicaEvent, DocProjection> & {
+function createFakeDocReplica(planeId: string): Replica<
+  DocReplicaEvent,
+  DocProjection
+> & {
   markLocalDivergence(): void;
   isLocallyDivergent(): boolean;
 } {

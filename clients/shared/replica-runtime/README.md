@@ -18,20 +18,20 @@ moves, is what makes the extraction mechanical.
 
 ## The seams
 
-| Module                   | What it is                                                             | What it is destined to absorb                                                                                        |
-| ------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `runtime-environment.ts` | Injected clock, scheduler, logger, monotonic sequence                  | Every `window.setTimeout` / `Date.now()` / `appLogger` call inside sync machinery                                     |
-| `lane-cursor.ts`         | The one cursor model, `(authorityEpoch, lane, position)`               | The epic stream's resume offer and the chat plane's `(transcriptEpoch, ordinal)` — the same coordinate, named twice   |
-| `projection-sink.ts`     | Where a replica publishes; transactions replace `suspend`/`resume`     | `EpicProjector.attach(doc, store)`'s direct `StoreApi.setState`                                                       |
-| `replica.ts`             | Owns one plane's state; applies events; is replaced, never patched     | The record tables, replica-swap machinery, and dirty-watermark math in the open-epic closure                          |
-| `replica-events.ts`      | The decode target: records, logs, docs, ephemera, control              | The `openStreamClient` callback block — the one part of the extraction that is a genuine redesign                     |
-| `generation-guard.ts`    | One generation guard                                                   | Two hand-rolled 30-handler `makeCallbacks` blocks (chat store and its terminal twin)                                  |
-| `adapter.ts`             | Decodes one wire lane; owns stream lifecycle and resume cursor         | `EpicStreamClient` consumption (as the legacy `@1` adapter) and every lane subscription that replaces it              |
-| `lease.ts`               | Refcounted demand, async materialise, deterministic teardown           | The artifact-room hot/cold tier, its cooldown, and `acquireArtifactBodyLease`                                         |
-| `session-registry.ts`    | One warm pool, policy-parameterised                                    | `stores/chats/session-registry.ts`, `stores/terminals/terminal-session-registry.ts`, the open-epic registry's core     |
-| `memory-accountant.ts`   | Process-wide budgets, soft, with protected regions                     | The uncoordinated per-plane constants — per-chat window bytes, hot-room cap, live-epic cap                            |
-| `command-overlay.ts`     | Client-generated ids, queue, `pending → committed \| rejected \| superseded` | The doc-write mutation path and `pending-metadata-overlay.ts`                                                   |
-| `replica-runtime.ts`     | The composition root that orders the pieces                            | The closure itself                                                                                                     |
+| Module                   | What it is                                                                   | What it is destined to absorb                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `runtime-environment.ts` | Injected clock, scheduler, logger, monotonic sequence                        | Every `window.setTimeout` / `Date.now()` / `appLogger` call inside sync machinery                                   |
+| `lane-cursor.ts`         | The one cursor model, `(authorityEpoch, lane, position)`                     | The epic stream's resume offer and the chat plane's `(transcriptEpoch, ordinal)` — the same coordinate, named twice |
+| `projection-sink.ts`     | Where a replica publishes; transactions replace `suspend`/`resume`           | `EpicProjector.attach(doc, store)`'s direct `StoreApi.setState`                                                     |
+| `replica.ts`             | Owns one plane's state; applies events; is replaced, never patched           | The record tables, replica-swap machinery, and dirty-watermark math in the open-epic closure                        |
+| `replica-events.ts`      | The decode target: records, logs, docs, ephemera, control                    | The `openStreamClient` callback block — the one part of the extraction that is a genuine redesign                   |
+| `generation-guard.ts`    | One generation guard                                                         | Two hand-rolled 30-handler `makeCallbacks` blocks (chat store and its terminal twin)                                |
+| `adapter.ts`             | Decodes one wire lane; owns stream lifecycle and resume cursor               | `EpicStreamClient` consumption (as the legacy `@1` adapter) and every lane subscription that replaces it            |
+| `lease.ts`               | Refcounted demand, async materialise, deterministic teardown                 | The artifact-room hot/cold tier, its cooldown, and `acquireArtifactBodyLease`                                       |
+| `session-registry.ts`    | One warm pool, policy-parameterised                                          | `stores/chats/session-registry.ts`, `stores/terminals/terminal-session-registry.ts`, the open-epic registry's core  |
+| `memory-accountant.ts`   | Process-wide budgets, soft, with protected regions                           | The uncoordinated per-plane constants — per-chat window bytes, hot-room cap, live-epic cap                          |
+| `command-overlay.ts`     | Client-generated ids, queue, `pending → committed \| rejected \| superseded` | The doc-write mutation path and `pending-metadata-overlay.ts`                                                       |
+| `replica-runtime.ts`     | The composition root that orders the pieces                                  | The closure itself                                                                                                  |
 
 `lease.ts` and `session-registry.ts` are deliberately two things, not one
 refcount with two configurations. A lease materialises a resource from a cheap

@@ -138,11 +138,7 @@ export interface SessionRegistry<TSession> {
    * while a different key is a different session. Getting that backwards is
    * what made two hosts' same-id chats one entry.
    */
-  acquire(
-    key: SessionKey,
-    scopeKey: string,
-    factory: () => TSession,
-  ): TSession;
+  acquire(key: SessionKey, scopeKey: string, factory: () => TSession): TSession;
 
   /** Drop one unit of demand. The last one starts the warm clock. */
   release(key: SessionKey): void;

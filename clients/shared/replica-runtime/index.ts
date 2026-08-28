@@ -33,10 +33,7 @@ export type {
 } from "./lane-cursor";
 export { advancesLaneCursor, compareLaneCursors } from "./lane-cursor";
 
-export type {
-  ProjectionDelivery,
-  ProjectionSink,
-} from "./projection-sink";
+export type { ProjectionDelivery, ProjectionSink } from "./projection-sink";
 export { createTransactionalProjectionSink } from "./projection-sink";
 
 export type {
@@ -149,7 +146,4 @@ export type {
   CommandState,
 } from "./command-overlay";
 
-export type {
-  PlaneRegistration,
-  ReplicaRuntime,
-} from "./replica-runtime";
+export type { PlaneRegistration, ReplicaRuntime } from "./replica-runtime";

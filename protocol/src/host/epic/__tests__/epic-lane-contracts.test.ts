@@ -38,7 +38,10 @@ import {
   listChatRecordsRequestV11Schema,
 } from "@traycer/protocol/host/epic/chat-records";
 import { epicListChatRecordsUpgradeV10ToV11 } from "@traycer/protocol/host/epic/contracts";
-import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**
@@ -389,12 +392,12 @@ describe("epic.state.subscribe@1.0", () => {
   describe("every row and removal on the lane requires a revision", () => {
     it("rejects an artifact record with no revision, accepts one with it", () => {
       const { revision: _revision, ...withoutRevision } = specArtifactFixture;
-      expect(
-        epicArtifactRecordSchema.safeParse(withoutRevision).success,
-      ).toBe(false);
-      expect(epicArtifactRecordSchema.safeParse(specArtifactFixture).success).toBe(
-        true,
+      expect(epicArtifactRecordSchema.safeParse(withoutRevision).success).toBe(
+        false,
       );
+      expect(
+        epicArtifactRecordSchema.safeParse(specArtifactFixture).success,
+      ).toBe(true);
     });
 
     it("rejects a deleted-artifact tombstone with no revision, accepts one with it", () => {
@@ -437,8 +440,7 @@ describe("epic.state.subscribe@1.0", () => {
       epicArtifactRecordSchema.safeParse(upsertAtRevisionFive).success,
     ).toBe(true);
     expect(
-      epicDeletedArtifactRecordSchema.safeParse(tombstoneAtRevisionTwo)
-        .success,
+      epicDeletedArtifactRecordSchema.safeParse(tombstoneAtRevisionTwo).success,
     ).toBe(true);
   });
 
@@ -731,7 +733,10 @@ describe("epic.status.subscribe@1.0", () => {
 
   describe("epicMigrationStatusSchema - the snapshot's current-state projection of the migration lifecycle", () => {
     it.each([
-      ["running with progress null - the real reconnect window before the first migrationProgress", { state: "running" as const, progress: null }],
+      [
+        "running with progress null - the real reconnect window before the first migrationProgress",
+        { state: "running" as const, progress: null },
+      ],
       [
         "running with progress",
         {
@@ -831,7 +836,9 @@ describe("epic.status.subscribe@1.0", () => {
       (option) => option.shape.kind.value === "snapshot",
     );
     if (!snapshotOption) {
-      throw new Error("no snapshot variant on epicStatusSubscribeServerFrameSchemaV10");
+      throw new Error(
+        "no snapshot variant on epicStatusSubscribeServerFrameSchemaV10",
+      );
     }
     const snapshotFieldNames = new Set(Object.keys(snapshotOption.shape));
 
@@ -961,10 +968,7 @@ describe("artifact.subscribe@1.0", () => {
           docGuid: "guid-1",
         },
       ],
-      [
-        "awareness",
-        { authorityEpoch: "epoch-1", artifactId: "artifact-1" },
-      ],
+      ["awareness", { authorityEpoch: "epoch-1", artifactId: "artifact-1" }],
     ];
 
     const textFrames: ReadonlyArray<

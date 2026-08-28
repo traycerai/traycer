@@ -176,11 +176,7 @@ export interface MemoryAccountant {
    * because the argument is the answer to "how big is this now", not "how much
    * did it grow".
    */
-  settle(
-    planeId: BudgetPlaneId,
-    holderId: BudgetHolderId,
-    bytes: number,
-  ): void;
+  settle(planeId: BudgetPlaneId, holderId: BudgetHolderId, bytes: number): void;
 
   /** Forget a holder entirely (it was evicted, demoted, or disposed). */
   release(planeId: BudgetPlaneId, holderId: BudgetHolderId): void;
