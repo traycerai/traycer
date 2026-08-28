@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { open } from "node:fs/promises";
 
 // `tail -f` over a file OTHER processes append to, shared by the two callers
@@ -114,7 +114,7 @@ export function startLogTail(options: LogTailOptions): LogTail {
   //     across transient failures.
   let fileIdentity: number | null = start.identity;
   let sawFileMissing = false;
-  let continuity: Buffer | null = null;
+  let continuity: Buffer | null = start.continuity;
   // The initial stat failed for a reason that is NOT "the file is absent" - a
   // transient EACCES, a Windows sharing violation. Offset 0 would then treat a
   // pre-existing log as newly appended and replay all of it into a terminal
@@ -342,13 +342,30 @@ function isFileMissingError(cause: unknown): boolean {
 function initialPosition(path: string): {
   readonly size: number;
   readonly identity: number | null;
+  readonly continuity: Buffer | null;
   readonly kind: "observed" | "absent" | "unreadable";
 } {
+  let fd: number | null = null;
   try {
-    const stats = statSync(path);
+    fd = openSync(path, "r");
+    const stats = fstatSync(fd);
+    // Seed the continuity bytes HERE, from the same descriptor. Recording only
+    // size and inode left continuity null through the first poll, so a file
+    // rewritten IN PLACE before that poll - same inode, longer than the
+    // starting offset - had no signal at all and resumed at the old offset,
+    // dropping the replacement's prefix. That is the identical defect the
+    // continuity check exists to close, in the one window it did not cover.
+    const length = Math.min(stats.size, CONTINUITY_BYTES);
+    let continuity: Buffer | null = null;
+    if (length > 0) {
+      const buffer = Buffer.alloc(length);
+      const read = readSync(fd, buffer, 0, length, stats.size - length);
+      if (read === length) continuity = buffer;
+    }
     return {
       size: stats.size,
       identity: stats.ino > 0 ? stats.ino : null,
+      continuity,
       kind: "observed",
     };
   } catch (cause) {
@@ -358,7 +375,16 @@ function initialPosition(path: string): {
     return {
       size: 0,
       identity: null,
+      continuity: null,
       kind: isFileMissingError(cause) ? "absent" : "unreadable",
     };
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing useful to do with a failed close here.
+      }
+    }
   }
 }

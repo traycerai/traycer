@@ -103,7 +103,13 @@ describe("stopServiceBeforeRuntimePurge", () => {
 });
 
 describe("runHostUninstall", () => {
-  it("forwards runtime purge permission after a confirmed stop", async () => {
+  // The runtime purge is withheld UNCONDITIONALLY, even on the cleanest
+  // possible teardown. Proving the captured child is dead does not prove
+  // nothing is writing: `host start`'s supervisor outlives its child, writes
+  // terminal and crash markers into host.log, and on Windows is not even
+  // signalled by `schtasks /End`. Every readback available here is too weak to
+  // close that gap, so the purge waits on a backend completion contract.
+  it("never purges runtime, even when stop resolved and the child is positively dead", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
     const result = await runHostUninstall(
@@ -113,16 +119,40 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
-        liveness: null,
+        liveness: "dead",
         successorAfterTeardown: null,
         publishedPid: null,
       }),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: true },
+      { environment: "dev", purgeChannelRuntime: false },
     ]);
-    expect(result.data).toMatchObject({ purgedRuntime: true });
+    expect(result.data).toMatchObject({ purgedRuntime: false });
+  });
+
+  // A verified deregistration is only claimable where the platform can answer
+  // "is this label registered?" with a real query. macOS can (`launchctl
+  // print`); Linux checks only the manifest this command just deleted, and
+  // Windows collapses every `schtasks /Query` failure into `not-installed`.
+  it("claims a verified deregistration only on platforms that can answer it", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => NOT_INSTALLED_STATUS,
+        liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      deregisterRequested: true,
+      serviceUninstalled: process.platform === "darwin",
+    });
   });
 
   it("forwards runtime preservation after a failed stop", async () => {
@@ -180,7 +210,7 @@ describe("runHostUninstall", () => {
       purgedRuntime: false,
       hostStillRunning: true,
     });
-    expect(result.human ?? "").toContain("could not confirm the host stopped");
+    expect(result.human ?? "").toContain("the host is still running");
     expect(result.human ?? "").toContain("traycer host stop --force");
   });
 
@@ -428,11 +458,9 @@ describe("runHostUninstall", () => {
     );
 
     expect(result.data).toMatchObject({
-      serviceUninstalled: true,
+      deregisterRequested: true,
       purgedRuntime: false,
-      // The probe answered "nothing serving", so `false` is earned here. What
-      // is NOT earned is the purge: the stop threw, so the host was never
-      // asked to die and its runtime stays.
+      // The probe answered "nothing serving", so `false` is earned here.
       hostStillRunning: false,
       serviceRegistrationRetained: false,
     });
@@ -440,7 +468,7 @@ describe("runHostUninstall", () => {
 
   // The other half of the same rule: a CONFIRMED stop is what gates the
   // runtime purge, so it is also the only evidence that justifies `false`.
-  it("reports hostStillRunning: false on --all only once the stop is confirmed", async () => {
+  it("reports hostStillRunning: false when the captured child is positively dead", async () => {
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
@@ -455,8 +483,8 @@ describe("runHostUninstall", () => {
     );
 
     expect(result.data).toMatchObject({
-      serviceUninstalled: true,
-      purgedRuntime: true,
+      deregisterRequested: true,
+      purgedRuntime: false,
       hostStillRunning: false,
       serviceRegistrationRetained: false,
     });

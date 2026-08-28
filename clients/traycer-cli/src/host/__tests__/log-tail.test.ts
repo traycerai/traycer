@@ -248,6 +248,31 @@ describe("startLogTail", () => {
     expect(text()).toBe(`${original}${replacement}`);
   });
 
+  // The reviewer's exact repro, and the one the unlink/create test missed:
+  // rewrite IN PLACE between construction and the first read, so the inode is
+  // identical by construction and only continuity seeded at construction can
+  // catch it. 201-byte original, 425-byte replacement; the buggy version
+  // delivered 224 bytes and dropped the marker entirely.
+  it("re-reads an in-place rewrite that landed before the first read", () => {
+    writeFileSync(logPath, `${"o".repeat(200)}\n`);
+    const { onBytes, text } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: () => undefined,
+      pollIntervalMs: 10_000, // no tick fires on its own
+      maxMissingRetries: 60,
+    });
+
+    // Same inode (no unlink), longer than the starting offset.
+    const replacement = `${"n".repeat(400)}\nNEW-PREFIX-MUST-SURVIVE\n`;
+    writeFileSync(logPath, replacement);
+    tail.drainSync();
+
+    expect(text()).toBe(replacement);
+  });
+
   // The window BEFORE the first poll. Recording only the size at construction
   // left the identity unknown, so a replacement that landed before the first
   // tick had nothing to compare against and resumed at the old offset.

@@ -171,6 +171,7 @@ export async function runHostUninstall(
   let serviceUninstalled = false;
   let purgeChannelRuntime = false;
   let retainedAfterAll: ServiceStatus | null = null;
+  let registrationClear = false;
   // Captured FIRST, before anything is torn down. The teardown destroys this
   // evidence: on Windows `uninstallService` removes pid metadata even when its
   // `taskkill` calls failed or timed out, so a probe that runs afterwards is
@@ -244,38 +245,48 @@ export async function runHostUninstall(
     retainedAfterAll = await readServiceStateBestEffort(deps, ctx);
     // Re-read at the PURGE BOUNDARY, after every probe above has had its
     // chance to take time. `published` describes the child we captured; this
-    // asks whether anything is publishing NOW.
+    // asks whether anything is publishing NOW - a supervisor relaunch loop can
+    // produce a successor while these probes are running.
     const successor = await readPublishedHostBestEffort(deps, ctx);
-    // Four conditions, and each rules out a different writer of the files the
-    // purge destroys:
-    //   - `stopResolved`: the host was actually asked to stand down.
-    //   - `liveness === "gone"`: the captured child is positively dead.
-    //   - registration NOT retained: `host start` supervisors outlive their
-    //     children - they write terminal and crash markers into host.log and
-    //     run a relaunch loop - so a surviving registration is positive
-    //     evidence that a restart source remains and nothing here orders it
-    //     not to fire after the purge. A weak negative status cannot license
-    //     the purge, but a positive retained one can veto it.
-    //   - no successor published: the captured child dying does not mean the
-    //     supervisor did not already start its replacement in the window
-    //     these probes take. A same-pid replacement even reads as `mismatch`,
-    //     which proves the CAPTURED process is gone and says nothing about
-    //     the live occupant.
-    const registrationClear = retainedAfterAll?.state === "not-installed";
-    purgeChannelRuntime =
-      stopResolved &&
-      liveness === "gone" &&
-      registrationClear &&
-      successor === null;
-    if (!purgeChannelRuntime) {
-      ctx.logger.warn("Host uninstall withheld the runtime purge", {
-        environment: ctx.environment,
-        stopResolved,
-        liveness,
-        registrationClear,
-        successorPublished: successor !== null,
-      });
+    if (successor !== null) {
+      // Identity-probe B rather than inheriting A's verdict. A successor
+      // record is not proof of life either - it can be stale - so it gets the
+      // same treatment A got.
+      liveness = await observeLiveness(deps, ctx, successor);
     }
+    registrationClear = retainedAfterAll?.state === "not-installed";
+    // THE RUNTIME PURGE IS WITHHELD UNCONDITIONALLY, and that is a deliberate
+    // retreat from what this command used to do.
+    //
+    // The purge deletes pid metadata and rotates the ACTIVE log, so it is only
+    // safe when nothing can still be writing them. Proving the captured child
+    // is dead does not prove that: `host start`'s supervisor deliberately
+    // outlives its child - it finalises the exit, writes terminal and crash
+    // markers into host.log, and only then consumes the stop intent and exits.
+    // On Windows `schtasks /End` does not even signal it (host-start.ts
+    // documents that it survives as an orphan), and every readback available
+    // here is too weak to close the gap: Linux `not-installed` only means the
+    // manifest this command just deleted is absent, and Windows maps EVERY
+    // `/Query` failure - timeout and access denial included - to
+    // `not-installed`.
+    //
+    // The honest instrument would be a backend-owned completion contract
+    // ("unit/task/job stopped, no restart pending"), which is a
+    // `ServiceController` change across three platforms and is tracked
+    // separately. Until it exists, keeping the runtime costs a stale pid.json
+    // for a dead process and an unrotated log - both harmless, and both
+    // already the outcome of every unconfirmed stop today. Purging under a
+    // live writer costs diagnostics for the failure the operator is most
+    // likely to be investigating.
+    purgeChannelRuntime = false;
+    ctx.logger.info("Host uninstall preserved runtime state", {
+      environment: ctx.environment,
+      stopResolved,
+      liveness,
+      registrationClear,
+      successorPublished: successor !== null,
+      reason: "supervisor-quiescence-unproven",
+    });
   }
   ctx.progress({
     stage: "uninstall",
@@ -307,6 +318,12 @@ export async function runHostUninstall(
   // reports its single pre-removal probe. Either probe failing yields null,
   // never a negative fact about something this command did not observe.
   const observedService = args.all ? retainedAfterAll : retainedService;
+  // Only macOS answers "is this label registered?" with a real query
+  // (`launchctl print`); the other two infer it from state this command just
+  // mutated or from an error-collapsing probe. So a verified deregistration is
+  // claimed only where it can be.
+  const verifiedDeregistration =
+    serviceUninstalled && registrationClear && process.platform === "darwin";
   const serviceRegistrationRetained =
     observedService === null ? null : observedService.state !== "not-installed";
   // Liveness comes from the endpoint probe on BOTH paths, never from
@@ -328,8 +345,14 @@ export async function runHostUninstall(
       // false outcome the readback had just caught. `null` (the probe could
       // not answer) is NOT agreement - it stays false, and
       // `deregisterRequested` carries the attempt.
-      serviceUninstalled:
-        serviceUninstalled && serviceRegistrationRetained === false,
+      // Deliberately conservative on every platform but macOS. A
+      // `not-installed` readback is NOT a verified absence on Linux (it checks
+      // only the manifest this command just deleted, even if a tolerated
+      // `disable --now` timed out) or on Windows (every `schtasks /Query`
+      // failure, timeout and access denial included, maps to
+      // `not-installed`). Publishing `true` from that would hand Desktop's
+      // `deregisteredService` projection a fact nothing established.
+      serviceUninstalled: verifiedDeregistration,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       // What the machine is left holding, so an automated caller does not
@@ -346,8 +369,14 @@ export async function runHostUninstall(
       // the same result reports `serviceRegistrationRetained: true` had the
       // prose and the payload contradicting each other in one breath - and
       // `!== true` wrongly counted an unanswerable probe as agreement.
-      serviceUninstalled:
-        serviceUninstalled && serviceRegistrationRetained === false,
+      // Deliberately conservative on every platform but macOS. A
+      // `not-installed` readback is NOT a verified absence on Linux (it checks
+      // only the manifest this command just deleted, even if a tolerated
+      // `disable --now` timed out) or on Windows (every `schtasks /Query`
+      // failure, timeout and access denial included, maps to
+      // `not-installed`). Publishing `true` from that would hand Desktop's
+      // `deregisteredService` projection a fact nothing established.
+      serviceUninstalled: verifiedDeregistration,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       serviceRegistrationRetained,
@@ -474,14 +503,23 @@ function humanSummary(args: {
         : "requested OS service deregistration, but could not verify it - run 'traycer host service status'",
     );
   }
-  if (args.purgedRuntime) {
-    parts.push("confirmed the host stopped and cleared its runtime state");
-  } else if (args.deregisterRequested) {
-    // `--all`'s stop is cooperative and its backend calls tolerate their own
-    // failures, so "the call returned" is not "the host exited". Saying
-    // nothing here is how an operator walks away believing it is down.
+  // Keyed on the liveness evidence, not on the purge - the purge is now always
+  // withheld, so using it would warn on every clean teardown. What an operator
+  // needs to know is whether anything is still serving.
+  if (args.deregisterRequested) {
+    if (args.hostStillRunning === true) {
+      parts.push(
+        "the host is still running - run 'traycer host stop --force' to end it",
+      );
+    } else if (args.hostStillRunning === null) {
+      parts.push(
+        "could not confirm the host stopped - run 'traycer host status', then 'traycer host stop --force' if it is still up",
+      );
+    } else {
+      parts.push("the host stopped");
+    }
     parts.push(
-      "could not confirm the host stopped, so it may still be running and its pid/log runtime was kept - run 'traycer host status', then 'traycer host stop --force' if it is still up",
+      "pid/log runtime was kept (removing it is only safe once the supervisor is confirmed stopped)",
     );
   }
   // Keyed on the READBACK, so a deregistration whose backend call merely
