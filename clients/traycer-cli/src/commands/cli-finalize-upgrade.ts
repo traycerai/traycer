@@ -71,7 +71,10 @@ export type FinalizeSwapOutcome =
       readonly stagedBinaryPath: string;
       readonly livePath: string;
     }
-  | { readonly status: "no-pending" }
+  | {
+      readonly status: "no-pending";
+      readonly serviceStartError: string | null;
+    }
   | { readonly status: "lock-timeout" };
 
 // Core: assumes the caller already holds cli-lock (matches the
@@ -113,8 +116,26 @@ export async function runFinalizeUpgradeSwap(opts: {
   // another actor holds the CLI lock, and it owns the service lifecycle
   // for the duration of its own critical section.
   if (swap.status === "no-pending" || swap.status === "no-manifest") {
-    await startServiceBestEffort(opts.environment, logger);
-    return { status: "no-pending" };
+    const serviceStartError = await startServiceBestEffort(
+      opts.environment,
+      logger,
+    );
+    if (serviceStartError !== null) {
+      // The helper runs detached with output redirected away. Preserve a
+      // failed hand-back in the cross-version marker format even though no
+      // upgrade identity remains; reconciliation's no-pending/no-manifest
+      // branch intentionally consumes this without identity correlation.
+      await writePostFinalizeMarkerFile(markerPath, {
+        status: "swap-failed",
+        attemptedAt: new Date().toISOString(),
+        livePath: "",
+        stagedBinaryPath: "",
+        errorMessage:
+          "no pending CLI upgrade remained when the finalize helper ran",
+        serviceStartError,
+      });
+    }
+    return { status: "no-pending", serviceStartError };
   }
 
   if (swap.status === "staged-binary-missing") {
@@ -240,7 +261,9 @@ function humanForOutcome(outcome: FinalizeSwapOutcome): string {
         "Re-run 'traycer cli upgrade' to re-stage it."
       );
     case "no-pending":
-      return "cli finalize-upgrade: nothing to finalize";
+      return outcome.serviceStartError === null
+        ? "cli finalize-upgrade: nothing to finalize"
+        : `cli finalize-upgrade: nothing to finalize; service did not start: ${outcome.serviceStartError}`;
     case "lock-timeout":
       return "cli finalize-upgrade: timed out acquiring cli-lock; deferring to the next 'host restart'";
   }

@@ -341,7 +341,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
       expect(mocks.controllerCalls).toEqual(["start"]);
-      expect(result.data).toEqual({ status: "no-pending" });
+      expect(result.data).toEqual({
+        status: "no-pending",
+        serviceStartError: null,
+      });
       expect(existsSync(markerPath())).toBe(false);
     },
   );
@@ -416,9 +419,18 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       expect(result.data).toMatchObject({ status: expectedOutcomeStatus });
 
       if (finalizeStatus === "no-pending") {
-        // No marker is written on this path either way - a failed
-        // service start has nowhere to be recorded except the log.
-        expect(existsSync(markerPath())).toBe(false);
+        expect(result.data).toMatchObject({
+          serviceStartError: "schtasks /Run failed",
+        });
+        const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
+        expect(marker).toMatchObject({
+          status: "swap-failed",
+          livePath: "",
+          stagedBinaryPath: "",
+          errorMessage:
+            "no pending CLI upgrade remained when the finalize helper ran",
+          serviceStartError: "schtasks /Run failed",
+        });
       } else {
         const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
         expect(marker.serviceStartError).toBe("schtasks /Run failed");
