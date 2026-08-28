@@ -103,6 +103,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -1432,6 +1433,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         distance: EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE,
       },
     }),
+    useSensor(KeyboardSensor),
   );
 
   const handleDragStart = useCallback(

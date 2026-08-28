@@ -1,5 +1,5 @@
 /**
- * Collision detection for the single root DndContext: pointer-only hit
+ * Collision detection for the single root DndContext: pointer/keyboard hit
  * testing, source→target compatibility filtering, the priority ladder for
  * overlapping targets, and the collision-pass pointer stash that the
  * provider's preview/commit math reads. Kept out of the provider component
@@ -8,6 +8,7 @@
  */
 import {
   pointerWithin,
+  rectIntersection,
   type Active,
   type CollisionDetection,
 } from "@dnd-kit/core";
@@ -161,7 +162,7 @@ function readDropTargetKind(value: unknown): EpicRootDropTargetKind | null {
 }
 
 /**
- * Pointer point from the most recent collision pass. @dnd-kit/core's event
+ * Interaction point from the most recent collision pass. @dnd-kit/core's event
  * `delta` is scroll-adjusted (it folds in the scroll delta since drag start)
  * while collision detection receives `pointerCoordinates` = activation
  * coordinates + translate, and droppable rects report live viewport
@@ -182,12 +183,15 @@ export function clearLastCollisionPointerPoint(): void {
 }
 
 /**
- * Pointer-only hit testing with a priority ladder for overlapping targets
+ * Pointer or keyboard hit testing with a priority ladder for overlapping targets
  * (see `TARGET_KIND_PRIORITY`). Targets incompatible with the active source
  * kind are dropped up front so e.g. a rail drag never lights up a pane body.
  */
 export const epicRootCollisionDetection: CollisionDetection = (args) => {
-  lastCollisionPointerPoint = args.pointerCoordinates;
+  lastCollisionPointerPoint = args.pointerCoordinates ?? {
+    x: args.collisionRect.left + args.collisionRect.width / 2,
+    y: args.collisionRect.top + args.collisionRect.height / 2,
+  };
   const activeKind = readActiveDragKind(args.active);
   const activeSource = readActiveDragSource(args.active);
   const compatibleKinds = targetKindsForSourceKind(activeKind);
@@ -201,7 +205,11 @@ export const epicRootCollisionDetection: CollisionDetection = (args) => {
       readDropTargetKind(container.data.current),
     ]),
   );
-  const rankedHits = pointerWithin(args).flatMap((hit) => {
+  const hits =
+    args.pointerCoordinates === null
+      ? rectIntersection(args)
+      : pointerWithin(args);
+  const rankedHits = hits.flatMap((hit) => {
     const kind = kindByContainerId.get(hit.id) ?? null;
     if (kind === null || !compatibleKinds.includes(kind)) return [];
     if (kind === COMPOSER_ATTACHMENT_DROP_TARGET_TYPE) {

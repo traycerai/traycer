@@ -1,5 +1,6 @@
 import type {
   BlankTileRef,
+  BrowserSessionTileRef,
   CommGraphTileRef,
   EpicArtifactRef,
   EpicTerminalRef,
@@ -29,6 +30,7 @@ export interface TileKindToRefMap {
   readonly story: EpicArtifactRef;
   readonly review: EpicArtifactRef;
   readonly terminal: EpicTerminalRef;
+  readonly "browser-session": BrowserSessionTileRef;
   readonly "workspace-file": WorkspaceFileRef;
   readonly "git-diff": GitDiffTileRef;
   readonly "snapshot-diff": SnapshotDiffTileRef;

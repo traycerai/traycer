@@ -49,6 +49,13 @@ const exceptionsPath = join(
 );
 
 describe("released baseline surface (newest release) is wire-compatible", () => {
+  it("keeps unreleased browser.screencast out of the released fixture", () => {
+    const baseline = protocolSurfaceSchema.parse(
+      JSON.parse(readFileSync(fixturePath, "utf8")),
+    );
+    expect(baseline.stream["browser.screencast"]).toBeUndefined();
+  });
+
   it("live registries have no blocking findings against the committed baseline", () => {
     const theirs = protocolSurfaceSchema.parse(
       JSON.parse(readFileSync(fixturePath, "utf8")),

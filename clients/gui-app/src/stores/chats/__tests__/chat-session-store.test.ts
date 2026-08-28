@@ -5,6 +5,7 @@ import type {
   ClaudePendingWake,
   InterviewDeliveryProjection,
   Message,
+  UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BackgroundItem,
@@ -12,6 +13,7 @@ import type {
   ChatErrorNotice,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
+  ChatQueueDeliveryPolicy,
   ChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
@@ -50,7 +52,9 @@ import {
   MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
   type ChatSessionStoreHandle,
+  type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import {
   IMMEDIATE_STREAM_FLUSH_COORDINATOR,
   type StreamFlushCoordinator,
@@ -77,6 +81,29 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+
+/**
+ * The plain text send these suites exercise: content in, no browser context,
+ * nothing staged for restore beyond the content itself.
+ */
+function sendTestMessage(
+  store: ChatSessionStoreHandle["store"],
+  content: JsonContent,
+  sender: UserMessageSender,
+  delivery: {
+    readonly settings: ChatRunSettings;
+    readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  },
+): SentChatMessageAction | null {
+  return store.getState().sendMessage({
+    content,
+    sender,
+    settings: delivery.settings,
+    attachments: buildAttachmentsFromJSONContent(content),
+    deliveryPolicy: delivery.deliveryPolicy,
+    restore: { content, browserAnnotations: [] },
+  });
+}
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -470,9 +497,12 @@ function statedNoticeWithIntent(intent: WorktreeIntent): ChatErrorNotice {
   const harness = createHarness();
   const callbacks = harness.callbacks();
   emitSnapshot(callbacks, "owner");
-  harness.handle.store
-    .getState()
-    .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+  sendTestMessage(
+    harness.handle.store,
+    CONTENT,
+    { type: "user", userId: OWNER_ID },
+    { settings: SETTINGS, deliveryPolicy: "auto" },
+  );
   useWorktreeIntentStagingStore.getState().setIntent(
     {
       surface: "owner",
@@ -483,14 +513,12 @@ function statedNoticeWithIntent(intent: WorktreeIntent): ChatErrorNotice {
     },
     intent,
   );
-  harness.handle.store
-    .getState()
-    .sendMessage(
-      SECOND_CONTENT,
-      { type: "user", userId: OWNER_ID },
-      SETTINGS,
-      "auto",
-    );
+  sendTestMessage(
+    harness.handle.store,
+    SECOND_CONTENT,
+    { type: "user", userId: OWNER_ID },
+    { settings: SETTINGS, deliveryPolicy: "auto" },
+  );
   const second = harness.sent[1];
   if (second.kind !== "send") throw new Error("Expected a send frame");
   callbacks.onConnectionStatus("reconnecting", null);
@@ -503,12 +531,18 @@ function sendTwo(
   first: JsonContent,
   second: JsonContent,
 ): void {
-  harness.handle.store
-    .getState()
-    .sendMessage(first, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
-  harness.handle.store
-    .getState()
-    .sendMessage(second, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+  sendTestMessage(
+    harness.handle.store,
+    first,
+    { type: "user", userId: OWNER_ID },
+    { settings: SETTINGS, deliveryPolicy: "auto" },
+  );
+  sendTestMessage(
+    harness.handle.store,
+    second,
+    { type: "user", userId: OWNER_ID },
+    { settings: SETTINGS, deliveryPolicy: "auto" },
+  );
 }
 
 function noticeFor(harness: Harness, clientActionId: string): ChatErrorNotice {
@@ -606,7 +640,11 @@ function emitSnapshotWithQueuedSend(
           kind: "prompt",
           queueItemId: `queue-${messageId}`,
           messageId,
-          message: { kind: "user", content: CONTENT },
+          message: {
+            kind: "user",
+            content: CONTENT,
+            browserAnnotations: [],
+          },
           sender: { type: "user", userId: OWNER_ID },
           settings: SETTINGS,
           accountContext: { type: "PERSONAL" },
@@ -821,6 +859,7 @@ function persistedUserMessage(
     message: {
       kind: "user",
       content: CONTENT,
+      browserAnnotations: [],
     },
     timestamp: 4,
     sessionAnchor: null,
@@ -1165,14 +1204,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    const clientActionId = harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "after_safe_point",
-      );
+    const clientActionId = sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "after_safe_point" },
+    );
 
     expect(clientActionId).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
@@ -1937,14 +1974,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    const clientActionId = harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    const clientActionId = sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     expect(clientActionId).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
@@ -1986,6 +2021,7 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
+          browserAnnotations: [],
         },
         timestamp: 2,
         sessionAnchor: null,
@@ -2027,14 +2063,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
     harness.handle.store.getState().refreshMissingWorktreePaths(["/repo"]);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
@@ -2097,14 +2131,12 @@ describe("createChatSessionStore", () => {
     };
     useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
@@ -2359,14 +2391,12 @@ describe("createChatSessionStore", () => {
     // A later send stages its own pick, consumes, and IS accepted - so the
     // outstanding mark is the send's, and the slot state is the send's.
     useWorktreeIntentStagingStore.getState().stageIntent(key, sendIntent);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const sendFrame = harness.sent.find((frame) => frame.kind === "send");
     if (sendFrame === undefined) throw new Error("Expected the send frame");
     callbacks.onActionAck({
@@ -2432,14 +2462,12 @@ describe("createChatSessionStore", () => {
     // it reaches the wire.
     callbacks.onConnectionStatus("reconnecting", null);
     expect(
-      harness.handle.store
-        .getState()
-        .sendMessage(
-          CONTENT,
-          { type: "user", userId: OWNER_ID },
-          SETTINGS,
-          "auto",
-        ),
+      sendTestMessage(
+        harness.handle.store,
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      ),
     ).toBeNull();
 
     // The slot was empty and unmarked before the attempt; it is empty and
@@ -2489,14 +2517,12 @@ describe("createChatSessionStore", () => {
     // dispatch that actually took this slot.
     callbacks.onConnectionStatus("reconnecting", null);
     expect(
-      harness.handle.store
-        .getState()
-        .sendMessage(
-          CONTENT,
-          { type: "user", userId: OWNER_ID },
-          SETTINGS,
-          "auto",
-        ),
+      sendTestMessage(
+        harness.handle.store,
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      ),
     ).toBeNull();
 
     // The reconnect sweeps the still-pending edit. No prompt is handed back,
@@ -2550,14 +2576,12 @@ describe("createChatSessionStore", () => {
 
     callbacks.onConnectionStatus("reconnecting", null);
     expect(
-      harness.handle.store
-        .getState()
-        .sendMessage(
-          CONTENT,
-          { type: "user", userId: OWNER_ID },
-          SETTINGS,
-          "auto",
-        ),
+      sendTestMessage(
+        harness.handle.store,
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      ),
     ).toBeNull();
 
     expect(
@@ -2588,26 +2612,22 @@ describe("createChatSessionStore", () => {
     const intent = worktreeIntentFor("send-branch");
 
     useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     // A second send finds the slot empty and is refused locally.
     callbacks.onConnectionStatus("reconnecting", null);
     expect(
-      harness.handle.store
-        .getState()
-        .sendMessage(
-          SECOND_CONTENT,
-          { type: "user", userId: OWNER_ID },
-          SETTINGS,
-          "auto",
-        ),
+      sendTestMessage(
+        harness.handle.store,
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      ),
     ).toBeNull();
 
     // The reconnect snapshot omits the first send, so its prompt comes back -
@@ -2649,24 +2669,20 @@ describe("createChatSessionStore", () => {
     const intentB = worktreeIntentFor("feat/b");
 
     useWorktreeIntentStagingStore.getState().setIntent(key, intentA);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     // B stages its own pick and consumes it, so the outstanding mark is B's.
     useWorktreeIntentStagingStore.getState().setIntent(key, intentB);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const [first, second] = harness.sent;
     if (first.kind !== "send" || second.kind !== "send") {
       throw new Error("Expected two send frames");
@@ -2754,14 +2770,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, { entries: [doomed, survivor] });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     // Only the first folder's worktree is swept while the send is in flight.
     useWorktreeIntentStagingStore
       .getState()
@@ -2807,14 +2821,12 @@ describe("createChatSessionStore", () => {
     // A turn is running, so the send is queued rather than optimistic.
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -2857,14 +2869,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     harness.handle.store
       .getState()
       .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
@@ -2908,14 +2918,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
 
     // Not queued: it keeps its optimistic row, so the SETTLED pass owns it.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -2967,14 +2975,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
 
     // Not queued: it keeps its optimistic row, so the SETTLED pass owns it.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3043,14 +3049,12 @@ describe("createChatSessionStore", () => {
       .getState()
       .setIntent(key, { entries: [staged] });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const rejected = rejectLastAction(harness, "Host refused the send.");
     // The hand-back put the binding back with the prompt.
     expect(
@@ -3096,14 +3100,12 @@ describe("createChatSessionStore", () => {
       ],
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected a send frame");
 
@@ -3151,14 +3153,12 @@ describe("createChatSessionStore", () => {
       ],
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected a send frame");
     // Accepted, so only a live turn settling can strand it.
@@ -3220,14 +3220,12 @@ describe("createChatSessionStore", () => {
       ],
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const rejected = rejectLastAction(harness, "Host refused the send.");
     harness.handle.store.getState().stateFailedSendRestoration(rejected);
 
@@ -3272,14 +3270,12 @@ describe("createChatSessionStore", () => {
         },
       ],
     });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected a send frame");
 
@@ -3348,14 +3344,12 @@ describe("createChatSessionStore", () => {
       ],
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const rejected = rejectLastAction(harness, "Host refused the send.");
 
     // The user picks something else AFTER the hand-back.
@@ -3389,14 +3383,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        IMAGE_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      IMAGE_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const rejected = rejectLastAction(harness, "Host refused the send.");
     harness.handle.store.getState().stateFailedSendRestoration(rejected);
 
@@ -3430,14 +3422,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3466,7 +3456,11 @@ describe("createChatSessionStore", () => {
             kind: "prompt",
             queueItemId: `queue-${frame.messageId}`,
             messageId: frame.messageId,
-            message: { kind: "user", content: CONTENT },
+            message: {
+              kind: "user",
+              content: CONTENT,
+              browserAnnotations: [],
+            },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" },
@@ -3525,14 +3519,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3555,7 +3547,11 @@ describe("createChatSessionStore", () => {
         role: "user",
         messageId: frame.messageId,
         sender: { type: "user", userId: OWNER_ID },
-        message: { kind: "user", content: CONTENT },
+        message: {
+          kind: "user",
+          content: CONTENT,
+          browserAnnotations: [],
+        },
         timestamp: 2,
         sessionAnchor: null,
       },
@@ -3598,14 +3594,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3622,7 +3616,11 @@ describe("createChatSessionStore", () => {
         role: "user",
         messageId: frame.messageId,
         sender: { type: "user", userId: OWNER_ID },
-        message: { kind: "user", content: CONTENT },
+        message: {
+          kind: "user",
+          content: CONTENT,
+          browserAnnotations: [],
+        },
         timestamp: 2,
         sessionAnchor: null,
       },
@@ -3665,14 +3663,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3727,7 +3723,11 @@ describe("createChatSessionStore", () => {
         role: "user",
         messageId: second.messageId,
         sender: { type: "user", userId: OWNER_ID },
-        message: { kind: "user", content: SECOND_CONTENT },
+        message: {
+          kind: "user",
+          content: SECOND_CONTENT,
+          browserAnnotations: [],
+        },
         timestamp: 2,
         sessionAnchor: null,
       },
@@ -3769,14 +3769,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3795,7 +3793,11 @@ describe("createChatSessionStore", () => {
             kind: "prompt",
             queueItemId: `queue-${frame.messageId}`,
             messageId: frame.messageId,
-            message: { kind: "user", content: CONTENT },
+            message: {
+              kind: "user",
+              content: CONTENT,
+              browserAnnotations: [],
+            },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" },
@@ -3845,14 +3847,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3892,14 +3892,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3934,14 +3932,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -3967,14 +3963,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
     startTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -4005,14 +3999,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected a send frame");
     harness.handle.store
@@ -4072,14 +4064,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected a send frame");
 
@@ -4124,14 +4114,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     harness.handle.store
       .getState()
       .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
@@ -4163,14 +4151,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     harness.handle.store
       .getState()
       .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
@@ -4196,14 +4182,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     harness.handle.store
       .getState()
       .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
@@ -4257,14 +4241,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, worktreeIntentFor("feat/sent"));
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     // The user picks again while the send is in flight, so their choice is
     // standing in the slot when the rejection lands.
     useWorktreeIntentStagingStore
@@ -4297,14 +4279,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, worktreeIntentFor("feat/sent"));
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     useWorktreeIntentStagingStore.getState().clear(key);
     rejectLastAction(harness, "Host refused the send.");
 
@@ -4332,14 +4312,12 @@ describe("createChatSessionStore", () => {
 
     // A rejected send claims the restoration slot; the composer has not
     // consumed it yet.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     rejectLastAction(harness, "Host refused the send.");
     expect(
       harness.handle.store.getState().failedSendRestoration?.content,
@@ -4405,14 +4383,12 @@ describe("createChatSessionStore", () => {
       ],
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected send frame");
@@ -4473,14 +4449,12 @@ describe("createChatSessionStore", () => {
       .getState()
       .setSuspendedWorkspacePaths(key, ["/repo"]);
 
-    const result = harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    const result = sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     expect(result).toBeNull();
     expect(harness.sent).toEqual([]);
@@ -4495,14 +4469,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore.setState({ intentByKey: {} });
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected send frame");
@@ -4515,14 +4487,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -4561,14 +4531,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -4580,6 +4548,7 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
       content: CONTENT,
+      browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
       displacedReason: "Message was not confirmed after reconnect.",
       stated: false,
@@ -4597,22 +4566,18 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const first = harness.sent[0];
     const second = harness.sent[1];
     if (first.kind !== "send" || second.kind !== "send") {
@@ -4634,6 +4599,7 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: first.clientActionId,
       content: CONTENT,
+      browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
       displacedReason: "Message was not confirmed after reconnect.",
       stated: false,
@@ -4669,22 +4635,18 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
@@ -4841,14 +4803,12 @@ describe("createChatSessionStore", () => {
       revertArtifacts: false,
     });
     // A send deliberately dispatched with NO worktree staged.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshotFrame({
@@ -4907,14 +4867,12 @@ describe("createChatSessionStore", () => {
     });
     // A newer pick, consumed by a SEND. The slot's last consumer is the send.
     useWorktreeIntentStagingStore.getState().setIntent(key, sendIntent);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     // Both die. The sweep restores the edit first, then the reconcile hands
     // the send's prompt back.
@@ -4980,14 +4938,12 @@ describe("createChatSessionStore", () => {
     }
     // A later send with NOTHING staged - it takes no pick, but it is still a
     // dispatch and still the current state of this slot.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     callbacks.onActionAck({
       kind: "actionAck",
@@ -5038,14 +4994,12 @@ describe("createChatSessionStore", () => {
         },
       ],
     });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     // A newer pick, consumed by a second send: the mark now describes THIS
     // one, and the RESTORATION path is deliberately ownerless - so it stages
     // send 1's own intent while the mark's entries belong to send 2.
@@ -5067,14 +5021,12 @@ describe("createChatSessionStore", () => {
         },
       ],
     });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     // The sweep removes the FIRST send's branch. The mark's own entries
     // survive it, so nothing about the mark changes.
@@ -5143,14 +5095,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, worktreeIntentFor("feat/send"));
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     // The EDIT's rejection arrives.
     callbacks.onActionAck({
@@ -5193,14 +5143,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, worktreeIntentFor("feat/doomed"));
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     // The worktree the send is staged for is swept while it is in flight.
     useWorktreeIntentStagingStore
       .getState()
@@ -5239,14 +5187,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, worktreeIntentFor("feat/doomed"));
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     // Accepted, so the action leaves `pendingActions` while its optimistic row
     // waits for a `messageAccepted` that never arrives.
     acceptLastAction(harness);
@@ -5304,14 +5250,12 @@ describe("createChatSessionStore", () => {
     };
 
     // The first send is rejected and claims the restoration slot.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     rejectLastAction(harness, "Host refused the first send.");
 
     // The second carries a staged worktree that is swept while it is in
@@ -5319,14 +5263,12 @@ describe("createChatSessionStore", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, worktreeIntentFor("feat/doomed"));
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     useWorktreeIntentStagingStore
       .getState()
       .purgeRemovedWorktreeIntents("host-a", {
@@ -5359,23 +5301,19 @@ describe("createChatSessionStore", () => {
       pendingFileEditApprovals: [],
       settings: SETTINGS,
     });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const first = harness.sent[0];
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const second = harness.sent[1];
     if (first.kind !== "send" || second.kind !== "send") {
       throw new Error("Expected two send frames");
@@ -5429,14 +5367,12 @@ describe("createChatSessionStore", () => {
       settings: SETTINGS,
     });
     // Occupy the restoration slot so the seeded send is STATED, not restored.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     harness.handle.store.getState().sendSeededUserMessage({
       messageId: "seeded-1",
       clientActionId: "seeded-action-1",
@@ -5468,22 +5404,18 @@ describe("createChatSessionStore", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "after_safe_point",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "after_safe_point" },
+    );
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
@@ -5569,23 +5501,19 @@ describe("createChatSessionStore", () => {
       pendingFileEditApprovals: [],
       settings: SETTINGS,
     });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     rejectLastAction(harness, "Host refused the send.");
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const second = harness.sent.at(-1);
     if (second === undefined || second.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -5809,25 +5737,21 @@ describe("createChatSessionStore", () => {
     const second = worktreeIntentFor("feat/second");
 
     useWorktreeIntentStagingStore.getState().setIntent(key, first);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     acceptLastAction(harness);
     // A second staged pick, consumed by its own send. The slot ends EMPTY.
     useWorktreeIntentStagingStore.getState().setIntent(key, second);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     acceptLastAction(harness);
     expect(
       useWorktreeIntentStagingStore.getState().intentByKey[
@@ -5894,14 +5818,12 @@ describe("createChatSessionStore", () => {
       ownerId: CHAT_ID,
     };
     // First send takes the slot on reconnect; the second is stated.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     useWorktreeIntentStagingStore.getState().setIntent(key, {
       entries: [
         {
@@ -5919,14 +5841,12 @@ describe("createChatSessionStore", () => {
         },
       ],
     });
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
@@ -6078,14 +5998,12 @@ describe("createChatSessionStore", () => {
     };
     useWorktreeIntentStagingStore.getState().setIntent(key, intent);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected a send frame");
@@ -6164,14 +6082,12 @@ describe("createChatSessionStore", () => {
     };
     useWorktreeIntentStagingStore.getState().setIntent(key, original);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     acceptLastAction(harness);
     // The user picks a DIFFERENT worktree while the send is in flight. The
     // revision guard's existing contract is that the newer pick wins.
@@ -6205,28 +6121,24 @@ describe("createChatSessionStore", () => {
 
     // Occupy the restoration slot, so the live send would take the
     // displacement branch.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     rejectLastAction(harness, "Host refused the send.");
 
     // The connection drops and comes back; the composer gate reopens on
     // `open`, so the user can send again before the snapshot lands.
     callbacks.onConnectionStatus("reconnecting", null);
     callbacks.onConnectionStatus("open", null);
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const live = harness.sent.at(-1);
     if (live === undefined || live.kind !== "send") {
       throw new Error("Expected the live send frame");
@@ -6259,7 +6171,11 @@ describe("createChatSessionStore", () => {
         role: "user",
         messageId: live.messageId,
         sender: { type: "user", userId: OWNER_ID },
-        message: { kind: "user", content: SECOND_CONTENT },
+        message: {
+          kind: "user",
+          content: SECOND_CONTENT,
+          browserAnnotations: [],
+        },
         timestamp: 4,
         sessionAnchor: null,
       },
@@ -6282,22 +6198,18 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        MENTION_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    sendTestMessage(
+      harness.handle.store,
+      MENTION_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
@@ -6327,22 +6239,18 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        IMAGE_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    sendTestMessage(
+      harness.handle.store,
+      IMAGE_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
@@ -6371,22 +6279,18 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const first = harness.sent[0];
     if (first.kind !== "send") throw new Error("Expected a send frame");
 
@@ -6402,14 +6306,12 @@ describe("createChatSessionStore", () => {
 
     // The user resends the displaced text under a new message id, then a
     // later snapshot lands.
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const resent = harness.sent.at(-1);
     if (resent === undefined || resent.kind !== "send") {
       throw new Error("Expected the resend frame");
@@ -6424,7 +6326,11 @@ describe("createChatSessionStore", () => {
         role: "user",
         messageId: resent.messageId,
         sender: { type: "user", userId: OWNER_ID },
-        message: { kind: "user", content: SECOND_CONTENT },
+        message: {
+          kind: "user",
+          content: SECOND_CONTENT,
+          browserAnnotations: [],
+        },
         timestamp: 3,
         sessionAnchor: null,
       },
@@ -6437,7 +6343,11 @@ describe("createChatSessionStore", () => {
           role: "user",
           messageId: resent.messageId,
           sender: { type: "user", userId: OWNER_ID },
-          message: { kind: "user", content: SECOND_CONTENT },
+          message: {
+            kind: "user",
+            content: SECOND_CONTENT,
+            browserAnnotations: [],
+          },
           timestamp: 3,
           sessionAnchor: null,
         },
@@ -6462,14 +6372,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
     const send = (content: JsonContent): void => {
-      harness.handle.store
-        .getState()
-        .sendMessage(
-          content,
-          { type: "user", userId: OWNER_ID },
-          SETTINGS,
-          "auto",
-        );
+      sendTestMessage(
+        harness.handle.store,
+        content,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      );
     };
 
     // Occupy the slot first, so BOTH stranded sends below lose it.
@@ -6522,23 +6430,19 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const occupant = rejectLastAction(harness, "Host refused the send.");
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        SECOND_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const stranded = acceptLastAction(harness);
 
     callbacks.onTurnStateChanged({
@@ -6571,14 +6475,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const stranded = acceptLastAction(harness);
 
     callbacks.onConnectionStatus("reconnecting", null);
@@ -6590,6 +6492,7 @@ describe("createChatSessionStore", () => {
     expect(state.failedSendRestoration).toEqual({
       clientActionId: stranded,
       content: CONTENT,
+      browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
       stated: false,
@@ -6607,14 +6510,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -6654,7 +6555,11 @@ describe("createChatSessionStore", () => {
         role: "user",
         messageId: frame.messageId,
         sender: { type: "user", userId: OWNER_ID },
-        message: { kind: "user", content: CONTENT },
+        message: {
+          kind: "user",
+          content: CONTENT,
+          browserAnnotations: [],
+        },
         timestamp: 2,
         sessionAnchor: null,
       },
@@ -6675,14 +6580,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -6697,6 +6600,7 @@ describe("createChatSessionStore", () => {
           message: {
             kind: "user",
             content: CONTENT,
+            browserAnnotations: [],
           },
           timestamp: 2,
           sessionAnchor: null,
@@ -6782,14 +6686,12 @@ describe("createChatSessionStore", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
 
-    const sent = harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    const sent = sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     if (sent === null) throw new Error("Expected send action");
     acceptLastAction(harness);
 
@@ -6823,14 +6725,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -6848,6 +6748,7 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
+              browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
@@ -6876,14 +6777,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -6964,14 +6863,12 @@ describe("createChatSessionStore", () => {
       activeTurn: runningActiveTurn(),
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        IMAGE_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      IMAGE_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -6995,14 +6892,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     startRunningTurn(callbacks);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        IMAGE_CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      IMAGE_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -7050,14 +6945,12 @@ describe("createChatSessionStore", () => {
       activeTurn: runningActiveTurn(),
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -7076,6 +6969,7 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
+              browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
@@ -7112,14 +7006,12 @@ describe("createChatSessionStore", () => {
       activeTurn: runningActiveTurn(),
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -7147,6 +7039,7 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
+              browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
@@ -7194,14 +7087,12 @@ describe("createChatSessionStore", () => {
       activeTurn: runningActiveTurn(),
     });
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -7220,6 +7111,7 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
+              browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
@@ -7245,14 +7137,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -7285,14 +7175,12 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
 
     const rejectSend = (index: number, reason: string): string => {
-      harness.handle.store
-        .getState()
-        .sendMessage(
-          index === 0 ? CONTENT : IMAGE_CONTENT,
-          { type: "user", userId: OWNER_ID },
-          SETTINGS,
-          "auto",
-        );
+      sendTestMessage(
+        harness.handle.store,
+        index === 0 ? CONTENT : IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      );
       const frame = harness.sent[index];
       if (frame.kind !== "send") throw new Error("Expected send frame");
       callbacks.onActionAck({
@@ -7332,14 +7220,12 @@ describe("createChatSessionStore", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "viewer");
 
-    const clientActionId = harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    const clientActionId = sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
 
     expect(clientActionId).toBeNull();
     expect(harness.sent).toEqual([]);
@@ -7655,6 +7541,7 @@ describe("createChatSessionStore", () => {
       message: {
         kind: "user" as const,
         content: CONTENT,
+        browserAnnotations: [],
       },
       sender: { type: "user" as const, userId: OWNER_ID },
       settings,
@@ -8487,6 +8374,7 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
+              browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
@@ -9642,6 +9530,7 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
+          browserAnnotations: [],
         },
         timestamp: 5,
         sessionAnchor: null,
@@ -10329,14 +10218,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -10364,20 +10251,18 @@ describe("createChatSessionStore", () => {
     // `startProviderTurn` awaits setup. `messageAccepted` clears
     // `pendingUserMessages`, so the later setup-gating `setup.failed` would
     // otherwise find nothing to restore. The accepted-action record retains the
-    // original `restoreContent` so the composer can still recover the
+    // original `restore` slot so the composer can still recover the
     // triggering prompt exactly once.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -10407,6 +10292,7 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
+          browserAnnotations: [],
         },
         timestamp: 2,
         sessionAnchor: null,
@@ -10420,7 +10306,7 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "send",
       messageId: sent.messageId,
-      restoreContent: CONTENT,
+      restore: { content: CONTENT, browserAnnotations: [] },
     });
 
     expect(
@@ -10430,14 +10316,14 @@ describe("createChatSessionStore", () => {
     ).toEqual(CONTENT);
 
     // The accepted-action record stays in place (so other reconciliation
-    // continues to work) but the restoreContent slot is cleared so a
+    // continues to work) but the restore slot is cleared so a
     // duplicate setup.failed cannot double-restore.
     expect(
       harness.handle.store.getState().acceptedActions[sent.clientActionId],
     ).toMatchObject({
       action: "send",
       messageId: sent.messageId,
-      restoreContent: null,
+      restore: null,
     });
     expect(
       harness.handle.store
@@ -10450,20 +10336,18 @@ describe("createChatSessionStore", () => {
     // Race coverage: the host may publish `messageAccepted` ahead of
     // the `actionAck`. `messageAccepted` clears `pendingUserMessages`
     // but the still-pending action retains the original
-    // `restoreContent`, so a setup-gating `setup.failed` arriving in
+    // `restore` slot, so a setup-gating `setup.failed` arriving in
     // this in-between window must still recover the prompt.
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -10481,6 +10365,7 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
+          browserAnnotations: [],
         },
         timestamp: 2,
         sessionAnchor: null,
@@ -10493,7 +10378,7 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "send",
       messageId: sent.messageId,
-      restoreContent: CONTENT,
+      restore: { content: CONTENT, browserAnnotations: [] },
     });
 
     expect(
@@ -10503,7 +10388,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(CONTENT);
     expect(
       harness.handle.store.getState().pendingActions[sent.clientActionId]
-        .restoreContent,
+        .restore,
     ).toBeNull();
     expect(
       harness.handle.store
@@ -10759,14 +10644,12 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshotWithWorktree(callbacks, [], null);
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -11871,14 +11754,12 @@ describe("turn-settled stranded-send reconciliation", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
     expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
@@ -11916,6 +11797,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     expect(state.failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
       content: CONTENT,
+      browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
       stated: false,
@@ -11927,14 +11809,12 @@ describe("turn-settled stranded-send reconciliation", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
 
     // e.g. a background task settling broadcasts a turn-settled frame while
@@ -11959,14 +11839,12 @@ describe("turn-settled stranded-send reconciliation", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
     acceptLastAction(harness);
@@ -11992,14 +11870,12 @@ describe("turn-settled stranded-send reconciliation", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
     // The accepted ack removes the pending action but keeps the optimistic
@@ -12022,6 +11898,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     expect(state.failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
       content: CONTENT,
+      browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
       stated: false,
@@ -12033,14 +11910,12 @@ describe("turn-settled stranded-send reconciliation", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    harness.handle.store
-      .getState()
-      .sendMessage(
-        CONTENT,
-        { type: "user", userId: OWNER_ID },
-        SETTINGS,
-        "auto",
-      );
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
     acceptLastAction(harness);

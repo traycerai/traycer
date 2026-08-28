@@ -25,6 +25,7 @@ import type {
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
+  BrowserSessionTileRef,
   GitDiffTileRef,
   GitDiffTileViewState,
   PrDiffTileViewState,
@@ -32,6 +33,7 @@ import type {
 } from "./types";
 import {
   isBlankTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
@@ -1492,6 +1494,25 @@ export function renameArtifact(
       return { ...ref, name, titleSource: "manual" };
     },
   );
+}
+
+export function updateBrowserTileViewportPreset(
+  state: EpicCanvasState,
+  tileInstanceId: string,
+  viewportPreset: BrowserSessionTileRef["viewportPreset"],
+): EpicCanvasState {
+  const current = state.tilesByInstanceId[tileInstanceId];
+  if (current === undefined || !isBrowserSessionTileRef(current)) {
+    return state;
+  }
+  if (current.viewportPreset === viewportPreset) return state;
+  return {
+    ...state,
+    tilesByInstanceId: {
+      ...state.tilesByInstanceId,
+      [tileInstanceId]: { ...current, viewportPreset },
+    },
+  };
 }
 
 /**
