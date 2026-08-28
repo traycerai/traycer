@@ -59,6 +59,8 @@ const HARNESS_PREFERRED_SLOT: Readonly<Partial<Record<string, number>>> = {
 type HarnessBrandColor = {
   readonly colorVar: string;
   readonly reservedSlots: readonly number[];
+  /** Slots whose CSS value exactly equals this semantic token. */
+  readonly exactColorSlots?: readonly number[];
 };
 
 const FIXED_HARNESS_COLOR: Readonly<
@@ -71,6 +73,7 @@ const FIXED_HARNESS_COLOR: Readonly<
   codex: {
     colorVar: "var(--usage-harness-codex)",
     reservedSlots: [1, 9],
+    exactColorSlots: [1],
   },
   opencode: {
     colorVar: "var(--usage-harness-opencode)",
@@ -127,50 +130,47 @@ export function buildUsageSeriesScale(
   };
 }
 
+type HarnessColorAllocation = {
+  readonly colorByKey: Map<string, string>;
+  readonly brandFamilyReservedSlots: Set<number>;
+  readonly exactColorReservedSlots: Set<number>;
+};
+
 function reserveHarnessBrandColor(
-  colorByKey: Map<string, string>,
-  brandFamilyReservedSlots: Set<number>,
+  allocation: HarnessColorAllocation,
   seriesKey: string,
   color: HarnessBrandColor,
 ): void {
-  colorByKey.set(seriesKey, color.colorVar);
+  allocation.colorByKey.set(seriesKey, color.colorVar);
   for (const reservedSlot of color.reservedSlots) {
-    brandFamilyReservedSlots.add(reservedSlot);
+    allocation.brandFamilyReservedSlots.add(reservedSlot);
+  }
+  for (const exactColorSlot of color.exactColorSlots ?? []) {
+    allocation.exactColorReservedSlots.add(exactColorSlot);
   }
 }
 
 function allocateHarnessBrandColors(
   primary: readonly string[],
-  colorByKey: Map<string, string>,
-  brandFamilyReservedSlots: Set<number>,
+  allocation: HarnessColorAllocation,
 ): void {
   for (const seriesKey of primary) {
     const fixed = FIXED_HARNESS_COLOR[seriesKey];
     if (fixed !== undefined) {
-      reserveHarnessBrandColor(
-        colorByKey,
-        brandFamilyReservedSlots,
-        seriesKey,
-        fixed,
-      );
+      reserveHarnessBrandColor(allocation, seriesKey, fixed);
     }
   }
 
   for (const seriesKey of primary) {
-    if (colorByKey.has(seriesKey)) continue;
+    if (allocation.colorByKey.has(seriesKey)) continue;
     const preferred = PREFERRED_HARNESS_COLOR[seriesKey];
     if (
       preferred !== undefined &&
       !preferred.reservedSlots.some((slot) =>
-        brandFamilyReservedSlots.has(slot),
+        allocation.brandFamilyReservedSlots.has(slot),
       )
     ) {
-      reserveHarnessBrandColor(
-        colorByKey,
-        brandFamilyReservedSlots,
-        seriesKey,
-        preferred,
-      );
+      reserveHarnessBrandColor(allocation, seriesKey, preferred);
     }
   }
 }
@@ -179,6 +179,7 @@ function findAvailableUsageSeriesSlot(
   preferredSlot: number | undefined,
   occupiedSlots: ReadonlySet<number>,
   brandFamilyReservedSlots: ReadonlySet<number>,
+  exactColorReservedSlots: ReadonlySet<number>,
 ): number | undefined {
   if (
     preferredSlot !== undefined &&
@@ -192,7 +193,12 @@ function findAvailableUsageSeriesSlot(
       (candidate) =>
         !occupiedSlots.has(candidate) &&
         !brandFamilyReservedSlots.has(candidate),
-    ) ?? USAGE_SERIES_SLOTS.find((candidate) => !occupiedSlots.has(candidate))
+    ) ??
+    USAGE_SERIES_SLOTS.find(
+      (candidate) =>
+        !occupiedSlots.has(candidate) &&
+        !exactColorReservedSlots.has(candidate),
+    )
   );
 }
 
@@ -209,22 +215,26 @@ export function buildHarnessUsageSeriesScale(
   const overflow = seriesKeysInSlotOrder.slice(USAGE_SERIES_SLOT_COUNT);
   const order =
     overflow.length > 0 ? [...primary, USAGE_SERIES_OTHER_KEY] : primary;
-  const colorByKey = new Map<string, string>();
+  const allocation: HarnessColorAllocation = {
+    colorByKey: new Map<string, string>(),
+    brandFamilyReservedSlots: new Set<number>(),
+    exactColorReservedSlots: new Set<number>(),
+  };
   const occupiedSlots = new Set<number>();
-  const brandFamilyReservedSlots = new Set<number>();
 
-  allocateHarnessBrandColors(primary, colorByKey, brandFamilyReservedSlots);
+  allocateHarnessBrandColors(primary, allocation);
 
   for (const seriesKey of primary) {
-    if (colorByKey.has(seriesKey)) continue;
+    if (allocation.colorByKey.has(seriesKey)) continue;
     const slot = findAvailableUsageSeriesSlot(
       HARNESS_PREFERRED_SLOT[seriesKey],
       occupiedSlots,
-      brandFamilyReservedSlots,
+      allocation.brandFamilyReservedSlots,
+      allocation.exactColorReservedSlots,
     );
     if (slot === undefined) continue;
     occupiedSlots.add(slot);
-    colorByKey.set(seriesKey, `var(--usage-series-${String(slot)})`);
+    allocation.colorByKey.set(seriesKey, `var(--usage-series-${String(slot)})`);
   }
 
   return {
@@ -232,7 +242,7 @@ export function buildHarnessUsageSeriesScale(
     colorVar: (seriesKey) =>
       seriesKey === USAGE_SERIES_OTHER_KEY
         ? "var(--usage-series-other)"
-        : (colorByKey.get(seriesKey) ?? "var(--usage-series-other)"),
+        : (allocation.colorByKey.get(seriesKey) ?? "var(--usage-series-other)"),
     labelFor: (seriesKey) =>
       seriesKey === USAGE_SERIES_OTHER_KEY ? "Other" : seriesKey,
   };

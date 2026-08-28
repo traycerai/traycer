@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { buildHarnessUsageSeriesScale } from "@/lib/usage-analytics/usage-series-scale";
 
 const CSS = readFileSync(
   path.join(
@@ -37,6 +38,11 @@ function contrastRatio(a: string, b: string): number {
   const hi = Math.max(first, second);
   const lo = Math.min(first, second);
   return (hi + 0.05) / (lo + 0.05);
+}
+
+function resolveColor(blockSelector: string, colorVar: string): string {
+  const token = colorVar.slice("var(".length, -1);
+  return colorIn(blockSelector, token);
 }
 
 const TOKENS = [
@@ -90,6 +96,37 @@ describe("usage harness brand anchors", () => {
       for (const surface of darkSurfaces) {
         expect(contrastRatio(color, surface)).toBeGreaterThan(2.5);
       }
+    }
+  });
+
+  it("resolves every supported harness to a distinct color in both themes", () => {
+    const scale = buildHarnessUsageSeriesScale([
+      "amp",
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+      "devin",
+      "droid",
+      "grok",
+      "hermes",
+      "huggingface",
+      "kilocode",
+      "kimi",
+      "kiro",
+      "omp",
+      "opencode",
+      "openrouter",
+    ]);
+
+    for (const selector of [
+      ".usage-chart-root {",
+      ".dark .usage-chart-root {",
+    ]) {
+      const colors = scale.order.map((key) =>
+        resolveColor(selector, scale.colorVar(key)),
+      );
+      expect(new Set(colors).size).toBe(colors.length);
     }
   });
 });
