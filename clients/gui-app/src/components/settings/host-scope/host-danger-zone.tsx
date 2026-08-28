@@ -353,16 +353,11 @@ function RemoveTraycerRow(): ReactNode {
   if (hostManagement === null) return null;
 
   if (uninstall.isSuccess) {
-    if (uninstall.data.serviceRegistrationRetained !== false) {
-      const retained = uninstall.data.serviceRegistrationRetained === true;
+    if (uninstall.data.serviceRegistrationRetained === true) {
       return (
         <SettingsRow
           label="Traycer removal incomplete"
-          description={
-            retained
-              ? "The background service is still registered. Traycer has not been fully removed; try again before quitting the app."
-              : "Traycer could not verify that the background service was removed. Try again before quitting the app."
-          }
+          description="The background service is still registered. Traycer has not been fully removed; try again before quitting the app."
           control={
             <Button
               type="button"
@@ -373,6 +368,19 @@ function RemoveTraycerRow(): ReactNode {
             >
               Try again
             </Button>
+          }
+        />
+      );
+    }
+    if (uninstall.data.serviceRegistrationRetained === null) {
+      return (
+        <SettingsRow
+          label="Traycer removal unverified"
+          description="The removal commands finished, but Traycer could not verify whether the background service remains registered. Run traycer host service status in a terminal and resolve any remaining service before quitting the app."
+          control={
+            <span className="text-muted-foreground text-xs">
+              Check terminal
+            </span>
           }
         />
       );

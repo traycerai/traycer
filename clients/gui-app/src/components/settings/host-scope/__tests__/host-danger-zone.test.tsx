@@ -232,26 +232,40 @@ describe("HostDangerZone", () => {
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
   });
 
-  it.each([
-    [true, "The background service is still registered"],
-    [null, "could not verify that the background service was removed"],
-  ])(
-    "does not report removal complete when service retention is %s",
-    (serviceRegistrationRetained, expectedCopy) => {
-      runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
-      uninstallMock.isSuccess = true;
-      uninstallMock.data = { serviceRegistrationRetained };
+  it("offers retry when the service is positively retained", () => {
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    uninstallMock.isSuccess = true;
+    uninstallMock.data = { serviceRegistrationRetained: true };
 
-      render(<LocalRecoveryDangerZone />);
+    render(<LocalRecoveryDangerZone />);
 
-      expect(screen.getByText("Traycer removal incomplete")).not.toBeNull();
-      expect(screen.getByText(expectedCopy, { exact: false })).not.toBeNull();
-      expect(screen.queryByText("Traycer removed")).toBeNull();
-      expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
-      screen.getByTestId("settings-retry-uninstall").click();
-      expect(uninstallMock.mutate).toHaveBeenCalledOnce();
-    },
-  );
+    expect(screen.getByText("Traycer removal incomplete")).not.toBeNull();
+    expect(
+      screen.getByText("The background service is still registered", {
+        exact: false,
+      }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Traycer removed")).toBeNull();
+    expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
+    screen.getByTestId("settings-retry-uninstall").click();
+    expect(uninstallMock.mutate).toHaveBeenCalledOnce();
+  });
+
+  it("reports unknown service teardown without offering a pointless retry", () => {
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    uninstallMock.isSuccess = true;
+    uninstallMock.data = { serviceRegistrationRetained: null };
+
+    render(<LocalRecoveryDangerZone />);
+
+    expect(screen.getByText("Traycer removal unverified")).not.toBeNull();
+    expect(
+      screen.getByText("traycer host service status", { exact: false }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Traycer removed")).toBeNull();
+    expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
+    expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
+  });
 
   it("explains the missing rows for an unreachable host that is not this one", () => {
     // The counterweight to loosening the gate: a host with no route and no
