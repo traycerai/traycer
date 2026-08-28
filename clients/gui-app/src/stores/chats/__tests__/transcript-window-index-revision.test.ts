@@ -136,6 +136,120 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
     // overwriting it with 0 here would be indistinguishable from a real gap.
     expect(result.indexRevision).toBe(5);
   });
+
+  /**
+   * The other half of the same rule, and the reason retaining is not merely
+   * tidy: the host's counter is per-VIEW, not per-subscriber.
+   * `TranscriptViewCache` holds one per chat session and restarts it only on an
+   * epoch change, so the FIRST delta after a rebuild carries the sequence
+   * forward from where it was - `6` here, not `1`.
+   *
+   * Reset the client to 0 at the rebuild boundary and that delta reads as a gap
+   * (`6 !== 0 + 1`), which voids the coordinate and asks for a resnapshot,
+   * which answers `null` again, which resets again. This asserts the delta
+   * lands instead, so the loop cannot be reintroduced by a change that only
+   * looks symmetric.
+   */
+  it("accepts the next delta after a rebuild, because the host's counter carried on", () => {
+    const rebuilt = applyWindowedSnapshot(windowAtRevision(5), {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+
+    const delta = applyIndexChange(rebuilt, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: 6,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0", 0) }],
+        },
+      ],
+    });
+
+    expect(delta.invalidated).toBe(false);
+    expect(delta.indexRevision).toBe(6);
+  });
+
+  /**
+   * A rebuild re-streams the whole skeleton INTO the array the previous stream
+   * left, so a dropped chunk of the replacement lands on ordinals that are
+   * already occupied: the array has no holes and `coversEveryOrdinal` vouches
+   * for entries this stream never sent. The client then declares the delivery
+   * complete while holding the previous stream's metadata - and the missing
+   * chunk is exactly the one carrying whatever changed while it was away.
+   *
+   * Completeness therefore has to be answered per STREAM, which is what
+   * `skeletonStreamCoveredThrough` is for.
+   */
+  it("detects a dropped chunk of a REPLACEMENT stream that old entries would mask", () => {
+    const complete = windowAtRevision(5);
+    // Sanity: the fixture really is complete and has no holes, so the masking
+    // this test is about is available to happen.
+    expect(complete.skeletonComplete).toBe(true);
+
+    const rebuilt = applyWindowedSnapshot(complete, {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+    // The claim is dropped at the boundary; the entries are not.
+    expect(rebuilt.skeletonComplete).toBe(false);
+    expect(rebuilt.skeleton).toHaveLength(10);
+
+    const first = applySkeletonChunk(rebuilt, {
+      epoch: 4,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 4),
+      isFinal: false,
+    });
+    // The chunk covering ordinals 4-6 never arrives.
+    const final = applySkeletonChunk(first, {
+      epoch: 4,
+      fromOrdinal: 7,
+      entries: skeletonEntries(7, 3),
+      isFinal: true,
+    });
+
+    // Every ordinal still HAS an entry - 4-6 are the previous stream's - so a
+    // hole scan reports a complete skeleton. Only the per-stream prefix knows.
+    expect(final.skeleton.filter((entry) => entry !== undefined)).toHaveLength(
+      10,
+    );
+    expect(final.skeletonComplete).toBe(false);
+    expect(final.invalidated).toBe(true);
+  });
+
+  /**
+   * The negative, and the constraint that shaped the fix: `indexRevision: null`
+   * also covers the host state in which `reconcileWindowedIndex` returns early
+   * and emits NO skeleton at all. Clearing the entries there would blank the
+   * transcript to detect a chunk that was never going to arrive.
+   *
+   * So the entries stay renderable and only the completeness claim drops -
+   * which is also what arms the recovery, since `chunkedDeliveryIncomplete()`
+   * reads exactly this boolean and the stream-completion watchdog reads that.
+   */
+  it("keeps the entries renderable when a rebuild snapshot has no stream behind it", () => {
+    const rebuilt = applyWindowedSnapshot(windowAtRevision(5), {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    });
+
+    expect(
+      rebuilt.skeleton.filter((entry) => entry !== undefined),
+    ).toHaveLength(10);
+    expect(rebuilt.spans.length).toBeGreaterThan(0);
+    // The signal `chunkedDeliveryIncomplete()` reads, so the watchdog fires and
+    // the window does not sit incomplete forever.
+    expect(rebuilt.skeletonComplete).toBe(false);
+  });
 });
 
 describe("applyWindowedSnapshot: a steady-state frame always carries a real number", () => {

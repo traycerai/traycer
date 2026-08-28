@@ -118,6 +118,28 @@ export interface TranscriptWindow {
   /** Set by the chunk carrying `isFinal`, once its length agrees with `rowCount`. */
   readonly skeletonComplete: boolean;
   /**
+   * Exclusive end of the contiguous prefix the CURRENT skeleton stream has
+   * delivered, counted from ordinal 0.
+   *
+   * Completeness has to be answered per STREAM, and the merged `skeleton` array
+   * cannot answer it. A rebuild re-streams the whole skeleton into the array
+   * the previous one left, so a dropped chunk of the REPLACEMENT stream is
+   * filled by the entries already sitting at those ordinals: the array has no
+   * holes, `coversEveryOrdinal` succeeds, and the client declares a delivery
+   * complete whose missing chunk carried the very `updated` metadata it needed.
+   * The stale entries - and the bodies they vouch for - then survive the whole
+   * connection.
+   *
+   * A contiguous prefix is sufficient because the producer chunks the whole
+   * skeleton from ordinal 0 in order (`chunkRowSkeleton` over `view.skeleton`),
+   * so "the stream reached `rowCount` without a gap" is exactly the question,
+   * and it costs one comparison per chunk rather than a scan.
+   *
+   * Reset to 0 wherever a new stream begins: a rebase, a void index, and the
+   * `indexRevision === null` rebuild boundary.
+   */
+  readonly skeletonStreamCoveredThrough: number;
+  /**
    * The host index revision this window's skeleton reflects, within its epoch.
    *
    * The ONLY signal that an `updated`-only index delta was lost. That frame
@@ -268,6 +290,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     rowCount: 0,
     skeleton: [],
     skeletonComplete: false,
+    skeletonStreamCoveredThrough: 0,
     indexRevision: 0,
     spans: [],
     liveMessages: [],
@@ -897,6 +920,36 @@ export function applyWindowedSnapshot(
   //
   // And only AHEAD: a snapshot serialized before a delta this client already
   // applied is a straggler, not a gap.
+  //
+  // ## What `indexRevision === null` means to each counter, in one place
+  //
+  // Five readings hang off this one signal, and three of them move different
+  // counters in different directions AT THE SAME BOUNDARY. That looks like
+  // inconsistency and is not - each counter is scoped differently on the HOST -
+  // so the set is stated together, because a reviewer who saw one of them alone
+  // proposed "fixing" it to match the others, and that proposal was a livelock.
+  //
+  // 1. NOT a gap (here). `missedDeltas` requires a non-null revision: null is
+  //    the host announcing a rebuild, and treating it as loss would invalidate
+  //    the window the incoming chunks are about to fill.
+  // 2. The REVISION is RETAINED (below). The host's counter is per-VIEW -
+  //    `TranscriptViewCache` holds one per chat session and restarts it only on
+  //    an epoch change - so the deltas after a rebuild carry it forward. A
+  //    client that reset to 0 would read the next delta as a gap, invalidate,
+  //    resnapshot, be told null again, and reset again: an unbounded loop.
+  // 3. The SKELETON COVERAGE is RESET (below). Completeness is a per-STREAM
+  //    fact, and the replacement stream merges into the array the previous one
+  //    left - so coverage inherited from the old stream would vouch for a
+  //    replacement chunk that never arrived.
+  // 4. The SUMMARY GENERATION is RESET (`chat-session-store.ts`). That counter
+  //    is per-SUBSCRIBER on the host, so a rebuild really can restart it at 1
+  //    and collide with the value this client holds.
+  // 5. The WATCHDOG DEADLINE restarts (`chat-session-store.ts`). A rebuild is a
+  //    fresh stream arriving; an aux-only snapshot is not, and must not
+  //    postpone a stall already being measured.
+  //
+  // Per-view retains. Per-subscriber and per-stream reset. That is the whole
+  // rule, and it is a fact about the host rather than a convention here.
   const missedDeltas =
     !rebased &&
     input.indexRevision !== null &&
@@ -917,17 +970,41 @@ export function applyWindowedSnapshot(
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
           // would lose the client's place in the delta sequence.
+          //
+          // And the revision must NOT be reset to 0 here, which looks like the
+          // symmetric thing to do and is a livelock. The host's counter is
+          // per-VIEW, not per-subscriber - `TranscriptViewCache` holds one per
+          // chat session and restarts it only on an epoch change - so the
+          // deltas after a rebuild carry it forward from wherever it was. A
+          // client that reset to 0 would read the very next delta as a gap
+          // (`revision !== held + 1`), invalidate, resnapshot, receive `null`
+          // again, and reset again, forever.
           indexRevision: input.indexRevision ?? window.indexRevision,
-          // RE-DERIVED, never carried. A same-epoch snapshot can raise
-          // `rowCount` - an `indexChanged` append frame that was dropped while
-          // the stream survived is exactly that - and spreading `...window`
-          // carried `skeletonComplete: true` across the change. Aux-only
-          // snapshots do not restream the skeleton and the completion watchdog
-          // reads only this boolean, so the client then declared a SHORT
-          // skeleton complete and never repaired it.
+          // RE-DERIVED, never carried, and FALSE outright at a rebuild.
+          //
+          // Two different losses, one field. A same-epoch snapshot can raise
+          // `rowCount` - an `indexChanged` append frame dropped while the
+          // stream survived is exactly that - and spreading `...window` carried
+          // `skeletonComplete: true` across the change, so the client declared
+          // a SHORT skeleton complete and never repaired it.
+          //
+          // The other is the rebuild. `indexRevision === null` says a full
+          // replacement skeleton is coming, and it streams into the array this
+          // window already holds - so completeness assembled from the PREVIOUS
+          // stream would vouch for a replacement chunk that never arrived. The
+          // entries stay (an invalidated host emits no skeleton at all, and
+          // blanking the transcript to detect a maybe-dropped chunk is a worse
+          // trade); what goes is the CLAIM that they are a complete delivery.
+          // `skeletonStreamCoveredThrough` below is what re-establishes it, and
+          // the completion watchdog is what recovers a stream that never comes.
           skeletonComplete:
+            input.indexRevision !== null &&
             window.skeletonComplete &&
             coversEveryOrdinal(window.skeleton, input.rowCount),
+          skeletonStreamCoveredThrough:
+            input.indexRevision === null
+              ? 0
+              : window.skeletonStreamCoveredThrough,
           invalidated: false,
           clock,
         };
@@ -1052,6 +1129,16 @@ export function applySkeletonChunk(
     skeleton[chunk.fromOrdinal + index] = chunk.entries[index];
   }
   const complete = chunk.isFinal;
+  // How far THIS stream has reached, contiguously from ordinal 0.
+  //
+  // A chunk that does not begin exactly where the stream left off means its
+  // predecessor was dropped, and the prefix stops advancing there for the rest
+  // of the stream - which is the whole point: nothing a later chunk delivers
+  // can repair a hole behind it.
+  const coveredThrough =
+    chunk.fromOrdinal === window.skeletonStreamCoveredThrough
+      ? chunk.fromOrdinal + chunk.entries.length
+      : window.skeletonStreamCoveredThrough;
   // Chunks were lost. Serving ordinals off an index the client KNOWS is
   // incomplete is the one thing the coordinate cannot survive, so declare it
   // void and let the caller re-request rather than render a transcript that is
@@ -1061,11 +1148,23 @@ export function applySkeletonChunk(
   // length is one past the highest ordinal ever assigned - a dropped INTERIOR
   // chunk followed by the final one still ends at `rowCount`, and the holes in
   // between read as complete. Only every ordinal being present is completeness.
-  const lost = complete && !coversEveryOrdinal(skeleton, window.rowCount);
+  //
+  // And on a REBUILD not even that is enough, which is why the prefix above
+  // exists. The replacement stream merges into the array the previous one left,
+  // so a dropped chunk's ordinals are already occupied: there are no holes to
+  // find, and `coversEveryOrdinal` vouches for entries this stream never sent.
+  // Both conditions are kept because they catch different losses - the prefix
+  // catches a chunk the current stream dropped, the scan catches an array that
+  // has a hole for any other reason.
+  const lost =
+    complete &&
+    (coveredThrough < window.rowCount ||
+      !coversEveryOrdinal(skeleton, window.rowCount));
   const next: TranscriptWindow = {
     ...window,
     skeleton,
     skeletonComplete: complete && !lost,
+    skeletonStreamCoveredThrough: coveredThrough,
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
@@ -1329,6 +1428,14 @@ export function applyIndexChange(
     // holes, and a length test reads that as complete.
     skeletonComplete:
       window.skeletonComplete && coversEveryOrdinal(skeleton, input.rowCount),
+    // An `appended` delta seats its entries at the end and is part of the same
+    // delivery, so the prefix follows `rowCount` rather than being left behind
+    // - otherwise the next stream-completeness question would report a gap the
+    // delta itself just filled. `appendCursor` is where the appends stopped.
+    skeletonStreamCoveredThrough:
+      window.skeletonStreamCoveredThrough === window.rowCount
+        ? Math.max(appendCursor, input.rowCount)
+        : window.skeletonStreamCoveredThrough,
     clock: window.clock + 1,
   };
   return dropSpansForUpdatedOrdinals(next, invalidated);

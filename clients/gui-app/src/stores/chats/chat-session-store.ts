@@ -2725,15 +2725,45 @@ export function createChatSessionStoreWithNotificationDependencies(
      * shipped once. Past the cap it stops asking and leaves the partial state,
      * which is no worse than the behaviour this replaces.
      */
-    const armStreamCompletionWatchdog = (armWithoutReading: boolean): void => {
+    const armStreamCompletionWatchdog = (input: {
+      /**
+       * Whether to read completeness before arming.
+       *
+       * `false` for a caller whose state has not landed yet - a snapshot can be
+       * DEFERRED, so reading completeness here would read the window the
+       * snapshot is about to replace. Arming costs one idle timer; the
+       * fire-time check below is the authoritative one either way, and a missed
+       * arm is the failure that matters.
+       */
+      readonly readCompleteness: boolean;
+      /**
+       * Whether this caller is DELIVERY PROGRESS, and so entitled to restart
+       * the idle clock.
+       *
+       * The watchdog measures "has anything arrived lately", so only something
+       * that actually carries stream content may reset it. A chunk qualifies. A
+       * REBUILD snapshot qualifies - a fresh stream is starting behind it. An
+       * aux-only snapshot does not: it carries no chunk, and an active chat
+       * re-broadcasts one on every queue change and approval. Letting those
+       * restart the deadline postpones the stall detector for as long as the
+       * chat stays busy, which is exactly when a dropped chunk is most likely
+       * and least affordable - the transcript keeps its missing rows for the
+       * rest of the connection and nothing ever asks again.
+       */
+      readonly restartDeadline: boolean;
+    }): void => {
+      // Teardown first, and it always CLEARS - the guard below must never be
+      // able to leave a timer running on a disposed store.
+      if (disposed || !windowedLine) {
+        clearStreamCompletionWatchdog();
+        return;
+      }
+      // A non-progress arm with a deadline already running is a no-op: the
+      // timer in flight is the one measuring this stall, and replacing it with
+      // an identical one that starts now is the postponement itself.
+      if (!input.restartDeadline && streamCompletionTimer !== null) return;
       clearStreamCompletionWatchdog();
-      if (disposed || !windowedLine) return;
-      // `armWithoutReading` skips the pre-check for a caller whose state has
-      // not landed yet - a snapshot can be DEFERRED, so reading completeness
-      // here would read the window the snapshot is about to replace. Arming
-      // costs one idle timer; the fire-time check below is the authoritative
-      // one either way, and a missed arm is the failure that matters.
-      if (!armWithoutReading && !chunkedDeliveryIncomplete()) {
+      if (input.readCompleteness && !chunkedDeliveryIncomplete()) {
         // Completed: the next stall starts from a clean budget.
         watchdogRestreamsForEpoch = null;
         return;
@@ -3450,7 +3480,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // was itself dropped, nothing else would ever ask again: the partial
         // index would simply read as valid. `true` because the apply above may
         // have DEFERRED, so completeness cannot be read here yet.
-        armStreamCompletionWatchdog(true);
+        armStreamCompletionWatchdog({
+          readCompleteness: false,
+          // A rebuild is a fresh stream starting, so it restarts the clock; an
+          // aux-only re-broadcast carries no chunk and must not. Same
+          // `indexRevision === null` discriminator the summary-generation reset
+          // above and the window's own skeleton-coverage reset read.
+          //
+          // OR a rebase, which is not the same condition and is easy to miss: a
+          // reindex can move the epoch while the host still HOLDS this
+          // subscriber's index, so the revision is a real number. A timer left
+          // running from the previous epoch is inert - its fire-time check
+          // returns on the epoch mismatch - so preserving it there would leave
+          // the new coordinate space with no watchdog at all.
+          restartDeadline: frame.snapshot.indexRevision === null || rebased,
+        });
         requestPlannedHydration();
       },
       onSkeletonChunk: (frame) => {
@@ -3472,7 +3516,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Re-arms while the skeleton is still short, disarms once it covers
         // `rowCount`. A stream that simply stops after a non-final chunk is
         // otherwise indistinguishable from one still in progress.
-        armStreamCompletionWatchdog(false);
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
         requestPlannedHydration();
       },
       onIndexChanged: (frame) => {
@@ -3662,7 +3709,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The gap check above only fires when a LATER chunk exposes the hole,
         // so it cannot see the stream simply stopping. Armed after the `set`
         // so the watchdog reads the assembled length this chunk produced.
-        armStreamCompletionWatchdog(false);
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
       },
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {

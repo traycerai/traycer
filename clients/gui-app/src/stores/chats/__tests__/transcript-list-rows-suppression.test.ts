@@ -91,6 +91,7 @@ function windowOf(
     indexRevision: 1,
     skeleton,
     skeletonComplete: true,
+    skeletonStreamCoveredThrough: rowCount,
     spans,
     liveMessages: [],
     liveEvents: [],

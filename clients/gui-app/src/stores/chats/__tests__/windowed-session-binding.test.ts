@@ -1283,6 +1283,74 @@ describe("index deltas", () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * The watchdog measures "has anything arrived lately", so only something that
+   * actually carries stream content may restart its clock.
+   *
+   * An aux-only re-broadcast carries none - it is the same snapshot re-sent
+   * against an unchanged skeleton for a queue change or an approval - and an
+   * active chat produces them constantly. Restarting the deadline on each one
+   * postpones stall detection for as long as the chat stays busy, which is
+   * exactly when a dropped chunk is most likely and least affordable: the
+   * transcript keeps its missing rows for the rest of the connection because
+   * nothing ever asks again.
+   *
+   * The fixture is deliberately arithmetic: two aux snapshots inside one
+   * deadline, and a total elapsed time well past it. If aux traffic restarts
+   * the clock, the watchdog never fires.
+   */
+  it("does not let aux-only snapshots postpone the stall watchdog", () => {
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      // A rebuild snapshot promising two rows. Its skeleton chunk never
+      // arrives, so delivery is incomplete from here on.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.resnapshotCount()).toBe(0);
+
+      const auxFrame = windowedSnapshot({
+        epoch: 4,
+        rowCount: 2,
+        tailFromOrdinal: 0,
+        tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+        accumulatedFileChangeCount: 0,
+      });
+      const sendAux = (): void => {
+        harness.callbacks().onWindowedSnapshot({
+          ...auxFrame,
+          // A HELD revision - the host has this client's index and is
+          // re-broadcasting aux state, not rebuilding.
+          snapshot: { ...auxFrame.snapshot, indexRevision: 0 },
+        });
+      };
+
+      // Two aux re-broadcasts, each comfortably inside the deadline.
+      vi.advanceTimersByTime(20_000);
+      sendAux();
+      vi.advanceTimersByTime(20_000);
+      sendAux();
+      // 40s elapsed, still under the 45s deadline: nothing should have fired
+      // yet either, or the test would pass for the wrong reason.
+      expect(harness.resnapshotCount()).toBe(0);
+
+      vi.advanceTimersByTime(10_000);
+
+      // 50s since the stream went quiet. The stall is real and reported.
+      expect(harness.resnapshotCount()).toBe(1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("accumulated-change chunks", () => {

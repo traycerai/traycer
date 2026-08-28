@@ -86,6 +86,7 @@ function windowOf(input: {
     indexRevision: 1,
     skeleton: input.skeleton,
     skeletonComplete: input.skeletonComplete,
+    skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
     spans: input.spans,
     liveMessages: [],
     liveEvents: [],

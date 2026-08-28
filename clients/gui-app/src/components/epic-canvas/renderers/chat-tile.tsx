@@ -1217,11 +1217,31 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     const chatId = props.node.id;
     const timer = setTimeout(() => {
       consumeTranscriptJump(hostId, chatId, pendingTranscriptJumpId);
+      // The ordinal goes with it, and this is the ONLY place that can release
+      // it on this path. The effect above releases it after consuming - but it
+      // opens with `if (transcriptJump === undefined) return`, and consuming is
+      // exactly what makes that true, so the release there is unreachable once
+      // the TTL has fired. Left set, the ordinal stays in
+      // `requiredHydrationOrdinalsOf`: the planner re-requests a row nobody is
+      // waiting for on every pass, and the budget protects its span from
+      // eviction for the life of the session.
+      //
+      // Safe without an id check of its own. This timer is keyed on
+      // `pendingTranscriptJumpId`, so a newer jump replaces the effect and
+      // clears it before it can fire - the request-id guard is the dependency
+      // array, and `consumeTranscriptJump` carries the same id anyway.
+      requestTranscriptOrdinal(null);
     }, TRANSCRIPT_JUMP_TTL_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [consumeTranscriptJump, hostId, pendingTranscriptJumpId, props.node.id]);
+  }, [
+    consumeTranscriptJump,
+    hostId,
+    pendingTranscriptJumpId,
+    props.node.id,
+    requestTranscriptOrdinal,
+  ]);
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.

@@ -182,6 +182,8 @@ describe("chatTurnMinimapItems caching", () => {
       indexRevision: 1,
       skeleton: entries,
       skeletonComplete: true,
+      // Fully delivered: the prefix reached the end of the index.
+      skeletonStreamCoveredThrough: entries.length,
       // The assistant row is hydrated - it is the one taking tokens.
       spans: [
         {
