@@ -145,7 +145,11 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
+  /** Uncommitted workspace draft on the summary chip. */
+  readonly draftPending?: boolean;
   readonly onDiscardStaged: (() => void) | null;
+  /** True while a captured Update/teardown run is in flight. */
+  readonly discardDisabled: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   /**
    * Re-derives these folders from disk, or `null` on a surface with no host to
@@ -260,6 +264,7 @@ export function WorkspaceFolderSummaryControl(props: {
         items={props.items}
         readOnly
         bindingResolved={props.bindingResolved}
+        draftPending={props.draftPending === true}
         className="max-w-full"
       />
     );
@@ -305,6 +310,7 @@ export function WorkspaceFolderSummaryControl(props: {
       items={props.items}
       readOnly={false}
       bindingResolved={props.bindingResolved}
+      draftPending={props.draftPending === true}
       className="justify-start overflow-hidden"
     />
   );
@@ -364,9 +370,6 @@ export function WorkspaceFolderSummaryControl(props: {
         // folder details" - an error toast the user never asked for, next to a
         // Refresh button correctly rendered disabled.
         if (open && canRefresh) triggerRefresh();
-        if (!open && props.onDiscardStaged !== null) {
-          props.onDiscardStaged();
-        }
       }}
     >
       {popoverTrigger}
@@ -401,6 +404,9 @@ export function WorkspaceFolderSummaryControl(props: {
             onUpdate={props.onUpdate === null ? null : handleUpdate}
             updateEnabled={props.updateEnabled}
             updatePending={props.updatePending}
+            onDiscardStaged={props.onDiscardStaged}
+            discardDisabled={props.discardDisabled}
+            draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}
             nestedInPopover={dialogBoundaryEl !== null}

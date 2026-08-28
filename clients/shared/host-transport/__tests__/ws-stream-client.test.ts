@@ -1338,6 +1338,98 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
+  it("marks missing browser streams unsupported without poisoning terminal.subscribe", async () => {
+    const {
+      "browser.sessions": browserSessionsRegistry,
+      "browser.screencast": browserScreencastRegistry,
+      ...oldHostStreamRpcRegistry
+    } = hostStreamRpcRegistry;
+    void browserSessionsRegistry;
+    void browserScreencastRegistry;
+
+    // What an old host acks: its own manifest intersected with the client's.
+    // This client names every method the old host does, so the intersection is
+    // the old host's manifest verbatim - browser methods simply absent.
+    const oldHostOpenAckManifest = buildStreamManifest(
+      oldHostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const observed: string[] = [];
+    const unsubscribe = client.subscribeMethodSupport(() => {
+      observed.push(
+        [
+          client.getMethodSupport("browser.sessions"),
+          client.getMethodSupport("browser.screencast"),
+          client.getMethodSupport("terminal.subscribe"),
+        ].join("|"),
+      );
+    });
+
+    const sessionsSubscription = client.subscribe("browser.sessions", {
+      epicId: "epic-1",
+    });
+    const screencastSubscription = client.subscribe("browser.screencast", {
+      epicId: "epic-1",
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+      role: "tile",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg",
+    });
+    const terminalSubscription = client.subscribe("terminal.subscribe", {
+      sessionId: "terminal-session-1",
+      cols: 80,
+      rows: 24,
+    });
+
+    await flush();
+    expect(sockets).toHaveLength(3);
+    for (const recorded of sockets) {
+      recorded.socket.fireOpen();
+      recorded.socket.fireText({
+        kind: "openAck",
+        manifest: oldHostOpenAckManifest,
+      });
+    }
+
+    expect(client.getMethodSupport("browser.sessions")).toBe("unsupported");
+    expect(client.getMethodSupport("browser.screencast")).toBe("unsupported");
+    expect(client.getMethodSupport("terminal.subscribe")).toBe("supported");
+    expect(observed).toEqual([
+      "unsupported|unsupported|supported",
+      "unsupported|unsupported|supported",
+    ]);
+
+    const terminalSocket = sockets[2].socket;
+    expect(terminalSocket.textSent).toHaveLength(2);
+    expect(parseText(terminalSocket.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "terminal.subscribe",
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      params: {
+        sessionId: "terminal-session-1",
+        cols: 80,
+        rows: 24,
+      },
+    });
+
+    unsubscribe();
+    sessionsSubscription.close();
+    screencastSubscription.close();
+    terminalSubscription.close();
+  });
+
   it("re-probes the full host manifest after reconnect and discovers a newly enabled method", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     const { factory, sockets } = makeFactory();
@@ -1369,7 +1461,10 @@ describe("WsStreamClient", () => {
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unsupported");
 
-    client.reconnectAll("host-endpoint-change", { probeFirst: false });
+    client.reconnectAll("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
     expect(
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unknown");
@@ -3301,7 +3396,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     // ones (this describe block runs on real timers).
     vi.useFakeTimers();
     try {
-      client.reconnectAll("wake-resume", { probeFirst: true });
+      client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
       // The probe is a real ping on the wire...
       const pinged = sockets[0].socket.textSent.some((raw) =>
         raw.includes('"kind":"ping"'),
@@ -3341,7 +3436,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     vi.useFakeTimers();
     try {
-      client.reconnectAll("wake-resume", { probeFirst: true });
+      client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
       // A probe really went out, so the re-dial below is the TIMEOUT path and
       // not the "nothing live to probe" shortcut.
       expect(
@@ -3378,7 +3473,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     // A concurrent wake re-dials and FULLY reconnects socket 1 while the
     // revalidation is still pending.
-    client.reconnectAll("wake-resume", { probeFirst: false });
+    client.reconnectAll("wake-resume", { probeFirst: false, wakeProbe: null });
     await wait(30);
     expect(sockets.length).toBeGreaterThanOrEqual(2);
     const socket1 = sockets[1].socket;
@@ -4858,7 +4953,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
 
     const sentBeforeProbe = stub.textSent.length;
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
     // The probe really went out on the SAME socket.
     expect(stub.textSent.length).toBe(sentBeforeProbe + 1);
     expect(parseText(stub.textSent[sentBeforeProbe]).kind).toBe("ping");
@@ -4890,7 +4985,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     const stub = await settleHandshake(sockets);
 
     vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
     expect(stub.closed).toBeNull();
 
     // No pong arrives; the 5s wake-probe timeout is the detector.
@@ -4925,7 +5020,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     // Sleep: the wall clock jumps far past every threshold with no timer run.
     vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
 
     // The probe's pong: the socket survived (kept, no reconnect) AND the gap
     // it answers is the whole sleep - that positive edge is the only recovery
@@ -4970,7 +5065,7 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     // A brief offline/resume cycle: well under pingIntervalMs (1s) + the 5s
     // recovery slack, so the gap-based arm can never fire for it.
     vi.setSystemTime(Date.now() + 2_000);
-    client.reconnectAll("wake-resume", { probeFirst: true });
+    client.reconnectAll("wake-resume", { probeFirst: true, wakeProbe: null });
 
     stub.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);

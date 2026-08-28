@@ -19,6 +19,10 @@ vi.mock("@/components/epic-canvas/canvas/tab-strip", () => ({
   TabStrip: () => null,
 }));
 
+vi.mock("@/components/epic-canvas/canvas/browser-tab-presentation", () => ({
+  useBrowserTabPresentation: () => null,
+}));
+
 const holder = vi.hoisted(() => ({ role: "owner" }));
 
 vi.mock("@/lib/epic-selectors", () => ({

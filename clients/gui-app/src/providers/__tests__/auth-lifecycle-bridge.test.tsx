@@ -68,6 +68,8 @@ function fakeChatHandle(
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => {
           calls.close += 1;
         },

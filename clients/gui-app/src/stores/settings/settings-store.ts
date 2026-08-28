@@ -30,6 +30,18 @@ import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
+export type BrowserLinkOpenMode = "in-app" | "external";
+export type BrowserLinkDefaultMode = BrowserLinkOpenMode | "per-kind";
+/**
+ * How a tab the AGENT opens via its browser REPL (`openTab`) is surfaced.
+ * `pip` floats it picture-in-picture, `tile` places it on the epic canvas,
+ * `off` keeps it fully in the background (hidden view + sidebar listing).
+ * Deliberately default-off: surfacing is opt-in, unlike the pre-setting
+ * behavior which always split the canvas.
+ */
+export type AgentTabSurfacingMode = "pip" | "tile" | "off";
+export const DEFAULT_AGENT_TAB_SURFACING_MODE: AgentTabSurfacingMode = "off";
+const DEFAULT_BROWSER_LINK_OPEN_MODE: BrowserLinkOpenMode = "in-app";
 export type MinimapSide = "left" | "right";
 export type MinimapPlacement = MinimapSide | "hide";
 // Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
@@ -130,6 +142,20 @@ export interface SettingsState {
    * the chat composer as a blockquote.
    */
   quoteReplyEnabled: boolean;
+  /** Global default for http(s) links. */
+  browserLinkDefaultMode: BrowserLinkDefaultMode;
+  /** Terminal plain URL / OSC-8 default used when global mode is per-kind. */
+  terminalBrowserLinkOpenMode: BrowserLinkOpenMode;
+  /** Markdown anchor default used when global mode is per-kind. */
+  markdownBrowserLinkOpenMode: BrowserLinkOpenMode;
+  /** Origins designated from terminal URL output for the host classifier. */
+  browserDevOrigins: ReadonlyArray<string>;
+  /**
+   * What happens visually when the agent opens a browser tab. The agent's
+   * REPL tabs are a host capability, separate from link routing, and this
+   * preference also governs suppressing them.
+   */
+  agentTabSurfacingMode: AgentTabSurfacingMode;
   /**
    * Cmd/Ctrl+Enter mid-turn steering. Opt-out (default ON): when enabled,
    * pressing Cmd+Enter while a turn is running on a steer-capable harness sends
@@ -182,6 +208,12 @@ export interface SettingsState {
   setVoiceLanguage: (value: string) => void;
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
+  setBrowserLinkDefaultMode: (mode: BrowserLinkDefaultMode) => void;
+  setTerminalBrowserLinkOpenMode: (mode: BrowserLinkOpenMode) => void;
+  setMarkdownBrowserLinkOpenMode: (mode: BrowserLinkOpenMode) => void;
+  addBrowserDevOrigin: (origin: string) => void;
+  removeBrowserDevOrigin: (origin: string) => void;
+  setAgentTabSurfacingMode: (mode: AgentTabSurfacingMode) => void;
   setSteerOnModEnterEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
@@ -218,6 +250,11 @@ type PersistedSettingsState = Pick<
   | "voiceLanguage"
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
+  | "browserLinkDefaultMode"
+  | "terminalBrowserLinkOpenMode"
+  | "markdownBrowserLinkOpenMode"
+  | "browserDevOrigins"
+  | "agentTabSurfacingMode"
   | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
   | "workspaceFileWordWrap"
@@ -287,6 +324,11 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     voiceLanguage: state.voiceLanguage,
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
+    browserLinkDefaultMode: state.browserLinkDefaultMode,
+    terminalBrowserLinkOpenMode: state.terminalBrowserLinkOpenMode,
+    markdownBrowserLinkOpenMode: state.markdownBrowserLinkOpenMode,
+    browserDevOrigins: state.browserDevOrigins,
+    agentTabSurfacingMode: state.agentTabSurfacingMode,
     steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
     workspaceFileWordWrap: state.workspaceFileWordWrap,
@@ -324,6 +366,11 @@ export const useSettingsStore = create<SettingsState>()(
       voiceLanguage: "auto",
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
+      browserLinkDefaultMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
+      terminalBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
+      markdownBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
+      browserDevOrigins: [],
+      agentTabSurfacingMode: DEFAULT_AGENT_TAB_SURFACING_MODE,
       steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       workspaceFileWordWrap: null,
@@ -392,6 +439,34 @@ export const useSettingsStore = create<SettingsState>()(
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
+      setBrowserLinkDefaultMode: makeSetter(set, "browserLinkDefaultMode"),
+      setTerminalBrowserLinkOpenMode: makeSetter(
+        set,
+        "terminalBrowserLinkOpenMode",
+      ),
+      setMarkdownBrowserLinkOpenMode: makeSetter(
+        set,
+        "markdownBrowserLinkOpenMode",
+      ),
+      addBrowserDevOrigin: (origin) => {
+        set((s) => {
+          if (s.browserDevOrigins.includes(origin)) return s;
+          return {
+            browserDevOrigins: [...s.browserDevOrigins, origin].slice(-50),
+          };
+        });
+      },
+      removeBrowserDevOrigin: (origin) => {
+        set((s) => {
+          const browserDevOrigins = s.browserDevOrigins.filter(
+            (candidate) => candidate !== origin,
+          );
+          return browserDevOrigins.length === s.browserDevOrigins.length
+            ? s
+            : { browserDevOrigins };
+        });
+      },
+      setAgentTabSurfacingMode: makeSetter(set, "agentTabSurfacingMode"),
       setSteerOnModEnterEnabled: makeSetter(set, "steerOnModEnterEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),
       patchDiffViewerPreferences: (patch) => {
@@ -438,6 +513,31 @@ export const useSettingsStore = create<SettingsState>()(
             persistedMinimapSide === "hide"
               ? persistedMinimapSide
               : DEFAULT_MINIMAP_SIDE,
+          agentTabSurfacingMode: isAgentTabSurfacingMode(
+            merged.agentTabSurfacingMode,
+          )
+            ? merged.agentTabSurfacingMode
+            : DEFAULT_AGENT_TAB_SURFACING_MODE,
+          browserLinkDefaultMode: isBrowserLinkDefaultMode(
+            merged.browserLinkDefaultMode,
+          )
+            ? merged.browserLinkDefaultMode
+            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          terminalBrowserLinkOpenMode: isBrowserLinkOpenMode(
+            merged.terminalBrowserLinkOpenMode,
+          )
+            ? merged.terminalBrowserLinkOpenMode
+            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          markdownBrowserLinkOpenMode: isBrowserLinkOpenMode(
+            merged.markdownBrowserLinkOpenMode,
+          )
+            ? merged.markdownBrowserLinkOpenMode
+            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          browserDevOrigins: Array.isArray(merged.browserDevOrigins)
+            ? merged.browserDevOrigins.filter(
+                (origin) => typeof origin === "string",
+              )
+            : [],
           workspaceFileWordWrap:
             typeof merged.workspaceFileWordWrap === "boolean"
               ? merged.workspaceFileWordWrap
@@ -450,4 +550,22 @@ export const useSettingsStore = create<SettingsState>()(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isBrowserLinkOpenMode(
+  value: unknown,
+): value is BrowserLinkOpenMode {
+  return value === "in-app" || value === "external";
+}
+
+export function isBrowserLinkDefaultMode(
+  value: unknown,
+): value is BrowserLinkDefaultMode {
+  return isBrowserLinkOpenMode(value) || value === "per-kind";
+}
+
+export function isAgentTabSurfacingMode(
+  value: unknown,
+): value is AgentTabSurfacingMode {
+  return value === "pip" || value === "tile" || value === "off";
 }

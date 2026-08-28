@@ -23,7 +23,6 @@ import type { HostRpcRegistry } from "@/lib/host";
 // settings seed a brand-new draft; the create path re-keys on the placement
 // host. A pinned landing composer's seed defaults may come from the effective
 // host - a nuance, not a placement leak.
-import { activeHostIdOrNull } from "@/lib/host/runtime";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
@@ -467,8 +466,11 @@ export function useLandingComposerActions(
         return;
       }
       // Mark before the one-shot create request so the existence reconciler
-      // cannot prune the result while `epic.listTasks` still lags it.
-      markEpicCreatedThisSession(epicId);
+      // cannot prune the result while `epic.listTasks` still lags it. The
+      // create host rides along so the epic session opens against the machine
+      // that holds the local-first warm slot - any other host cold-opens into
+      // a cloud NOT_FOUND until the create host's background connect lands.
+      markEpicCreatedThisSession(epicId, activeHostId);
 
       void createLandingEpic({
         epicId,
@@ -500,6 +502,12 @@ export function useLandingComposerActions(
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
           clearConsumedLandingWorktreeIntent(workspaceContext);
+          // Re-anchor the create-race window on COMPLETION - see the terminal
+          // flow's copy for why. This flow needs it most: the tab is opened
+          // below, INSIDE this handler, so a create slower than the window
+          // would hand the session an already-expired seed and open it on the
+          // effective host - the exact race this marker exists to prevent.
+          markEpicCreatedThisSession(epicId, activeHostId);
           // The host already kicked the provider turn from `initialMessage`;
           // jump the handoff straight to `sending` so the driver does not
           // re-send. (Re-sends are harmless - the host dedupes on
@@ -582,7 +590,11 @@ export function useLandingComposerActions(
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
       if (text.trim().length === 0 && !hasImages) return;
-      const draftId = ensureSubmissionDraft(args.draftId, editorContent);
+      const draftId = ensureSubmissionDraft(
+        args.draftId,
+        editorContent,
+        hostId,
+      );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return;
       // The runtime's stored content already reflects the latest edit (every
@@ -716,6 +728,13 @@ export function useLandingComposerActions(
       const epicId = uuidv4();
       const now = Date.now();
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
+      // The identity this create belongs to, captured synchronously. The
+      // create's continuation outlives this component, and the completion
+      // re-anchor below is an INSERT into account-scoped memory - see its own
+      // comment for why that has to be checked. `dispatchSubmission` needs no
+      // equivalent capture: its retired-settlement early return already turns
+      // the whole continuation back on an identity teardown.
+      const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
       // Stored untitled; the title is generated from the first terminal prompt,
       // and render surfaces fall back via `epicDisplayTitle` meanwhile. (The
       // tui-agent tile is named separately in `use-create-tui-agent.ts`.)
@@ -731,7 +750,10 @@ export function useLandingComposerActions(
       // Terminal-agent create registers no initial-chat handoff, so this
       // synchronous marker is what keeps the existence reconciler from
       // force-closing the tab before `epic.listTasks` reflects the new epic.
-      markEpicCreatedThisSession(epicId);
+      // The create host rides along for session placement; this flow
+      // navigates BEFORE the host round-trip, so the session provider mounts
+      // while only the create host can ever serve the epic.
+      markEpicCreatedThisSession(epicId, hostId);
       const replaced =
         workspaceContext.draftId === null
           ? null
@@ -782,6 +804,27 @@ export function useLandingComposerActions(
             // This staged selection now belongs to a successfully-created
             // epic. Until this point a retry must see the exact same intent.
             clearConsumedLandingWorktreeIntent(workspaceContext);
+            // Re-anchor the create-race window on COMPLETION. The marker
+            // above is written before the request because the reconciler
+            // needs it that early, but the race it bounds - the host's
+            // deferred cloud connect - only starts now, and `epic.create`
+            // can legitimately hold a 30s host-side deadline before landing.
+            // Measured from the request instead, a slow create burns its own
+            // window and the session it protects opens unprotected.
+            //
+            // Only for the identity that dispatched it. These markers are
+            // account-scoped, and `auth-lifecycle-bridge` clears them on
+            // sign-out/user-switch precisely so the NEXT identity's persisted
+            // tabs reconcile normally. This continuation survives that
+            // teardown, so an unguarded re-mark would restore the outgoing
+            // account's host seed and reconciliation exemption for an epic id
+            // the incoming account may also have a tab for.
+            if (
+              (useAuthStore.getState().profile?.userId ?? null) ===
+              dispatchUserId
+            ) {
+              markEpicCreatedThisSession(epicId, hostId);
+            }
             return terminalAgentCreateFn({
               epicId,
               tabId,
@@ -881,16 +924,20 @@ export function useLandingComposerActions(
 function ensureSubmissionDraft(
   draftId: string | null,
   content: JsonContent,
+  hostId: string,
 ): string {
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore.getState().createDraft(
     useComposerRunSettingsStore
       .getState()
-      // Through the shared reader - the spine carries no identity after
-      // P4.2, so asking it seeded every draft from the unresolved-host
-      // bucket instead of the effective host's saved run settings.
-      .getGlobalRunSettings(activeHostIdOrNull()),
+      // The placement host is the same one whose workspace is restored below;
+      // a pinned pristine composer must not seed either setting from the
+      // app-wide active host.
+      .getGlobalRunSettings(hostId),
   );
+  useLandingDraftStore
+    .getState()
+    .restoreDraftWorkspaceForHost(createdDraftId, hostId);
   useLandingDraftStore
     .getState()
     .setDraftContent(createdDraftId, content, null);

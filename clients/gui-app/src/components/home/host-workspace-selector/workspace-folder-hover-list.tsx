@@ -3,10 +3,7 @@ import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surfac
 import { cn } from "@/lib/utils";
 import { CopyPathButton } from "./copy-path-button";
 import type { WorkspaceRunItem } from "./workspace-run-item";
-import {
-  workspaceRunBranchSourceLabel,
-  workspaceRunPath,
-} from "./workspace-run-item";
+import { stagedFolderApplyHint, workspaceRunPath } from "./workspace-run-item";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
 
 /**
@@ -38,6 +35,7 @@ export function WorkspaceFolderHoverList(props: {
     >
       {props.items.map((item) => {
         const runPath = workspaceRunPath(item);
+        const applyHint = stagedFolderApplyHint(item);
         return (
           <div key={item.key} className="flex min-w-0 flex-col gap-0.5">
             <div className="flex min-w-0 items-start gap-1.5">
@@ -60,24 +58,7 @@ export function WorkspaceFolderHoverList(props: {
                 </span>
               </div>
             </div>
-            {runPath === null ? (
-              <span className="break-words pl-5 text-ui-xs leading-5 text-muted-foreground/70">
-                {newWorktreeDetail(item)}
-              </span>
-            ) : (
-              <span className="flex min-w-0 items-start gap-1 pl-5">
-                <span
-                  className="block min-w-0 flex-1 break-all text-ui-xs leading-5 text-muted-foreground/70"
-                  data-testid="workspace-hover-run-path"
-                >
-                  {runPath}
-                </span>
-                <CopyPathButton
-                  path={runPath}
-                  testId="workspace-hover-copy-path"
-                />
-              </span>
-            )}
+            <HoverListDetail applyHint={applyHint} runPath={runPath} />
           </div>
         );
       })}
@@ -85,9 +66,30 @@ export function WorkspaceFolderHoverList(props: {
   );
 }
 
-function newWorktreeDetail(item: WorkspaceRunItem): string {
-  const source = workspaceRunBranchSourceLabel(item.currentIntent);
-  return source === null
-    ? "New worktree · created on send"
-    : `From ${source} · created on send`;
+function HoverListDetail(props: {
+  readonly applyHint: string | null;
+  readonly runPath: string | null;
+}) {
+  if (props.applyHint !== null) {
+    return (
+      <span
+        className="break-words pl-5 text-ui-xs leading-5 text-muted-foreground/70"
+        data-testid="workspace-hover-draft-hint"
+      >
+        {props.applyHint}
+      </span>
+    );
+  }
+  if (props.runPath === null) return null;
+  return (
+    <span className="flex min-w-0 items-start gap-1 pl-5">
+      <span
+        className="block min-w-0 flex-1 break-all text-ui-xs leading-5 text-muted-foreground/70"
+        data-testid="workspace-hover-run-path"
+      >
+        {props.runPath}
+      </span>
+      <CopyPathButton path={props.runPath} testId="workspace-hover-copy-path" />
+    </span>
+  );
 }

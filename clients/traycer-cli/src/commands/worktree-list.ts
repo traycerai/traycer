@@ -1,8 +1,8 @@
 import {
-  worktreeListAllForHostRequestSchemaV14,
-  worktreeListAllForHostResponseSchemaV14,
+  worktreeListAllForHostRequestSchemaV16,
+  worktreeListAllForHostResponseSchemaV16,
 } from "@traycer/protocol/host";
-import type { WorktreeHostEntryV14 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host";
 import {
   WORKTREE_TIER_LABEL,
   classifyWorktreeTier,
@@ -10,7 +10,7 @@ import {
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -31,7 +31,7 @@ const DEFAULT_WORKTREE_LIST_PAGE_LIMIT = 32;
  * feed the greens, so classifying unprobed entries would misread every worktree
  * as Review. Null mirrors the probe-skipped semantics of the other fields.
  */
-export type WorktreeListRow = WorktreeHostEntryV14 & {
+export type WorktreeListRow = WorktreeHostEntryV16 & {
   readonly tier: WorktreeTier | null;
 };
 
@@ -52,12 +52,30 @@ interface WorktreeListPage {
 
 /**
  * `traycer worktree list` - host-wide listing of every Traycer-managed
- * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost@1.4`;
- * the canonical (latest) request carries `includeActivity`, so a v1.0 host is
- * bridged up transparently (enriched fields default to empty `owners` / `null`
- * timestamps). Human mode renders a scannable table; `--json` hands the
- * enriched entries to the caller (the skill), each carrying the shared
- * classifier's computed `tier` (null without `--include-activity`).
+ * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost` at
+ * the CANONICAL v1.6 contract; the request carries `includeActivity`, so a
+ * v1.0 host is bridged up transparently (enriched fields default to empty
+ * `owners` / `null` timestamps). Human mode renders a scannable table;
+ * `--json` hands the enriched entries to the caller (the skill), each carrying
+ * the shared classifier's computed `tier` (null without `--include-activity`).
+ *
+ * The canonical parse is load-bearing, not tidiness. This read used to decode
+ * the v1.4 response, and Zod strips unknown keys, so two facts a current host
+ * sends were dropped before anything saw them:
+ *
+ *   - `gitUnreadable` (v1.6) - git cannot resolve the repository the worktree's
+ *     gitlink points at, so its branch and `uncommittedCount` are placeholders.
+ *     `classifyWorktreeTier` reads it at rung 1b and returns `review`
+ *     specifically so such a row does NOT read as an fs-only cleanup. Stripped,
+ *     the row fell through to rung 2 (`!gitRemovable`) and rendered `Orphaned`,
+ *     whose whole meaning is "forced cleanup, nothing to lose" - the one
+ *     reading the ladder is written to prevent, and the `traycer-housekeeping`
+ *     skill takes `tier` verbatim.
+ *   - `presence` (v1.5) - never consumed here, but it is part of the `--json`
+ *     contract the skill reads.
+ *
+ * The classifier tolerates the field's absence (older hosts omit it), which is
+ * why the loss was silent rather than a parse failure.
  */
 export function buildWorktreeListCommand(
   opts: WorktreeListCommandOpts,
@@ -128,7 +146,7 @@ async function requestWorktreeListPage(
   cursor: string | null,
   limit: number | null,
 ): Promise<WorktreeListPage> {
-  const request = parseUserInput(worktreeListAllForHostRequestSchemaV14, {
+  const request = parseUserInput(worktreeListAllForHostRequestSchemaV16, {
     includeActivity,
     // The CLI is a paged-listing caller, never a GUI per-selection probe.
     activityPaths: null,
@@ -141,8 +159,9 @@ async function requestWorktreeListPage(
   const result = await toAgentCliError(
     callHostRpc("worktree.listAllForHost", request),
   );
-  const parsed = parseHostResponse(
-    worktreeListAllForHostResponseSchemaV14,
+  const parsed = parseCanonicalHostResponse(
+    "worktree.listAllForHost",
+    worktreeListAllForHostResponseSchemaV16,
     result,
   );
   return {

@@ -224,6 +224,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
+  | "agentTabSurfacingMode"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"
@@ -361,6 +362,7 @@ export enum AnalyticsEvent {
   TabCreated = "tab_created",
   TabDuplicated = "tab_duplicated",
   TabSplit = "tab_split",
+  AgentTabSurfaced = "agent_tab_surfaced",
   TabMoved = "tab_moved",
   TabClosed = "tab_closed",
   ArtifactCreated = "artifact_created",
@@ -695,6 +697,14 @@ export interface AnalyticsEventProperties {
     readonly target: AnalyticsTargetKind;
   };
   readonly [AnalyticsEvent.TabSplit]: { readonly target: AnalyticsTargetKind };
+  readonly [AnalyticsEvent.AgentTabSurfaced]: {
+    readonly disposition: "float" | "tile" | "suppress";
+    readonly disposition_reason:
+      | "mode-off"
+      | "manual-pip-active"
+      | "pip-epic-hidden"
+      | null;
+  };
   readonly [AnalyticsEvent.TabMoved]: { readonly target: AnalyticsTargetKind };
   readonly [AnalyticsEvent.TabClosed]: { readonly target: AnalyticsTargetKind };
   readonly [AnalyticsEvent.ArtifactCreated]: {
@@ -1395,6 +1405,10 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["target"],
   ),
   ...eventKeyEntries([AnalyticsEvent.ArtifactCreated], ["kind"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.AgentTabSurfaced],
+    ["disposition", "disposition_reason"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.ArtifactOpened], ["source", "kind"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ArtifactStatusChanged],
@@ -1739,6 +1753,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     ANALYTICS_TARGETS,
   ),
   ...eventValueEntries(
+    [AnalyticsEvent.AgentTabSurfaced],
+    "disposition",
+    new Set(["float", "tile", "suppress"]),
+  ),
+  ...eventValueEntries(
     [
       AnalyticsEvent.ShareInviteSent,
       AnalyticsEvent.ShareRoleChanged,
@@ -1867,6 +1886,7 @@ function isAnalyticsMeasure(value: unknown): boolean {
  */
 const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
   "blocker",
+  "disposition_reason",
   "has_more",
   "result_count_bucket",
   "status",
@@ -1885,6 +1905,13 @@ function isEventScopedPropertyValue(
       );
     }
     return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
+  }
+  if (key === "disposition_reason") {
+    if (value === null) return event === AnalyticsEvent.AgentTabSurfaced;
+    return (
+      typeof value === "string" &&
+      new Set(["mode-off", "manual-pip-active", "pip-epic-hidden"]).has(value)
+    );
   }
   if (key === "result_count_bucket") {
     if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;

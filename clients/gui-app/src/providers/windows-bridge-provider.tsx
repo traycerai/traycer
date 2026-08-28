@@ -421,6 +421,10 @@ function hasFunctions(
   return true;
 }
 
+// `requestOpenDraftInNewWindow` is intentionally NOT listed: it is optional and
+// capability-probed at its call site (`use-draft-open-in-new-window`), for the
+// same skew reason as `perWindowState.clear` below - requiring it would fail
+// the whole bridge guard against a preload built before draft moves existed.
 const ROOT_FN_KEYS = [
   "list",
   "onChange",

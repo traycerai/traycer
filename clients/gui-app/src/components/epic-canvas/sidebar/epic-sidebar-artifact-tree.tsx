@@ -1602,6 +1602,9 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     nodePadRightClass(
       selectionMode ? false : canEdit,
       selectionMode ? false : showAdd,
+      // The artifact tree has no touch surface of its own; its controls always
+      // wait for hover.
+      false,
     ),
     selectionMode && "cursor-pointer",
     isActive

@@ -16,6 +16,7 @@ import {
 } from "@/stores/tile-find";
 import type { SnapshotDiffTileRef } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "../../tab-host-provider";
 
 interface SnapshotTestStore {
@@ -23,6 +24,10 @@ interface SnapshotTestStore {
   readonly messages: [];
   readonly liveAssistantMessage: null;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
+  // Empty, and `transcriptDerived: null` with it: this fixture is the
+  // pre-windowed line, where the contents ride the snapshot above.
+  readonly accumulatedFileChangeSummaries: [];
+  readonly transcriptDerived: null;
 }
 
 interface DiffPrimitiveCall {
@@ -37,6 +42,10 @@ interface DiffPrimitiveCall {
 const state = vi.hoisted(() => ({
   handle: null as {
     readonly store: UseBoundStore<StoreApi<SnapshotTestStore>>;
+    // The cumulative path addresses its on-demand contents by `(epicId,
+    // chatId, filePath, digest)`, so the handle has to carry the first two.
+    readonly epicId: string;
+    readonly chatId: string;
   } | null,
   buildPatch: vi.fn(),
   diffPrimitiveCalls: [] as DiffPrimitiveCall[],
@@ -104,18 +113,26 @@ function cumulativeChange(
 }
 
 function renderSnapshotTile(node: SnapshotDiffTileRef): void {
+  // The tile is a Query consumer on every path now: hash-backed tiles fetch by
+  // content hash and cumulative ones fetch by accumulated-change digest (D7).
+  // Production always mounts it under the app's provider; this supplies one.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   render(
-    <TabHostProvider hostId="host-1">
-      <TileFindScope
-        node={node}
-        viewTabId="view-1"
-        tileId={node.id}
-        epicId="epic-1"
-        isActive
-      >
-        <SnapshotDiffTileBody node={node} viewTabId="view-1" />
-      </TileFindScope>
-    </TabHostProvider>,
+    <QueryClientProvider client={queryClient}>
+      <TabHostProvider hostId="host-1">
+        <TileFindScope
+          node={node}
+          viewTabId="view-1"
+          tileId={node.id}
+          epicId="epic-1"
+          isActive
+        >
+          <SnapshotDiffTileBody node={node} viewTabId="view-1" />
+        </TileFindScope>
+      </TabHostProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -128,6 +145,8 @@ describe("<SnapshotDiffTileBody />", () => {
         args.ignoreWhitespace ? "patch:ignore" : "patch:include",
     );
     state.handle = {
+      epicId: "epic-1",
+      chatId: "chat-1",
       store: create<SnapshotTestStore>(() => ({
         snapshotLoaded: true,
         messages: [],
@@ -135,6 +154,8 @@ describe("<SnapshotDiffTileBody />", () => {
         accumulatedFileChanges: [
           cumulativeChange("src/a.ts", "const a = 1;\n", "const a = 2;\n"),
         ],
+        accumulatedFileChangeSummaries: [],
+        transcriptDerived: null,
       })),
     };
     useSettingsStore.setState({
@@ -219,8 +240,10 @@ describe("<SnapshotDiffTileBody />", () => {
       messages: [],
       liveAssistantMessage: null,
       accumulatedFileChanges: [],
+      accumulatedFileChangeSummaries: [],
+      transcriptDerived: null,
     }));
-    state.handle = { store: handleStore };
+    state.handle = { epicId: "epic-1", chatId: "chat-1", store: handleStore };
     state.buildPatch.mockReturnValue(SNAPSHOT_PATCH);
 
     renderSnapshotTile(node);

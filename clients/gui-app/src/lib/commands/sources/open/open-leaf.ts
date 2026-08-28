@@ -101,13 +101,14 @@ export function openerExistingLeaf(
   ref: EpicCanvasTileRef,
   hostBadge: string | null,
 ): CommandItem {
+  const name = ref.name;
   const leaf = openerActionLeaf({
     // Row id is keyed on the stable content id (unique among a category's
     // existing items); the ref's instanceId is a placeholder re-minted by
     // openTileInPane on open.
     id: `open:${categoryId}:${ref.id}`,
-    label: ref.name,
-    keywords: [ref.name],
+    label: name,
+    keywords: [name],
     run: () =>
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,

@@ -81,6 +81,7 @@ function baseController(
     restart: unimplemented,
     stopForRestart: unimplemented,
     relaunchAfterRestart: unimplemented,
+    hostStartAdoptionLabel: unimplemented,
     retireCompetingRegistration: unimplemented,
     takeoverDesktopRegistration: unimplemented,
     ...overrides,

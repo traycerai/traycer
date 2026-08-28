@@ -348,7 +348,10 @@ describe("<MobileEpicHeaderActionsBinder />", () => {
   afterEach(() => {
     cleanup();
     holder.mobile = true;
-    useMobileHeaderStore.getState().setRightActions(null);
+    useMobileHeaderStore.setState({
+      rightActions: null,
+      rightActionsOwner: null,
+    });
   });
 
   it("fills the header slot on mobile and clears it on unmount", () => {
@@ -363,5 +366,26 @@ describe("<MobileEpicHeaderActionsBinder />", () => {
     holder.mobile = false;
     render(<MobileEpicHeaderActionsBinder tabId="tab-1" />);
     expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+  });
+
+  // Launching a task hands the header from the start page to the epic the
+  // launch created, and the two halves of that handoff are not ordered: the
+  // start page's terminal panel follows its pane anchor, so it is torn down a
+  // commit after the epic surface has already claimed the slot. The departing
+  // owner must not blank the incoming one's trigger.
+  it("keeps its trigger when a previous owner is torn down afterwards", () => {
+    holder.mobile = true;
+    useMobileHeaderStore
+      .getState()
+      .setRightActions("landing-terminal:page-1", <button type="button" />);
+    render(<MobileEpicHeaderActionsBinder tabId="tab-1" />);
+    const claimed = useMobileHeaderStore.getState().rightActions;
+    expect(claimed).not.toBeNull();
+
+    useMobileHeaderStore
+      .getState()
+      .clearRightActions("landing-terminal:page-1");
+
+    expect(useMobileHeaderStore.getState().rightActions).toBe(claimed);
   });
 });

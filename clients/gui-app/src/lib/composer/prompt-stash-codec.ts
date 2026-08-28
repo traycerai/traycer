@@ -18,8 +18,7 @@ import {
   KNOWN_STASH_MARK_TYPES,
   KNOWN_STASH_NODE_TYPES,
 } from "@/lib/composer/prompt-stash-schema-descriptor";
-
-type ImageBytes = Uint8Array<ArrayBuffer>;
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 export interface PromptStashEntry {
   readonly id: string;

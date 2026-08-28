@@ -1,6 +1,7 @@
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
-  worktreeDeleteByPathServerFrameSchema,
-  type WorktreeDeleteByPathServerFrame,
+  worktreeDeleteByPathServerFrameSchemaV11,
+  type WorktreeDeleteByPathServerFrameV11,
   type WorktreeDeleteOutputChannel,
   type WorktreeDeletePhase,
 } from "@traycer/protocol/host/worktree-delete-stream";
@@ -15,7 +16,7 @@ import type {
 import type { IStreamClient } from "./i-stream-client";
 
 /**
- * Typed handlers for a `worktree.deleteByPath@1.0` session. Frames flow
+ * Typed handlers for a `worktree.deleteByPath` session. Frames flow
  * server → client only (apart from the heartbeat handled by `WsStreamClient`),
  * so there is no upstream application API on the wrapper.
  */
@@ -29,8 +30,15 @@ export interface WorktreeDeleteStreamCallbacks {
   ) => void;
   /** Terminal: the pipeline ran; `deleted` is the final outcome. */
   readonly onComplete: (deleted: boolean) => void;
-  /** Terminal: the host declined (busy / unexpected error). */
-  readonly onFailed: (reason: string) => void;
+  /**
+   * Terminal: the host declined (busy / unexpected error). `holders` is the
+   * T2 inventory on a 1.1 busy `failed` frame; `undefined` when the host
+   * omitted it (old host / non-busy failure).
+   */
+  readonly onFailed: (
+    reason: string,
+    holders: readonly WorktreeBusyHolder[] | undefined,
+  ) => void;
   /**
    * Connection-status changes. `reason` is non-null only on the `closed`
    * transition (e.g. an unreachable host, or a fatal handshake error).
@@ -45,17 +53,24 @@ export interface WorktreeDeleteStreamClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly worktreePath: string;
   readonly scripts: WorktreeEntryScripts | null;
+  /**
+   * `worktree.deleteByPath@1.1`. `true` asks the host to stop enumerated
+   * holders, then delete. Omitted/`false` is today's refuse-on-busy (a 1.0
+   * host strips the field).
+   */
+  readonly stopOwners: boolean;
   readonly callbacks: WorktreeDeleteStreamCallbacks;
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for `worktree.deleteByPath@1.0`.
+ * Typed wrapper over `WsStreamClient` for `worktree.deleteByPath@1.1`.
  *
  * Subscribing kicks off the host-side delete pipeline for `worktreePath`.
  * The wrapper Zod-parses each inbound envelope and dispatches to the typed
  * callback for its `kind`. There are no upstream application frames; closing
  * the session aborts the host-side run via the connection-scoped
- * `RequestContext` abort.
+ * `RequestContext` abort. `stopOwners: false` is omitted from the open
+ * request so a 1.0 subscribe stays byte-identical to today's payload.
  */
 export class WorktreeDeleteStreamClient {
   private readonly session: IStreamSession;
@@ -69,6 +84,7 @@ export class WorktreeDeleteStreamClient {
     this.session = options.wsStreamClient.subscribe("worktree.deleteByPath", {
       worktreePath: options.worktreePath,
       scripts: options.scripts,
+      ...(options.stopOwners ? { stopOwners: true } : {}),
     });
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
@@ -93,11 +109,11 @@ export class WorktreeDeleteStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    const parsed = worktreeDeleteByPathServerFrameSchema.safeParse(envelope);
+    const parsed = worktreeDeleteByPathServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: WorktreeDeleteByPathServerFrame = parsed.data;
+    const frame: WorktreeDeleteByPathServerFrameV11 = parsed.data;
     switch (frame.kind) {
       case "started": {
         this.callbacks.onStarted(frame.hasTeardown);
@@ -116,7 +132,7 @@ export class WorktreeDeleteStreamClient {
         return;
       }
       case "failed": {
-        this.callbacks.onFailed(frame.reason);
+        this.callbacks.onFailed(frame.reason, frame.holders);
         return;
       }
       case "pong": {

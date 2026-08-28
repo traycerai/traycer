@@ -299,6 +299,7 @@ function createRunnerHostWithoutPrivateDelivery(
 
 function createBaseRunnerHost(): IRunnerHost {
   return {
+    browserView: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
     refreshHostFleet: () => Promise.resolve(),
     onRegisteredHostsChange: () => null,
@@ -376,6 +377,7 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onNetworkPathChanged: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,

@@ -20,6 +20,7 @@ import type {
   PendingUserMessage,
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
@@ -1075,7 +1076,7 @@ export function reconcileSnapshotChange(
       }
       // Nothing to restore and nothing lost: the send stays pending and no
       // statement is owed.
-      if (pending.restoreContent === null) {
+      if (pending.restore === null) {
         return next;
       }
       // Everything below settles on ABSENCE, and absence is only evidence for
@@ -1111,7 +1112,7 @@ export function reconcileSnapshotChange(
             ...next.appendedErrorNotices,
             unrecoverableSendNotice({
               clientActionId: pending.clientActionId,
-              content: pending.restoreContent,
+              content: pending.restore.content,
               circumstance: "A message was not confirmed after reconnect",
               account: {
                 worktree: worktreeSweepFor(
@@ -1154,7 +1155,8 @@ export function reconcileSnapshotChange(
         ),
         failedSendRestoration: {
           clientActionId: pending.clientActionId,
-          content: pending.restoreContent,
+          content: pending.restore.content,
+          browserAnnotations: pending.restore.browserAnnotations,
           reason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
             snapshotAccount,
             true,
@@ -1223,7 +1225,7 @@ function reconcileAcceptedSends(
       if (
         accepted.action !== "send" ||
         accepted.messageId === null ||
-        accepted.restoreContent === null ||
+        accepted.restore === null ||
         optimisticRowIds.has(accepted.clientActionId)
       ) {
         return next;
@@ -1278,7 +1280,7 @@ function reconcileAcceptedSends(
             ...next.appendedErrorNotices,
             unrecoverableSendNotice({
               clientActionId: accepted.clientActionId,
-              content: accepted.restoreContent,
+              content: accepted.restore.content,
               circumstance:
                 "A queued message was not confirmed after reconnect",
               account,
@@ -1291,7 +1293,8 @@ function reconcileAcceptedSends(
         settledAcceptedActionIds,
         failedSendRestoration: {
           clientActionId: accepted.clientActionId,
-          content: accepted.restoreContent,
+          content: accepted.restore.content,
+          browserAnnotations: accepted.restore.browserAnnotations,
           reason: `A queued message was not confirmed after reconnect.${deadSendAccountClauses(
             account,
             true,
@@ -1480,7 +1483,8 @@ export function reconcileTurnSettled(
         ? input.failedSendRestoration
         : {
             clientActionId: restorable.clientActionId,
-            content: restorable.content,
+            content: restorable.restore.content,
+            browserAnnotations: restorable.restore.browserAnnotations,
             reason: `The message was not recorded before the turn stopped.${deadSendAccountClauses(
               settledAccount ?? EMPTY_DEAD_SEND_ACCOUNT,
               true,
@@ -1630,7 +1634,7 @@ function pendingUserMessageFromPendingAction(
 ): PendingUserMessage | undefined {
   if (
     action.messageId === null ||
-    action.restoreContent === null ||
+    action.restore === null ||
     action.sender === null ||
     action.settings === null ||
     // Joined the guard rather than being defaulted. A synthesized
@@ -1648,12 +1652,14 @@ function pendingUserMessageFromPendingAction(
   return {
     clientActionId: action.clientActionId,
     messageId: action.messageId,
-    content: action.restoreContent,
+    content: action.restore.content,
+    attachments: buildAttachmentsFromJSONContent(action.restore.content),
     sender: action.sender,
     settings: action.settings,
     accountContext: action.accountContext,
     deliveryPolicy: action.deliveryPolicy,
     timestamp: action.createdAt,
+    restore: action.restore,
     restoreWorktreeIntent: action.restoreWorktreeIntent,
   };
 }
@@ -1751,7 +1757,7 @@ export function addAcceptedAction(
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
         acceptedAt: now,
-        restoreContent: pending.restoreContent,
+        restore: pending.restore,
         // The recovery tuple travels with the record now - see
         // `AcceptedChatAction`. A queued send's ONLY copy lives here between
         // its accepted ack and the host's durable confirmation.

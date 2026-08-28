@@ -99,7 +99,17 @@ export async function preserveLegacyProviders(
   oldInstallDir: string,
   newInstallDir: string,
   logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<void> {
+  let authorityFailed = false;
+  const verify = async (): Promise<void> => {
+    try {
+      await verifyMutationCapability();
+    } catch (cause) {
+      authorityFailed = true;
+      throw cause;
+    }
+  };
   try {
     const oldResources = await resolveResourcesDir(oldInstallDir, logger);
     if (oldResources === null) return;
@@ -152,8 +162,18 @@ export async function preserveLegacyProviders(
         // and one an earlier source already placed is the newer copy.
         if (await isDirectory(join(newBundle, entry.name), logger)) continue;
         if (await isDirectory(join(dest, entry.name), logger)) continue;
+        // Carryover is best-effort only for provider-pack I/O failures. It is
+        // still a canonical-install mutation after the swap, so losing the
+        // outer contender is not a pack failure we may log and continue past.
+        // The pre-mkdir check below sits OUTSIDE the broad mkdir/rename
+        // catch; the pre-rename check sits INSIDE it, which makes the
+        // `authorityFailed` rethrow at the top of that catch load-bearing:
+        // the catch tolerates a locked Windows pack, but must never swallow
+        // a failed ownership proof and move a later pack anyway.
+        await verify();
         try {
           await mkdir(dest, { recursive: true });
+          await verify();
           // Same volume (both under the host home), so this is a rename, not
           // a multi-GB copy. A pack that cannot move (a lingering handle on
           // Windows) is skipped and dies with the old install - same outcome
@@ -161,6 +181,13 @@ export async function preserveLegacyProviders(
           await rename(join(source, entry.name), join(dest, entry.name));
           moved += 1;
         } catch (cause) {
+          // The nested pack catch is intentionally best-effort for a locked
+          // or malformed provider directory, but it must not turn a failed
+          // contender verification into a warning. In particular, the
+          // second verification sits directly before `rename`; swallowing it
+          // would let this composite continue to later canonical mutations
+          // after authority was lost.
+          if (authorityFailed) throw cause;
           skipped += 1;
           // Name the pack and the cause: until its registry download lands,
           // a skipped pack is a provider this user cannot run, and the
@@ -181,6 +208,12 @@ export async function preserveLegacyProviders(
       });
     }
   } catch (cause) {
+    // A verifier failure is not a best-effort carryover failure. In
+    // particular, it may occur after the canonical install swap; continuing
+    // would let stale work populate executable provider bytes in that tree.
+    // The verifier is deliberately invoked only outside the I/O catches, so
+    // any error reaching here from it must escape to the admitted caller.
+    if (authorityFailed) throw cause;
     logger.warn("Host install carryover failed; continuing", {
       oldInstallDir,
       newInstallDir,

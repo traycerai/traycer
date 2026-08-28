@@ -14,6 +14,8 @@ import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-min
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
+import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
 import { ReviewTile } from "./review-tile";
 import { SpecTile } from "./spec-tile";
@@ -49,8 +51,13 @@ type TileRendererRegistry = {
 };
 
 const TILE_RENDERERS: TileRendererRegistry = {
-  chat: ({ node, viewTabId, isActive }) => (
-    <ChatTile node={node} viewTabId={viewTabId} isActive={isActive} />
+  chat: ({ node, viewTabId, tileId, isActive }) => (
+    <ChatTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      isActive={isActive}
+    />
   ),
   "terminal-agent": ({ node, viewTabId, tileId, isActive }) => (
     <TuiAgentTile
@@ -100,6 +107,14 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
+  "browser-session": ({ node, viewTabId, tileId, epicId }) => (
+    <BrowserSessionTile
+      node={node}
+      viewTabId={viewTabId}
+      paneId={tileId}
+      epicId={epicId}
+    />
+  ),
   "workspace-file": ({ node, viewTabId, isActive }) => (
     <WorkspaceFileTile node={node} viewTabId={viewTabId} isActive={isActive} />
   ),
@@ -131,11 +146,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
   // The ordinary chat surface fed from a published copy - see the tile's own
   // note. Bound, like every tile, to the tab's host: that host SERVES the cloud
   // read, and the chat's owning host is metadata the locked composer names.
-  "published-chat": ({ node, epicId, viewTabId, isActive }) => (
+  "published-chat": ({ node, epicId, viewTabId, tileId, isActive }) => (
     <PublishedChatTile
       node={node}
       epicId={epicId}
       viewTabId={viewTabId}
+      tileId={tileId}
       isActive={isActive}
     />
   ),
@@ -182,17 +198,25 @@ function tileRenderer<K extends TileKindId>(
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
-      <TileFindScope
-        node={args.node}
-        viewTabId={args.viewTabId}
-        tileId={args.tileId}
-        epicId={args.epicId}
-        isActive={args.isActive}
+      <BrowserLinkRoutingProvider
+        source={{
+          viewTabId: args.viewTabId,
+          paneId: args.tileId,
+          hostId: args.node.hostId,
+        }}
       >
-        <TileMinimapScope tileInstanceId={args.node.instanceId}>
-          {tileRenderer(args.node.type)(args)}
-        </TileMinimapScope>
-      </TileFindScope>
+        <TileFindScope
+          node={args.node}
+          viewTabId={args.viewTabId}
+          tileId={args.tileId}
+          epicId={args.epicId}
+          isActive={args.isActive}
+        >
+          <TileMinimapScope tileInstanceId={args.node.instanceId}>
+            {tileRenderer(args.node.type)(args)}
+          </TileMinimapScope>
+        </TileFindScope>
+      </BrowserLinkRoutingProvider>
     </TabHostProvider>
   );
 }

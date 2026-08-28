@@ -230,12 +230,14 @@ export function MobileEpicHeaderActionsBinder(props: {
   const { tabId } = props;
   const isMobile = useIsMobileViewport();
   const setRightActions = useMobileHeaderStore((s) => s.setRightActions);
+  const clearRightActions = useMobileHeaderStore((s) => s.clearRightActions);
+  const owner = `epic-tab:${tabId}`;
 
   useEffect(() => {
     if (!isMobile) return;
-    setRightActions(<EpicMobileSwitcherTrigger tabId={tabId} />);
-    return () => setRightActions(null);
-  }, [isMobile, tabId, setRightActions]);
+    setRightActions(owner, <EpicMobileSwitcherTrigger tabId={tabId} />);
+    return () => clearRightActions(owner);
+  }, [clearRightActions, isMobile, owner, setRightActions, tabId]);
 
   return null;
 }

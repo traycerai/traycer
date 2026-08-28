@@ -9,6 +9,7 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
         environment: "production",
         cwd: null,
         serviceLabel: null,
+        adoptionNonce: null,
         transitionId: null,
         probeNonce: null,
       }),
@@ -21,6 +22,7 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
         environment: "production",
         cwd: "/tmp/host",
         serviceLabel: "ai.traycer.host.agent",
+        adoptionNonce: null,
         transitionId: null,
         probeNonce: null,
       }),
@@ -28,6 +30,7 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
       environment: "production",
       cwd: "/tmp/host",
       serviceLabel: "ai.traycer.host.agent",
+      adoptionNonce: null,
     });
   });
 
@@ -37,6 +40,7 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
         environment: "production",
         cwd: null,
         serviceLabel: "ai.traycer.host.fallback",
+        adoptionNonce: null,
         transitionId: "transition-1",
         probeNonce: null,
       }),
@@ -46,6 +50,7 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
         environment: "production",
         cwd: null,
         serviceLabel: "ai.traycer.host.fallback",
+        adoptionNonce: null,
         transitionId: "transition-1",
         probeNonce: null,
       });
@@ -63,6 +68,7 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
         environment: "staging",
         cwd: null,
         serviceLabel: "ai.traycer.host.staging.fallback",
+        adoptionNonce: null,
         transitionId: "transition-1",
         probeNonce: "nonce-1",
       }),
@@ -74,6 +80,24 @@ describe("hostStartOptionsFromCommand — mixed-version service invocations", ()
         transitionId: "transition-1",
         probeNonce: "nonce-1",
       },
+    });
+  });
+
+  it("preserves a valid service adoption nonce without turning it into probe authority", () => {
+    expect(
+      hostStartOptionsFromCommand({
+        environment: "production",
+        cwd: null,
+        serviceLabel: "ai.traycer.host.prod",
+        adoptionNonce: "11111111-1111-4111-8111-111111111111",
+        transitionId: null,
+        probeNonce: null,
+      }),
+    ).toEqual({
+      environment: "production",
+      cwd: null,
+      serviceLabel: "ai.traycer.host.prod",
+      adoptionNonce: "11111111-1111-4111-8111-111111111111",
     });
   });
 });

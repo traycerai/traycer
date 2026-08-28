@@ -98,7 +98,7 @@ describe("<TileCanvas /> empty epic", () => {
       const tabId = root.tabInstanceIds[0];
       const tab = canvas.tilesByInstanceId[tabId];
       expect(tab?.type).toBe("blank");
-      expect(tab?.name).toBe("New tab");
+      expect(tab === undefined ? null : tab.name).toBe("New tab");
     });
 
     expect(screen.getByTestId("tab-group-view")).not.toBeNull();

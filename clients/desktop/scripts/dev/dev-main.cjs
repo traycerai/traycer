@@ -91,7 +91,8 @@ const child = spawn(electronBin, electronArgs, {
 
 child.on("exit", (code, signal) => {
   if (signal !== null) {
-    process.kill(process.pid, signal);
+    console.error(`[dev-main] Electron exited due to ${signal}`);
+    process.exitCode = 1;
     return;
   }
   process.exit(code ?? 0);

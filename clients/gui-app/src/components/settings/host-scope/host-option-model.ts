@@ -1,5 +1,9 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type {
+  FleetUpdateView,
+  FleetUpdateViewKind,
+} from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
  * What CHOOSING a host does on this surface — the one thing that legitimately
@@ -167,6 +171,121 @@ export function hostOptionStatusWord(
   const statusWord = STATUS_WORD[host.health.state];
   if (statusWord !== null) return statusWord;
   return surfaceState.kind === "refused" ? surfaceState.word : null;
+}
+
+/**
+ * The row's UPDATE badge — deliberately a second, separate word from
+ * {@link hostOptionStatusWord}, and this file is the wrong place to merge them.
+ *
+ * The status word above answers **health and route**: can this machine be
+ * reached, is it mid-setup, is it removed. This answers **what its update is
+ * doing**. The experience doc states the rule directly — "connectivity and
+ * update state remain separate facts" — and the long note on `STATUS_WORD`
+ * records what happened the last time one vocabulary tried to answer two
+ * questions: a row contradicted its own health line, in the same row.
+ *
+ * So a host can legitimately carry both ("offline" · "update failed"), and it
+ * can carry the update badge with no status word at all, which is the common
+ * case: a perfectly healthy host that happens to be downloading.
+ *
+ * SILENT during restart/reconnect on purpose. Those are the one genuine overlap
+ * — the health state already has its own `restarting` word, and the doc's
+ * "an observed expected restart is not flattened into ordinary Offline" cuts
+ * both ways: connectivity owns that moment, and a second word beside it would
+ * be the duplication this split exists to prevent.
+ *
+ * IT TAKES THE PROJECTED VIEW, never a raw `host.status` response, and that is
+ * what keeps it from becoming a fourth vocabulary. `describeUpdateOperation`
+ * (sentences, for the banner and the Overview) and this (one or two words, for
+ * a single-line row) are two renderings of the SAME `FleetUpdateView.kind`, so
+ * they can differ in length but cannot disagree about what the host is doing.
+ * A badge derived from the wire directly could, and would.
+ *
+ * Silent for `idle` and `complete` because a row is for exceptions: an
+ * up-to-date host and a host that just finished both have nothing a person
+ * needs to act on from a picker.
+ *
+ * A BARE `unknown` is silent too, and that rule is load-bearing rather than
+ * tidy: a badge reading "unknown" on every pre-@1.3 remote host, indefinitely,
+ * is noise that teaches people to ignore the column.
+ *
+ * A RETAINED phase is a different thing wearing the same `kind`, and it gets a
+ * qualified word. The two cases are cleanly separable — a peer that never spoke
+ * `@1.3` has nothing to retain, so `lastKnownKind` is exactly `null` for the
+ * noise case and non-null only for a host we genuinely watched doing something
+ * before losing it. The retained word is deliberately coarser than the live
+ * one: from a picker, "which phase was it in" is not a question anyone acts on,
+ * whereas "this machine was mid-update when it went quiet" is.
+ */
+export function hostOptionUpdateBadge(view: FleetUpdateView): string | null {
+  if (view.kind === "unknown") {
+    const lastKnown = view.lastKnownKind;
+    if (lastKnown === null) return null;
+    const retained = retainedBadgeWord(lastKnown);
+    // Qualified in the badge itself. A row has no room for a separate marker,
+    // so an unqualified "updating" on an offline host would be a claim we
+    // cannot support.
+    return retained === null ? null : `last seen ${retained}`;
+  }
+  if (view.qualified) {
+    // A stale view can carry a NON-unknown kind too (`qualified` is the
+    // view's own "surfaces MUST qualify this" flag, deliberately separate
+    // from `kind`). Rendering `liveBadgeWord` for it would present "last
+    // knew it was downloading" as "is downloading" — the exact present-tense
+    // claim the retained vocabulary exists to avoid.
+    const retained = retainedBadgeWord(view.kind);
+    return retained === null ? null : `last seen ${retained}`;
+  }
+  return liveBadgeWord(view.kind);
+}
+
+function liveBadgeWord(kind: FleetUpdateViewKind): string | null {
+  switch (kind) {
+    case "downloading":
+    case "preparing":
+    case "applying":
+    case "verifying":
+      return "updating";
+    case "waiting-for-work":
+      return "update waiting";
+    case "waiting-to-activate":
+      return "restart to finish";
+    case "failed":
+      return "update failed";
+    case "unavailable":
+    case "restarting":
+    case "reconnecting":
+    case "complete":
+    case "idle":
+    case "unknown":
+      return null;
+  }
+}
+
+function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
+  switch (kind) {
+    // Every mid-update phase collapses to one word. "last seen restart to
+    // finish" and "last seen update waiting" are compounds that read as
+    // instructions for a machine this client cannot currently reach.
+    case "downloading":
+    case "preparing":
+    case "applying":
+    case "verifying":
+    case "waiting-for-work":
+    case "waiting-to-activate":
+    case "restarting":
+    case "reconnecting":
+      return "updating";
+    // Terminal and durable: the host still holds this record, so it remains
+    // true after we lose contact rather than becoming merely old.
+    case "failed":
+      return "update failed";
+    case "complete":
+    case "idle":
+    case "unavailable":
+    case "unknown":
+      return null;
+  }
 }
 
 /**

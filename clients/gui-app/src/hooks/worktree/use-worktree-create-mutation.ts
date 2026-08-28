@@ -12,20 +12,27 @@ import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 
 export function useWorktreeCreateForClient(
   client: HostClient<HostRpcRegistry> | null,
+  silentCodes: readonly HostRpcError["code"][] | undefined,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "worktree.create">,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "worktree.create">,
   { readonly hostId: string | null }
 > {
-  return useHostScopedMutationForClient(client, worktreeCreateMutationArgs());
+  return useHostScopedMutationForClient(
+    client,
+    worktreeCreateMutationArgs(silentCodes),
+  );
 }
 
-function worktreeCreateMutationArgs() {
+function worktreeCreateMutationArgs(
+  silentCodes: readonly HostRpcError["code"][] | undefined,
+) {
   return {
     method: "worktree.create",
     mutationKey: worktreeMutationKeys.create(),
     errorMessage: "Couldn't create worktree.",
     invalidateMethods: WORKTREE_BINDING_INVALIDATIONS,
+    silentCodes,
   } as const;
 }

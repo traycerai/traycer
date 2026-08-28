@@ -53,6 +53,7 @@ export function createFakeRunnerHost(
   overrides: Partial<IRunnerHost>,
 ): IRunnerHost {
   const base: IRunnerHost = {
+    browserView: null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
@@ -135,6 +136,7 @@ export function createFakeRunnerHost(
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onNetworkPathChanged: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,

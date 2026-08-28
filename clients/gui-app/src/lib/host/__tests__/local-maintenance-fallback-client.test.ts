@@ -92,7 +92,10 @@ describe("mapInstallVersionOutcome", () => {
       kind: "ok",
       value: { installedVersion: "1.2.0", runningActivated: true },
     };
-    expect(mapInstallVersionOutcome(outcome)).toEqual({ outcome: "accepted" });
+    expect(mapInstallVersionOutcome(outcome)).toEqual({
+      outcome: "accepted",
+      attemptId: null,
+    });
   });
 
   it("throws HostRpcError for the PRE-commit busy (retry-with-force), carrying the lane message", () => {
@@ -243,7 +246,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
 
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
-    ).resolves.toEqual({ outcome: "already-updating" });
+    ).resolves.toEqual({ outcome: "already-updating", attemptId: null });
     expect(maintenanceInstallVersion).toHaveBeenCalledTimes(1);
     expect(management.getHostControllerStatus).not.toHaveBeenCalled();
     expect(management.installVersion).not.toHaveBeenCalled();
@@ -267,7 +270,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
 
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: true }),
-    ).resolves.toEqual({ outcome: "accepted" });
+    ).resolves.toEqual({ outcome: "accepted", attemptId: null });
     expect(maintenanceInstallVersion).toHaveBeenCalledWith({
       version: "1.2.0",
       force: true,
@@ -501,7 +504,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
         },
         "host.update.install": () => {
           rpcCalls.push("host.update.install");
-          return { outcome: "accepted" as const };
+          return { outcome: "accepted" as const, attemptId: null };
         },
         "host.doctor": () => {
           rpcCalls.push("host.doctor");
@@ -525,6 +528,10 @@ describe("createLocalMaintenanceFallbackClient", () => {
             busySessionCount: 0,
             updateProgress: null,
             busyBreakdown: null,
+            // `null` = this fixture's host did not report the durable attempt,
+            // which is exactly what host.status@1.2-and-older peers send.
+            updateOperation: null,
+            updateTransaction: null,
           };
         },
       },
@@ -718,7 +725,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     expect(served.installCalls).toEqual([
       { version: "1.2.0", force: false, expectedHostId: LOCAL_HOST_ID },
     ]);
-    expect(install).toEqual({ outcome: "accepted" });
+    expect(install).toEqual({ outcome: "accepted", attemptId: null });
     expect(served.management.installVersion).not.toHaveBeenCalled();
     expect(served.management.getHostControllerStatus).not.toHaveBeenCalled();
   });

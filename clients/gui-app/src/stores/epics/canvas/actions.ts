@@ -25,13 +25,16 @@ import type {
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
+  BrowserSessionTileRef,
   GitDiffTileRef,
   GitDiffTileViewState,
   PrDiffTileViewState,
+  SnapshotDiffTilePayload,
   TilesByInstanceId,
 } from "./types";
 import {
   isBlankTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
@@ -1494,6 +1497,25 @@ export function renameArtifact(
   );
 }
 
+export function updateBrowserTileViewportPreset(
+  state: EpicCanvasState,
+  tileInstanceId: string,
+  viewportPreset: BrowserSessionTileRef["viewportPreset"],
+): EpicCanvasState {
+  const current = state.tilesByInstanceId[tileInstanceId];
+  if (current === undefined || !isBrowserSessionTileRef(current)) {
+    return state;
+  }
+  if (current.viewportPreset === viewportPreset) return state;
+  return {
+    ...state,
+    tilesByInstanceId: {
+      ...state.tilesByInstanceId,
+      [tileInstanceId]: { ...current, viewportPreset },
+    },
+  };
+}
+
 /**
  * Refresh the persisted `name` snapshot of every terminal tile bound to
  * (hostId, sessionId) after a successful host rename. The snapshot is the
@@ -1651,6 +1673,41 @@ export function updateSnapshotDiffTileView(
     state,
     (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
     (ref) => (isSnapshotDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * Rewrite a snapshot-diff tile's PAYLOAD, not its view state.
+ *
+ * The one payload on these nodes that is not a fact about the request is the
+ * segment capture: it records what the source blocks said at open time and is
+ * the fallback once those blocks leave the window. Captured mid-stream it
+ * freezes a half-written edit into the tile permanently, so it is refreshed
+ * once the edit settles - see `settledSnapshotSegmentCapture`, which owns both
+ * the settled-enough decision and the "nothing changed" answer.
+ *
+ * Deliberately narrow. It replaces the whole `diff` payload rather than
+ * patching hashes, because the payload is a discriminated union and a partial
+ * write would have to re-narrow it at every call site; and it takes an
+ * already-decided value rather than a resolver, so the policy stays in one
+ * place and this stays a store mutation.
+ *
+ * Identity-stable when the payload already matches: `updateTilesWhere` reports
+ * no change for a returned-as-is ref, so a re-render that recomputes the same
+ * capture does not churn the persisted canvas.
+ */
+export function updateSnapshotDiffTilePayload(
+  state: EpicCanvasState,
+  tileId: string,
+  diff: SnapshotDiffTilePayload,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
+    (ref) => {
+      if (!isSnapshotDiffTileRef(ref)) return ref;
+      return ref.diff === diff ? ref : { ...ref, diff };
+    },
   );
 }
 

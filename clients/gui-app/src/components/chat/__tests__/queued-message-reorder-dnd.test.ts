@@ -268,6 +268,7 @@ function makeQueuedItem(queueItemId: string): ChatQueuedPromptItem {
           },
         ],
       },
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: TEST_SETTINGS,

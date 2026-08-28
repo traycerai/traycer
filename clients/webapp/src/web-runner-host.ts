@@ -65,6 +65,7 @@ import type {
   INotificationHost,
   IPushPermissionHost,
   IRunnerHost,
+  SystemResumeEvent,
   ISecureStorage,
   ITokenStore,
   ITrayState,
@@ -136,6 +137,12 @@ interface RetainedStepUpCredential {
  * the desktop's main process uses, so the two boundaries cannot drift.
  */
 export class WebRunnerHost implements IRunnerHost {
+  /**
+   * No native browser capability: a tab cannot host an embedded browser view
+   * the way the desktop shell can. `null` is the contract's own answer for a
+   * shell without one, so consumers branch on it rather than on the platform.
+   */
+  readonly browserView = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
@@ -538,7 +545,15 @@ export class WebRunnerHost implements IRunnerHost {
     return disposable();
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onNetworkPathChanged(_handler: () => void): Disposable {
+    // Native-only: a tab cannot observe the interface moving under live
+    // connectivity, which is the event this reports. The contract expects a
+    // no-op here rather than a DOM approximation - `window`'s `online` event
+    // is a different signal and the wake consumers already pair with it.
+    return disposable();
+  }
+
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     // This document's hidden -> visible edge IS the wake signal here, for the
     // reason it is one on the phone: a tab the browser froze or discarded had
     // its sockets killed and its timers stopped while the network never moved,
@@ -556,7 +571,15 @@ export class WebRunnerHost implements IRunnerHost {
     // event and nothing else. One collapses a device-flow poll's interval, the
     // other opens a stream-recovery episode, and an emission policy added for
     // either must not silently become the other's.
-    return this.systemResume.subscribe(handler);
+    //
+    // `backgroundedForMs: null` is the honest answer, not a placeholder: the
+    // signal is a raw visibility edge and carries no stamp of when the freeze
+    // began, which is the case the contract documents as unmeasurable. It
+    // selects the conservative, desktop-calibrated recovery - the right default
+    // for a tab that cannot prove how long it was gone.
+    return this.systemResume.subscribe(() =>
+      handler({ backgroundedForMs: null }),
+    );
   }
 
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
