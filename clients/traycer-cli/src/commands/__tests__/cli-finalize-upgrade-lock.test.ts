@@ -185,7 +185,10 @@ describe.skipIf(process.platform === "win32")(
         writeFileSync(join(holdBarrierDir, "release"), "");
         const result = await pending;
         expect(mocks.finalizeCalls).toEqual(["finalize"]);
-        expect(result.data).toEqual({ status: "no-pending" });
+        expect(result.data).toEqual({
+          status: "no-pending",
+          serviceStartError: null,
+        });
       } finally {
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
