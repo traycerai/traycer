@@ -1286,8 +1286,9 @@ it("stages a location change from the last resolved snapshot while a refresh is 
 it("acknowledges a captured create that committed after Discard cancelled the run", async () => {
   seedResolvedBindingMetadata();
   const onBindingCommitted = vi.fn();
-  let releaseCreate: ((value: { perEntry: readonly unknown[] }) => void) | null =
-    null;
+  let releaseCreate:
+    | ((value: { perEntry: readonly unknown[] }) => void)
+    | null = null;
   mutationMocks.createWorktree.mockImplementation(
     () =>
       new Promise((resolve) => {
