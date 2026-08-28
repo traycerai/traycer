@@ -162,6 +162,20 @@ describe("MobileFileSave", () => {
     expect(saved).toEqual({ name: "traycer-export", path: null });
   });
 
+  it("falls back for a padded dot, which names the staging directory itself", async () => {
+    // Whitespace around the dots hides them from a strip that runs first, and
+    // `.../.` is the directory rather than a file in it.
+    await new MobileFileSave().saveFile(request(" . ", new Uint8Array([1])));
+
+    expect(stagedBaseName(0)).toBe("traycer-export");
+  });
+
+  it("falls back for a padded double dot, which names the parent", async () => {
+    await new MobileFileSave().saveFile(request(" .. ", new Uint8Array([1])));
+
+    expect(stagedBaseName(0)).toBe("traycer-export");
+  });
+
   it("stages a repeat of the same name somewhere else, so it cannot overwrite the first", async () => {
     // The sheet resolves on dismissal, which on Android can precede the
     // receiving app finishing its read of the granted URI. Two exports sharing

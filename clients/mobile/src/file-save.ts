@@ -123,7 +123,11 @@ function boundFileNameBytes(name: string): string {
  */
 function toFileName(suggested: string): string {
   const leaf = suggested.split(/[\\/]/).at(-1) ?? "";
-  const trimmed = leaf.replace(/^\.+/, "").trim();
+  // Trimmed BEFORE the leading dots are stripped, or surrounding whitespace
+  // hides them from the strip: `" . "` would survive as `"."` and `" .. "` as
+  // `".."`, naming the staging directory itself or its parent rather than a
+  // file in it. The second trim catches what removing the dots exposes.
+  const trimmed = leaf.trim().replace(/^\.+/, "").trim();
   return trimmed.length === 0 ? "traycer-export" : boundFileNameBytes(trimmed);
 }
 

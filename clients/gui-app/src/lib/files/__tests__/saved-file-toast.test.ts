@@ -26,9 +26,16 @@ vi.mock("sonner", () => ({
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 
-type SaveFileMock = ReturnType<
-  typeof vi.fn<(request: FileSaveRequest) => Promise<SavedFileLocation | null>>
->;
+/**
+ * The `saveFile` member of a faked `IFileSaveHost`: callable exactly as the
+ * contract declares it, plus the one mock member these tests read back.
+ */
+interface SaveFileMock {
+  (request: FileSaveRequest): Promise<SavedFileLocation | null>;
+  readonly mock: {
+    readonly calls: ReadonlyArray<[FileSaveRequest]>;
+  };
+}
 
 /**
  * A shell with a native save route. `openSavedFile` is what separates the two
