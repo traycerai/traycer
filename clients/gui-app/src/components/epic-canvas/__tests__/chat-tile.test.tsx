@@ -3450,6 +3450,69 @@ describe("<ChatTile />", () => {
     });
   }
 
+  async function loadBusyChatWithShell(): Promise<void> {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: runningActiveTurn(),
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+  }
+
+  function submitComposerWithEnter(): void {
+    const editorDom = document.querySelector('[contenteditable="true"]');
+    if (!(editorDom instanceof HTMLElement)) {
+      throw new Error("expected composer editor");
+    }
+    fireEvent.keyDown(editorDom, { key: "Enter" });
+  }
+
+  it("sends clean during a running turn when no workspace draft is staged", async () => {
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("send");
+  });
+
+  it("sends clean during a running turn when the staged draft restates the binding", async () => {
+    useWorktreeIntentStagingStore.getState().stageIntent(
+      {
+        surface: "owner",
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        ownerKind: "chat",
+        ownerId: CHAT_ARTIFACT.id,
+      },
+      {
+        entries: [
+          {
+            kind: "local",
+            workspacePath: "/Users/test/project",
+            repoIdentifier: null,
+            isPrimary: true,
+          },
+        ],
+      },
+    );
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("send");
+  });
+
   it("keeps the send confirmation open with a reason when it cannot proceed", async () => {
     stageChatWorktreeDraft("/wt/a");
     await loadChatWithDroppedShell();

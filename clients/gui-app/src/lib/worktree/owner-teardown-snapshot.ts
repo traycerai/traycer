@@ -144,6 +144,42 @@ export function droppedRunDirectoriesFromDraft(input: {
   return dropped;
 }
 
+/**
+ * Whether committing this draft at send would actually change the owner's
+ * binding: a staged folder whose next run directory differs from the bound
+ * one (a staged `worktree` create always does — its run directory does not
+ * exist yet), a staged folder the binding does not carry, or a pending
+ * removal of a bound folder. A draft that merely restates the committed
+ * binding — or no draft at all — commits nothing, so a send with one is not
+ * a rebind gesture and must not be gated on teardown disclosure: the
+ * disclosure exists to confirm "switch folders and stop what runs there",
+ * and with nothing switching there is nothing to confirm.
+ */
+export function worktreeDraftCommitsRebind(input: {
+  readonly binding: WorktreeBinding | null;
+  readonly draft: WorktreeIntent | null;
+  readonly removedWorkspacePaths: readonly string[];
+}): boolean {
+  const previousByWorkspace = new Map(
+    (input.binding?.entries ?? []).map((entry) => [
+      entry.workspacePath,
+      runDirectoryOfBindingEntry(entry),
+    ]),
+  );
+  if (
+    input.removedWorkspacePaths.some((path) => previousByWorkspace.has(path))
+  ) {
+    return true;
+  }
+  if (input.draft === null) return false;
+  return input.draft.entries.some((entry) => {
+    const previous = previousByWorkspace.get(entry.workspacePath);
+    if (previous === undefined) return true;
+    const next = runDirectoryOfFolderIntent(entry);
+    return next === null || next !== previous;
+  });
+}
+
 export function pathContainsDirectory(
   root: string,
   candidate: string,

@@ -71,6 +71,7 @@ import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-bu
 import {
   droppedRunDirectoriesFromDraft,
   teardownHolderSetDrifted,
+  worktreeDraftCommitsRebind,
 } from "@/lib/worktree/owner-teardown-snapshot";
 import {
   takeArmedTeardownSubmit,
@@ -2206,6 +2207,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         ownerKind: "chat",
         ownerId: node.id,
       };
+      // The disclosure is consent for the rebind a send would commit. A send
+      // whose draft commits nothing (none staged, or one that restates the
+      // committed binding) has no rebind to consent to — gating it would put
+      // "Send in the new folder?" in front of every steer of a busy agent.
+      if (
+        !worktreeDraftCommitsRebind({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        })
+      ) {
+        return dispatchUserSend(input);
+      }
       const snapshot = snapshotTeardownHolders(
         droppedRunDirectoriesFromDraft({
           binding: state.worktreeBinding,
@@ -2829,7 +2843,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         const drifted =
           worktreeCommitCaptureIsStale(armed.capture, live) ||
           teardownHolderSetDrifted(disclosedHolders, liveSnapshot.holders);
-        if (drifted && liveSnapshot.holders.length > 0) {
+        // Same bar as arming the dialog: a live draft that commits no rebind
+        // has nothing left to re-consent to, so a drift that CLEARED the
+        // rebind sends rather than re-disclosing holders forever.
+        const liveCommitsRebind = worktreeDraftCommitsRebind({
+          binding: live.binding,
+          draft: live.draft,
+          removedWorkspacePaths: live.removedWorkspacePaths,
+        });
+        if (drifted && liveCommitsRebind && liveSnapshot.holders.length > 0) {
           pendingSubmitRef.current = {
             input: armed.input,
             capture: live,
