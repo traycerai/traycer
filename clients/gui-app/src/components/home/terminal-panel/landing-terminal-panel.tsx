@@ -1663,16 +1663,21 @@ function MobileLandingTerminalActionBinder(props: {
   const setRightActions = useMobileHeaderStore(
     (state) => state.setRightActions,
   );
+  const clearRightActions = useMobileHeaderStore(
+    (state) => state.clearRightActions,
+  );
+  const owner = `landing-terminal:${props.landingPageId}`;
   useEffect(() => {
     // Re-baked whenever the focused landing page changes, so the slotted node
     // always toggles the layout of the page actually on screen.
     setRightActions(
+      owner,
       <LandingTerminalHeaderToggle landingPageId={props.landingPageId} />,
     );
     return () => {
-      setRightActions(null);
+      clearRightActions(owner);
     };
-  }, [setRightActions, props.landingPageId]);
+  }, [clearRightActions, owner, setRightActions, props.landingPageId]);
   return null;
 }
 

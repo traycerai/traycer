@@ -57,7 +57,10 @@ describe("<EpicSurface />", () => {
   afterEach(() => {
     cleanup();
     viewport.mobile = false;
-    useMobileHeaderStore.getState().setRightActions(null);
+    useMobileHeaderStore.setState({
+      rightActions: null,
+      rightActionsOwner: null,
+    });
   });
 
   it("keeps two split Epic panes under independent session and sidebar boundaries", () => {
