@@ -126,6 +126,21 @@ export async function runFinalizeUpgradeSwap(opts: {
     };
   }
 
+  if (swap.status === "publish-failed") {
+    // Same marker status as a still-locked swap: publication did not
+    // happen, the live binary is untouched, and `pendingUpgrade` stands.
+    // The errorMessage carries what actually went wrong.
+    await writePostFinalizeMarkerFile(markerPath, {
+      status: "swap-failed",
+      attemptedAt: new Date().toISOString(),
+      livePath: swap.livePath,
+      stagedBinaryPath: swap.stagedBinaryPath,
+      errorMessage: swap.errorMessage,
+      serviceStartError: null,
+    });
+    return { status: "swap-failed", errorMessage: swap.errorMessage };
+  }
+
   if (swap.status === "still-locked") {
     await writePostFinalizeMarkerFile(markerPath, {
       status: "swap-failed",

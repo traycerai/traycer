@@ -243,6 +243,11 @@ function humanForRestart(
       return `${reconcilePrefix}${base}; cli upgrade ${outcome.stagedBinaryPath} still locked (${outcome.errorMessage}) - pending state retained`;
     case "staged-binary-missing":
       return `${reconcilePrefix}${base}; cli upgrade staged binary for ${outcome.stagedVersion} missing at ${outcome.stagedBinaryPath} - re-run 'traycer cli upgrade'`;
+    case "publish-failed":
+      // The host was relaunched regardless - the restart the user asked
+      // for is not forfeited because a staged CLI swap could not be
+      // published. The live binary is untouched and pending state stands.
+      return `${reconcilePrefix}${base}; cli upgrade could not publish ${outcome.stagedBinaryPath} over ${outcome.livePath} (${outcome.errorMessage}) - live binary unchanged, pending state retained`;
     case "no-pending":
     case "no-manifest":
       return `${reconcilePrefix}${base}`;

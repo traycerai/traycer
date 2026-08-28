@@ -6,7 +6,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { hashFileSha256 } from "../installer/sha256";
 import { downloadToFile } from "../registry/fetch-resource";
 import {
@@ -283,10 +283,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           environment: ctx.runtime.environment,
           platformKey,
         });
-        const stagedBinaryPath = join(
+        const stagedBinaryPath = resolveStagingPath({
           installDir,
-          `traycer-${targetVersion}-${platformKey}${binaryExtension()}`,
-        );
+          targetVersion,
+          platformKey,
+          livePath: manifest.binaryPath,
+        });
 
         ctx.progress({
           stage: "download",
@@ -553,6 +555,8 @@ async function publishAcrossFilesystems(opts: {
   readonly logger: ILogger;
 }): Promise<ReplaceResult> {
   const liveDir = dirname(opts.livePath);
+  // Distinct from the `.download` staging file `resolveStagingPath` builds:
+  // this one is per-attempt and is always removed, on success or failure.
   const publishPath = join(
     liveDir,
     `.${basename(opts.livePath)}.traycer-upgrade-${process.pid}-${Math.random()
@@ -698,6 +702,48 @@ async function publishAcrossFilesystems(opts: {
   return { status: "replaced", errorMessage: null };
 }
 
+// Where the download lands, guaranteed NOT to be the live binary.
+//
+// `downloadToFile` treats its destination as a RESUMABLE PARTIAL: it
+// reads the existing size to resume from, and discards or truncates it
+// on a restart. Pointed at the live executable that is not a download,
+// it is destruction - resuming "from" a working CLI's bytes yields a
+// corrupt file, and a restart deletes it outright, before any digest is
+// ever checked.
+//
+// The old name (`traycer-<version>-<platform>`) could collide: it is
+// exactly the shape a re-anchored manual install may already have, and
+// `cli re-anchor` records the version it is told rather than the one in
+// the filename, so `manifest.version != targetVersion` while
+// `basename(binaryPath) == <staging template>` is reachable. The leading
+// dot plus the explicit inequality check below make the collision
+// impossible rather than merely unlikely.
+function resolveStagingPath(opts: {
+  readonly installDir: string;
+  readonly targetVersion: string;
+  readonly platformKey: string;
+  readonly livePath: string;
+}): string {
+  const candidate = join(
+    opts.installDir,
+    `.traycer-upgrade-${opts.targetVersion}-${opts.platformKey}.download${binaryExtension()}`,
+  );
+  // Deterministic on purpose - a retry reuses one staging file instead of
+  // littering the install directory. `.staged` only ever applies to a
+  // live path pathological enough to be named like the staging file, and
+  // cannot itself collide, since one path cannot equal both spellings.
+  //
+  // NOTE for anyone asserting on this directory's contents: two unrelated
+  // temp families live here and both carry `.traycer-upgrade-`. THIS one
+  // ends in `.download` and is deliberately LEFT BEHIND after a failure
+  // so the next attempt reuses it. The other ends in `.tmp` (see
+  // `publishAcrossFilesystems`) and is always cleaned up. Match on the
+  // suffix, never on the shared prefix.
+  return resolve(candidate) === resolve(opts.livePath)
+    ? `${candidate}.staged`
+    : candidate;
+}
+
 // Codes that mean "the live binary is held open / not replaceable right
 // now" rather than "the upgrade is broken". Callers turn these into a
 // retained `pendingUpgrade` instead of an error.
@@ -816,6 +862,18 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly livePath: string;
       readonly errorMessage: string;
     }
+  // Publication genuinely failed (full disk, unwritable install dir,
+  // digest mismatch on a cross-filesystem copy). Reported rather than
+  // thrown: `host restart` stops the service BEFORE calling this and
+  // relaunches only after it returns, so throwing here would leave the
+  // host down because a bolt-on CLI self-upgrade failed. The live binary
+  // is untouched and `pendingUpgrade` is retained either way.
+  | {
+      readonly status: "publish-failed";
+      readonly stagedBinaryPath: string;
+      readonly livePath: string;
+      readonly errorMessage: string;
+    }
   | {
       readonly status: "finalised";
       readonly previousVersion: string;
@@ -876,18 +934,38 @@ export async function finalizePendingCliUpgrade(opts: {
       stagedBinaryPath: pending.stagedBinaryPath,
     };
   }
-  const swap = await tryReplaceLiveBinary({
-    environment: opts.environment,
-    stagedBinaryPath: pending.stagedBinaryPath,
-    livePath: manifest.binaryPath,
-    // The manifest doesn't preserve the asset digest after `cli upgrade`
-    // clears `pendingUpgrade`, so the helper finalize path doesn't
-    // re-hash. The staged-binary digest was verified at download time;
-    // the rename path is byte-for-byte safe, and an EXDEV fallback in
-    // the helper is rare (staging dir is sibling to the live binary).
-    expectedSha256: null,
-    logger,
-  });
+  // A publication failure must not escape as an exception - see the
+  // `publish-failed` variant for why the restart path cannot survive one.
+  let swap: ReplaceResult;
+  try {
+    swap = await tryReplaceLiveBinary({
+      environment: opts.environment,
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
+      // The persisted `pendingUpgrade` record carries no release digest,
+      // so this path pins the copy to the staged file's own digest
+      // instead - see `publishAcrossFilesystems`.
+      expectedSha256: null,
+      logger,
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error(
+      "CLI pending upgrade publication failed",
+      {
+        environment: opts.environment,
+        currentVersion: manifest.version,
+        pendingVersion: pending.version,
+      },
+      errorFromUnknown(err),
+    );
+    return {
+      status: "publish-failed",
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
+      errorMessage,
+    };
+  }
   if (swap.status === "locked") {
     logger.warn("CLI pending upgrade still locked", {
       environment: opts.environment,

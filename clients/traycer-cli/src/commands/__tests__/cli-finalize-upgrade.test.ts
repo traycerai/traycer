@@ -292,6 +292,41 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     });
   });
 
+  it("on publish-failed, writes a 'swap-failed' marker carrying the errorMessage, collapses to the swap-failed outcome, and never starts the service (Codex P1 #2)", async () => {
+    // `finalizePendingCliUpgrade` now catches publication failures
+    // (full disk, unwritable dir, digest mismatch) instead of throwing,
+    // so `restartWithPendingCliUpgradeFinalize` can still relaunch the
+    // service. `runFinalizeUpgradeSwap` maps that outcome onto the same
+    // `swap-failed` marker/status a still-locked swap gets - the live
+    // binary is untouched and pendingUpgrade stands either way, so
+    // readers of the marker (Doctor, a cross-version finalize helper)
+    // don't need a new status to react to.
+    mocks.finalizeResult = {
+      status: "publish-failed",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      livePath: "/opt/traycer/cli/traycer",
+      errorMessage: "cross-device copy hash mismatch",
+    };
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    const result = await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual([]);
+    expect(result.data).toEqual({
+      status: "swap-failed",
+      errorMessage: "cross-device copy hash mismatch",
+    });
+    const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
+    expect(marker).toMatchObject({
+      status: "swap-failed",
+      livePath: "/opt/traycer/cli/traycer",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      errorMessage: "cross-device copy hash mismatch",
+      serviceStartError: null,
+    });
+  });
+
   it.each(["no-pending", "no-manifest"])(
     "on %s, writes no marker and never starts the service",
     async (status) => {
