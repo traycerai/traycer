@@ -373,6 +373,15 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "host service start",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
     path: "host service status",
     options: [
       { flags: "--json", mandatory: false },
@@ -433,6 +442,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host update",
     options: [
+      { flags: "--release <version>", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -1134,7 +1144,12 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     const hostUpdate = findByPath(program, ["host", "update"]);
     const help = renderHelp(hostUpdate);
     expect(help).toContain("--version <version>");
-    expect(help).toContain("Update to this exact registry version");
+    // The target is now a REGISTERED `--release` option; `--version` survives
+    // as the published compatibility spelling the host's own spawners use, and
+    // the argv rewrite retargets it onto `--release`. The hidden parse flag it
+    // used to point at is deleted outright.
+    expect(help).toContain("Compatibility alias for --release");
+    expect(help).toContain("--release <version>");
     expect(help).not.toContain("--host-update-version");
   });
 
@@ -1189,7 +1204,6 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host install --if-idle",
         "traycer host apply --expected-stage-fingerprint",
         "traycer host apply --no-service",
-        "traycer host update --host-update-version",
         "traycer host download --automatic",
       ].sort(),
     );

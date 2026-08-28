@@ -243,12 +243,41 @@ export interface ServiceRegistrationOk {
 
 export interface UninstallOk {
   readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - not that
+   * the registration is provably gone.
+   *
+   * That weaker meaning is the only honest one available. No platform can
+   * verify absence: Windows maps every `schtasks /Query` failure (timeout,
+   * access denial) to `not-installed`, Linux re-reads the manifest the
+   * uninstall just deleted, and macOS's `launchctl print` probe tolerates
+   * non-zero while an unloaded SMAppService record is invisible to it. A field
+   * meaning "actually accomplished" would therefore be unsatisfiable, so the
+   * contract is stated rather than the value inverted.
+   *
+   * It IS false when the CLI's readback positively found the registration
+   * still present - a positive observation is real evidence and vetoes the
+   * claim. Read `serviceRegistrationRetained` for the underlying tri-state.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the CLI's post-teardown readback actually observed.
+   * `true` = definitely still registered, `null` = nothing could confirm
+   * either way, `false` = verified absent (no platform produces this today).
+   */
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 export interface RemoveTraycerOk {
   readonly removedHost: boolean;
+  /** Same weaker meaning as `UninstallOk.deregisteredService` - see there. */
   readonly deregisteredService: boolean;
+  /**
+   * Same tri-state as `UninstallOk.serviceRegistrationRetained`. Carried here
+   * too: discarding it left Remove Traycer publishing the weakened boolean as
+   * an accomplished fact with no way for a caller to see the uncertainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 

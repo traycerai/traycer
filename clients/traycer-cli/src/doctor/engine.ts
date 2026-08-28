@@ -544,20 +544,41 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // already covers, since that card appends the same `serviceStartError` to
   // its own message. That is precisely `markerDescribesUpgrade`, so it is
   // asked here rather than approximated by "is anything pending".
-  const markerCoveredByPendingCard =
+  const matchingPendingMarker =
     pendingUpgrade !== null &&
     finalizeMarker.status === "present" &&
     markerDescribesUpgrade(finalizeMarker.marker, {
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
       livePath: pendingUpgrade.binaryPath,
       stagedAt: pendingUpgrade.pending.stagedAt,
-    });
+    })
+      ? finalizeMarker.marker
+      : null;
+  const markerCoveredByPendingCard = matchingPendingMarker !== null;
+  const pendingMarkerServiceStartError =
+    matchingPendingMarker?.serviceStartError ?? null;
   if (
     !markerCoveredByPendingCard &&
     finalizeMarker.status === "present" &&
-    finalizeMarker.marker.status === "swapped" &&
+    (finalizeMarker.marker.status === "swapped" ||
+      finalizeMarker.marker.status === "swap-failed") &&
     finalizeMarker.marker.serviceStartError !== null
   ) {
+    const markerSwapCompleted = finalizeMarker.marker.status === "swapped";
+    // Empty paths are the explicit identity-less marker written when the
+    // detached helper discovers that no pending manifest remains. Every
+    // attempted swap carries both paths, even if its manifest is later
+    // cleared or replaced, so preserve that failed-swap history instead of
+    // describing all uncovered markers as empty finalization.
+    const markerAttemptedSwap =
+      finalizeMarker.marker.livePath !== "" ||
+      finalizeMarker.marker.stagedBinaryPath !== "";
+    const markerOutcomeMessage = markerSwapCompleted
+      ? "The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. "
+      : markerAttemptedSwap
+        ? `The CLI swap from ${finalizeMarker.marker.stagedBinaryPath} to ${finalizeMarker.marker.livePath} failed: ` +
+          `${finalizeMarker.marker.errorMessage ?? "no error message recorded"}. `
+        : "No pending CLI upgrade remained for the helper to apply. ";
     // THE MARKER IS HISTORY, NOT A LIVE READING. It records what happened at
     // `attemptedAt` and then persists until some later `host restart`
     // reconciles it - so on a machine whose supervisor already recovered the
@@ -607,14 +628,18 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
       severity: hostRunningNow ? "info" : "warning",
       title: hostRunningNow
-        ? "Host briefly failed to start after a CLI upgrade (since recovered)"
-        : "CLI upgrade completed but the host service did not start",
+        ? "Host briefly failed to start after CLI finalization (since recovered)"
+        : markerSwapCompleted
+          ? "CLI upgrade completed but the host service did not start"
+          : "CLI finalization ended without restarting the host service",
       message: hostRunningNow
-        ? `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
-          `${finalizeMarker.marker.serviceStartError}. The host is running now, so this is a record of a past outage rather than a live fault - ` +
+        ? `The finalize helper ran at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. ${markerOutcomeMessage}` +
+          "The host is running now, so this is a record of a past outage rather than a live fault - " +
           "quote it if you are investigating why the host was briefly unavailable around that time. The next 'traycer host restart' clears the record."
-        : `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
-          `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. ` +
+        : `The finalize helper ran at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. ` +
+          markerOutcomeMessage +
           (startAttemptedSince
             ? "The host has been started at least once since then, so the outage you are looking at now may have a different cause - check the recent activity below. "
             : "") +
@@ -627,6 +652,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         serviceStartError: finalizeMarker.marker.serviceStartError,
         livePath: finalizeMarker.marker.livePath,
         stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
+        errorMessage: finalizeMarker.marker.errorMessage,
         // Directly observed, and named for exactly what it is. Kept apart from
         // the history flag below so nothing downstream can read one as the
         // other, which is how the contradiction above happened.
@@ -670,7 +696,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         message:
           `cli upgrade has pendingUpgrade=${pendingUpgrade.pending.version} but ` +
           `the staged binary at ${pendingUpgrade.pending.stagedBinaryPath} ` +
-          "is no longer on disk. Re-run 'traycer cli upgrade' to re-stage.",
+          "is no longer on disk. Re-run 'traycer cli upgrade' to re-stage." +
+          (pendingMarkerServiceStartError === null
+            ? ""
+            : ` The finalize helper also could not restart the host service: ${pendingMarkerServiceStartError}`),
         fixAction: null,
         terminalCommand: `traycer cli upgrade`,
         details: {
@@ -681,6 +710,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           currentVersion: pendingUpgrade.currentVersion,
           binaryPath: pendingUpgrade.binaryPath,
           finalizeMarker: finalizeMarkerDetail(finalizeMarker),
+          serviceStartError: pendingMarkerServiceStartError,
         },
       });
     } else {
@@ -1049,7 +1079,10 @@ function postFinalizeMarkerIssue(
         `The CLI is still ${pending.currentVersion} and the upgrade remains ` +
         "pending. 'traycer host restart' retries the whole flow; if it keeps " +
         "failing, the live binary's directory is likely not writable by this " +
-        "user.",
+        "user." +
+        (marker.serviceStartError === null
+          ? ""
+          : ` The helper also could not restart the host service: ${marker.serviceStartError}`),
       fixAction: "host-restart",
       terminalCommand: `traycer host restart`,
       details: {
@@ -1060,6 +1093,7 @@ function postFinalizeMarkerIssue(
         markerStatus: marker.status,
         attemptedAt: marker.attemptedAt,
         errorMessage: marker.errorMessage,
+        serviceStartError: marker.serviceStartError,
       },
     };
   }

@@ -1447,11 +1447,21 @@ export interface HostRemovalState {
 
 // Result of the in-app "Remove Traycer" action. The desktop stops + removes
 // the host service, the host install, and (on macOS) the SMAppService login
-// item, while preserving all `~/.traycer` user data. Each flag reports what
-// the teardown actually accomplished so the renderer can confirm.
+// item, while preserving all `~/.traycer` user data.
 export interface TraycerUninstallResult {
   readonly removedHost: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. See `HostUninstallResult` for why no
+   * platform can verify absence.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed: `true` = definitely still
+   * registered, `null` = nothing could confirm either way. Read this rather
+   * than `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 
@@ -1682,7 +1692,23 @@ export type ApplyStagedTrigger = "launch" | "manual";
 
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. No platform can verify absence:
+   * Windows maps every `schtasks /Query` failure to `not-installed`, Linux
+   * re-reads the manifest the uninstall just deleted, and macOS's
+   * `launchctl print` probe tolerates non-zero while an unloaded SMAppService
+   * record is invisible to it. It IS false when the readback positively found
+   * the registration still present.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed. `true` = definitely still
+   * registered, `null` = nothing could confirm either way, `false` = verified
+   * absent (no platform produces this today). Read this rather than
+   * `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 export interface HostLogsTailResult {

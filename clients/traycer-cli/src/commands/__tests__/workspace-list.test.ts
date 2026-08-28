@@ -329,7 +329,7 @@ describe("formatWorkspaceListTable", () => {
         // A worktree row (isGitRepo: false) with a legacy `setup_failed`
         // REASON is now blocking ("missing on disk") under the production
         // fix - use the canonical `setupState` spelling instead, which
-        // `hasBlockingReason` never inspects, so this row stays a plain
+        // `hasBlockingWorktreeSelectorReason` never inspects, so this row stays a plain
         // "setup failed" STATE for the column-alignment check below.
         disabledReason: null,
         setupState: "failed",
