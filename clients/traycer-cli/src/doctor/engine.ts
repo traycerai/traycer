@@ -555,9 +555,11 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   if (
     !markerCoveredByPendingCard &&
     finalizeMarker.status === "present" &&
-    finalizeMarker.marker.status === "swapped" &&
+    (finalizeMarker.marker.status === "swapped" ||
+      finalizeMarker.marker.status === "swap-failed") &&
     finalizeMarker.marker.serviceStartError !== null
   ) {
+    const markerSwapCompleted = finalizeMarker.marker.status === "swapped";
     // THE MARKER IS HISTORY, NOT A LIVE READING. It records what happened at
     // `attemptedAt` and then persists until some later `host restart`
     // reconciles it - so on a machine whose supervisor already recovered the
@@ -607,14 +609,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
       severity: hostRunningNow ? "info" : "warning",
       title: hostRunningNow
-        ? "Host briefly failed to start after a CLI upgrade (since recovered)"
-        : "CLI upgrade completed but the host service did not start",
+        ? "Host briefly failed to start after CLI finalization (since recovered)"
+        : markerSwapCompleted
+          ? "CLI upgrade completed but the host service did not start"
+          : "CLI finalization ended without restarting the host service",
       message: hostRunningNow
-        ? `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
+        ? `The finalize helper ran at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
           `${finalizeMarker.marker.serviceStartError}. The host is running now, so this is a record of a past outage rather than a live fault - ` +
           "quote it if you are investigating why the host was briefly unavailable around that time. The next 'traycer host restart' clears the record."
-        : `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
-          `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. ` +
+        : `The finalize helper ran at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. ` +
+          (markerSwapCompleted
+            ? "The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. "
+            : "No pending CLI upgrade remained for the helper to apply. ") +
           (startAttemptedSince
             ? "The host has been started at least once since then, so the outage you are looking at now may have a different cause - check the recent activity below. "
             : "") +

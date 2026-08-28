@@ -614,6 +614,41 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(existsSync(markerPath)).toBe(true);
   });
 
+  it("reports an identity-less swap-failed marker's serviceStartError when no upgrade is pending", async () => {
+    stageDoctorMocks();
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    const markerPath = join(cliDir, "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: "",
+        stagedBinaryPath: "",
+        errorMessage:
+          "no pending CLI upgrade remained when the finalize helper ran",
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.message).toContain("Input/output error");
+    expect(issue?.message).toContain("No pending CLI upgrade remained");
+    expect(issue?.terminalCommand).toMatch(/traycer host restart/);
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
   // The marker records what happened at `attemptedAt` and then persists until
   // some later `host restart` reconciles it. On a machine whose supervisor
   // already recovered the host, warning that "the host is down" would assert
