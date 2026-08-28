@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
+  WorktreeBindingEntryMode,
   WorktreeBindingSelectorDisabledReason,
   WorktreeSetupState,
+} from "@traycer/protocol/host/index";
+import {
+  worktreeBindingEntryModeSchema,
+  worktreeBindingSelectorDisabledReasonSchema,
+  worktreeSetupStateSchema,
 } from "@traycer/protocol/host/index";
 import {
   hasBlockingWorktreeSelectorReason,
@@ -53,11 +59,13 @@ const SETUP_STATES: ReadonlyArray<WorktreeSetupState> = [
   "cancelled",
 ];
 
+const MODES: ReadonlyArray<WorktreeBindingEntryMode> = ["local", "worktree"];
+
 function everyInput(): ReadonlyArray<WorktreeRowStateInput> {
   const rows: WorktreeRowStateInput[] = [];
   for (const disabledReason of DISABLED_REASONS) {
     for (const setupState of SETUP_STATES) {
-      for (const mode of ["worktree", "local"] as const) {
+      for (const mode of MODES) {
         for (const isGitRepo of [true, false]) {
           for (const isGitResolvePending of [true, false]) {
             rows.push({
@@ -74,6 +82,33 @@ function everyInput(): ReadonlyArray<WorktreeRowStateInput> {
   }
   return rows;
 }
+
+/**
+ * The lists above are hand-written, and TypeScript only catches a value that
+ * was REMOVED from a protocol enum or misspelled - it says nothing about one
+ * that was ADDED. Without this, a new `setupState` or disabled reason would
+ * quietly shrink "the entire input domain" to a subset, and every exhaustive
+ * claim below would keep passing while covering less. Pin them to the schemas.
+ */
+describe("the enumerated domain", () => {
+  it("covers every value the protocol enums declare", () => {
+    expect([...DISABLED_REASONS].sort()).toStrictEqual(
+      [...worktreeBindingSelectorDisabledReasonSchema.options, null].sort(),
+    );
+    expect([...SETUP_STATES].sort()).toStrictEqual(
+      [...worktreeSetupStateSchema.options].sort(),
+    );
+    expect([...MODES].sort()).toStrictEqual(
+      [...worktreeBindingEntryModeSchema.options].sort(),
+    );
+  });
+
+  it("is the full product of those values", () => {
+    expect(everyInput().length).toBe(
+      DISABLED_REASONS.length * SETUP_STATES.length * MODES.length * 2 * 2,
+    );
+  });
+});
 
 describe("hasBlockingWorktreeSelectorReason", () => {
   it("does not block a row with no reason", () => {
