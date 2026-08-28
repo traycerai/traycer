@@ -741,6 +741,59 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(issue?.message).toContain("may have a different cause");
   });
 
+  // The other arrangement that loses the causal error: an OLD swapped marker
+  // carrying a serviceStartError survives while a LATER `cli upgrade` records
+  // a new pending upgrade. `postFinalizeMarkerIssue` correctly rejects that
+  // marker as stale, so gating this report on "nothing pending" meant nobody
+  // reported the failure at all - while the host stayed down for exactly the
+  // reason the marker names.
+  it("still reports a stale marker's service-start error when a NEWER upgrade is pending", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const pendingStagedPath = join(workHome, "bin", "traycer-1.6.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      version: "1.6.0",
+      stagedBinaryPath: pendingStagedPath,
+      liveBinaryPath,
+      stagedExists: true,
+    });
+    writeFileSync(
+      join(workHome, ".traycer", "cli", "post-finalize.json"),
+      JSON.stringify({
+        status: "swapped",
+        // Predates the pending 1.6.0 staging and names the 1.5.0 staged path,
+        // so `markerDescribesUpgrade` rejects it for the pending card.
+        attemptedAt: "2026-05-09T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: null,
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const startFailure = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(startFailure).toBeDefined();
+    expect(startFailure?.message).toContain("Input/output error");
+    // ...and the newer pending upgrade is still reported on its own card.
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
+    ).toBeDefined();
+    // The stale marker must NOT be read as completing the newer upgrade.
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED"),
+    ).toBeUndefined();
+  });
+
   // `invalid` (read the bytes, they were nonsense) and `unreadable` (could not
   // read the bytes at all) license different advice. Reconciliation unlinks
   // the first but returns without unlinking on a read failure, so offering

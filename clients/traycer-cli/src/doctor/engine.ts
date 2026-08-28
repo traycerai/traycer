@@ -515,9 +515,30 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   //
   // Other probes will notice the host is not running, but none of them can
   // say WHY - and the helper's own error is the only artifact that explains
-  // it. Reported whenever present, independently of pending state.
+  // it.
+  //
+  // The gate is DUPLICATION, not pending state. An earlier version skipped
+  // this whenever any pending upgrade existed, which lost the error in a
+  // second, entirely reachable arrangement: an old `swapped` marker carrying
+  // a `serviceStartError` survives, a later `cli upgrade` records a NEW
+  // pending upgrade, and `postFinalizeMarkerIssue` then correctly rejects
+  // that marker as stale - so nothing reported the failure at all, while the
+  // host stayed down for exactly the reason the marker names.
+  //
+  // The only case that must not double-report is a marker the pending card
+  // already covers, since that card appends the same `serviceStartError` to
+  // its own message. That is precisely `markerDescribesUpgrade`, so it is
+  // asked here rather than approximated by "is anything pending".
+  const markerCoveredByPendingCard =
+    pendingUpgrade !== null &&
+    finalizeMarker.status === "present" &&
+    markerDescribesUpgrade(finalizeMarker.marker, {
+      stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
+      livePath: pendingUpgrade.binaryPath,
+      stagedAt: pendingUpgrade.pending.stagedAt,
+    });
   if (
-    pendingUpgrade === null &&
+    !markerCoveredByPendingCard &&
     finalizeMarker.status === "present" &&
     finalizeMarker.marker.status === "swapped" &&
     finalizeMarker.marker.serviceStartError !== null
