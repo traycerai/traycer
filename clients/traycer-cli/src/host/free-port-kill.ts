@@ -112,10 +112,16 @@ export interface KillConflictingPortOwnerResult {
   // Human-readable evidence behind `release` - which probe answered, or why
   // it could not. Callers put this in the error message and `details`.
   readonly releaseDetail: string;
-  // Who holds the port at the end of verification, when the probe could see
-  // that far. `null` when nothing listens or the probe could not answer.
-  // Diagnostic only: a non-null value that differs from `pid` is compatible
-  // with `release: "released"` (see the auto-respawn note above).
+  // Who holds the port at the end of verification, and non-null ONLY for
+  // `release: "still-held"`. `released` requires consecutive no-listener
+  // observations, so it always reports `null` here, and `unverified` never
+  // names a holder it could not confirm.
+  //
+  // Stated precisely because an earlier version of this comment described a
+  // `released`-with-holder combination the producer cannot emit, which invites
+  // callers to add defensive `holderPid` checks on the success path for a
+  // state that never arrives. `release` is the whole verdict; this field is
+  // diagnostic.
   readonly holderPid: number | null;
 }
 

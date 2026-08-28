@@ -538,6 +538,45 @@ export async function readPostFinalizeMarker(opts: {
   return { status: "present", marker: toPostFinalizeMarker(parsed) };
 }
 
+// The identity of the operation a marker describes, as far as the marker
+// format can express it.
+export interface MarkerUpgradeIdentity {
+  readonly stagedBinaryPath: string;
+  readonly livePath: string;
+  readonly stagedAt: string;
+}
+
+// Does this marker describe THIS pending upgrade?
+//
+// Lives here, exported, because two callers need the identical answer and the
+// cost of them drifting is concrete rather than theoretical: doctor reporting
+// an upgrade as already applied while `host restart` discards the same marker
+// as stale was an actual defect in this PR's history, found in review. Two
+// copies of the predicate put that one edit away from returning.
+//
+// Both paths are compared, and the ORDERING too, because neither path is
+// identity on its own: `cli re-anchor` deliberately keeps a path across
+// binaries, and `cli upgrade` derives the staged filename from the version, so
+// a same-version retry reproduces the exact tuple an older marker carries. A
+// marker written before the upgrade was staged cannot be describing it.
+//
+// Timestamps are compared as instants, never as strings: the Windows helper
+// writes `(Get-Date).ToUniversalTime().ToString("o")` (7 fractional digits)
+// against `toISOString()`'s 3, so lexicographic ordering mis-sorts the same
+// moment. An unparseable timestamp answers `false` - the conservative
+// direction, which retries an upgrade rather than falsely completing one.
+export function markerDescribesUpgrade(
+  marker: PostFinalizeMarker,
+  pending: MarkerUpgradeIdentity,
+): boolean {
+  if (marker.stagedBinaryPath !== pending.stagedBinaryPath) return false;
+  if (marker.livePath !== pending.livePath) return false;
+  const markerAt = Date.parse(marker.attemptedAt);
+  const stagedAt = Date.parse(pending.stagedAt);
+  if (!Number.isFinite(markerAt) || !Number.isFinite(stagedAt)) return false;
+  return markerAt >= stagedAt;
+}
+
 export type ReconcileOutcome =
   | { readonly status: "no-marker" }
   | { readonly status: "marker-invalid"; readonly errorMessage: string }
@@ -669,36 +708,17 @@ export async function reconcilePostFinalizeMarker(opts: {
   // re-anchored destination. The marker only describes this operation if it
   // agrees about where the bytes came FROM and where they went TO.
   //
-  // PATHS ARE NOT IDENTITY, which is why the timestamp check below is not
-  // belt-and-braces. Both paths are REUSABLE by design: `cli re-anchor`
-  // deliberately supports replacing the binary while keeping the same path,
-  // and `cli upgrade` derives the staged filename deterministically from the
-  // version, so retrying the same version reproduces it exactly. A marker
-  // from a prior attempt can therefore match both paths of a genuinely new
-  // pending upgrade - and applying it would clear that pending record and
-  // stamp its version while the newly staged bytes sat untouched.
-  //
-  // A marker written BEFORE the pending upgrade was staged cannot be
-  // describing it. That ordering is the closest thing to an operation ID
-  // available without adding one to the marker format, and it is decisive for
-  // the reuse case, which is by construction a LATER staging than the marker.
-  // Timestamps are compared as instants, not strings: the helper writes
-  // `(Get-Date).ToUniversalTime().ToString("o")` on Windows (7 fractional
-  // digits) against `toISOString()`'s 3 elsewhere, so lexicographic ordering
-  // would mis-sort identical moments.
-  const markerAt = Date.parse(parsed.attemptedAt);
-  const pendingStagedAt = Date.parse(pending.stagedAt);
-  // An untimestamped or unparseable marker cannot be placed in the ordering.
-  // Discarding is the conservative direction: `pendingUpgrade` survives, so
-  // the upgrade is retried rather than falsely marked complete.
-  const markerPredatesPending =
-    !Number.isFinite(markerAt) ||
-    !Number.isFinite(pendingStagedAt) ||
-    markerAt < pendingStagedAt;
+  // Identity is decided by the shared `markerDescribesUpgrade` predicate above
+  // rather than inline, so this path and doctor's read path cannot drift - a
+  // divergence that already happened once in this PR's history and produced
+  // doctor announcing an upgrade as applied while this function correctly
+  // discarded the same marker as stale.
   if (
-    parsed.stagedBinaryPath !== pending.stagedBinaryPath ||
-    parsed.livePath !== manifest.binaryPath ||
-    markerPredatesPending
+    !markerDescribesUpgrade(parsed, {
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
+      stagedAt: pending.stagedAt,
+    })
   ) {
     await safeUnlink(markerPath);
     return {

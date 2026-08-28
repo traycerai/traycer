@@ -21,17 +21,11 @@ import {
 type SpawnOverride = (command: string, args: readonly string[]) => ChildProcess;
 
 const mocks = vi.hoisted(() => ({
-  isProcessAliveMock: vi.fn(),
   // `null` delegates to the real `spawn` so the Finding 7 tests below (which
   // launch genuine fake-`lsof` scripts off `PATH`) are untouched; only the
   // "post-kill release verification" describe block sets this.
   spawnOverride: null as SpawnOverride | null,
 }));
-
-vi.mock("../../store/cli-lock", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../store/cli-lock")>();
-  return { ...actual, isProcessAlive: mocks.isProcessAliveMock };
-});
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -141,10 +135,9 @@ describe.skipIf(process.platform === "win32")(
 // check to pass and a SIGTERM to be "delivered" before the verification
 // loop it drives ever runs. `node:child_process.spawn` and `process.kill`
 // are stubbed so the loop's outcome is fully controlled without touching a
-// real process or a real port; `isProcessAlive` is stubbed separately since
-// it is the loop's first (cheaper) probe. Fake timers collapse the 5s
-// verification deadline used by the still-held/unverified cases below to
-// (near-)zero wall-clock time.
+// real process or a real port. Fake timers collapse the 5s verification
+// deadline used by the still-held/unverified cases below to (near-)zero
+// wall-clock time.
 interface StubProbeChild extends EventEmitter {
   readonly pid: number;
   readonly stdout: EventEmitter;
@@ -219,8 +212,6 @@ describe.skipIf(process.platform === "win32")(
       vi.useFakeTimers();
       responseQueue = [];
       defaultResponse = null;
-      mocks.isProcessAliveMock.mockReset();
-      mocks.isProcessAliveMock.mockReturnValue(true);
       mocks.spawnOverride = () => {
         const response = responseQueue.shift() ?? defaultResponse;
         if (response === null || response === undefined) {
@@ -282,15 +273,13 @@ describe.skipIf(process.platform === "win32")(
       expect(result.holderPid).toBe(7777);
     });
 
-    it("released: a dead target is confirmed by the port probe, not by process exit alone", async () => {
-      // The verifier no longer short-circuits on `isProcessAlive` - a dead
-      // pid says nothing about whether the PORT is free. Liveness reports
-      // dead here AND the probe reports no listener; the probe is what makes
-      // it a release. The companion test below pins the case where those two
-      // facts disagree.
+    it("released: the verdict comes from the port probe, never from process liveness", async () => {
+      // The verifier does not consult `isProcessAlive` at all any more - a
+      // dead pid says nothing about whether the PORT is free, and the module
+      // no longer imports it. Only the probe can produce a release. The
+      // companion test below pins the case those two facts disagree in.
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = NO_LISTENER;
-      mocks.isProcessAliveMock.mockReturnValue(false);
 
       const pending = killConflictingPortOwner({
         pid: TARGET_PID,
@@ -307,12 +296,11 @@ describe.skipIf(process.platform === "win32")(
     it("still-held: the target died but a replacement listener took the port", async () => {
       // The CLI-011 regression that three reviewers caught. A supervised
       // foreign listener respawning under a NEW pid leaves the conflict fully
-      // intact while the pid we signalled is gone. Reporting `released` here
+      // intact even though the pid we signalled is gone. Reporting `released` here
       // would restart the host onto an occupied port and call it a completed
       // repair - the exact false success this change exists to remove.
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = ownsPort(7777);
-      mocks.isProcessAliveMock.mockReturnValue(false);
 
       const pending = killConflictingPortOwner({
         pid: TARGET_PID,

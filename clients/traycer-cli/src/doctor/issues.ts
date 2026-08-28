@@ -70,6 +70,13 @@ export const DOCTOR_ISSUE_CODES = {
   // upgrade right now, and staying silent about it would let doctor call the
   // CLI-upgrade state clean while an unparseable file sits on disk.
   CLI_UPGRADE_MARKER_UNREADABLE: "CLI_UPGRADE_MARKER_UNREADABLE",
+  // The marker's BYTES were read and are not a marker (bad JSON, wrong shape).
+  // Its own code rather than sharing UNREADABLE above, because the two have
+  // opposite remediations - reconciliation unlinks an unparseable marker, so
+  // `host restart` clears it, while a marker it cannot read is left in place -
+  // and a consumer that groups by `code` would otherwise have to parse message
+  // prose to tell which advice applies.
+  CLI_UPGRADE_MARKER_UNPARSEABLE: "CLI_UPGRADE_MARKER_UNPARSEABLE",
   // The finalize helper swapped the CLI successfully and then could not start
   // the host service. Its own error is the only artifact that explains a host
   // that is down for this particular reason, and it is recorded in the marker

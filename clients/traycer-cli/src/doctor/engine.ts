@@ -23,6 +23,7 @@ import {
   readPendingCliUpgrade,
 } from "../commands/cli-upgrade";
 import {
+  markerDescribesUpgrade,
   readPostFinalizeMarker,
   type PostFinalizeMarkerRead,
 } from "../upgrade/finalize-helper";
@@ -432,11 +433,11 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       () => false,
     );
     issues.push({
-      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNREADABLE,
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNPARSEABLE,
       severity: "warning",
-      title: "CLI upgrade finalize marker is unreadable",
+      title: "CLI upgrade finalize marker is not readable as a marker",
       message:
-        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be read: ` +
+        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be parsed: ` +
         `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed. ` +
         (markerDirWritable
           ? "Run 'traycer host restart': its reconcile step discards a marker it cannot parse, which clears this. " +
@@ -935,27 +936,17 @@ function postFinalizeMarkerIssue(
   // the staged filename carries the version and defeats a stale-VERSION
   // marker, but `cli re-anchor` can repoint the live binary without deleting
   // the marker, so a same-version retry would match on staged path alone.
-  //
-  // The ORDERING check matters as much as the paths, and for the reason spelled
-  // out in `reconcilePostFinalizeMarker`: both paths are reusable by design
-  // (`cli re-anchor` keeps a path across binaries; `cli upgrade` derives the
-  // staged filename from the version), so a same-version retry reproduces the
-  // exact tuple an older marker carries. A marker written before this upgrade
-  // was staged cannot describe it. Compared as instants because the Windows
-  // helper's 7 fractional digits mis-sort lexicographically against
-  // `toISOString()`'s 3.
-  //
-  // This has to agree with the reconcile side or doctor and `host restart`
-  // disagree about the same file - doctor announcing an upgrade as applied
-  // while the restart correctly discards the marker as stale.
-  const markerAt = Date.parse(marker.attemptedAt);
-  const pendingStagedAt = Date.parse(pending.stagedAt);
+  // Identity is decided by the SHARED `markerDescribesUpgrade` predicate, not
+  // re-implemented here. These two call sites disagreeing is not hypothetical:
+  // it happened in this PR's history, and produced doctor announcing an
+  // upgrade as already applied while `host restart` correctly discarded the
+  // same marker as stale. One predicate, one answer.
   if (
-    marker.stagedBinaryPath !== pending.stagedBinaryPath ||
-    marker.livePath !== pending.binaryPath ||
-    !Number.isFinite(markerAt) ||
-    !Number.isFinite(pendingStagedAt) ||
-    markerAt < pendingStagedAt
+    !markerDescribesUpgrade(marker, {
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: pending.binaryPath,
+      stagedAt: pending.stagedAt,
+    })
   ) {
     return null;
   }

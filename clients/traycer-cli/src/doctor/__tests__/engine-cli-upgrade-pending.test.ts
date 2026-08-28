@@ -819,11 +819,26 @@ describe("runDoctor pending CLI upgrade surface", () => {
       portConflictDeps: null,
     });
 
-    const unreadable = result.issues.find(
-      (i) => i.code === "CLI_UPGRADE_MARKER_UNREADABLE",
+    // Its OWN code, not the read-failure one: reconciliation unlinks an
+    // unparseable marker, so `host restart` genuinely clears it, whereas a
+    // marker it cannot read at all is left in place. Opposite remediations
+    // must not share a code, or a consumer grouping by `code` has to parse
+    // message prose to tell which advice applies.
+    const unparseable = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_MARKER_UNPARSEABLE",
     );
-    expect(unreadable).toBeDefined();
-    expect(unreadable?.severity).toBe("warning");
+    expect(unparseable).toBeDefined();
+    expect(unparseable?.severity).toBe("warning");
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_MARKER_UNREADABLE"),
+    ).toBeUndefined();
+    // The fixture creates the marker directory 0o700 under the test user, so
+    // it IS writable and this branch must offer the repair that works.
+    // Pinning both sides of that conditional, since probing writability
+    // existed precisely to stop advertising a deletion that cannot happen.
+    expect(unparseable?.fixAction).toBe("host-restart");
+    expect(unparseable?.terminalCommand).toMatch(/traycer host restart/);
+    expect(unparseable?.details?.markerDirWritable).toBe(true);
     // Still observational: reporting the fault must not repair it.
     expect(readFileSync(markerPath, "utf8")).toBe(markerBody);
   });

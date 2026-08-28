@@ -152,10 +152,13 @@ export function buildHostFreePortAndRestartCommand(
     // `host free-port`. Three distinct paths reach success here:
     //   - no kill requested (`--pid`/`--port` omitted): a plain restart;
     //   - SIGTERM delivered, port then verified free;
-    //   - the owner exited on its own between the ownership probe and the kill
-    //     (ESRCH), and the port was verified free anyway - `killed` is false
-    //     and claiming SIGTERM was sent would describe an act that did not
-    //     happen.
+    //   - the signal FAILED and the port was verified free regardless -
+    //     `killed` is false, and claiming SIGTERM was sent would describe an
+    //     act that did not happen. Worded neutrally rather than as an exit:
+    //     `killError` covers ESRCH ("already gone") and EPERM ("still there,
+    //     not ours to signal") alike, and EPERM reaching a released port is
+    //     reachable when an operator stops a root-owned listener inside the
+    //     verification window. The errno is quoted so the reader can tell.
     //
     // "sent SIGTERM to" rather than "terminated" in the second case: the
     // signal is all this command did to the process, and a server that closes
@@ -166,7 +169,7 @@ export function buildHostFreePortAndRestartCommand(
         ? `restart requested for service '${label.id}'`
         : kill.killed
           ? `sent SIGTERM to pid ${args.pid ?? "?"} (${kill.releaseDetail}); restart requested for service '${label.id}'`
-          : `pid ${args.pid ?? "?"} exited before SIGTERM could be delivered (${kill.killError}); port verified free (${kill.releaseDetail}); restart requested for service '${label.id}'`;
+          : `pid ${args.pid ?? "?"} could not be signalled (${kill.killError}); port verified free anyway (${kill.releaseDetail}); restart requested for service '${label.id}'`;
     return {
       data: {
         port: args.port,

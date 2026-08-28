@@ -86,12 +86,20 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
         holderPid: result.holderPid,
       },
       // Rendered from what actually happened to the signal, not from the fact
-      // that we reached the success path. There are two ways to get here: the
-      // SIGTERM was delivered, or the owner exited on its own between the
-      // ownership probe and the kill (ESRCH) and the port was then verified
-      // free anyway. Saying "sent SIGTERM" in the second case describes an act
-      // this command did not perform - a small lie, but the same kind the rest
-      // of this change exists to remove.
+      // that we reached the success path. Two ways to get here: the SIGTERM was
+      // delivered, or it failed and the port turned out to be free regardless.
+      // Saying "sent SIGTERM" in the second case describes an act this command
+      // did not perform - a small lie, but the same kind the rest of this
+      // change exists to remove.
+      //
+      // The failed-signal wording stays NEUTRAL rather than saying the process
+      // exited. `killError` is set for any `process.kill` failure, and the two
+      // common ones mean opposite things: ESRCH is "it was already gone",
+      // EPERM is "it is still there and we may not signal it". EPERM reaching
+      // a released port is reachable - an operator stops a root-owned listener
+      // inside the verification window - and announcing an exit there would
+      // assert the opposite of what happened. The errno is quoted so the
+      // reader can tell which they had.
       //
       // "sent SIGTERM to", not "terminated", in the first case: the signal is
       // all this command did to the process, and a server that closes its
@@ -99,7 +107,7 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
       // dying. The verified claim is the port one, in `releaseDetail`.
       human: result.killed
         ? `sent SIGTERM to pid ${args.pid}; port ${args.port} released (${result.releaseDetail})`
-        : `pid ${args.pid} exited before SIGTERM could be delivered (${result.killError}); port ${args.port} verified free (${result.releaseDetail})`,
+        : `pid ${args.pid} could not be signalled (${result.killError}); port ${args.port} verified free anyway (${result.releaseDetail})`,
       exitCode: 0,
     };
   };
