@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { check } from "@traycer/protocol/framework/compatibility-checker";
 import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -47,8 +50,13 @@ describe("epic.createChat stays on the released floor", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
-    expect(split.manifest["epic.createChat"]).toEqual({ major: 1, minor: 1 });
+    expect(split.manifest["epic.createChat"]).toEqual({
+      major: 1,
+      minor: 1,
+      supportedMajors: [1],
+    });
     expect(split.optionalManifest["epic.createChat"]).toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CanonicalTerminalSessionInfoWithCurrentCwd } from "@traycer/protocol/host/terminal/unary-schemas";
+import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfoWithLifecycleOwner } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   buildTerminalListCommand,
   formatTerminalListTable,
@@ -50,8 +51,8 @@ afterEach(() => {
 });
 
 function session(
-  overrides: Partial<CanonicalTerminalSessionInfoWithCurrentCwd>,
-): CanonicalTerminalSessionInfoWithCurrentCwd {
+  overrides: Partial<CanonicalTerminalSessionInfoWithLifecycleOwner>,
+): CanonicalTerminalSessionInfoWithLifecycleOwner {
   return {
     sessionId: "term-1",
     scope: { kind: "epic", epicId: "epic-1" },
@@ -68,6 +69,7 @@ function session(
     createdAt: 1_700_000_000_000,
     title: "build",
     activeProcessName: "vitest",
+    lifecycleOwner: "registry",
     ...overrides,
   };
 }
@@ -187,6 +189,19 @@ describe("buildTerminalListCommand", () => {
     const result = await buildTerminalListCommand({ epicId: null })(ctx);
 
     expect(result.data).toMatchObject({ terminals: [{ title: "api" }] });
+  });
+
+  it("parses a v2.3 terminal.list payload without stripping lifecycleOwner", () => {
+    // The v1.4-equivalent regression for this method: a stale v2.2 schema
+    // strips the additive `lifecycleOwner` field silently (Zod discards
+    // unknown keys). The canonical v2.3 parse must keep it, even though the
+    // CLI's own row shape does not currently surface it downstream.
+    const wireSession = session({ lifecycleOwner: "manager" });
+    const parsed = listTerminalsResponseSchemaV23.parse({
+      sessions: [wireSession],
+      homeCwd: "/home/dev",
+    });
+    expect(parsed.sessions[0]?.lifecycleOwner).toBe("manager");
   });
 });
 

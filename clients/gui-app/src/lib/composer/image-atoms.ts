@@ -29,6 +29,67 @@ export function collectImageAtoms(
 export function containsImageAtoms(content: JsonContent): boolean {
   return walk(content, (node) => node.type === "imageAttachment");
 }
+
+export function appendImageAttachmentAtoms(
+  content: JsonContent,
+  atoms: ReadonlyArray<{
+    readonly id: string;
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly size: number | null;
+    readonly b64content: string;
+    readonly hash: string;
+  }>,
+): JsonContent {
+  if (atoms.length === 0) return content;
+  const nodes: JsonContent[] = atoms.map((atom) => ({
+    type: "imageAttachment",
+    attrs: {
+      id: atom.id,
+      fileName: atom.fileName,
+      mimeType: atom.mimeType,
+      size: atom.size,
+      b64content: atom.b64content,
+      hash: atom.hash,
+    },
+  }));
+  const children = content.content ?? [];
+  return {
+    ...content,
+    content: [...children, ...nodes],
+  };
+}
+
+/**
+ * Content hash is the identity everywhere else (`excludeHashes`, the landing
+ * image store), so exclusion is by hash - a pasted image that happens to share
+ * a crop's file name must not vanish from the rendered message.
+ */
+export function omitImageAtomsByHash(
+  content: JsonContent,
+  hashes: ReadonlySet<string>,
+): JsonContent {
+  if (hashes.size === 0) return content;
+  const children = content.content;
+  if (children === undefined) return content;
+  const next: JsonContent[] = [];
+  let changed = false;
+  for (const child of children) {
+    if (child.type === "imageAttachment") {
+      const hash = stringValue(child.attrs?.hash);
+      if (hash !== null && hashes.has(hash)) {
+        changed = true;
+        continue;
+      }
+    }
+    const rewritten = omitImageAtomsByHash(child, hashes);
+    if (rewritten !== child) changed = true;
+    next.push(rewritten);
+  }
+  if (!changed) return content;
+  return { ...content, content: next };
+}
+
 function walk(
   node: JsonContent,
   visit: (node: JsonContent) => boolean,

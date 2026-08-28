@@ -12,7 +12,6 @@ import {
   RELAY_PING_INTERVAL_MS,
   RELAY_PING_TICK_MS,
   RELAY_PONG_TIMEOUT_MS,
-  RELAY_WAKE_PROBE_TIMEOUT_MS,
 } from "./config";
 
 /**
@@ -37,6 +36,15 @@ import {
 // Kept in lockstep with workers/relay-do/src/config.ts (relay-owned constants).
 const KEEPALIVE_PING = "relay-ping";
 const KEEPALIVE_PONG = "relay-pong";
+
+/**
+ * The close code+reason a failed wake probe reports, exported so the session
+ * above can recognize this loss BY IDENTITY (structured fields on the close
+ * event, not a substring of the composed log line) when deciding whether a
+ * wake-probe verdict earns an immediate redial.
+ */
+export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE = 4006;
+export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON = "relay-wake-probe-timeout";
 
 /**
  * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
@@ -95,6 +103,21 @@ export class RelaySocket {
    * {@link pokeKeepalive}.
    */
   private probeTimer: TimerHandle | null = null;
+  /**
+   * Monotonically increasing identity of the current wake-probe arm. Bumped
+   * when an arm is raised AND when one is retired by an inbound answer, so a
+   * scheduled deadline callback can prove it still speaks for the live arm.
+   */
+  private probeArmToken = 0;
+  /** When the current arm's (possibly joined-earlier) deadline fires. */
+  private probeDeadlineAt = 0;
+  /**
+   * True from the moment an arm is raised until an inbound frame answers it.
+   * Deliberately NOT cleared by `close()` - see `pokeKeepalive`'s contract.
+   */
+  private probeUnanswered = false;
+  /** The current arm's effective failure policy (upgrade-only merged). */
+  private probeImmediateRedialOnFailure = false;
   /** Last time ANY frame arrived from the relay (pong, control, or data). */
   private lastInboundAt: number;
   /**
@@ -162,10 +185,15 @@ export class RelaySocket {
    * So: run the scheduled check off-schedule (a socket already past
    * `RELAY_PONG_TIMEOUT_MS` fails immediately, exactly as the tick would), and
    * then hold the ping that check just sent to a much shorter
-   * `RELAY_WAKE_PROBE_TIMEOUT_MS` deadline. The 60s allowance is calibrated for
+   * `probeTimeoutMs` deadline. The 60s allowance is calibrated for
    * a link that is merely slow; a wake is the one moment we have positive
    * reason to suspect the socket is dead, and waiting out a minute to find out
-   * is most of what "the app was unusable after switching away" means.
+   * is most of what "the app was unusable after switching away" means. The
+   * deadline is the CALLER's because the caller holds the evidence that sizes
+   * it: a desktop wake passes `RELAY_WAKE_PROBE_TIMEOUT_MS` (the socket
+   * usually survived, be generous), a mobile resume after a measured brief
+   * background passes `RELAY_WAKE_PROBE_TIMEOUT_BACKGROUNDED_MS` (the socket
+   * is probably dead, verdict fast).
    *
    * An ARMED probe timer is the whole state, and it means exactly "a ping went
    * out and nothing has answered since". Any inbound frame disarms it; the
@@ -177,35 +205,99 @@ export class RelaySocket {
    * credits a later probe with an earlier probe's answer. Silence is the thing
    * being measured; only the absence of a disarm can measure it.
    *
-   * One probe is in flight at a time, so a burst of wakes cannot stack
-   * deadlines - and because an inbound frame disarms, the poke after an
-   * answered one arms a genuinely fresh probe rather than inheriting a spent
-   * window. No verdict is duplicated: the probe fails through the same
-   * {@link fail} path. A socket that has not opened, or is closed, has nothing
-   * to probe and is a no-op.
+   * One probe ARM is unanswered at a time, and ownership within it is
+   * MONOTONIC. A poke that finds an arm already in flight joins it - no
+   * second ping goes out - and a joiner may only make the arm stricter:
+   * the deadline moves to the EARLIER of the two, and the failure policy
+   * (`immediateRedialOnFailure`) can be raised but never lowered. Wake
+   * bursts arrive from independent triggers with different evidence (a
+   * measured mobile resume beside a generic online edge, in either order),
+   * and whichever is stronger must win regardless of arrival order.
+   *
+   * Any inbound frame RETIRES the arm completely - deadline, policy, and
+   * token - so the poke after an answered one arms a genuinely fresh probe
+   * whose policy starts from its own arguments, never inherited. The arm
+   * token is what keeps a retired arm's scheduled deadline callback inert.
+   * No verdict is duplicated: a probe fails through the same {@link fail}
+   * path. A socket that has not opened, or is closed, has nothing to probe
+   * and is a no-op.
+   *
+   * The unanswered-arm state and its effective policy deliberately survive
+   * {@link close}, so the session's close handler can still read
+   * {@link hasUnansweredImmediateRedialProbe} - a NEGATIVE end of any kind
+   * (the probe's own deadline, an OS-delivered error close, missed pongs)
+   * while the arm was unanswered inherits the arm's policy, not only the
+   * synthetic probe-timeout close. Each connection owns its own socket
+   * object, so nothing here can leak across dials.
    */
-  pokeKeepalive(): void {
-    // The outstanding-probe check comes FIRST, before anything is sent. A probe
-    // already in flight is already asking this exact question, so a second poke
-    // has nothing to learn and every extra ping is pure wire traffic - and
-    // pokes do arrive in bursts, one per subscriber on a single visibility
-    // edge.
-    if (this.closed || !this.opened || this.probeTimer !== null) {
+  pokeKeepalive(
+    probeTimeoutMs: number,
+    immediateRedialOnFailure: boolean,
+  ): void {
+    if (this.closed || !this.opened) {
+      return;
+    }
+    const now = Date.now();
+    if (this.probeTimer !== null) {
+      // Join the in-flight arm: upgrade-only merge, no additional ping.
+      this.probeImmediateRedialOnFailure =
+        this.probeImmediateRedialOnFailure || immediateRedialOnFailure;
+      const joinedDeadlineAt = now + probeTimeoutMs;
+      if (joinedDeadlineAt < this.probeDeadlineAt) {
+        this.probeDeadlineAt = joinedDeadlineAt;
+        clearTimeout(this.probeTimer);
+        this.probeTimer = setTimeout(
+          this.probeDeadlineCallback(this.probeArmToken),
+          probeTimeoutMs,
+        );
+      }
       return;
     }
     this.runKeepaliveTick();
     if (this.closed) {
+      // The staleness check failed the socket synchronously - no arm was
+      // raised, so the close that just happened inherited no probe policy.
       return;
     }
-    this.probeTimer = setTimeout(() => {
-      this.probeTimer = null;
-      if (this.closed) {
+    this.probeArmToken += 1;
+    this.probeUnanswered = true;
+    this.probeImmediateRedialOnFailure = immediateRedialOnFailure;
+    this.probeDeadlineAt = now + probeTimeoutMs;
+    this.probeTimer = setTimeout(
+      this.probeDeadlineCallback(this.probeArmToken),
+      probeTimeoutMs,
+    );
+  }
+
+  /**
+   * The deadline for one specific arm, pinned by token: a callback whose arm
+   * has been retired (answered, or re-armed later) finds a different token
+   * and does nothing, however late the runtime delivers it.
+   */
+  private probeDeadlineCallback(token: number): () => void {
+    return () => {
+      if (this.closed || token !== this.probeArmToken) {
         return;
       }
-      // Still armed at the deadline, so nothing answered the ping this probe
-      // sent - the socket is open in name only.
-      this.fail(4006, "relay-wake-probe-timeout");
-    }, RELAY_WAKE_PROBE_TIMEOUT_MS);
+      this.probeTimer = null;
+      // Still unanswered at the deadline, so nothing answered the ping this
+      // arm sent - the socket is open in name only.
+      this.fail(
+        RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE,
+        RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
+      );
+    };
+  }
+
+  /**
+   * True while an unanswered wake-probe arm demands that a failure redial
+   * immediately. Readable after {@link close} on purpose - the session's
+   * close handler is the consumer, and the close IS the failure the arm's
+   * policy speaks to. An answered arm reads false forever: liveness was
+   * proven, so a later loss is an ordinary one.
+   */
+  hasUnansweredImmediateRedialProbe(): boolean {
+    return this.probeUnanswered && this.probeImmediateRedialOnFailure;
   }
 
   close(code: number, reason: string): void {
@@ -451,16 +543,35 @@ export class RelaySocket {
     }
   }
 
+  /**
+   * Retires the current wake-probe arm as ANSWERED: liveness is proven, so
+   * the arm's deadline, failure policy, and token all end here. The token
+   * bump is what makes a late deadline callback from this arm inert, and the
+   * policy reset is what keeps an answered arm's `immediateRedialOnFailure`
+   * from ever attaching to a later, unrelated loss.
+   */
   private clearProbe(): void {
     if (this.probeTimer !== null) {
       clearTimeout(this.probeTimer);
       this.probeTimer = null;
     }
+    if (this.probeUnanswered) {
+      this.probeUnanswered = false;
+      this.probeImmediateRedialOnFailure = false;
+      this.probeArmToken += 1;
+    }
   }
 
   private teardownTimers(): void {
     this.clearKeepalive();
-    this.clearProbe();
+    // Only the probe TIMER dies with the socket. The unanswered-arm state and
+    // its failure policy deliberately survive close - retiring them here (via
+    // `clearProbe`) would erase the very evidence the session's close handler
+    // is about to read to decide whether this loss earns an immediate redial.
+    if (this.probeTimer !== null) {
+      clearTimeout(this.probeTimer);
+      this.probeTimer = null;
+    }
     if (this.dialTimer !== null) {
       clearTimeout(this.dialTimer);
       this.dialTimer = null;

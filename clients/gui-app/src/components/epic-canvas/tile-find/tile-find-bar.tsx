@@ -272,6 +272,7 @@ export function TileFindBar(props: TileFindBarProps) {
   return (
     <search
       data-testid="tile-find-bar"
+      data-browser-overlay="tile-find-bar"
       className={cn(
         "pointer-events-auto absolute right-3 top-3 z-30 flex max-w-[min(92vw,42rem)] gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
         replaceEnabled ? "items-start" : "flex-wrap items-center",

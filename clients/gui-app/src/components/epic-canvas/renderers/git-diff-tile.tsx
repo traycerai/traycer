@@ -667,6 +667,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
         backgrounds={props.diffViewerPreferences.backgrounds}
         lineNumbers={props.diffViewerPreferences.lineNumbers}
         indicatorStyle={props.diffViewerPreferences.indicatorStyle}
+        loadDiffFiles={editing.loadDiffFiles}
         sizing="fill"
         scrollContainerRef={findScrollContainerRef}
         onScroll={onScroll}

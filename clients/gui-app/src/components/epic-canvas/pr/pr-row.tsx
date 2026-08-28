@@ -19,6 +19,8 @@ import {
 import type { PrLightItem, PrState } from "@traycer/protocol/host/pr-schemas";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
+import { PrRowOwnerHover } from "@/components/epic-canvas/pr/pr-owner-hover";
+import { PrRowHoverCardContext } from "@/components/epic-canvas/pr/pr-owner-hover-context";
 import { Badge } from "@/components/ui/badge";
 import { DropLine } from "@/components/ui/drop-line";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -196,69 +198,101 @@ export function PrRow(props: {
       data-pr-state={item.state}
       data-pr-identified={identified !== null ? "true" : "false"}
     >
-      <div
-        role={clickable ? "button" : undefined}
-        tabIndex={clickable ? 0 : undefined}
-        aria-label={clickable ? `Open ${formatPrRowTitle(item)}` : undefined}
-        onClick={clickable ? handleActivate : undefined}
-        onKeyDown={clickable ? handleKeyDown : undefined}
-        data-testid="pr-row-main"
-        aria-current={isActive ? true : undefined}
-        className={cn(
-          "relative flex min-w-0 flex-col gap-1.5 py-2.5 pr-3 pl-3 text-left transition-colors",
-          clickable &&
-            "cursor-pointer focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none",
-          // Selection reads as a WASH plus the rail's active bar, not the solid
-          // `bg-accent` fill a chat/terminal row uses. Those rows are one line
-          // of plain text, so a flat fill costs nothing; this row carries the
-          // status palette (state tint, failing checks, review decision), and
-          // most presets keep `--accent` a near-grey while `traycer-green` sets
-          // it to its saturated `--primary` (#257174) - a full fill there stacks
-          // the row's hues on a competing one and leaves the state glyph at
-          // 3.08:1, the WCAG 1.4.11 graphic floor with nothing to spare. The
-          // wash lifts the worst preset past 4:1 and keeps the same token, so
-          // the sidebar still speaks one selection language. See
-          // `pr-row.test.tsx`'s "PrRow selection surface" matrix.
-          isActive ? "bg-accent/35" : clickable && "hover:bg-accent/20",
-          item.state === "closed" && "opacity-70",
-        )}
+      {/* The WHOLE row is the hover trigger, not just the owner band: the band
+          is the last of four and the easiest to miss, and "which chats produced
+          this?" is the question a reader has while scanning the row, not after
+          finding its badges. Returns this div untouched when the row has no
+          resolvable owners. */}
+      <PrRowOwnerHover
+        owners={item.owners}
+        epicId={props.epicId}
+        fallbackHostId={activeHostId}
+        title={titleText}
       >
-        {isActive ? (
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="absolute inset-y-1 left-0 rounded-l-none rounded-r"
-            testId="pr-row-active-indicator"
+        <div
+          role={clickable ? "button" : undefined}
+          tabIndex={clickable ? 0 : undefined}
+          aria-label={clickable ? `Open ${formatPrRowTitle(item)}` : undefined}
+          onClick={clickable ? handleActivate : undefined}
+          onKeyDown={clickable ? handleKeyDown : undefined}
+          data-testid="pr-row-main"
+          aria-current={isActive ? true : undefined}
+          className={cn(
+            "relative flex min-w-0 flex-col gap-1.5 py-2.5 pr-3 pl-3 text-left transition-colors",
+            clickable &&
+              "cursor-pointer focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none",
+            // Selection reads as a WASH plus the rail's active bar, not the solid
+            // `bg-accent` fill a chat/terminal row uses. Those rows are one line
+            // of plain text, so a flat fill costs nothing; this row carries the
+            // status palette (state tint, failing checks, review decision), and
+            // most presets keep `--accent` a near-grey while `traycer-green` sets
+            // it to its saturated `--primary` (#257174) - a full fill there stacks
+            // the row's hues on a competing one and leaves the state glyph at
+            // 3.08:1, the WCAG 1.4.11 graphic floor with nothing to spare. The
+            // wash lifts the worst preset past 4:1 and keeps the same token, so
+            // the sidebar still speaks one selection language. See
+            // `pr-row.test.tsx`'s "PrRow selection surface" matrix.
+            isActive ? "bg-accent/35" : clickable && "hover:bg-accent/20",
+            item.state === "closed" && "opacity-70",
+          )}
+        >
+          {isActive ? (
+            <DropLine
+              orientation="vertical"
+              glow={false}
+              className="absolute inset-y-1 left-0 rounded-l-none rounded-r"
+              testId="pr-row-active-indicator"
+            />
+          ) : null}
+          <PrRowBadges item={item} />
+          {titleText !== null ? <PrRowTitle title={titleText} /> : null}
+          <p className="flex min-w-0 items-center gap-1 font-mono text-ui-xs text-muted-foreground/80">
+            <GitBranch className="size-3 shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">
+              {formatPrBaseFromHead(item)}
+            </span>
+          </p>
+          <PrOwnerBadges
+            owners={item.owners}
+            epicId={props.epicId}
+            fallbackHostId={activeHostId}
+            className={undefined}
           />
-        ) : null}
-        <PrRowBadges item={item} />
-        {titleText !== null ? (
-          <TooltipWrapper
-            label={titleText}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <p
-              className="min-w-0 truncate text-ui-sm font-medium text-foreground"
-              data-testid="pr-row-title"
-            >
-              {titleText}
-            </p>
-          </TooltipWrapper>
-        ) : null}
-        <p className="flex min-w-0 items-center gap-1 font-mono text-ui-xs text-muted-foreground/80">
-          <GitBranch className="size-3 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">{formatPrBaseFromHead(item)}</span>
-        </p>
-        <PrOwnerBadges
-          owners={item.owners}
-          epicId={props.epicId}
-          fallbackHostId={activeHostId}
-          className={undefined}
-        />
-      </div>
+        </div>
+      </PrRowOwnerHover>
     </div>
+  );
+}
+
+/**
+ * Band 2: the title, truncated to one line, with the full text on hover.
+ *
+ * Its own component only so it can read {@link PrRowHoverCardContext} - it
+ * renders INSIDE `PrRowOwnerHover`, and `PrRow` itself is above the provider.
+ * When the row's hover card is live that card heads itself with the untitled
+ * title, so the tooltip stands down: both fire at 500ms from the same pointer,
+ * and this element is the row's largest hover target, so leaving both wired
+ * meant two floating surfaces from one hover over most of the row. A row
+ * without a hover card (no owners, or no epic session yet) keeps the tooltip -
+ * nothing else is showing the full title there.
+ */
+function PrRowTitle(props: { readonly title: string }): ReactNode {
+  const hoverCardShowsTitle = use(PrRowHoverCardContext);
+  return (
+    <TooltipWrapper
+      // `null` makes `TooltipWrapper` a transparent Slot - see its own note.
+      label={hoverCardShowsTitle ? null : props.title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <p
+        className="min-w-0 truncate text-ui-sm font-medium text-foreground"
+        data-testid="pr-row-title"
+      >
+        {props.title}
+      </p>
+    </TooltipWrapper>
   );
 }
 

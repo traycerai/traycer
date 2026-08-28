@@ -1,11 +1,55 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callHostRpc, callHostRpcFastFail, toAgentCliError } from "../host-rpc";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  callHostRpc,
+  callHostRpcFastFail,
+  canonicalResponseSchemaFor,
+  parseCanonicalHostResponse,
+  toAgentCliError,
+} from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
+import type {
+  StreamMethodVersionRegistry,
+  UncheckedStreamMethodVersionRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { ZodType } from "zod";
+import {
+  agentGetProviderProfileRateLimitsResponseSchema,
+  agentGetProviderProfileRateLimitsResponseSchemaV5,
+} from "@traycer/protocol/host/agent/profiles";
+import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
+import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
+import { worktreeDeleteByPathServerFrameSchemaV11 } from "@traycer/protocol/host/worktree-delete-stream";
+
+/**
+ * Mirrors `getLatestContract`'s traversal (highest major -> its
+ * `latestMinor`) for a stream method registry - there is no shared helper
+ * because `hostStreamRpcRegistry`'s validated shape carries no
+ * `downgradePathsFromLatest`, so it fails `getLatestContract`'s
+ * `MethodVersionRegistry` constraint outright.
+ */
+function latestStreamServerFrameSchema<
+  Registry extends UncheckedStreamMethodVersionRegistry,
+>(registry: StreamMethodVersionRegistry<Registry>): ZodType {
+  const highestMajor = Math.max(
+    ...Object.keys(registry)
+      .map(Number)
+      .filter((candidate) => Number.isInteger(candidate)),
+  );
+  const majorLine = registry[highestMajor];
+  return majorLine.versions[majorLine.latestMinor].contract.serverFrameSchema;
+}
 
 // Mock the WS transport + the credentials-store FACTORY; exercise the real
 // store-backed revalidator + withCommitRetry + shared auth-aware wrapper so this
@@ -373,5 +417,147 @@ describe("callHostRpc", () => {
       message: "traycer: Message exceeds the maximum size.",
       details: null,
     });
+  });
+});
+
+const COMMANDS_DIR = join(__dirname, "..", "..", "commands");
+
+describe("canonicalResponseSchemaFor", () => {
+  it("returns exactly the registry's latest contract response schema for a spread of methods", () => {
+    const methods: ReadonlyArray<keyof typeof hostRpcRegistry & string> = [
+      "worktree.listAllForHost",
+      "terminal.list",
+      "agent.getProviderProfileRateLimits",
+      "agent.list",
+    ];
+    for (const method of methods) {
+      expect(canonicalResponseSchemaFor(method)).toBe(
+        getLatestContract(hostRpcRegistry[method], undefined).responseSchema,
+      );
+    }
+  });
+
+  it("agrees with the concrete canonical schemas the fixed call sites parse against", () => {
+    expect(canonicalResponseSchemaFor("worktree.listAllForHost")).toBe(
+      worktreeListAllForHostResponseSchemaV16,
+    );
+    expect(canonicalResponseSchemaFor("terminal.list")).toBe(
+      listTerminalsResponseSchemaV23,
+    );
+    expect(
+      canonicalResponseSchemaFor("agent.getProviderProfileRateLimits"),
+    ).toBe(agentGetProviderProfileRateLimitsResponseSchemaV5);
+  });
+});
+
+describe("parseCanonicalHostResponse", () => {
+  it("returns the parsed data on the canonical-pairing happy path", () => {
+    const value = {
+      rateLimits: { provider: "codex", available: false, reason: "timeout" },
+      usageUpdatedAt: null,
+    };
+    const parsed = parseCanonicalHostResponse(
+      "agent.getProviderProfileRateLimits",
+      agentGetProviderProfileRateLimitsResponseSchemaV5,
+      value,
+    );
+    expect(parsed).toEqual(value);
+  });
+
+  // This is the one case the type system cannot catch: `...Schema` (no
+  // version suffix) is the LIVE-line alias, redefined onto each new major as
+  // the previous one freezes. It is STRUCTURALLY IDENTICAL to `...SchemaV5`
+  // today, so it satisfies `ZodType<ResponseOfMethod<...>>` and compiles at
+  // the call site - but it is a DIFFERENT object, free to stop tracking
+  // canonical the moment a v6 line ships. Only the runtime identity check in
+  // `assertCanonicalResponseSchema` catches that drift; a type-level
+  // assertion would pass this call unchanged.
+  it("throws when handed a schema that is structurally identical to canonical but not the same object (the runtime backstop)", () => {
+    const value = {
+      rateLimits: { provider: "codex", available: false, reason: "timeout" },
+      usageUpdatedAt: null,
+    };
+    // Sanity: the base alias really does accept the same payload as V5 today -
+    // otherwise this test would be catching a type/shape bug, not the
+    // identity backstop it exists to prove.
+    expect(
+      agentGetProviderProfileRateLimitsResponseSchema.safeParse(value).success,
+    ).toBe(true);
+    expect(() =>
+      parseCanonicalHostResponse(
+        "agent.getProviderProfileRateLimits",
+        agentGetProviderProfileRateLimitsResponseSchema,
+        value,
+      ),
+    ).toThrow(/non-canonical response schema/);
+  });
+});
+
+describe("parseHostResponse creep guard", () => {
+  // Empty, as intended: #1508 carved out `workspace-list.ts` and
+  // `worktree-create.ts` while PR #1505 held them, and #1505 converted both to
+  // `parseCanonicalHostResponse` on landing. Do not add to it without
+  // justification - use `parseCanonicalHostResponse` instead. A call site that
+  // genuinely means a specific historical version (monitor.ts's frame decode)
+  // lives outside this directory.
+  const ALLOWLIST = new Set<string>([]);
+
+  it("no command calls the un-canonical parseHostResponse", () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(COMMANDS_DIR)) {
+      if (!file.endsWith(".ts") || ALLOWLIST.has(file)) continue;
+      const source = readFileSync(join(COMMANDS_DIR, file), "utf8");
+      if (/\bparseHostResponse\(/.test(source)) offenders.push(file);
+    }
+    expect(
+      offenders,
+      `${offenders.join(", ")} call parseHostResponse() directly. Use ` +
+        "parseCanonicalHostResponse(method, schema, value) instead - naming " +
+        "the method lets the compiler and the runtime identity check both " +
+        "prove the schema is canonical. If this call site genuinely needs a " +
+        "specific historical version (like monitor.ts's frame decode), " +
+        "justify it in this test's allowlist instead of failing silently.",
+    ).toEqual([]);
+  });
+});
+
+describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
+  it("worktreeDeleteByPathServerFrameSchemaV11 is the canonical serverFrameSchema for worktree.deleteByPath", () => {
+    expect(
+      latestStreamServerFrameSchema(
+        hostStreamRpcRegistry["worktree.deleteByPath"],
+      ),
+    ).toBe(worktreeDeleteByPathServerFrameSchemaV11);
+  });
+
+  // The v1.0 -> v1.1 diff on this method is an OPTIONAL field
+  // (`worktreeBusyHoldersWireFieldSchema` is `.optional().catch(undefined)`)
+  // added to one arm of a discriminated union, not a new required field on
+  // the whole response. A `ZodType<...>` compile-time constraint would not
+  // reject the v1.0 schema in that shape, so this identity check (mirroring
+  // `canonicalResponseSchemaFor`'s unary-registry traversal, but over
+  // `hostStreamRpcRegistry`) is the only thing that would have caught this
+  // specific skew.
+  it("scans commands/*.ts for hand-picked ServerFrameSchemaV<N> usage outside the negotiated-dispatch allowlist", () => {
+    // `monitor.ts` parses agentInboxSubscribeServerFrameSchemaV10/V11/V12 (plus
+    // the base envelope) ON PURPOSE - that is per-connection negotiated-version
+    // dispatch (try newest, fall back), not a stale call site. `worktree-delete.ts`
+    // names `worktreeDeleteByPathServerFrameSchemaV11` explicitly, verified
+    // canonical by the assertion above.
+    const ALLOWLIST = new Set(["monitor.ts", "worktree-delete.ts"]);
+    const versionedFrameSchemaPattern = /[A-Za-z]+ServerFrameSchemaV\d+/;
+    const offenders: string[] = [];
+    for (const file of readdirSync(COMMANDS_DIR)) {
+      if (!file.endsWith(".ts") || ALLOWLIST.has(file)) continue;
+      const source = readFileSync(join(COMMANDS_DIR, file), "utf8");
+      if (versionedFrameSchemaPattern.test(source)) offenders.push(file);
+    }
+    expect(
+      offenders,
+      `${offenders.join(", ")} reference a versioned *ServerFrameSchemaV<N> ` +
+        "directly. Confirm it is the registry's canonical latest for that " +
+        "stream method (see the identity assertion above) or justify the " +
+        "addition in this allowlist.",
+    ).toEqual([]);
   });
 });

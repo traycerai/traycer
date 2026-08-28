@@ -21,6 +21,7 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import {
   buildPrOwnerTree,
+  prOwnerCollectionNouns,
   prOwnerKey,
   type PrOwnerTreeNode,
 } from "@/components/epic-canvas/pr/pr-owner-tree";
@@ -44,27 +45,6 @@ const DELETED_OWNER_LABEL: Record<PrOwnerRef["ownerKind"], string> = {
   chat: "Removed chat",
   "terminal-agent": "Removed terminal agent",
 };
-
-/**
- * What to call a SET of owners.
- *
- * `ownerKind` is not always `chat` - a PR can be derived entirely from
- * terminal agents, and calling those "chats" in the overflow chip's accessible
- * name announces the wrong thing to a screen reader. A uniform set gets its own
- * noun; a mixed one has no single true noun, so it falls back to the
- * kind-neutral word rather than picking a side.
- */
-function prOwnerCollectionNouns(owners: readonly PrOwnerRef[]): {
-  readonly plural: string;
-  readonly capitalized: string;
-} {
-  const kinds = new Set(owners.map((owner) => owner.ownerKind));
-  if (kinds.size === 1) {
-    if (kinds.has("chat")) return { plural: "chats", capitalized: "Chats" };
-    return { plural: "terminal agents", capitalized: "Terminal agents" };
-  }
-  return { plural: "owners", capitalized: "Owners" };
-}
 
 /**
  * The resolution `PrOwnerBadge` and `PrOwnerRow` must agree on, in one place:
@@ -203,10 +183,19 @@ export function PrOwnerBadges(props: {
   // renders its children before it has one (desktop ownership claim, then
   // acquire) and says so: "session-bound slots see a null context and show
   // their own loading content". This row is one of those slots and did not know
-  // it - the PR list arrives on a host stream that owes the epic's Y.Doc
-  // session nothing, so rows paint inside that window and took the route's
-  // error boundary down with them. Nothing is the right loading content for a
-  // chip row: the chips appear on the render after the session lands.
+  // it - the PR list arrives on its OWN host stream, which waits for no epic
+  // session, so rows paint inside that window and took the route's error
+  // boundary down with them. Nothing is the right loading content for a chip
+  // row: the chips appear on the render after the session lands.
+  //
+  // "Session lands" is the gate, NOT "the doc syncs". Since chats-off-YJS the
+  // titles these chips resolve come from `OpenEpicState.chats`, which is the
+  // host's store-backed record plane (`epic.listChatRecords` /
+  // `host.chatRecords.subscribe`) unioned with `docChats` - and that doc half
+  // is not-yet-swept residue serving hosts that predate the record methods,
+  // not the live plane. So the handle existing is necessary but not
+  // sufficient: chips can stay absent against a live session until the records
+  // are served.
   return (
     <EpicSessionGate fallback={null}>
       <ResolvedPrOwnerBadges {...props} />
@@ -329,12 +318,14 @@ function PrOwnerOverflow(props: {
             subscribes every collapsed `+N` chip on the surface to the tree and
             rebuilds its forest on every rename, reparent and agent
             create/delete, for a list nobody is looking at. */}
-        <PrOwnerOverflowList
+        <PrOwnerTreeList
           owners={props.owners}
           label={`${nouns.capitalized} this PR came from`}
           epicId={props.epicId}
           fallbackHostId={props.fallbackHostId}
           onOpened={close}
+          testId="pr-owner-overflow-list"
+          className={undefined}
         />
       </PopoverContent>
     </Popover>
@@ -342,15 +333,25 @@ function PrOwnerOverflow(props: {
 }
 
 /**
- * The owner forest itself. Split from `PrOwnerOverflow` purely so its tree
- * subscription is scoped to the open popover - see the call site.
+ * The owner forest itself. Split from its containers purely so its tree
+ * subscription is scoped to the OPEN surface - mount it only inside content a
+ * Radix primitive unmounts on close (`PrOwnerOverflow`'s popover, the row hover
+ * card's content), never in a collapsed trigger. See the popover call site for
+ * what that costs when it leaks.
+ *
+ * `testId` and `className` are parameterised because the two containers differ
+ * exactly there and nowhere else: a popover sized by its own `max-h` cap versus
+ * a hover card that caps this list directly, and two surfaces that must stay
+ * separately addressable in tests.
  */
-function PrOwnerOverflowList(props: {
+export function PrOwnerTreeList(props: {
   readonly owners: readonly PrOwnerRef[];
   readonly label: string;
   readonly epicId: string;
   readonly fallbackHostId: string | null;
   readonly onOpened: () => void;
+  readonly testId: string;
+  readonly className: string | undefined;
 }): ReactNode {
   // The same `parentId` links the sidebar's agent tree nests by, so a chat and
   // the sub-agents it spawned read as one lineage here too instead of as the
@@ -370,8 +371,11 @@ function PrOwnerOverflowList(props: {
     // message, and `<ul>`/`<li>` already carry it.
     <ul
       aria-label={props.label}
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-1"
-      data-testid="pr-owner-overflow-list"
+      className={cn(
+        "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-1",
+        props.className,
+      )}
+      data-testid={props.testId}
     >
       {forest.map((node) => (
         <PrOwnerTreeItem

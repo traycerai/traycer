@@ -711,6 +711,13 @@ export function LandingComposer(props: LandingComposerProps) {
           // will create on.
           .getGlobalRunSettings(activeHostId),
       );
+      // `createDraftWithId` has non-composer callers and therefore seeds from
+      // the app-wide active host. This unbound composer can be pinned to a
+      // different placement host, so replace that seed synchronously before
+      // publishing the new draft id or accepting a submit.
+      useLandingDraftStore
+        .getState()
+        .restoreDraftWorkspaceForHost(createdDraftId, activeHostId);
       createdUnboundDraftIdRef.current = createdDraftId;
       // The workspace picker's staging key is keyed by this draft id
       // (`{surface:"landing", draftId}`), so minting it here flips that key

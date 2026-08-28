@@ -326,7 +326,6 @@ function buildHeaderEpicHandle(
     epic: {
       title: tab.name,
       updatedAt: 1,
-      isTitleEditedByUser: false,
     },
     chats: {
       byId: liveChatsById,

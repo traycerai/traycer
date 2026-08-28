@@ -23,7 +23,11 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
     role: "user",
     messageId,
     sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: CONTENT },
+    message: {
+      kind: "user",
+      content: CONTENT,
+      browserAnnotations: [],
+    },
     timestamp: 1000 + messageId.length,
     sessionAnchor: null,
   };

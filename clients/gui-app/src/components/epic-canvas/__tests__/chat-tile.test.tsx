@@ -17,6 +17,10 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -39,6 +43,17 @@ const cloudChatListTestState = vi.hoisted(() => ({
 // cannot drift apart into a fixture that tests a host the tile never sees.
 // Hoisted because the module mocks below read it from their factories.
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+
+const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
+  hostId: HOST_ID,
+  lifecycle: "live",
+  inventoryReady: true,
+  items: [],
+  errorMessage: null,
+  retry: () => undefined,
+  openTab: () => Promise.reject(new Error("not used")),
+  closeTab: () => Promise.resolve(),
+};
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -312,7 +327,12 @@ import type {
   ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeFolderIntent,
+} from "@traycer/protocol/host/worktree-schemas";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   getFocusedComposerControls,
   resetFocusedComposerControlsForTests,
@@ -548,6 +568,7 @@ function emitChatSnapshotWithMessages(input: {
   readonly events?: ReadonlyArray<ChatEvent>;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
+  readonly managedCommands?: ReadonlyArray<ManagedCommand>;
 }): void {
   input.callbacks.onSnapshot({
     kind: "snapshot",
@@ -587,7 +608,7 @@ function emitChatSnapshotWithMessages(input: {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
-      managedCommands: [],
+      managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
     },
   });
@@ -631,6 +652,7 @@ function hostUserMessage(): Message {
           },
         ],
       },
+      browserAnnotations: [],
     },
     timestamp: 1,
     sessionAnchor: null,
@@ -915,7 +937,11 @@ function renderSwitchableChatTile() {
   };
 }
 
-function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
+function chatTileTestTree(
+  queryClient: QueryClient,
+  chatVisible: boolean,
+  node: typeof CHAT_ARTIFACT = CHAT_ARTIFACT,
+) {
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -932,19 +958,22 @@ function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
             })
           }
         >
-          <TooltipProvider>
-            <TestEpicSessionWrapper epicId={EPIC_ID}>
-              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                {chatVisible ? (
-                  <ChatTile
-                    node={CHAT_ARTIFACT}
-                    viewTabId="tab-test"
-                    isActive
-                  />
-                ) : null}
-              </TabHostProvider>
-            </TestEpicSessionWrapper>
-          </TooltipProvider>
+          <BrowserSessionsContext.Provider value={EMPTY_BROWSER_SESSIONS_STATE}>
+            <TooltipProvider>
+              <TestEpicSessionWrapper epicId={EPIC_ID}>
+                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                  {chatVisible ? (
+                    <ChatTile
+                      node={node}
+                      viewTabId="tab-test"
+                      tileId="pane-test"
+                      isActive
+                    />
+                  ) : null}
+                </TabHostProvider>
+              </TestEpicSessionWrapper>
+            </TooltipProvider>
+          </BrowserSessionsContext.Provider>
         </RunnerHostProvider>
       </QueryClientProvider>
     </TestRouterProvider>
@@ -1044,6 +1073,7 @@ describe("<ChatTile />", () => {
         [CHAT_ARTIFACT.id]: {
           content: PENDING_DRAFT_CONTENT,
           selection: null,
+          browserAnnotations: [],
           resetEpoch: 0,
           revision: 0,
         },
@@ -1067,6 +1097,7 @@ describe("<ChatTile />", () => {
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
     useInitialChatHandoffStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
   });
@@ -1085,6 +1116,7 @@ describe("<ChatTile />", () => {
     });
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -2360,6 +2392,7 @@ describe("<ChatTile />", () => {
           message: {
             kind: "user",
             content: INITIAL_HANDOFF_CONTENT,
+            browserAnnotations: [],
           },
           timestamp: 3,
           sessionAnchor: null,
@@ -2660,6 +2693,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2679,6 +2713,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2769,6 +2804,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2803,6 +2839,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2837,6 +2874,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2911,6 +2949,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2966,6 +3005,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -3023,6 +3063,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -3042,6 +3083,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: SECOND_QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -3356,6 +3398,194 @@ describe("<ChatTile />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  function stageChatWorktreeDraft(worktreePath: string): void {
+    const entry: WorktreeFolderIntent = {
+      kind: "import",
+      workspacePath: "/Users/test/project",
+      repoIdentifier: null,
+      isPrimary: true,
+      worktreePath,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(
+      {
+        surface: "owner",
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        ownerKind: "chat",
+        ownerId: CHAT_ARTIFACT.id,
+      },
+      { entries: [entry] },
+    );
+  }
+
+  function runningShellOnProject(): ManagedCommand {
+    return {
+      id: "sh-dropped",
+      monitoring: false,
+      description: "watch",
+      command: "npm run dev",
+      cwd: "/Users/test/project/apps",
+      cadence: null,
+      status: { state: "running", pid: 42, startedAtMs: 1 },
+      chatId: CHAT_ARTIFACT.id,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+  }
+
+  async function loadChatWithDroppedShell(): Promise<void> {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+  }
+
+  it("keeps the send confirmation open with a reason when it cannot proceed", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(screen.getByTestId("teardown-commit-refusal").textContent).toBe(
+      "You don't have permission to send.",
+    );
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
+  });
+
+  it("re-discloses when staging mutates under an armed chat send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    act(() => {
+      stageChatWorktreeDraft("/wt/b");
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") {
+      throw new Error("expected send frame");
+    }
+    expect(frame.worktreeIntent?.entries[0]).toMatchObject({
+      kind: "import",
+      worktreePath: "/wt/b",
+    });
+  });
+
+  it("drops an armed send when the tile repoints to another chat", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const rendered = render(chatTileTestTree(queryClient, true));
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    rendered.rerender(
+      chatTileTestTree(queryClient, true, {
+        ...CHAT_ARTIFACT,
+        id: "chat-2",
+        instanceId: "inst-chat-2",
+        name: "Chat 2",
+      }),
+    );
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("re-discloses when the holder set changes under an armed chat send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [
+          runningShellOnProject(),
+          {
+            ...runningShellOnProject(),
+            id: "sh-other",
+            command: "sleep 1",
+          },
+        ],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "sleep 1",
+    );
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

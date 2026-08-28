@@ -1,5 +1,6 @@
 export * from "./agent";
 export * from "./asset-stream-schemas";
+export * from "./browser";
 export * from "./chat-fork";
 export * from "./comments";
 export * from "./config";
@@ -45,6 +46,7 @@ export {
   worktreeDeleteV10,
   worktreeDeleteV11,
   worktreeDeleteUpgradeV10ToV11,
+  worktreeListHoldersV10,
   worktreeListAllForHostV10,
   worktreeListAllForHostV12,
   worktreeListAllForHostV11,
@@ -115,6 +117,8 @@ export {
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
   worktreeDeleteResponseSchema,
+  worktreeListHoldersRequestSchema,
+  worktreeListHoldersResponseSchema,
   worktreeHostEntrySchema,
   worktreeHostEntryOwnerSchema,
   worktreeBranchStatusSchema,
@@ -212,6 +216,8 @@ export {
   type WorktreeDeleteRequest,
   type WorktreeDeleteRequestV11,
   type WorktreeDeleteResponse,
+  type WorktreeListHoldersRequest,
+  type WorktreeListHoldersResponse,
   type WorktreeHostEntry,
   type WorktreeHostEntryOwner,
   type WorktreeBranchStatus,

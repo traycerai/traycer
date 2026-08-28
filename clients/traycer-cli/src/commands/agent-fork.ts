@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -64,7 +64,11 @@ export function buildAgentForkCommand(opts: {
       profileSelection: parseForkProfileSelection(opts.profile),
     });
     const result = await toAgentCliError(callHostRpc("agent.fork", request));
-    const response = parseHostResponse(forkAgentResponseSchema, result);
+    const response = parseCanonicalHostResponse(
+      "agent.fork",
+      forkAgentResponseSchema,
+      result,
+    );
     const lines = [
       response.agentId,
       `Forked from: ${response.sourceAgentId}`,

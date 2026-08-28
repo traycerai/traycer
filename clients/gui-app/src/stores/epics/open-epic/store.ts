@@ -15,7 +15,7 @@ import type {
   ChatRecordRemovalReason,
   ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -35,7 +35,11 @@ import type {
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import type { DeletedEpicArtifact } from "@traycer/protocol/persistence/epic/artifacts";
 import { createTypedMap } from "@traycer/protocol/utils/yjs-utils";
-import { evaluateReparent, reparentRejectionError } from "@/lib/reparent-rules";
+import { resolveReparentNode } from "@/lib/reparent-rules";
+import {
+  evaluateProjectedReparent,
+  projectedReparentRejectionError,
+} from "@/lib/reparent-projection-rules";
 import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
 import { basePersistOptions, openEpicKey } from "@/lib/persist";
 import type {
@@ -80,6 +84,7 @@ import {
   type RetainedChatCreation,
 } from "./pending-chat-creations";
 import { createEpicProjector, type EpicProjector } from "./epic-projector";
+import type { PendingMetadataMutation } from "./pending-metadata-overlay";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
 
@@ -387,7 +392,6 @@ export interface OpenEpicState {
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
-  readonly contentRevByArtifactId: Readonly<Record<string, number>>;
   /**
    * Per-artifact-room availability mirrored from `epic.subscribe@1.0` `artifactRoomState`
    * frames. The body of an artifact is renderable only when the artifactRoom
@@ -523,11 +527,35 @@ export interface OpenEpicState {
    * change-gated: an answer that says the same thing as the last one writes
    * nothing, so the poll behind it costs no renders while an epic is quiet.
    *
+   * MERGED against what the push has already delivered, not clear-and-replace,
+   * on {@link OpenEpicState.applyTuiAgentRecords}' exact contract: a served row
+   * is revision-guarded like an `upsert` delta (an answer issued before a push
+   * carries an OLDER version of the row, and overwriting with it would regress
+   * a version the client has already shown - and hand the optimistic overlay's
+   * dead sweep a stale value it reads as terminal supersession, killing a
+   * healthy pending chain), and a row the answer omits is retracted only if it
+   * was already held when the answer was ISSUED. `issuedAtSeq` is where
+   * {@link OpenEpicState.peekChatIngestSeq} stood when the request was
+   * dispatched - the caller captures it immediately before the RPC and hands
+   * it back with the answer. `null` (no session to read at dispatch) falls
+   * back to the previous answer's watermark, which holds an omitted row for
+   * one extra pass instead.
+   *
    * Never called in doc-only mode - an older host answers `E_HOST_UNSUPPORTED`
    * and the caller simply does not call this, leaving the record slice empty and
    * `chats` identical to the doc projection.
    */
-  applyChatRecords: (records: readonly ChatRecordSummary[]) => void;
+  applyChatRecords: (
+    records: readonly ChatRecordSummary[],
+    issuedAtSeq: number | null,
+  ) => void;
+  /**
+   * The chat-record ingest counter as it stands now - the value a list
+   * request captures at dispatch and passes back to
+   * {@link OpenEpicState.applyChatRecords} as `issuedAtSeq`. Monotonic, per
+   * session; every accepted row write advances it.
+   */
+  peekChatIngestSeq: () => number;
   /** Marks the record list authoritative after success or unsupported. */
   markChatRecordListAuthoritative: () => void;
   /**
@@ -570,7 +598,7 @@ export interface OpenEpicState {
    * holds an omitted row for one extra pass instead.
    */
   applyTuiAgentRecords: (
-    records: readonly TuiAgentRecordSummary[],
+    records: readonly TuiAgentRecordSummaryV11[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -580,6 +608,20 @@ export interface OpenEpicState {
    * per session; every accepted row write advances it.
    */
   peekTuiAgentIngestSeq: () => number;
+  /**
+   * Which STORE GENERATION the two ingest counters above belong to. The
+   * counters are per-store and restart at zero when an epic session is
+   * rebuilt after eviction, while the TanStack cache can retain a list
+   * answer whose `issuedAtSeq` was captured against the PREVIOUS store - a
+   * fence from another generation is numerically meaningless here, and
+   * replayed as-is its (typically larger) value lets the omission pass
+   * retract rows the old counter never covered. The record hooks capture
+   * this WITH the fence and hand back `null` instead when the applying
+   * store is not the one the fence was read from - the same conservative
+   * "no session to read at dispatch" path, which holds omitted rows one
+   * extra pass. Module-monotonic; never reused across generations.
+   */
+  ingestFenceIdentity: number;
   /**
    * Applies ONE `host.chatRecords.subscribe@1.1` terminal-agent delta - the
    * push half of the table {@link OpenEpicState.applyTuiAgentRecords} fills
@@ -670,12 +712,70 @@ export interface OpenEpicState {
   // fast path layered under those same host RPCs.
   /** Returns true when the title actually changed in the Y.Doc. */
   renameArtifact: (artifactId: string, nextTitle: string) => boolean;
+  // ── Optimistic metadata overlay (Phase 1.1) ──────────────────────────
+  // Each `begin*` stamps a client request id, patches the published
+  // projection, and returns that id; the caller fires the RPC and reports
+  // its outcome through `retirePendingMutation` - "landed" on ack, "failed"
+  // on terminal failure - riding the mutation PROMISE, never a per-call
+  // `onSettled` (TanStack drops those on unmount and on consecutive
+  // `mutate()` calls). `null` means nothing was stamped (refused, or the
+  // value already matches).
+  //
+  // These cover EVERY plane, which the doc write above does not: a
+  // registry-backed chat or terminal agent has no doc entry, so
+  // `renameArtifact` no-ops for it and has done since chats moved off YJS.
+  /** Optimistic rename for an artifact, chat, or terminal agent. */
+  beginRenameMutation: (nodeId: string, nextTitle: string) => string | null;
+  /** Optimistic epic-header title change. */
+  beginEpicTitleMutation: (nextTitle: string) => string | null;
+  /** Optimistic reparent, validated against the projected tree. */
+  beginReparentMutation: (
+    nodeId: string,
+    newParentId: string | null,
+  ) => string | null;
+  /**
+   * Report a mutation's RPC outcome. `"failed"` (terminal failure only - a
+   * retryable transport error must stay pending or the row flaps) drops the
+   * patch, revealing whatever the host actually has. `"landed"` marks the
+   * entry acked: it keeps patching the display until the authoritative row
+   * catches up - the ack proves the host holds this value, so dropping it at
+   * ack time would snap the row back to a stale slice - and is swept from the
+   * map by the first full projection that sees the row caught up or
+   * overwritten.
+   */
+  retirePendingMutation: (
+    requestId: string,
+    outcome: "landed" | "failed",
+  ) => boolean;
+  /**
+   * Whether `requestId` is the LAST-STAMPED rename for its node - the guard
+   * the persisted canvas-tab snapshot writes on. RPC settles are not
+   * ordered: with two renames in flight, the older one's success arm can
+   * run after the newer one's, and writing its captured title into the
+   * snapshot would preserve the superseded value across cold renders.
+   *
+   * Deliberately answered from a stamp TOMBSTONE rather than the live
+   * chain: a successful rename's own echo can reach the store before its
+   * RPC settles, and the dead sweep then removes the chain as an off-anchor
+   * move - a chain-membership answer would refuse the only persisted-tab
+   * write of a rename that SUCCEEDED. The tombstone survives the sweep, so
+   * the only acks it refuses are ones a newer stamp genuinely superseded.
+   */
+  isLatestRenameStamp: (nodeId: string, requestId: string) => boolean;
   /** Returns true when a delete actually happened. Reparents children. */
   deleteArtifact: (artifactId: string) => boolean;
   /**
    * Move an artifact, chat, or terminal-agent to a new parent within its own
-   * family. Throws `MissingNodeError`, `CrossFamilyParentError`, or
-   * `ReparentCycleError` on validation failure.
+   * family.
+   *
+   * Validated against the PROJECTED TREE, not the doc, so a record-backed
+   * parent is a legal target: a doc-only terminal agent can be nested under a
+   * registry-backed chat, which is what the sidebar has always displayed as
+   * possible. Throws `MissingNodeError`, `CrossFamilyParentError`, or
+   * `ReparentCycleError` when the PROJECTION rejects the move.
+   *
+   * Returns `false` without throwing when the node has no doc entry to write:
+   * that node is registry-backed and `epic.reparentChat` owns its pointer.
    */
   reparentArtifact: (artifactId: string, newParentId: string | null) => boolean;
   /** Returns true when the title actually changed. */
@@ -797,6 +897,22 @@ const STREAM_ORIGIN = "stream";
  */
 export const LOCAL_ORIGIN = "local";
 const EMPTY_Y_UPDATE_BYTES = 2;
+/**
+ * How long a LANDED metadata mutation may keep patching the display while its
+ * own echo is still missing from the authoritative slices. One full
+ * record-poll interval (20s, `HOST_METHOD_POLL_TABLE`) plus refetch slack:
+ * past this, `authoritative === baseline` is more plausibly a peer's write
+ * back to the old value than a stale slice, and the row wins. See the timer
+ * in `retirePendingMutation`.
+ */
+const LANDED_MUTATION_TTL_MS = 30_000;
+
+/**
+ * Mints {@link OpenEpicState.ingestFenceIdentity} - one value per store
+ * construction, module-monotonic so no two generations (even of the same
+ * epic) ever share one.
+ */
+let nextIngestFenceIdentity = 1;
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -883,9 +999,12 @@ function emitCurrentAwareness(
   client.awareness(encodeAwarenessUpdate(awareness, [doc.clientID]));
 }
 
-// Reparent resolution / validation lives in `@/lib/reparent-rules`
-// (`evaluateReparent`), shared verbatim with the DnD pre-flight read in
-// `epic-y-mutations.ts` so the rule can never drift between read and write.
+// Reparent validation lives in `@/lib/reparent-projection-rules`
+// (`evaluateProjectedReparent`) for the DnD preview, the DnD commit AND this
+// store's write path - one evaluator over the projected tree, so preview and
+// write cannot disagree. `@/lib/reparent-rules` is now consulted for one thing
+// only: `resolveReparentNode`, which finds the Y.Map entry to write to. It
+// still owns the doc-side evaluator for callers that genuinely mean the doc.
 
 /**
  * Constructs a fresh per-Epic session.
@@ -1842,6 +1961,23 @@ export function createOpenEpicStore(
    * something to guess at here.
    */
   const chatRetractions = new Map<string, ChatRecordRemovalReason>();
+  /**
+   * Local ingest order for the chat rows, and the watermark the last
+   * `epic.listChatRecords` answer left behind - the chat halves of
+   * `tuiAgentRowSeq` / `tuiAgentIngestSeq` / `tuiAgentSnapshotFence` below,
+   * keyed like {@link chatRecordRows} on `(ownerUserId, chatId)`. See the
+   * terminal-agent block for the full rationale: `revision` orders two
+   * versions of ONE row and says nothing about a row an answer omits, so an
+   * omission may only retract a row that was already held when the answer was
+   * issued, and a served row may only replace a strictly older version.
+   */
+  const chatRowSeq = new Map<string, number>();
+  let chatIngestSeq = 0;
+  let chatSnapshotFence = 0;
+  // See {@link OpenEpicState.ingestFenceIdentity}: which generation the two
+  // ingest counters belong to, so a cached fence can never cross stores.
+  const mintedIngestFenceIdentity = nextIngestFenceIdentity;
+  nextIngestFenceIdentity += 1;
 
   /**
    * Locally initiated creations with no record back yet, keyed like
@@ -1915,7 +2051,7 @@ export function createOpenEpicStore(
    * to be safe for what the host actually serves.
    */
   let tuiAgentRecords: TerminalAgentsSlice = EMPTY_TERMINAL_AGENTS_SLICE;
-  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummary>();
+  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummaryV11>();
   /** See `OpenEpicState.tuiAgentRetractions` - absorbing for the session. */
   const tuiAgentRetractions = new Map<string, ChatRecordRemovalReason>();
   /**
@@ -1952,11 +2088,206 @@ export function createOpenEpicStore(
   // used to be the email), but it is fixed at construction, and a session
   // constructed before the auth profile hydrates must pick up the id on its
   // next projection.
-  const projector: EpicProjector = createEpicProjector(
-    getCurrentChatProjectionUserId,
-    () => chatRecords,
-    () => tuiAgentRecords,
-  );
+  /**
+   * Metadata mutations stamped by this client and not yet answered, keyed by
+   * client request id (Phase 1.1's optimistic overlay).
+   *
+   * Held here rather than in store state for the same reason
+   * {@link pendingChatCreations} is: it is the projector's INPUT, folded into
+   * the published slices at projection time, and putting it in state would
+   * make every mutation two setStates - one for the pending map and one for
+   * the projection it forces - with a frame between them where the row is
+   * neither old nor new.
+   *
+   * A `Map` because order is semantic: two renames of one row must apply in
+   * the order the user made them.
+   */
+  const pendingMetadataMutations = new Map<string, PendingMetadataMutation>();
+
+  /**
+   * The last-stamped rename request per node, SURVIVING the chain: the dead
+   * sweep deletes a chain whose row moved off-anchor, and a successful
+   * rename's own echo arriving before its RPC settles is exactly such a
+   * move. The persisted-tab snapshot guard has to tell "an older rename of
+   * ours acked after a newer one" (skip the write) from "our only rename's
+   * echo beat its ack" (write) - chain membership cannot, because the chain
+   * is gone in both. Entries are overwritten per node and cleared at
+   * dispose; request ids are never reused, so a stale tombstone can only
+   * ever refuse a write, never misattribute one.
+   */
+  const latestRenameStampByNode = new Map<string, string>();
+
+  /**
+   * Mutations OBSERVED to target a record-plane row, by client request id.
+   *
+   * Membership is decided by {@link markRegistryBackedMutations} while the
+   * evidence exists - a record row for the node that the OWNER SELECTION
+   * would actually serve to this viewer - and is STICKY: a registry row
+   * disappearing is itself a record-plane judgment (that plane keeps moving
+   * through a root reconnect), so it must not downgrade the chain back to
+   * doc authority at exactly the moment the dead sweep needs to honor the
+   * disappearance.
+   *
+   * The fact is CHAIN-WIDE and stored chain-wide: one marked member marks
+   * every current sibling AND every sibling stamped later (the marking pass
+   * propagates), so a mutation begun after the record row disappeared -
+   * against the doc fallback the union still serves - carries its chain's
+   * provenance itself rather than borrowing it from an older sibling that a
+   * partially-processed dead batch might already have deleted. Request ids
+   * are never reused, so an id left behind by a deleted entry can never
+   * mislabel a future chain - the deletes at the map's removal sites are
+   * hygiene, not correctness.
+   */
+  const registryBackedRequestIds = new Set<string>();
+
+  /**
+   * Whether the record plane CURRENTLY serves `nodeId` to this viewer, using
+   * the same owner selection the publish seams use. The raw tables
+   * deliberately retain every identity's rows - a collaborator may hold the
+   * SAME `chatId` (a record identity is `(epicId, ownerUserId, chatId)`, see
+   * {@link chatRecordRows}) - and a row the projector never served cannot be
+   * provenance for a mutation the user made against the visible one. Testing
+   * bare-id membership here shipped once and misclassified a doc-only legacy
+   * chat as registry-backed off a collaborator's invisible same-id row.
+   */
+  const hasVisibleRecordRowForNode = (nodeId: string): boolean => {
+    const currentUserId = getCurrentChatProjectionUserId();
+    const tuiRow = tuiAgentRecordRows.get(nodeId);
+    if (
+      tuiRow !== undefined &&
+      isTerminalAgentVisibleToUser(tuiRow.ownerUserId, currentUserId)
+    ) {
+      return true;
+    }
+    for (const row of chatRecordRows.values()) {
+      if (row.chatId !== nodeId) continue;
+      if (isChatVisibleToUser(row.ownerUserId, currentUserId)) return true;
+    }
+    return false;
+  };
+
+  /**
+   * Capture record-plane provenance for every retained mutation whose CHAIN
+   * the record plane serves to this viewer. Runs at stamp time and from both
+   * record publish seams - the ONE writer each raw table has - so a row
+   * already present at begin and a row arriving mid-flight both mark the
+   * chain while the row is still there to prove it.
+   *
+   * Two passes because the fact is chain-wide: a chain counts as
+   * registry-backed if ANY member is already marked (stickiness surviving
+   * the row's disappearance) or the node currently has a visible record row,
+   * and then EVERY member is marked - including one stamped after the row
+   * disappeared, which inherits the chain's provenance here at its own
+   * stamp.
+   */
+  const markRegistryBackedMutations = (): void => {
+    if (pendingMetadataMutations.size === 0) return;
+    const chainKeyOf = (kind: string, nodeId: string): string =>
+      `${kind}\u001f${nodeId}`;
+    const markedChains = new Set<string>();
+    for (const mutation of pendingMetadataMutations.values()) {
+      if (mutation.kind === "epic-title") continue;
+      const key = chainKeyOf(mutation.kind, mutation.nodeId);
+      if (markedChains.has(key)) continue;
+      if (
+        registryBackedRequestIds.has(mutation.requestId) ||
+        hasVisibleRecordRowForNode(mutation.nodeId)
+      ) {
+        markedChains.add(key);
+      }
+    }
+    if (markedChains.size === 0) return;
+    for (const mutation of pendingMetadataMutations.values()) {
+      if (mutation.kind === "epic-title") continue;
+      if (markedChains.has(chainKeyOf(mutation.kind, mutation.nodeId))) {
+        registryBackedRequestIds.add(mutation.requestId);
+      }
+    }
+  };
+
+  /**
+   * Whether a mutation's CHAIN is served by the RECORD plane. Registry rows
+   * live in {@link chatRecordRows} / {@link tuiAgentRecordRows} - closure
+   * state fed by the poll and delta channels, never cleared by a root
+   * reconnect - so their authority does not ride the root doc snapshot the
+   * way artifact rows and the epic title do. The dead sweep's snapshot gate
+   * reads this to decide which plane's judgment it may trust while the
+   * replacement doc is still unseeded.
+   *
+   * Chain-level, not entry-level: the sweep reports whole chains, and one
+   * member observed against a record row is provenance for all of them - a
+   * split verdict would delete half a chain and hand `resolvePendingChain`
+   * a remainder whose baseline no longer means anything.
+   */
+  const isRegistryBackedMutation = (
+    mutation: PendingMetadataMutation,
+  ): boolean => {
+    if (mutation.kind === "epic-title") return false;
+    for (const other of pendingMetadataMutations.values()) {
+      if (other.kind !== mutation.kind) continue;
+      if (other.nodeId !== mutation.nodeId) continue;
+      if (registryBackedRequestIds.has(other.requestId)) return true;
+    }
+    return hasVisibleRecordRowForNode(mutation.nodeId);
+  };
+
+  const projector: EpicProjector = createEpicProjector({
+    getCurrentUserId: getCurrentChatProjectionUserId,
+    getChatRecords: () => chatRecords,
+    getTuiAgentRecords: () => tuiAgentRecords,
+    getPendingOverlay: () => pendingMetadataMutations,
+    // The dead sweep: a full projection proved these chains finished (row
+    // caught up to the acked value, or a peer overwrote it). Deletion only -
+    // NO republish - a dead chain already displays the authoritative value,
+    // and a republish here would recurse into the projection that reported it.
+    //
+    // Gated on the open cycle's root snapshot, because a projection can run
+    // against a replica that holds no authority yet: `requestFreshSnapshotImpl`
+    // swaps in a brand-new EMPTY `Y.Doc` and `projector.attach` full-projects
+    // it before the replacement snapshot lands, and record ingests can force
+    // full projections inside that same window. Against that state every
+    // doc-backed row reads as deleted and the epic title as "", so honoring
+    // the report would terminally retire chains whose RPCs are alive and
+    // retryable. While the flag is down the report is ignored; the snapshot's
+    // own full projection re-runs the sweep against real state the moment it
+    // lands, and the landed-entry TTL bounds the map meanwhile.
+    //
+    // The gate is PLANE-AWARE: it protects only chains whose authority rides
+    // the doc (artifact rows, the epic title, a doc-only legacy chat). A
+    // registry-backed chat or terminal agent is judged against record rows
+    // the reconnect never touched, and its record plane keeps moving through
+    // the window - suppressing ITS death lets a supersession verdict
+    // (row moved off-anchor) sit retained until a later record revisits the
+    // chain's baseline value, where the stale intent would resurrect. A
+    // deadness computed entirely from live registry state is honored
+    // regardless of the flag. Which plane a chain rides is the STICKY,
+    // owner-selected provenance above (`registryBackedRequestIds`), not a
+    // bare-id scan of the raw tables - see `hasVisibleRecordRowForNode`.
+    //
+    // Classification runs to completion BEFORE any deletion: the plane
+    // lookup is chain-level, so deleting one member (and its provenance
+    // mark) mid-batch would change a later sibling's verdict - honoring
+    // half a chain and suppressing the rest, leaving a remainder whose
+    // baseline no longer means anything.
+    onDeadMutations: (requestIds) => {
+      const honored: string[] = [];
+      for (const requestId of requestIds) {
+        const mutation = pendingMetadataMutations.get(requestId);
+        if (mutation === undefined) continue;
+        if (
+          !hasFreshRootSnapshotForOpenCycle &&
+          !isRegistryBackedMutation(mutation)
+        ) {
+          continue;
+        }
+        honored.push(requestId);
+      }
+      for (const requestId of honored) {
+        pendingMetadataMutations.delete(requestId);
+        registryBackedRequestIds.delete(requestId);
+      }
+    },
+  });
 
   const handleDocUpdate = (updateBytes: Uint8Array, origin: unknown) => {
     if (origin === STREAM_ORIGIN) return;
@@ -2182,6 +2513,11 @@ export function createOpenEpicStore(
           // `unionChatsSlice` still applies the same predicate at projection
           // time; two boundaries, one shared rule, so they cannot disagree.
           const currentUserId = getCurrentChatProjectionUserId();
+          // Record provenance for any pending metadata mutation this table
+          // now backs, BEFORE the change gate below can early-return: the
+          // marks must be captured while the row exists, and this is the one
+          // seam every chat-record write flows through.
+          markRegistryBackedMutations();
           const visible: ChatRecordSummary[] = [];
           for (const row of chatRecordRows.values()) {
             if (!isChatVisibleToUser(row.ownerUserId, currentUserId)) continue;
@@ -2223,7 +2559,10 @@ export function createOpenEpicStore(
           extra: Pick<OpenEpicState, "tuiAgentRetractions"> | null,
         ): void => {
           const currentUserId = getCurrentChatProjectionUserId();
-          const visible: TuiAgentRecordSummary[] = [];
+          // See publishChatRecords: provenance marks are captured at the one
+          // seam every terminal-agent record write flows through.
+          markRegistryBackedMutations();
+          const visible: TuiAgentRecordSummaryV11[] = [];
           for (const row of tuiAgentRecordRows.values()) {
             if (!isTerminalAgentVisibleToUser(row.ownerUserId, currentUserId)) {
               continue;
@@ -3017,6 +3356,145 @@ export function createOpenEpicStore(
         //    fires once per logical mutation and `handleDocUpdate` routes
         //    the resulting update bytes through `applyLocalUpdate`.
 
+        /**
+         * Republish the projection so a change to the pending overlay is
+         * visible. The doc has not moved, so this is a pure re-projection -
+         * the same call the chat-record channel makes when new rows land.
+         */
+        const republishForOverlay = (): void => {
+          if (!projector.isAttached()) return;
+          set(projector.projectFull());
+        };
+
+        /**
+         * Arm (or re-arm) the bounded landed-entry expiry. See the landed arm
+         * of {@link retirePendingMutation} for why landed entries expire at
+         * all; the CHAIN-SCOPED half lives here, in two rules.
+         *
+         * While any member of the entry's chain is still un-settled, the
+         * timer re-arms: an INTERIOR landed entry is a causal anchor for
+         * every later pending member (`resolvePendingChain` anchors a
+         * pending chain on baseline plus every landed target), so expiring
+         * it would strip the anchor set and the next projection would read
+         * the landed value's own echo as off-anchor supersession -
+         * terminally killing a chain whose RPC is alive and retryable.
+         *
+         * Once the whole chain is landed, expiry is owned by the chain's
+         * TAIL - the last-STAMPED member, whose target is what the
+         * all-landed chain displays - and the tail deletes the ENTIRE chain
+         * atomically. Per-entry deletion is wrong here: ACKs settle out of
+         * order, so a later-stamped member's timer can fire before an
+         * earlier one's, and deleting just that member would re-expose the
+         * previous landed target - the display walking BACKWARD through the
+         * chain's history as timers fire. A non-tail timer re-arms instead;
+         * if the tail is ever retired away (a failed RPC), the next re-armed
+         * timer to find itself the tail takes over, at most one TTL later.
+         * A sibling's failure or landing never needs to reschedule anything
+         * for the same reason.
+         */
+        const scheduleLandedExpiry = (requestId: string): void => {
+          window.setTimeout(() => {
+            if (disposed) return;
+            const entry = pendingMetadataMutations.get(requestId);
+            if (entry === undefined) return;
+            const nodeId = entry.kind === "epic-title" ? null : entry.nodeId;
+            const chainRequestIds: string[] = [];
+            let chainHasUnsettled = false;
+            for (const [id, other] of pendingMetadataMutations) {
+              if (other.kind !== entry.kind) continue;
+              const otherId = other.kind === "epic-title" ? null : other.nodeId;
+              if (otherId !== nodeId) continue;
+              chainRequestIds.push(id);
+              if (!other.landed) chainHasUnsettled = true;
+            }
+            const isTail =
+              chainRequestIds[chainRequestIds.length - 1] === requestId;
+            if (chainHasUnsettled || !isTail) {
+              scheduleLandedExpiry(requestId);
+              return;
+            }
+            for (const id of chainRequestIds) {
+              pendingMetadataMutations.delete(id);
+              registryBackedRequestIds.delete(id);
+            }
+            republishForOverlay();
+          }, LANDED_MUTATION_TTL_MS);
+        };
+
+        /**
+         * Report a mutation's RPC outcome.
+         *
+         * `"failed"` is the simple half: the patch is layered over the
+         * authoritative value, so deleting the entry reveals whatever the
+         * host actually has. Nothing is written back - see the module doc on
+         * `pending-metadata-overlay.ts`, and do not reintroduce a restore
+         * path. Only TERMINAL failures; a retryable transport error must
+         * leave the row pending, or the title flaps for the length of the
+         * retry.
+         *
+         * `"landed"` does NOT delete: the ack is causal proof the host holds
+         * this value, which the row-wins rule needs to tell our own echo from
+         * a peer's write, and which keeps the display honest while the record
+         * slice is still stale (deleting here would snap a successful rename
+         * back to the old title until the refetch landed). The projection's
+         * dead sweep (`collectDeadPendingMutations`) forgets the entry once
+         * the row catches up or a peer overwrites it.
+         */
+        const retirePendingMutation = (
+          requestId: string,
+          outcome: "landed" | "failed",
+        ): boolean => {
+          const entry = pendingMetadataMutations.get(requestId);
+          if (entry === undefined) return false;
+          // A landed outcome is only worth KEEPING while the projector can
+          // still observe the echo that sweeps it. Detached (a retained
+          // buffer), the display is frozen and no projection will ever run
+          // again - a kept entry would just sit in the map for the handle's
+          // life, so delete on both outcomes there.
+          if (outcome === "failed" || !projector.isAttached()) {
+            pendingMetadataMutations.delete(requestId);
+            registryBackedRequestIds.delete(requestId);
+          } else {
+            pendingMetadataMutations.set(requestId, {
+              ...entry,
+              landed: true,
+            });
+            // The bounded half of the landed contract. The ack proves the host
+            // HELD this value, but value equality is the only reconciliation
+            // the sweep has, and it cannot tell "the slice has not caught up
+            // to our write yet" from "a peer moved the row BACK to the
+            // baseline value after our write" - both read as authoritative ===
+            // baseline. Unbounded, the wrong guess hides the peer's write for
+            // the rest of the session. So a landed entry outranks a
+            // baseline-valued row only while our own echo could still
+            // plausibly be in flight - one full record-poll interval (20s)
+            // plus refetch slack - and past that the row wins. If the slice
+            // was merely stale (a run of failed polls), the brief regression
+            // is honest and the next successful poll re-serves our value
+            // anyway. Expiry is CHAIN-SCOPED (see `scheduleLandedExpiry`):
+            // while a later sibling is still in flight this entry is that
+            // sibling's causal anchor, not just a display bridge, and the
+            // timer re-arms instead of deleting; an all-landed chain is
+            // expired atomically by its TAIL, so out-of-order ACKs cannot
+            // walk the display backward through the chain's history.
+            scheduleLandedExpiry(requestId);
+          }
+          republishForOverlay();
+          return true;
+        };
+
+        const stampPendingMutation = (
+          mutation: PendingMetadataMutation,
+        ): string => {
+          pendingMetadataMutations.set(mutation.requestId, mutation);
+          // Provenance is captured while the record row exists - a node the
+          // record plane serves right now marks its chain registry-backed
+          // for the dead sweep's plane-aware gate, stickily.
+          markRegistryBackedMutations();
+          republishForOverlay();
+          return mutation.requestId;
+        };
+
         const renameArtifactAction = (
           artifactId: string,
           nextTitle: string,
@@ -3189,27 +3667,53 @@ export function createOpenEpicStore(
           if (disposed) return false;
           const role = currentRole ?? get().permissionRole;
           if (role === "viewer" || role === null) return false;
+          // VALIDATE AGAINST THE PROJECTION, WRITE TO THE DOC. The two are no
+          // longer the same surface and have not been since chats-off-YJS: a
+          // registry-backed chat or terminal agent has NO doc entry, so the
+          // doc evaluator answers `missing-node` for a row the user is plainly
+          // dragging. That is not a hypothetical - it rejected every drop onto
+          // a record-backed parent, and the rejection THREW, which is how one
+          // ordinary drag came to wedge the whole DnD session (4.3a).
+          //
+          // The projected tree is the union the sidebar renders, so it is the
+          // only surface that can judge a drop for every node the user can
+          // grab. Cycle detection improves for free: the walk now crosses the
+          // doc and record arms, which the doc-only walk could not see.
+          //
+          // Read before the transaction, deliberately. `get().tree` is
+          // projector output, and the projector runs on the doc observer -
+          // reading it INSIDE `doc.transact` would still return the pre-write
+          // projection, but only by accident of when observers fire. Reading
+          // it here says what we mean, and nothing can mutate between these
+          // two synchronous statements.
+          const evaluation = evaluateProjectedReparent(
+            get().tree,
+            artifactId,
+            newParentId,
+          );
+          if (!evaluation.ok) {
+            if (evaluation.reason === "same-parent") return false; // no-op
+            throw projectedReparentRejectionError(
+              get().tree,
+              evaluation.reason,
+              artifactId,
+              newParentId,
+            );
+          }
+          // The projection said yes; now find something to write to. A node
+          // with no doc entry is registry-backed, and its parent pointer lives
+          // on the host record - `epic.reparentChat` owns that move, and the
+          // caller routes it there instead. Returning false rather than
+          // throwing is the honest answer: nothing is wrong, there is simply
+          // no local write to make.
+          const target = resolveReparentNode(doc, artifactId);
+          if (target === null) return false;
           let mutated = false;
-          const pendingErrors: Error[] = [];
           doc.transact(() => {
-            const evaluation = evaluateReparent(doc, artifactId, newParentId);
-            if (!evaluation.ok) {
-              if (evaluation.reason === "same-parent") return; // no-op
-              pendingErrors.push(
-                reparentRejectionError(
-                  doc,
-                  evaluation.reason,
-                  artifactId,
-                  newParentId,
-                ),
-              );
-              return;
-            }
-            evaluation.node.entry.set("parentId", newParentId);
-            evaluation.node.entry.set("updatedAt", Date.now());
+            target.entry.set("parentId", newParentId);
+            target.entry.set("updatedAt", Date.now());
             mutated = true;
           }, LOCAL_ORIGIN);
-          if (pendingErrors.length > 0) throw pendingErrors[0];
           return mutated;
         };
 
@@ -3226,6 +3730,180 @@ export function createOpenEpicStore(
           }, LOCAL_ORIGIN);
           return mutated;
         };
+
+        /**
+         * The AUTHORITATIVE value a new mutation should record as its
+         * baseline.
+         *
+         * `get()` returns the OVERLAID projection - the projector folds the
+         * overlay in - so the currently displayed value is not authoritative
+         * whenever something is already in flight for this node. When a chain
+         * exists, its first element already captured the authoritative value
+         * and the host has not moved (if it had, that chain would have been
+         * dropped at projection time), so reusing that baseline is both
+         * correct and the only reading available here. With no chain, nothing
+         * is overlaid and the projected value IS authoritative.
+         */
+        const baselineFor = (
+          kind: PendingMetadataMutation["kind"],
+          nodeId: string | null,
+          projected: string | null,
+        ): string | null => {
+          for (const mutation of pendingMetadataMutations.values()) {
+            if (mutation.kind !== kind) continue;
+            const id = mutation.kind === "epic-title" ? null : mutation.nodeId;
+            if (id !== nodeId) continue;
+            return mutation.baseline;
+          }
+          return projected;
+        };
+
+        /**
+         * Stamp an optimistic rename and return its request id. The caller
+         * fires the RPC and retires the id when it settles or terminally
+         * fails.
+         *
+         * Covers every plane: an artifact, a doc-backed chat, and a
+         * REGISTRY-backed chat or terminal agent, which is the case desktop
+         * silently lost when chats moved off YJS - `renameArtifact`'s doc
+         * write no-ops for those rows, so until now they had no optimistic
+         * feedback on any viewport.
+         */
+        const beginRenameMutation = (
+          nodeId: string,
+          nextTitle: string,
+        ): string | null => {
+          if (disposed) return null;
+          const trimmed = nextTitle.trim();
+          if (trimmed.length === 0) return null;
+          const role = currentRole ?? get().permissionRole;
+          if (role === "viewer" || role === null) return null;
+          // The RAW union row, never the tree node: tree titles already
+          // carry the "Untitled ..." display fallback, so a baseline read
+          // there lives in a different value space than the row title the
+          // applier compares against - an untitled row's rename would anchor
+          // on the fallback string and never apply. Same lookup rule as
+          // `beginReparentMutation` and the dead sweep.
+          const slices = get();
+          let displayed: string | null = null;
+          for (const byId of [
+            slices.artifacts.byId,
+            slices.chats.byId,
+            slices.tuiAgents.byId,
+          ]) {
+            if (!Object.hasOwn(byId, nodeId)) continue;
+            displayed = byId[nodeId].title;
+            break;
+          }
+          if (displayed === null) return null;
+          // No-op against what the user SEES (the overlaid title), never the
+          // chain baseline. With a landed rename awaiting its echo, "rename
+          // back to the original" differs from the display and must become a
+          // real chain entry - a baseline compare would return null here
+          // while the caller's RPC fires anyway, leaving the UI stuck on the
+          // landed value until a full row round-trip.
+          if (displayed === trimmed) return null;
+          const baseline = baselineFor("rename", nodeId, displayed);
+          if (baseline === null) return null;
+          const requestId = stampPendingMutation({
+            kind: "rename",
+            requestId: crypto.randomUUID(),
+            nodeId,
+            title: trimmed,
+            baseline,
+            landed: false,
+          });
+          // The stamp TOMBSTONE outlives the chain - see
+          // {@link OpenEpicState.isLatestRenameStamp} for why the snapshot
+          // guard cannot read chain membership.
+          latestRenameStampByNode.set(nodeId, requestId);
+          return requestId;
+        };
+
+        /** Stamp an optimistic epic-title change. See {@link beginRenameMutation}. */
+        const beginEpicTitleMutation = (nextTitle: string): string | null => {
+          if (disposed) return null;
+          const trimmed = nextTitle.trim();
+          if (trimmed.length === 0) return null;
+          // `epic.title` is the OVERLAID (displayed) value; the no-op check
+          // runs against it for the same rename-back-to-baseline reason as
+          // `beginRenameMutation`. `baselineFor` then anchors a chained entry
+          // on the original authoritative value.
+          const displayed = get().epic.title;
+          if (displayed === trimmed) return null;
+          const baseline = baselineFor("epic-title", null, displayed);
+          if (baseline === null) return null;
+          return stampPendingMutation({
+            kind: "epic-title",
+            requestId: crypto.randomUUID(),
+            title: trimmed,
+            baseline,
+            landed: false,
+          });
+        };
+
+        /**
+         * Stamp an optimistic reparent. Validated against the projected tree,
+         * exactly as the write path is (4.3) - one evaluator, one tree, so the
+         * overlay can never accept a move the commit would refuse.
+         */
+        const beginReparentMutation = (
+          nodeId: string,
+          newParentId: string | null,
+        ): string | null => {
+          if (disposed) return null;
+          const role = currentRole ?? get().permissionRole;
+          if (role === "viewer" || role === null) return null;
+          const evaluation = evaluateProjectedReparent(
+            get().tree,
+            nodeId,
+            newParentId,
+          );
+          if (!evaluation.ok) return null;
+          // Baseline from the union ROW's raw `parentId`, NOT the tree
+          // node's. The tree promotes a dangling raw parent to root, so the
+          // effective parent can be `null` while the row still carries the
+          // deleted id - and the applier compares the ROW. A baseline read
+          // from the tree would then look like "the authoritative value
+          // moved" and refuse the very patch that was just validated. Same
+          // lookup rule as `collectDeadPendingMutations`' authoritative read.
+          const slices = get();
+          let rawParent: { found: boolean; value: string | null } = {
+            found: false,
+            value: null,
+          };
+          for (const byId of [
+            slices.artifacts.byId,
+            slices.chats.byId,
+            slices.tuiAgents.byId,
+          ]) {
+            if (!Object.hasOwn(byId, nodeId)) continue;
+            rawParent = { found: true, value: byId[nodeId].parentId };
+            break;
+          }
+          if (!rawParent.found) return null;
+          return stampPendingMutation({
+            kind: "reparent",
+            requestId: crypto.randomUUID(),
+            nodeId,
+            parentId: newParentId,
+            baseline: baselineFor("reparent", nodeId, rawParent.value),
+            landed: false,
+          });
+        };
+
+        /**
+         * See the {@link OpenEpicState.isLatestRenameStamp} contract - a
+         * tombstone read, NOT a chain walk. The chain answer shipped first
+         * and was wrong: the fast-echo race (authoritative row catches up
+         * before the RPC settles) sweeps the chain, and the success arm then
+         * found "not latest" for a rename that succeeded, skipping its only
+         * persisted-tab write.
+         */
+        const isLatestRenameStamp = (
+          nodeId: string,
+          requestId: string,
+        ): boolean => latestRenameStampByNode.get(nodeId) === requestId;
 
         return {
           epicId,
@@ -3353,9 +4031,9 @@ export function createOpenEpicStore(
             }
           },
 
-          applyChatRecords: (records) => {
+          applyChatRecords: (records, issuedAtSeq) => {
             if (disposed) return;
-            chatRecordRows.clear();
+            const served = new Map<string, ChatRecordSummary>();
             for (const row of records) {
               // A retracted chat never comes back through the poll. The list
               // read is a SNAPSHOT of the host's SQLite and the host applies a
@@ -3364,18 +4042,50 @@ export function createOpenEpicStore(
               // it through would resurrect a chat seconds after its tab said it
               // was gone. See `OpenEpicState.chatRetractions`.
               if (chatRetractions.has(row.chatId)) continue;
-              chatRecordRows.set(recordKey(row.ownerUserId, row.chatId), row);
-              // The record for a creation this client is holding open has
-              // arrived: the stand-in has served its purpose and the served row
-              // takes over. Retiring it HERE (rather than only in the union) is
-              // what keeps the clear-and-replace above from being the only
-              // reader that knows the difference. Runs for EVERY ingested row,
-              // not only newly-seen ones, which is what lets a later answer
-              // retire a stand-in registered while the row was already held.
-              expirePendingChatCreationForRecord(row.ownerUserId, row.chatId);
+              served.set(recordKey(row.ownerUserId, row.chatId), row);
             }
+            // Omissions first, against the fence - see `chatRowSeq`. A row
+            // this answer does not carry is dropped only if it was already
+            // held when the answer was ISSUED; anything ingested since then (a
+            // push delta, a faster later answer) is newer than this snapshot
+            // by construction and survives it.
+            const fence = issuedAtSeq ?? chatSnapshotFence;
+            for (const key of [...chatRecordRows.keys()]) {
+              if (served.has(key)) continue;
+              if ((chatRowSeq.get(key) ?? 0) > fence) continue;
+              chatRecordRows.delete(key);
+              chatRowSeq.delete(key);
+            }
+            for (const [key, row] of served) {
+              // The record for a creation this client is holding open has
+              // arrived: the stand-in has served its purpose and the served
+              // row takes over. Runs for EVERY served row - stale-rejected
+              // ones included, since even an old version proves the record
+              // exists - which is what lets a later answer retire a stand-in
+              // registered while the row was already held.
+              expirePendingChatCreationForRecord(row.ownerUserId, row.chatId);
+              const held = chatRecordRows.get(key);
+              // The same monotonic-`revision` test the delta path applies, in
+              // the same direction: a snapshot row that does not strictly
+              // exceed what is held is an older version of that row, and
+              // overwriting with it would regress a push the client has
+              // already shown - and, through the optimistic overlay's
+              // supersession rule, terminally kill a healthy pending chain
+              // over a read that was merely slow. (No doc-resident carve-out
+              // here, unlike the terminal-agent twin: chat records are
+              // registry-only, so every row carries a real revision.)
+              if (held !== undefined && row.revision <= held.revision) continue;
+              chatRecordRows.set(key, row);
+              chatIngestSeq += 1;
+              chatRowSeq.set(key, chatIngestSeq);
+            }
+            chatSnapshotFence = chatIngestSeq;
             publishChatRecords(null);
           },
+
+          peekChatIngestSeq: () => chatIngestSeq,
+
+          ingestFenceIdentity: mintedIngestFenceIdentity,
 
           markChatRecordListAuthoritative: () => {
             if (disposed || get().chatRecordListAuthoritative) return;
@@ -3409,7 +4119,10 @@ export function createOpenEpicStore(
                 return;
               }
               chatRetractions.set(delta.chatId, delta.reason);
-              for (const key of doomed) chatRecordRows.delete(key);
+              for (const key of doomed) {
+                chatRecordRows.delete(key);
+                chatRowSeq.delete(key);
+              }
               publishChatRecords({
                 chatRetractions: Object.fromEntries(chatRetractions),
               });
@@ -3429,6 +4142,12 @@ export function createOpenEpicStore(
             // `updatedAt` is display metadata no ordering decision may read.
             if (held !== undefined && record.revision <= held.revision) return;
             chatRecordRows.set(key, record);
+            // Past the fence the last snapshot left: an `epic.listChatRecords`
+            // answer already in flight cannot carry this row's new version, so
+            // its omission - or its stale copy, via the revision test above -
+            // must not defeat it. See `chatRowSeq`.
+            chatIngestSeq += 1;
+            chatRowSeq.set(key, chatIngestSeq);
             // Same handover as the poll's, on the same full identity: whichever
             // path delivers the real row first retires the stand-in, so the row
             // never blinks out between the two.
@@ -3443,7 +4162,7 @@ export function createOpenEpicStore(
 
           applyTuiAgentRecords: (records, issuedAtSeq) => {
             if (disposed) return;
-            const served = new Map<string, TuiAgentRecordSummary>();
+            const served = new Map<string, TuiAgentRecordSummaryV11>();
             for (const row of records) {
               // A retracted agent never comes back through the poll: the list
               // read is a snapshot of the host's registry and the host applies
@@ -3473,7 +4192,26 @@ export function createOpenEpicStore(
               // does not strictly exceed what is held is an older version of
               // that row, and overwriting with it would regress a push the
               // client has already shown.
-              if (held !== undefined && row.revision <= held.revision) continue;
+              //
+              // EXCEPT doc-resident over doc-resident, which the test cannot
+              // judge. A doc row has no registry seq to carry, so it ships at
+              // `revision: 0` on EVERY answer - `0 <= 0` would reject each
+              // refresh and freeze that agent at whatever the first answer of
+              // the session said, for the life of the session. Under `@2` that
+              // row is its only source, so the freeze hides a peer-host rename,
+              // reparent and archive alike.
+              //
+              // Narrow, and in one direction only. The guard still applies the
+              // moment either side is registry-backed: a doc row at 0 can never
+              // clobber an adopted registry row (`0 <= n`), and an adopted row
+              // still replaces the frozen copy (`n <= 0` is false). What is
+              // waived is only the comparison between two rows that both carry
+              // a placeholder, where the later answer is newer by construction
+              // because it is a fresher read of the same map.
+              if (held !== undefined) {
+                const bothDocResident = held.docResident && row.docResident;
+                if (!bothDocResident && row.revision <= held.revision) continue;
+              }
               tuiAgentRecordRows.set(id, row);
               tuiAgentIngestSeq += 1;
               tuiAgentRowSeq.set(id, tuiAgentIngestSeq);
@@ -3515,7 +4253,19 @@ export function createOpenEpicStore(
             // only ordering fact on a row, so a delta that does not strictly
             // exceed what is held is a replay, a reorder or a duplicate.
             if (held !== undefined && record.revision <= held.revision) return;
-            tuiAgentRecordRows.set(record.tuiAgentId, record);
+            // The delta plane is REGISTRY-ONLY by construction - a doc-resident
+            // agent has no registry row, so it can never produce a delta. So
+            // `false` here is a fact about the source, not a filled-in default.
+            //
+            // It is also what makes ADOPTION converge through the staleness
+            // test above: `epic.listTuiAgents@1.1` serves a frozen doc row at
+            // `revision: 0`, so the first real delta after that agent's binding
+            // host upgrades and the sweep imports it strictly exceeds 0 and
+            // replaces the frozen copy in place.
+            tuiAgentRecordRows.set(record.tuiAgentId, {
+              ...record,
+              docResident: false,
+            });
             // Past the fence the last snapshot left: an `epic.listTuiAgents`
             // answer already in flight cannot carry this row, so its omission
             // must not delete it. See `tuiAgentRowSeq`.
@@ -3585,6 +4335,19 @@ export function createOpenEpicStore(
             // stops producing dial evidence for a host the window has left -
             // and the doc, its replica and the unsynced queue are left intact,
             // because they are the thing being retained.
+            //
+            // Landed overlay entries are dropped here: their sweep runs
+            // inside full projections, and a detached projector never
+            // projects again, so a landed stamp would sit in the map for the
+            // life of the retained handle waiting for an echo the closed
+            // stream cannot deliver. Un-landed entries stay - their RPC
+            // promise still owns a terminal retire.
+            for (const [requestId, entry] of pendingMetadataMutations) {
+              if (entry.landed) {
+                pendingMetadataMutations.delete(requestId);
+                registryBackedRequestIds.delete(requestId);
+              }
+            }
             projector.detach();
             closeStreamClient();
             // Say so rather than leaving the last live reading in place. The
@@ -3603,6 +4366,12 @@ export function createOpenEpicStore(
             // Must run before destroyReplica so the unobserve targets a live
             // doc.
             [...attachmentReadWaiters].forEach((waiter) => waiter.settle(null));
+            // Backstop for retires that never arrive (a caller torn down
+            // before its RPC settled). The store is dead, so nothing reads
+            // the map again; clearing just guarantees no stamp outlives it.
+            pendingMetadataMutations.clear();
+            registryBackedRequestIds.clear();
+            latestRenameStampByNode.clear();
             unsubscribeAuthUserId?.();
             unsubscribeAuthUserId = null;
             projector.detach();
@@ -3613,6 +4382,11 @@ export function createOpenEpicStore(
           },
 
           renameArtifact: renameArtifactAction,
+          beginRenameMutation,
+          beginEpicTitleMutation,
+          beginReparentMutation,
+          retirePendingMutation,
+          isLatestRenameStamp,
           deleteArtifact: deleteArtifactAction,
           reparentArtifact: reparentArtifactAction,
           setEpicTitle: setEpicTitleAction,

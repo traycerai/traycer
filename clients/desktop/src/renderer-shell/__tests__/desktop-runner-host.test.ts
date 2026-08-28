@@ -530,6 +530,74 @@ function buildFakeBridge(
       reset: async () => 100,
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
+    browserView: {
+      ensureTab: async (input) => ({
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+        registrationId: "registration-1",
+      }),
+      acceptTab: async () => undefined,
+      attachSurface: async () => undefined,
+      detachSurface: async () => undefined,
+      releaseTab: async () => true,
+      controlElectronTab: async () => undefined,
+      dispatchElectronTabCdp: async () => ({
+        kind: "cdpGetFrameTree" as const,
+        ok: true as const,
+        frames: [],
+      }),
+      setReservedChords: async () => undefined,
+      overlayPaintAck: async () => undefined,
+      updateBounds: async () => undefined,
+      findInPage: async () => undefined,
+      stopFindInPage: async () => undefined,
+      cancelDownload: async () => undefined,
+      trustCertificate: async () => undefined,
+      capturePage: async (input) => ({
+        ...input,
+        mediaType: "image/png",
+        base64: "",
+        byteLength: 0,
+        sha256: "",
+        capturedAt: 0,
+      }),
+      getDebugSnapshot: async (input) => ({
+        ...input,
+        consoleEntries: [],
+        networkEntries: [],
+      }),
+      startAnnotation: async () => ({ ok: true as const }),
+      cancelAnnotation: async () => undefined,
+      setAnnotationTargetChatLabel: async () => undefined,
+      occludeForOverlay: async () => ({ snapshots: [], restoredTiles: [] }),
+      releaseOverlay: async () => ({ restoredTiles: [] }),
+      capturePrimaryProfile: async () => ({
+        status: "captured" as const,
+        storageState: { cookies: [], origins: [] },
+        reason: null,
+      }),
+      getCookieCryptoState: async () => ({
+        mode: "real" as const,
+        persistence: "persistent" as const,
+        reason: "os-backed" as const,
+        storageBackend: null,
+        encryptionAvailable: true,
+      }),
+      onFindChange: (_handler) => ({ dispose: () => undefined }),
+      onDownloadChange: (_handler) => ({ dispose: () => undefined }),
+      onCertificateError: (_handler) => ({ dispose: () => undefined }),
+      onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
+      onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
+      onAnnotationEvent: (_handler) => ({ dispose: () => undefined }),
+      onAnnotationAttached: (_handler) => ({ dispose: () => undefined }),
+      startPipCapture: async () => undefined,
+      stopPipCapture: async () => undefined,
+      onPipCaptureFrame: (_handler) => ({ dispose: () => undefined }),
+      onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
+      onElectronTabHandoff: (_handler) => ({ dispose: () => undefined }),
+      reportAnnotationAttachResult: async () => undefined,
+    },
     hostManagement: {
       getHostControllerStatus: async () => {
         throw new Error("getHostControllerStatus not used in test");
@@ -1091,7 +1159,13 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
 
     expect(fake.systemResumedBridgeSubscriptionCount()).toBe(1);
     fake.emitSystemResumed();
-    for (const handler of calls) expect(handler).toHaveBeenCalledTimes(1);
+    for (const handler of calls) {
+      expect(handler).toHaveBeenCalledTimes(1);
+      // Desktop cannot measure sleep duration (`powerMonitor` reports none),
+      // so its resume event must say so - a number here would put every
+      // desktop wake through the mobile duration gate.
+      expect(handler).toHaveBeenCalledWith({ backgroundedForMs: null });
+    }
 
     subscriptions[0]?.dispose();
     fake.emitSystemResumed();

@@ -623,7 +623,10 @@ describe("<LandingTerminalPanel />", () => {
 
   afterEach(() => {
     cleanup();
-    useMobileHeaderStore.setState({ rightActions: null });
+    useMobileHeaderStore.setState({
+      rightActions: null,
+      rightActionsOwner: null,
+    });
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
@@ -709,6 +712,52 @@ describe("<LandingTerminalPanel />", () => {
       view.unmount();
 
       expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+    });
+
+    // The panel outlives its page's activation to keep its PTYs warm - it stays
+    // mounted behind an epic tab, History or Settings so its PTYs survive - so
+    // being mounted is not a claim on the header. The header belongs to the
+    // surface on screen: a toggle published from behind another surface would
+    // act on a terminal panel the user cannot see.
+    it("publishes no toggle while another surface is presented", async () => {
+      seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
+      render(
+        <>
+          {panelUi()}
+          <MobileHeaderSlotProbe />
+        </>,
+      );
+      await screen.findByTestId("landing-terminal-panel");
+
+      expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+      expect(useMobileHeaderStore.getState().rightActionsOwner).toBeNull();
+      expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
+    });
+
+    // Launching a task from this page replaces it with the epic it created,
+    // and the epic's surface claims the header slot while this panel is still
+    // mounted: its existence follows the pane ANCHOR, which unregisters a
+    // commit later. The teardown therefore arrives AFTER the new owner's
+    // write, and must leave that owner's controls alone - otherwise the task
+    // that just opened has no tab-switcher trigger until something remounts
+    // it.
+    it("leaves a slot another surface has since claimed", async () => {
+      const view = render(panelUi());
+      await waitFor(() => {
+        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+      });
+
+      const epicTrigger = <button type="button" data-testid="epic-claim" />;
+      useMobileHeaderStore
+        .getState()
+        .setRightActions("epic-tab:t1", epicTrigger);
+
+      view.unmount();
+
+      expect(useMobileHeaderStore.getState().rightActions).toBe(epicTrigger);
+      expect(useMobileHeaderStore.getState().rightActionsOwner).toBe(
+        "epic-tab:t1",
+      );
     });
   });
 

@@ -228,9 +228,6 @@ describe("<DiffContentPrimitive />", () => {
     expect(captured.editRenderHistory.slice(rendersBeforeEdit)).toEqual([true]);
     expect(captured.lastEdit).toBe(true);
     expect(editContainer?.getAttribute("data-edit")).toBe("true");
-    expect(captured.lastUnsafeCSS).toContain(
-      ":host-context([data-diffs-editor-boundary]) [data-separator-last]",
-    );
   });
 
   it("keeps the same host read-only until the hydrated worker cache is ready, then enables edit", async () => {

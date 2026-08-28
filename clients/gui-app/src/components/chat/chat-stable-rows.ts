@@ -110,6 +110,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   segments: (a, b) => a.segments === b.segments,
   structuredContent: (a, b) => a.structuredContent === b.structuredContent,
   attachments: (a, b) => a.attachments === b.attachments,
+  browserAnnotations: (a, b) => a.browserAnnotations === b.browserAnnotations,
   settings: (a, b) => a.settings === b.settings,
   createdAt: (a, b) => a.createdAt === b.createdAt,
   elapsedStartedAt: (a, b) => a.elapsedStartedAt === b.elapsedStartedAt,

@@ -318,7 +318,7 @@ function agentRow(id: string, title: string, active: boolean): AgentRow {
     id,
     title,
     surface: "gui",
-    active,
+    activity: active ? "turn" : false,
     hostId: "host-1",
   };
 }
@@ -354,6 +354,7 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     message: {
       kind: "user",
       content: content(text),
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,

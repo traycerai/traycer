@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useEpicSweepWorktreeCandidatesForClient } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 
 interface StubOwner {
@@ -120,8 +121,10 @@ function wrapperFor(queryClient: QueryClient) {
   );
 }
 
-function renderCandidates(epicIds: ReadonlyArray<string> | null) {
-  const queryClient = new QueryClient();
+function renderCandidatesWithQueryClient(
+  epicIds: ReadonlyArray<string> | null,
+  queryClient: QueryClient,
+) {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -137,6 +140,10 @@ function renderCandidates(epicIds: ReadonlyArray<string> | null) {
     () => useEpicSweepWorktreeCandidatesForClient(client, epicIds),
     { wrapper: wrapperFor(queryClient) },
   );
+}
+
+function renderCandidates(epicIds: ReadonlyArray<string> | null) {
+  return renderCandidatesWithQueryClient(epicIds, new QueryClient());
 }
 
 describe("useEpicSweepWorktreeCandidatesForClient", () => {
@@ -287,7 +294,92 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     expect(requestParams(3)).toEqual(forcedProbeParams(["/wt/recheck"]));
   });
 
-  it("marks shared rows checkable-unchecked and busy/unresolved rows disabled", async () => {
+  it("keeps the last snapshot visible while a fresh proof is in flight", async () => {
+    const before = entry({ worktreePath: "/wt/recheck", resolvedAt: 100 });
+    const after = entry({
+      worktreePath: "/wt/recheck",
+      atBaseCommit: true,
+      resolvedAt: 200,
+    });
+    let pauseForcedProbe = false;
+    let releaseForcedProbe: (() => void) | null = null;
+    worktreeHandler = async (params) => {
+      if (!params.forceRefresh) {
+        return { worktrees: [before], nextCursor: null };
+      }
+      if (pauseForcedProbe) {
+        await new Promise<void>((resolve) => {
+          releaseForcedProbe = resolve;
+        });
+      }
+      return {
+        worktrees: [pauseForcedProbe ? after : before],
+        nextCursor: null,
+      };
+    };
+
+    const { result } = renderCandidates(["epic-1"]);
+    await waitFor(() => {
+      expect(result.current.checkedAt).toBe(100);
+    });
+
+    pauseForcedProbe = true;
+    let refreshPromise: Promise<void> | null = null;
+    act(() => {
+      refreshPromise = result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+    });
+    expect(result.current.rows[0]?.entry.worktreePath).toBe("/wt/recheck");
+    expect(result.current.checkedAt).toBe(100);
+
+    await act(async () => {
+      releaseForcedProbe?.();
+      await refreshPromise;
+    });
+    await waitFor(() => {
+      expect(result.current.checkedAt).toBe(200);
+    });
+  });
+
+  it("paints from warm task provenance on first open while proving in the background", async () => {
+    const warm = entry({
+      worktreePath: "/wt/warm",
+      atBaseCommit: true,
+      resolvedAt: 123,
+    });
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<WorktreeListAllForHostResponseV16>(
+      hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+        "host-1",
+        "worktree.listAllForHost",
+        {
+          includeActivity: true,
+          activityPaths: [warm.worktreePath],
+          cursor: null,
+          limit: null,
+          forceRefresh: false,
+        },
+      ),
+      { worktrees: [warm], nextCursor: null },
+    );
+    worktreeHandler = () => new Promise(() => {});
+
+    const { result, unmount } = renderCandidatesWithQueryClient(
+      ["epic-1"],
+      queryClient,
+    );
+
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+      expect(result.current.rows[0]?.entry.worktreePath).toBe("/wt/warm");
+    });
+    expect(result.current.checkedAt).toBe(123);
+    unmount();
+  });
+
+  it("marks shared rows checkable-unchecked, in-use checkable-unchecked, and unresolved rows disabled", async () => {
     const probed = [
       entry({
         worktreePath: "/wt/shared",
@@ -322,7 +414,7 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     });
     expect(byPath.get("/wt/busy")).toMatchObject({
       defaultChecked: false,
-      disabled: true,
+      disabled: false,
       note: "in-use",
     });
     expect(byPath.get("/wt/probing")).toMatchObject({

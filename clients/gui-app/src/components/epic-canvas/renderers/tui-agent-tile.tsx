@@ -937,6 +937,7 @@ function TerminalAgentPreLaunchToolbar(
           // signal to distinguish - this field is unread for this surface kind
           // (the notice text is fixed regardless), kept equal for consistency.
           hasActiveTurn: props.isOwnerActive,
+          ownerLabel: props.agent.title,
           // Surfaced on the chip as a per-folder "missing on disk" indicator.
           // The host-computed signal on `worktree.getBinding` — the actual
           // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
@@ -1190,7 +1191,8 @@ function TerminalAgentHeaderControls(props: {
   if (self === null || controls.descendants.length === 0) return null;
 
   // Include the root agent in the badge when it is itself active.
-  const runningCount = controls.descendants.length + (self.active ? 1 : 0);
+  const runningCount =
+    controls.descendants.length + (self.activity === false ? 0 : 1);
 
   return (
     <div className="flex shrink-0 items-center gap-1">
