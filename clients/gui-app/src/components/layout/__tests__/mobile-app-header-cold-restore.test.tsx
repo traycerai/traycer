@@ -155,7 +155,7 @@ function renderRestoredAtLanding(): void {
 describe("MobileAppHeader on a cold-restored epic tab", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ tabsById: {} });
-    useMobileHeaderStore.setState({ rightActions: null });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     useTabsStore.setState({ items: [], activeItemId: null });
     __getOpenEpicRegistryForTests().disposeAll();
     updateTitleMutateAsyncSpy.mockClear();
@@ -168,7 +168,7 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     __setEpicStreamClientFactoryForTests(null);
     useEpicCanvasStore.setState({ tabsById: {} });
-    useMobileHeaderStore.setState({ rightActions: null });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     useTabsStore.setState({ items: [], activeItemId: null });
   });
 

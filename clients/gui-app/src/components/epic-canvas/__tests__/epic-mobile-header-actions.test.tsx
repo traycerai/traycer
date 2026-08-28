@@ -15,7 +15,10 @@ import {
   MobileEpicHeaderActionsBinder,
   MobileEpicHeaderTitle,
 } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
-import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import {
+  epicTabRightActionsKey,
+  useMobileHeaderStore,
+} from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 
 interface RenameVariables {
@@ -348,44 +351,48 @@ describe("<MobileEpicHeaderActionsBinder />", () => {
   afterEach(() => {
     cleanup();
     holder.mobile = true;
-    useMobileHeaderStore.setState({
-      rightActions: null,
-      rightActionsOwner: null,
-    });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
   });
 
-  it("fills the header slot on mobile and clears it on unmount", () => {
+  it("registers its tab's entry on mobile and unregisters it on unmount", () => {
     holder.mobile = true;
     const { unmount } = render(<MobileEpicHeaderActionsBinder tabId="tab-1" />);
-    expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+    expect(
+      useMobileHeaderStore
+        .getState()
+        .rightActionEntries.get(epicTabRightActionsKey("tab-1")),
+    ).not.toBeUndefined();
     unmount();
-    expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+    expect(useMobileHeaderStore.getState().rightActionEntries.size).toBe(0);
   });
 
-  it("does not fill the slot on desktop", () => {
+  it("registers nothing on desktop", () => {
     holder.mobile = false;
     render(<MobileEpicHeaderActionsBinder tabId="tab-1" />);
-    expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+    expect(useMobileHeaderStore.getState().rightActionEntries.size).toBe(0);
   });
 
   // Launching a task hands the header from the start page to the epic the
   // launch created, and the two halves of that handoff are not ordered: the
   // start page's terminal panel follows its pane anchor, so it is torn down a
-  // commit after the epic surface has already claimed the slot. The departing
-  // owner must not blank the incoming one's trigger.
-  it("keeps its trigger when a previous owner is torn down afterwards", () => {
+  // commit after this binder has already registered. Teardowns on other keys
+  // cannot touch this tab's entry.
+  it("keeps its entry when another surface unregisters afterwards", () => {
     holder.mobile = true;
     useMobileHeaderStore
       .getState()
-      .setRightActions("landing-terminal:page-1", <button type="button" />);
+      .registerRightActions("landing-terminal", <button type="button" />);
     render(<MobileEpicHeaderActionsBinder tabId="tab-1" />);
-    const claimed = useMobileHeaderStore.getState().rightActions;
-    expect(claimed).not.toBeNull();
-
-    useMobileHeaderStore
+    const key = epicTabRightActionsKey("tab-1");
+    const registered = useMobileHeaderStore
       .getState()
-      .clearRightActions("landing-terminal:page-1");
+      .rightActionEntries.get(key);
+    expect(registered).not.toBeUndefined();
 
-    expect(useMobileHeaderStore.getState().rightActions).toBe(claimed);
+    useMobileHeaderStore.getState().unregisterRightActions("landing-terminal");
+
+    expect(useMobileHeaderStore.getState().rightActionEntries.get(key)).toBe(
+      registered,
+    );
   });
 });
