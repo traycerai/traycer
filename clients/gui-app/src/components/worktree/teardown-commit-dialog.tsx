@@ -65,13 +65,13 @@ export function TeardownCommitDialog(props: {
             </p>
           )}
         </DialogHeader>
-        <div className="px-6 py-2">
+        <div className="min-w-0 w-full overflow-hidden px-6 py-2">
           <TeardownDisclosure
             holders={props.holders}
             failures={props.failures}
           />
         </div>
-        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
+        <DialogFooter className="mx-0 mb-0 mt-2 w-full min-w-0 flex-wrap gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
           <Button
             type="button"
             variant="ghost"
