@@ -161,14 +161,17 @@ function parseSectionRows(
 
 // Every option row's leading term is commander's own `option.flags` string
 // verbatim (e.g. "-a, --all", "--workspace <path>") - confirmed by reading
-// `Option#flags` against real rendered rows, not assumed. Reduced here to
-// just the long flag for comparison against the plain-long-flag inventory;
-// the auto-added `-h, --help` is excluded uniformly rather than tracked per
-// command.
-function parseOptionRowLongFlags(help: string): string[] {
-  return parseSectionRows(help, "Options", ["Commands"])
-    .map((term) => term.match(/--[a-zA-Z0-9-]+/)?.[0])
-    .filter((flag): flag is string => flag !== undefined && flag !== "--help");
+// `Option#flags` against real rendered rows, not assumed. Returned AS THE
+// FULL TERM, not reduced to the bare long flag: reducing to `--all` would
+// let the public `-a` alias on `agent list` be deleted with nothing to
+// disagree - `parseOptionRowFlagTerms(...)` would still report `--all`
+// present, and a caller of `traycer agent list -a` breaks with no test
+// failure. The auto-added `-h, --help` is excluded uniformly rather than
+// tracked per command.
+function parseOptionRowFlagTerms(help: string): string[] {
+  return parseSectionRows(help, "Options", ["Commands"]).filter(
+    (term) => term !== "-h, --help",
+  );
 }
 
 // The "Arguments:" section lists the bare argument name (no `<>`/`[]`/
@@ -180,6 +183,27 @@ function parseOptionRowLongFlags(help: string): string[] {
 // inventory's argument check.
 function parseArgumentRowNames(help: string): string[] {
   return parseSectionRows(help, "Arguments", ["Options", "Commands"]);
+}
+
+interface ExpectedArgument {
+  readonly name: string;
+  readonly required: boolean;
+  readonly variadic: boolean;
+}
+
+// Commander renders the SAME bare row name for `[artifactPaths]`,
+// `[artifactPaths...]`, and `<artifactPaths...>` in the "Arguments:"
+// section - the name alone can't tell them apart, so a name-only inventory
+// entry cannot catch `comments list` silently losing its variadic (only one
+// path accepted) or becoming required (breaking a no-args invocation). Both
+// `.required` and `.variadic` are public fields on commander's `Argument`
+// (confirmed by reading `argument.js`, not assumed).
+function actualArgumentSignature(cmd: Command): readonly ExpectedArgument[] {
+  return cmd.registeredArguments.map((argument) => ({
+    name: argument.name(),
+    required: argument.required,
+    variadic: argument.variadic,
+  }));
 }
 
 const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
@@ -200,25 +224,28 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
 interface ExpectedSurfaceEntry {
   readonly path: string;
   readonly options: readonly string[];
-  readonly args: readonly string[];
+  readonly args: readonly ExpectedArgument[];
 }
 
 // The full public command surface under `buildProgramWithAgentRoles(true)` -
 // every visible command path (`""` is the root itself; parents are listed
 // too, so deleting a whole subtree is caught, not just a leaf), each
-// command's own visible long flags (auto-added `-h, --help` excluded
-// uniformly), and each command's registered positional argument names.
+// command's own visible options as their FULL rendered flags term (short
+// alias included, e.g. `"-a, --all"`, not reduced to the long flag - see
+// `parseOptionRowFlagTerms`), and each command's registered arguments as
+// their full name/required/variadic signature (see `ExpectedArgument`
+// above) rather than just a name.
 //
 // THIS LITERAL IS MEANT TO BE EDITED whenever the public surface
-// legitimately changes - a new command, a renamed/added/removed flag, a new
-// positional argument. That edit is the enforcement mechanism, not a
-// maintenance cost to route around: unlike everything else in this file,
-// nothing here is derived from `cmd`, so it is the one check that can prove
-// something disappeared.
+// legitimately changes - a new command, a renamed/added/removed flag or
+// alias, a new positional argument, a changed arity. That edit is the
+// enforcement mechanism, not a maintenance cost to route around: unlike
+// everything else in this file, nothing here is derived from `cmd`, so it
+// is the one check that can prove something disappeared.
 const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "",
-    options: ["--json", "--no-progress", "--quiet", "--version"],
+    options: ["--json", "--no-progress", "--quiet", "-V, --version"],
     args: [],
   },
   { path: "login", options: ["--json", "--no-progress", "--quiet"], args: [] },
@@ -232,10 +259,14 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   { path: "host", options: [], args: [] },
   {
     path: "host start",
-    options: ["--cwd", "--json", "--no-progress", "--quiet"],
+    options: ["--cwd <path>", "--json", "--no-progress", "--quiet"],
     args: [],
   },
-  { path: "host capabilities", options: ["--has", "--json"], args: [] },
+  {
+    path: "host capabilities",
+    options: ["--has <capability>", "--json"],
+    args: [],
+  },
   {
     path: "host status",
     options: ["--json", "--no-progress", "--quiet"],
@@ -284,13 +315,13 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       "--allow-self-invocation",
       "--force",
-      "--from",
+      "--from <path>",
       "--json",
       "--no-linger",
       "--no-progress",
       "--no-service-register",
       "--quiet",
-      "--release",
+      "--release <version>",
     ],
     args: [],
   },
@@ -299,13 +330,13 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       "--allow-self-invocation",
       "--force",
-      "--from",
+      "--from <path>",
       "--json",
       "--no-linger",
       "--no-progress",
       "--no-service-register",
       "--quiet",
-      "--release",
+      "--release <version>",
     ],
     args: [],
   },
@@ -322,7 +353,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "host download",
     options: ["--json", "--no-progress", "--quiet"],
-    args: ["version"],
+    args: [{ name: "version", required: false, variadic: false }],
   },
   {
     path: "host uninstall",
@@ -342,25 +373,43 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "host logs",
-    options: ["--follow", "--json", "--no-progress", "--quiet", "--tail"],
+    options: [
+      "--follow",
+      "--json",
+      "--no-progress",
+      "--quiet",
+      "--tail <lines>",
+    ],
     args: [],
   },
   {
     path: "host free-port-and-restart",
-    options: ["--json", "--no-progress", "--pid", "--port", "--quiet"],
+    options: [
+      "--json",
+      "--no-progress",
+      "--pid <pid>",
+      "--port <port>",
+      "--quiet",
+    ],
     args: [],
   },
   { path: "cli", options: [], args: [] },
   {
     path: "cli upgrade",
-    options: ["--dry-run", "--json", "--no-progress", "--quiet", "--target"],
+    options: [
+      "--dry-run",
+      "--json",
+      "--no-progress",
+      "--quiet",
+      "--target <version>",
+    ],
     args: [],
   },
   {
     path: "cli re-anchor",
     options: [
-      "--binary-path",
-      "--installed-version",
+      "--binary-path <path>",
+      "--installed-version <version>",
       "--json",
       "--no-progress",
       "--quiet",
@@ -381,22 +430,28 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "config shell set",
-    options: ["--clear-args", "--json", "--no-progress", "--path", "--quiet"],
-    args: ["shellArgs"],
+    options: [
+      "--clear-args",
+      "--json",
+      "--no-progress",
+      "--path <path>",
+      "--quiet",
+    ],
+    args: [{ name: "shellArgs", required: false, variadic: true }],
   },
   {
     path: "config shell add",
-    options: ["--json", "--no-progress", "--path", "--quiet"],
+    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
     args: [],
   },
   {
     path: "config shell remove",
-    options: ["--json", "--no-progress", "--path", "--quiet"],
+    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
     args: [],
   },
   {
     path: "config shell revert-args",
-    options: ["--json", "--no-progress", "--path", "--quiet"],
+    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
     args: [],
   },
   {
@@ -412,34 +467,46 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "config env get",
-    options: ["--json", "--key", "--no-progress", "--quiet"],
+    options: ["--json", "--key <key>", "--no-progress", "--quiet"],
     args: [],
   },
   {
     path: "config env set",
-    options: ["--json", "--key", "--no-progress", "--quiet", "--value"],
+    options: [
+      "--json",
+      "--key <key>",
+      "--no-progress",
+      "--quiet",
+      "--value <value>",
+    ],
     args: [],
   },
   {
     path: "config env unset",
-    options: ["--json", "--key", "--no-progress", "--quiet"],
+    options: ["--json", "--key <key>", "--no-progress", "--quiet"],
     args: [],
   },
   {
     path: "config env delete",
-    options: ["--json", "--key", "--no-progress", "--quiet"],
+    options: ["--json", "--key <key>", "--no-progress", "--quiet"],
     args: [],
   },
   { path: "comments", options: [], args: [] },
   {
     path: "comments list",
-    options: ["--json", "--no-progress", "--quiet", "--status"],
-    args: ["artifactPaths"],
+    options: ["--json", "--no-progress", "--quiet", "--status <status>"],
+    args: [{ name: "artifactPaths", required: false, variadic: true }],
   },
   {
     path: "comments set-status",
-    options: ["--artifact", "--json", "--no-progress", "--quiet", "--status"],
-    args: ["threadIds"],
+    options: [
+      "--artifact <path>",
+      "--json",
+      "--no-progress",
+      "--quiet",
+      "--status <status>",
+    ],
+    args: [{ name: "threadIds", required: true, variadic: true }],
   },
   { path: "terminal", options: [], args: [] },
   {
@@ -450,7 +517,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "terminal output",
     options: ["--json", "--no-progress", "--quiet"],
-    args: ["terminal-id"],
+    args: [{ name: "terminal-id", required: true, variadic: false }],
   },
   { path: "workspace", options: [], args: [] },
   {
@@ -462,10 +529,10 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "worktree list",
     options: [
-      "--cursor",
+      "--cursor <worktreePath>",
       "--include-activity",
       "--json",
-      "--limit",
+      "--limit <n>",
       "--no-progress",
       "--quiet",
     ],
@@ -473,62 +540,62 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "worktree delete",
-    options: ["--json", "--no-progress", "--path", "--quiet"],
+    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
     args: [],
   },
   {
     path: "worktree create",
     options: [
-      "--branch",
+      "--branch <branch>",
       "--carry-uncommitted",
-      "--existing",
+      "--existing <branch>",
       "--json",
       "--no-progress",
       "--quiet",
-      "--source-branch",
-      "--workspace",
+      "--source-branch <branch>",
+      "--workspace <path>",
     ],
     args: [],
   },
   { path: "agent", options: [], args: [] },
   {
     path: "agent list",
-    options: ["--all", "--json", "--no-progress", "--quiet"],
+    options: ["--json", "--no-progress", "--quiet", "-a, --all"],
     args: [],
   },
   {
     path: "agent create",
     options: [
-      "--cwd",
+      "--cwd <path>",
       "--fast",
-      "--harness",
+      "--harness <id>",
       "--json",
-      "--model",
-      "--name",
+      "--model <id>",
+      "--name <name>",
       "--no-progress",
-      "--permission-mode",
-      "--profile",
+      "--permission-mode <mode>",
+      "--profile <ambient|id>",
       "--quiet",
-      "--reasoning-effort",
-      "--surface",
-      "--workspace-entry",
-      "--workspace-path",
+      "--reasoning-effort <effort>",
+      "--surface <surface>",
+      "--workspace-entry <workspace=path>",
+      "--workspace-path <path>",
     ],
     args: [],
   },
   {
     path: "agent fork",
     options: [
-      "--agent-id",
-      "--cwd",
+      "--agent-id <id>",
+      "--cwd <path>",
       "--json",
-      "--name",
+      "--name <name>",
       "--no-progress",
-      "--permission-mode",
-      "--profile",
+      "--permission-mode <mode>",
+      "--profile <ambient|id>",
       "--quiet",
-      "--workspace-entry",
-      "--workspace-path",
+      "--workspace-entry <workspace=path>",
+      "--workspace-path <path>",
     ],
     args: [],
   },
@@ -545,43 +612,49 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "agent list-harness-models",
     options: ["--json", "--no-progress", "--quiet"],
-    args: ["harness"],
+    args: [{ name: "harness", required: true, variadic: false }],
   },
   {
     path: "agent list-profiles",
     options: ["--json", "--no-progress", "--quiet"],
-    args: ["harness"],
+    args: [{ name: "harness", required: true, variadic: false }],
   },
   {
     path: "agent profile-rate-limits",
-    options: ["--json", "--no-progress", "--profile", "--quiet"],
-    args: ["harness"],
+    options: ["--json", "--no-progress", "--profile <ambient|id>", "--quiet"],
+    args: [{ name: "harness", required: true, variadic: false }],
   },
   {
     path: "agent configure",
     options: [
-      "--agent-id",
+      "--agent-id <id>",
       "--fast",
-      "--harness",
+      "--harness <id>",
       "--json",
-      "--model",
+      "--model <id>",
       "--no-progress",
-      "--permission-mode",
-      "--profile",
+      "--permission-mode <mode>",
+      "--profile <ambient|id>",
       "--quiet",
-      "--reasoning-effort",
+      "--reasoning-effort <effort>",
     ],
     args: [],
   },
   {
     path: "agent stop",
-    options: ["--agent-id", "--cascade", "--json", "--no-progress", "--quiet"],
+    options: [
+      "--agent-id <id>",
+      "--cascade",
+      "--json",
+      "--no-progress",
+      "--quiet",
+    ],
     args: [],
   },
   {
     path: "agent archive",
     options: [
-      "--agent-id",
+      "--agent-id <id>",
       "--json",
       "--no-progress",
       "--quiet",
@@ -594,29 +667,29 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       "--expect-reply",
       "--json",
-      "--message",
+      "--message <text>",
       "--no-progress",
       "--quiet",
-      "--response-id",
-      "--to",
+      "--response-id <id>",
+      "--to <agentId>",
     ],
     args: [],
   },
   {
     path: "agent transcript",
-    options: ["--agent-id", "--json", "--no-progress", "--quiet"],
+    options: ["--agent-id <id>", "--json", "--no-progress", "--quiet"],
     args: [],
   },
   { path: "agent role", options: [], args: [] },
   {
     path: "agent role claim",
     options: [
-      "--agent-id",
+      "--agent-id <id>",
       "--json",
       "--no-progress",
       "--quiet",
-      "--role",
-      "--scope",
+      "--role <name>",
+      "--scope <scope>",
     ],
     args: [],
   },
@@ -627,17 +700,29 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "agent role relinquish",
-    options: ["--agent-id", "--claim-id", "--json", "--no-progress", "--quiet"],
+    options: [
+      "--agent-id <id>",
+      "--claim-id <id>",
+      "--json",
+      "--no-progress",
+      "--quiet",
+    ],
     args: [],
   },
   {
     path: "agent inbox",
-    options: ["--after", "--agent-id", "--json", "--no-progress", "--quiet"],
+    options: [
+      "--after <createdAt:eventId>",
+      "--agent-id <id>",
+      "--json",
+      "--no-progress",
+      "--quiet",
+    ],
     args: [],
   },
   {
     path: "monitor",
-    options: ["--agent-id", "--json", "--no-progress", "--quiet"],
+    options: ["--agent-id <id>", "--json", "--no-progress", "--quiet"],
     args: [],
   },
 ];
@@ -689,7 +774,10 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       const label = pathLabel(splitPath(entry.path));
       const help = cmd.helpInformation();
 
-      const actualOptions = new Set(parseOptionRowLongFlags(help));
+      // Full flags TERM (short alias included, e.g. "-a, --all"), not
+      // reduced to the long flag - a deleted `-a` alias with `--all` still
+      // registered must show up as a mismatch here.
+      const actualOptions = new Set(parseOptionRowFlagTerms(help));
       const expectedOptions = new Set(entry.options);
       const missingOptions = [...expectedOptions].filter(
         (f) => !actualOptions.has(f),
@@ -706,19 +794,29 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         `${label}: undocumented new rendered option(s) - add to EXPECTED_PUBLIC_SURFACE if intentional: ${unexpectedOptions.join(", ")}`,
       ).toEqual([]);
 
-      const actualArgs = new Set(parseArgumentRowNames(help));
-      const expectedArgs = new Set(entry.args);
+      // Full argument SIGNATURE (name + required + variadic), not just the
+      // name - commander renders the identical bare row name for
+      // `[artifactPaths]`, `[artifactPaths...]`, and `<artifactPaths...>`,
+      // so a name-only comparison can't catch an arity change (e.g.
+      // `comments list` silently losing its "many paths" variadic, or
+      // becoming required). Compared via a canonical string key so a
+      // mismatch reports which exact signature is missing/unexpected
+      // rather than just a name.
+      const argumentKey = (arg: ExpectedArgument): string =>
+        `${arg.name} (required=${arg.required}, variadic=${arg.variadic})`;
+      const actualArgs = new Set(actualArgumentSignature(cmd).map(argumentKey));
+      const expectedArgs = new Set(entry.args.map(argumentKey));
       const missingArgs = [...expectedArgs].filter((a) => !actualArgs.has(a));
       const unexpectedArgs = [...actualArgs].filter(
         (a) => !expectedArgs.has(a),
       );
       expect(
         missingArgs,
-        `${label}: argument row(s) removed from rendered help: ${missingArgs.join(", ")}`,
+        `${label}: argument signature(s) removed or changed from rendered help: ${missingArgs.join(", ")}`,
       ).toEqual([]);
       expect(
         unexpectedArgs,
-        `${label}: undocumented new rendered argument(s) - add to EXPECTED_PUBLIC_SURFACE if intentional: ${unexpectedArgs.join(", ")}`,
+        `${label}: undocumented new/changed rendered argument signature(s) - add to EXPECTED_PUBLIC_SURFACE if intentional: ${unexpectedArgs.join(", ")}`,
       ).toEqual([]);
     }
   });

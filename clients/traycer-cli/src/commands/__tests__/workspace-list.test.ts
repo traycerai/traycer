@@ -171,10 +171,16 @@ describe("formatWorkspaceListTable", () => {
     expect(cells[2]).toBe("-"); // BRANCH
   });
 
+  // The default fixture is `mode: "local"`, so a legacy `setup_*`
+  // `disabledReason` never trips the blocking check below (that only
+  // applies to `mode === "worktree" && !isGitRepo`) and falls through to
+  // the setup-lifecycle branch, matching the GUI's
+  // `worktreeFolderRowBadge` labels exactly - "setup_running" now reads
+  // "setting up", not "setup running".
   it.each([
     [null, "ready"],
     ["setup_pending", "setup pending"],
-    ["setup_running", "setup running"],
+    ["setup_running", "setting up"],
     ["setup_failed", "setup failed"],
     ["setup_cancelled", "setup cancelled"],
     ["missing_worktree_path", "missing on disk"],
@@ -186,6 +192,67 @@ describe("formatWorkspaceListTable", () => {
       expect(line).toContain(label);
     },
   );
+
+  // Regression coverage for the "creation is the selector gate" fix: once a
+  // worktree exists, setup progress/outcomes live in `setupState` with
+  // `disabledReason: null`, so `formatState` must read `setupState` too -
+  // keying on `disabledReason` alone reported a worktree whose setup script
+  // FAILED as plain "ready".
+  it.each([
+    ["failed", "setup failed"],
+    ["running", "setting up"],
+    ["pending", "setup pending"],
+    ["cancelled", "setup cancelled"],
+    ["succeeded", "ready"],
+    ["not_required", "ready"],
+  ] as const)(
+    "REGRESSION: setupState %j with disabledReason: null renders %j (not masked by a null reason)",
+    (setupState, label) => {
+      const table = formatWorkspaceListTable([
+        row({ setupState, disabledReason: null }),
+      ]);
+      const line = table.split("\n")[1];
+      const cells = line.split(/\s{2,}/);
+      expect(cells[4]).toBe(label); // STATE
+    },
+  );
+
+  it("a legacy host's setup_failed reason on a mode: 'local' row is not blocking - it reports 'setup failed'", () => {
+    const table = formatWorkspaceListTable([
+      row({ mode: "local", disabledReason: "setup_failed" }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[4]).toBe("setup failed"); // STATE
+  });
+
+  it("a legacy host's setup_failed reason on a mode: 'worktree' row with isGitRepo: false IS blocking - it reports 'missing on disk'", () => {
+    const table = formatWorkspaceListTable([
+      row({
+        mode: "worktree",
+        isGitRepo: false,
+        disabledReason: "setup_failed",
+        isGitResolvePending: false,
+      }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[4]).toBe("missing on disk"); // STATE
+  });
+
+  it("a legacy host's setup_failed reason on a mode: 'worktree' row with isGitRepo: false reports 'checking' while resolve is pending", () => {
+    const table = formatWorkspaceListTable([
+      row({
+        mode: "worktree",
+        isGitRepo: false,
+        disabledReason: "setup_failed",
+        isGitResolvePending: true,
+      }),
+    ]);
+    const line = table.split("\n")[1];
+    const cells = line.split(/\s{2,}/);
+    expect(cells[4]).toBe("checking"); // STATE
+  });
 
   it("REGRESSION: a pending row's missing_worktree_path reason is not reported as 'missing on disk' - it renders 'checking' with GIT '?'", () => {
     const table = formatWorkspaceListTable([
@@ -259,7 +326,13 @@ describe("formatWorkspaceListTable", () => {
         mode: "worktree",
         branch: "feature-x",
         isGitRepo: false,
-        disabledReason: "setup_failed",
+        // A worktree row (isGitRepo: false) with a legacy `setup_failed`
+        // REASON is now blocking ("missing on disk") under the production
+        // fix - use the canonical `setupState` spelling instead, which
+        // `hasBlockingReason` never inspects, so this row stays a plain
+        // "setup failed" STATE for the column-alignment check below.
+        disabledReason: null,
+        setupState: "failed",
         sources: [],
         runningDir: "/a/much/longer/directory/path",
       }),
