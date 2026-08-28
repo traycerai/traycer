@@ -6,6 +6,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { pathContainsDirectory as pathIsUnderRoot } from "@/lib/path/cross-platform-path";
+import { displayTitle } from "@/lib/display-title";
 
 /**
  * Phase-1 (client-local) owner-scoped teardown snapshot.
@@ -177,7 +178,7 @@ export function snapshotOwnerTeardown(
         ownerRef: input.ownerRef,
         holdKind: "terminal-agent-pty",
         activity: "working",
-        label: `${input.ownerLabel} will restart in the new folder`,
+        label: `${teardownOwnerDisplayName(input.ownerLabel)} will restart in the new folder`,
       }),
     );
   }
@@ -231,11 +232,29 @@ function chatTurnWillCallAgentStop(input: OwnerTeardownSnapshotInput): boolean {
   return input.hasActiveTurn && input.ownerRef.ownerKind === "chat";
 }
 
+/**
+ * Evidence-naming fallback for a holder row. Untitled chats/agents use the
+ * short "This agent" so the tab-strip's empty-title state doesn't overflow
+ * the disclosure as "Untitled agent is working…".
+ */
+export function teardownOwnerDisplayName(ownerLabel: string): string {
+  const trimmed = ownerLabel.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed === displayTitle("", "agent") ||
+    trimmed === displayTitle("", "chat") ||
+    trimmed === displayTitle("", "terminal-agent")
+  ) {
+    return "This agent";
+  }
+  return trimmed;
+}
+
 function chatTurnHolderLabel(
   input: OwnerTeardownSnapshotInput,
   agentStopClearsOwner: boolean,
 ): string {
-  const base = `${input.ownerLabel} is working`;
+  const base = `${teardownOwnerDisplayName(input.ownerLabel)} is working`;
   if (!agentStopClearsOwner) return base;
   const named: string[] = [];
   if (input.queuedMessageCount === 1) named.push("1 queued message");
