@@ -318,7 +318,7 @@ function agentRow(id: string, title: string, active: boolean): AgentRow {
     id,
     title,
     surface: "gui",
-    active,
+    activity: active ? "turn" : false,
     hostId: "host-1",
   };
 }

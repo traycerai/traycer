@@ -266,7 +266,7 @@ export async function resolveHostStartTarget(
   if (record === null) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-      message: `no host installed on environment '${opts.environment}'. Run 'traycer host install latest' to install one.`,
+      message: `no host installed on environment '${opts.environment}'. Run 'traycer host install' to install one.`,
       details: { environment: opts.environment },
       exitCode: 69,
     });
@@ -282,7 +282,7 @@ export async function resolveHostStartTarget(
   if (!(await deps.pathExists(record.executablePath))) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-      message: `host executable missing on environment '${opts.environment}' at ${record.executablePath}. Re-run 'traycer host install latest'.`,
+      message: `host executable missing on environment '${opts.environment}' at ${record.executablePath}. Re-run 'traycer host install'.`,
       details: {
         environment: opts.environment,
         executablePath: record.executablePath,
