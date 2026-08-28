@@ -12,6 +12,7 @@ import {
   TraycerApp,
   hostRpcRegistry,
   setMobileApp,
+  setMobileAppPlatform,
 } from "@traycer-clients/gui-app";
 import type {
   RemoteHostFetcher,
@@ -159,6 +160,16 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
+  // The shell's platform, for copy that must name the right update channel
+  // (TestFlight / the App Store vs Google Play). Gated on the same native
+  // check as the flag above: the dev browser tab reports platform "web" and
+  // stays `null`, which gui-app answers with store-neutral copy.
+  const nativePlatform = Capacitor.getPlatform();
+  setMobileAppPlatform(
+    nativePlatform === "ios" || nativePlatform === "android"
+      ? nativePlatform
+      : null,
+  );
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite
   // `aps-environment` to "production" at export), so only `dev` - the one
