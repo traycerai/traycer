@@ -176,6 +176,51 @@ describe("MobileFileSave", () => {
     expect(stagingDirectory(1)).not.toBe(stagingDirectory(0));
   });
 
+  it("bounds a staged name by encoded bytes, not characters, keeping its extension", async () => {
+    // Callers bound their suggestions by CODE POINT - artifact export allows
+    // 120 - which says nothing about bytes. 120 CJK characters is 360 bytes,
+    // past the component limit, and the write would reject before the sheet
+    // was ever reached.
+    const title = "経過報告".repeat(30);
+    expect(title.length).toBe(120);
+
+    const saved = await new MobileFileSave().saveFile(
+      request(`${title}.md`, new Uint8Array([1])),
+    );
+
+    const staged = stagedBaseName(0);
+    expect(new TextEncoder().encode(staged).length).toBeLessThanOrEqual(255);
+    // The extension survives: it is what the receiving app dispatches on.
+    expect(staged.endsWith(".md")).toBe(true);
+    // A prefix of the real title, cut on a character boundary - no severed
+    // multi-byte character, and nothing invented to pad it out.
+    expect(title.startsWith(staged.slice(0, -".md".length))).toBe(true);
+    expect(staged).not.toContain("�");
+    expect(saved).toEqual({ name: staged, path: null });
+  });
+
+  it("bounds a name whose characters are wider still", async () => {
+    // Four bytes each: the same 120-code-point allowance is 480 bytes here.
+    const title = "🌊".repeat(120);
+
+    await new MobileFileSave().saveFile(
+      request(`${title}.png`, new Uint8Array([1])),
+    );
+
+    const staged = stagedBaseName(0);
+    expect(new TextEncoder().encode(staged).length).toBeLessThanOrEqual(255);
+    expect(staged.endsWith(".png")).toBe(true);
+    expect(staged).not.toContain("�");
+  });
+
+  it("leaves a name that already fits exactly as it was suggested", async () => {
+    await new MobileFileSave().saveFile(
+      request("mermaid-diagram.png", new Uint8Array([1])),
+    );
+
+    expect(stagedBaseName(0)).toBe("mermaid-diagram.png");
+  });
+
   it("never offers a re-open route, having learned no path to re-open", () => {
     expect(new MobileFileSave().openSavedFile).toBeNull();
   });

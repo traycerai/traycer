@@ -56,6 +56,66 @@ function toBase64(bytes: ArrayBuffer): string {
 }
 
 /**
+ * What a single path component may occupy. The filesystems under both native
+ * shells bound a component in BYTES, not characters, and reject the write
+ * outright past it - so this is the phone's limit to enforce, at the point
+ * where a name becomes a path.
+ */
+const MAX_FILE_NAME_BYTES = 255;
+
+const utf8 = new TextEncoder();
+
+function utf8Length(value: string): number {
+  return utf8.encode(value).length;
+}
+
+/**
+ * The longest prefix of `value` that encodes within `budget` bytes, cut on a
+ * character boundary - iterating the string yields whole code points, so a
+ * multi-byte character is dropped entirely rather than severed into mojibake.
+ */
+function truncateToBytes(value: string, budget: number): string {
+  let used = 0;
+  let kept = "";
+  for (const character of value) {
+    const size = utf8Length(character);
+    if (used + size > budget) break;
+    used += size;
+    kept += character;
+  }
+  return kept;
+}
+
+/**
+ * A name bounded by ENCODED length, keeping its extension.
+ *
+ * Callers bound their suggestions by code point (artifact export allows 120),
+ * which says nothing about bytes: 120 CJK characters is 360 bytes and 120
+ * emoji is 480, so a legitimate title can exceed the component limit and make
+ * the write reject before the share sheet is ever reached. The extension is
+ * preserved across the cut because it is what the receiving app dispatches on
+ * - a truncated stem is a cosmetic loss, a lost extension is a file the OS no
+ * longer knows how to open.
+ */
+function boundFileNameBytes(name: string): string {
+  if (utf8Length(name) <= MAX_FILE_NAME_BYTES) return name;
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 ? name.slice(dot) : "";
+  const extensionBytes = utf8Length(extension);
+  // An extension that cannot itself fit is not one worth preserving.
+  if (extensionBytes >= MAX_FILE_NAME_BYTES) {
+    return truncateToBytes(name, MAX_FILE_NAME_BYTES);
+  }
+  const stem = truncateToBytes(
+    dot > 0 ? name.slice(0, dot) : name,
+    MAX_FILE_NAME_BYTES - extensionBytes,
+  );
+  return stem.length === 0
+    ? truncateToBytes(name, MAX_FILE_NAME_BYTES)
+    : `${stem}${extension}`;
+}
+
+/**
  * The suggested name reduced to a single path segment. Callers compose names
  * from user content (an image's alt text, an epic's title), so a separator in
  * one would otherwise choose a directory - and an empty result would write to
@@ -64,7 +124,7 @@ function toBase64(bytes: ArrayBuffer): string {
 function toFileName(suggested: string): string {
   const leaf = suggested.split(/[\\/]/).at(-1) ?? "";
   const trimmed = leaf.replace(/^\.+/, "").trim();
-  return trimmed.length === 0 ? "traycer-export" : trimmed;
+  return trimmed.length === 0 ? "traycer-export" : boundFileNameBytes(trimmed);
 }
 
 /**
