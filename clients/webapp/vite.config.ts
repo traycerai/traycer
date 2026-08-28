@@ -41,6 +41,12 @@ const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
  * with no privileged process to escape through - so a tab served from any
  * other origin is refused at the device-authorize call, not at some later
  * edge case.
+ *
+ * The two lanes name their dashboard differently, and the asymmetry is the
+ * point rather than a typo: production's dashboard is the APEX, with
+ * `platform.` there being a redirect onto it, so a browser that follows it
+ * ends up on the apex and that is the origin authn admits. Staging has no
+ * such redirect and is reached at its own host.
  */
 const SHIPPED_ENVIRONMENTS = {
   staging: {
@@ -50,7 +56,7 @@ const SHIPPED_ENVIRONMENTS = {
   },
   production: {
     authnBaseUrl: "https://authn.traycer.ai",
-    cloudUiBaseUrl: "https://platform.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
     relayBaseUrl: RELAY_BASE_URL,
   },
 } as const;
