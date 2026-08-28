@@ -108,13 +108,6 @@ export const worktreeBindingEntrySchema = z.object({
   setupExitCode: z.number().int().nullable(),
   setupFailedAt: z.number().nullable(),
   createdAt: z.number(),
-  // Stable idempotency identity for the generated root-worktree allocation.
-  // Repo-local setup scripts use it to allocate collision-safe companion
-  // branches (for example in submodules) without adopting an unrelated
-  // same-named ref. Null for non-generated/imported/local entries. Optional on
-  // the wire for the same released-host compatibility reason as
-  // `ownedSubmodules` below.
-  branchRetryIdentity: z.string().min(1).max(128).nullable().optional(),
   // Submodule branches this worktree owns (see `worktreeOwnedSubmoduleSchema`).
   // `[]` when the repo has no submodules, or none were checked out on a branch.
   // Optional on the wire: this entry shape is embedded, unversioned, in many
