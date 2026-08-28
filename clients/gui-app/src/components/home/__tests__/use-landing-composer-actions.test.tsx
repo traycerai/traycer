@@ -10,6 +10,7 @@ import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabItemId, type SplitStripItem } from "@/stores/tabs/layout";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -39,10 +40,16 @@ import {
   wasEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 
+interface CapturedNavigation {
+  readonly search?: (
+    previous: Readonly<Record<string, unknown>>,
+  ) => Readonly<Record<string, unknown>>;
+}
+
 const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   createTerminalAgent: vi.fn<(input: unknown) => Promise<void>>(),
-  navigate: vi.fn(),
+  navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
   getActiveHost: vi.fn(() => ({
@@ -268,6 +275,7 @@ describe("useLandingComposerActions", () => {
   });
 
   afterEach(() => {
+    setSystemTabModalApi(null);
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
@@ -1581,6 +1589,76 @@ describe("useLandingComposerActions", () => {
       });
     });
     expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
+  it("keeps Settings open when a submitted draft finishes creating", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-settings-race", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+
+    // Settings opens while epic.create is still in flight. It is URL-backed,
+    // so the success navigation must carry its search flag onto the new Epic
+    // route instead of dismissing the modal.
+    setSystemTabModalApi({
+      active: { kind: "settings", section: "general" },
+      openSettings: () => undefined,
+      openHistory: () => undefined,
+      close: () => undefined,
+      setSection: () => undefined,
+      promoteToTab: () => undefined,
+      isOverlayActive: (kind) => kind === "settings",
+    });
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    });
+    const search = landingMocks.navigate.mock.calls[0]?.[0].search;
+    if (search === undefined) {
+      throw new Error("expected created-task navigation to preserve search");
+    }
+    expect(search({ settingsOverlay: true })).toEqual({
+      settingsOverlay: true,
+    });
+    expect(useTabsStore.getState().items[0]).toMatchObject({
+      kind: "tab",
+      ref: { kind: "epic" },
+    });
     queryClient.clear();
   });
 

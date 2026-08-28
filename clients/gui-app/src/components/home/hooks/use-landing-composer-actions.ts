@@ -106,6 +106,7 @@ import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { toast } from "sonner";
 import {
   buildDefaultBranchByPath,
@@ -529,10 +530,18 @@ export function useLandingComposerActions(
               editor,
               placement: attempt.placement,
               activate: () => {
+                // The create continuation can settle after the user opens
+                // Settings / History. Keep the normal underlying transition
+                // from draft to Epic, but carry that foreground overlay onto
+                // the Epic route so async completion cannot dismiss it.
+                const preserveSystemOverlay =
+                  (getSystemTabModalApi()?.active ?? null) !== null;
                 activateTabIntent(
                   navigate,
                   existingEpicTabIntent({ epicId, tabId, focus: undefined }),
-                  undefined,
+                  preserveSystemOverlay
+                    ? { search: (previous) => previous }
+                    : undefined,
                 );
               },
             });
