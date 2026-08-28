@@ -382,7 +382,7 @@ describe("PrDetailBody", () => {
     tileNavigationMock.openTileInTab.mockClear();
   });
 
-  it("refreshes the visible PR list alongside detail so the left row cannot keep an older status", async () => {
+  it("sends only one detail refresh frame while a PR list is visible", async () => {
     renderBodyWithVisibleList({
       epicId: "epic-1",
       githubHost: "github.com",
@@ -418,10 +418,8 @@ describe("PrDetailBody", () => {
       expect(detailSession.sentClientFrames).toEqual([
         { kind: "refresh", hasBinaryPayload: false },
       ]);
-      expect(listSession.sentClientFrames).toEqual([
-        { kind: "refresh", hasBinaryPayload: false },
-      ]);
     });
+    expect(listSession.sentClientFrames).toEqual([]);
     expect(mockWsStreamClient.subscribeCallCount).toBe(2);
   });
 

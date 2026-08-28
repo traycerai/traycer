@@ -17,7 +17,6 @@ import {
   usePrDetailSubscription,
   type PrDetailSubscriptionData,
 } from "@/hooks/pr/use-pr-detail-subscription";
-import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { usePrQuoteTargets } from "@/hooks/pr/use-pr-quote-targets";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import {
@@ -114,22 +113,10 @@ export function PrDetailBody(props: {
     enabled: props.isActive,
   });
 
-  // A detail sweep and a list sweep intentionally have independent freshness
-  // clocks on the host. Join the already-live foreground list session as a
-  // disabled reader so a detail refresh can refresh both visible projections
-  // without opening a second list stream when the sidebar is absent.
-  const listSubscription = usePrListSubscription({
-    hostId: detailTabHostId,
-    epicId: props.epicId,
-    mode: "foreground",
-    enabled: false,
-  });
-
   const onRefresh = useCallback((): Promise<void> => {
     subscription.sendRefresh();
-    listSubscription.sendRefresh();
     return Promise.resolve();
-  }, [subscription, listSubscription]);
+  }, [subscription]);
 
   const refresh = useRefreshSpinner({
     onRefresh,
