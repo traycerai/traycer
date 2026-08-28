@@ -178,7 +178,14 @@ export class WebRunnerHost implements IRunnerHost {
   readonly pushPermission: IPushPermissionHost | null = null;
   readonly deviceFlow: IDeviceFlowHost;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
-  private readonly browserReturn = new WebBrowserReturnSignal();
+  /**
+   * Two emitters over the same DOM edge, deliberately not one shared instance -
+   * see {@link WebVisibilityEdgeSignal} and the two subscription methods below.
+   */
+  private readonly browserReturn = new WebVisibilityEdgeSignal(
+    "browser-return",
+  );
+  private readonly systemResume = new WebVisibilityEdgeSignal("system-resume");
   /**
    * The in-window selection authority (the "shell with no main process"
    * binding the contract names): the SAME engine desktop mounts in Electron
@@ -517,6 +524,10 @@ export class WebRunnerHost implements IRunnerHost {
     // The token always arrives through the device-flow poll, so sign-in still
     // completes if this never fires - all it buys is collapsing one poll
     // interval.
+    //
+    // Its own emitter, separate from `onSystemResumed`'s: the two read the same
+    // DOM event and answer different questions, and this one's consumer is a
+    // poll nudge that may be dropped freely.
     return this.browserReturn.subscribe(handler);
   }
 
@@ -528,11 +539,24 @@ export class WebRunnerHost implements IRunnerHost {
   }
 
   onSystemResumed(handler: () => void): Disposable {
-    // No wake signal is published yet. Consumers already pair this with the
-    // cross-platform `window` `online` event, so wake recovery degrades the
-    // way the contract describes for a shell without one.
-    void handler;
-    return disposable();
+    // This document's hidden -> visible edge IS the wake signal here, for the
+    // reason it is one on the phone: a tab the browser froze or discarded had
+    // its sockets killed and its timers stopped while the network never moved,
+    // so `window 'online'` - the only trigger the shared wake consumers have
+    // left otherwise - cannot fire for it. What went away is this runtime.
+    //
+    // Raw visibility is a safe wake trigger ONLY because the wake path is
+    // probe-first: it pings each live session and re-dials just the ones that
+    // fail to answer inside the probe window, so an ordinary alt-tab keeps its
+    // healthy streams. A BLIND reconnect on this same edge would tear them
+    // down once per hide/show, and anything wiring one onto this signal breaks
+    // the invariant that makes it publishable at all.
+    //
+    // Its own emitter, separate from `onAuthCallback`'s: the two share a DOM
+    // event and nothing else. One collapses a device-flow poll's interval, the
+    // other opens a stream-recovery episode, and an emission policy added for
+    // either must not silently become the other's.
+    return this.systemResume.subscribe(handler);
   }
 
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
@@ -719,22 +743,30 @@ class WebDeviceFlowSession implements DeviceFlowSession {
 }
 
 /**
- * "The user came back from the sign-in tab", observed as this document's
- * hidden -> visible edge.
+ * This document's hidden -> visible edge, as a subscribable signal.
  *
- * Scoped to the auth return on purpose. The same DOM event is also what a
- * resume policy would be built on, but `onSystemResumed` publishes nothing
- * yet, and conflating the two would silently give stream reconnection a
- * policy nobody designed.
+ * The shell holds TWO instances rather than one shared emitter - the auth
+ * return-nudge (`onAuthCallback`) and the resume episode (`onSystemResumed`).
+ * They observe the same DOM event and answer different questions, so each owns
+ * its own subscriber set and its own edge state: a debounce, a filter or a
+ * suppression added for one consumer stays with that consumer instead of
+ * silently becoming the other's policy. `label` is what tells their log lines
+ * apart.
  *
  * Fires ONLY on the hidden -> visible edge, and that edge filter is the whole
- * dedupe: a repeat needs a real hide in between, and the one consumer
- * (collapsing a device poll's interval wait) is idempotent.
+ * dedupe: a repeat needs a real hide in between. Deliberately no debounce
+ * timer - every consumer downstream is idempotent and rate-limits itself (the
+ * wake path probes before it re-dials; the device poll has one pending wait) -
+ * and a timer here would only add latency to the recovery this exists to make
+ * fast.
  */
-class WebBrowserReturnSignal {
+class WebVisibilityEdgeSignal {
   private readonly handlers = new Set<() => void>();
   private hidden = false;
   private listening = false;
+
+  constructor(private readonly label: string) {}
+
   private readonly onVisibilityChange = (): void => {
     const hidden = document.visibilityState === "hidden";
     const resumed = this.hidden && !hidden;
@@ -747,7 +779,7 @@ class WebBrowserReturnSignal {
         handler();
       } catch (error) {
         // One bad subscriber must not cost the others their signal.
-        console.error("[web] browser-return handler threw", error);
+        console.error(`[web] ${this.label} handler threw`, error);
       }
     }
   };
@@ -767,7 +799,8 @@ class WebBrowserReturnSignal {
    * visible/hidden state has to stay tracked across a window with no
    * subscribers, or the next edge is read against a stale baseline. Seeding
    * from the CURRENT state here (rather than at construction) is what keeps a
-   * cold load from counting as a return.
+   * cold load from counting as an edge - a tab that loads visible has not
+   * returned from anywhere, and one that loads hidden has not woken up yet.
    */
   private ensureListening(): void {
     if (this.listening || typeof document === "undefined") {
