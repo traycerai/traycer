@@ -571,6 +571,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
         currentVersion: pendingUpgrade.currentVersion,
         binaryPath: pendingUpgrade.binaryPath,
+        stagedAt: pendingUpgrade.pending.stagedAt,
       },
       stagedExists,
     );
@@ -844,6 +845,7 @@ interface PendingUpgradeFacts {
   readonly stagedBinaryPath: string;
   readonly currentVersion: string;
   readonly binaryPath: string;
+  readonly stagedAt: string;
 }
 
 /**
@@ -889,9 +891,27 @@ function postFinalizeMarkerIssue(
   // the staged filename carries the version and defeats a stale-VERSION
   // marker, but `cli re-anchor` can repoint the live binary without deleting
   // the marker, so a same-version retry would match on staged path alone.
+  //
+  // The ORDERING check matters as much as the paths, and for the reason spelled
+  // out in `reconcilePostFinalizeMarker`: both paths are reusable by design
+  // (`cli re-anchor` keeps a path across binaries; `cli upgrade` derives the
+  // staged filename from the version), so a same-version retry reproduces the
+  // exact tuple an older marker carries. A marker written before this upgrade
+  // was staged cannot describe it. Compared as instants because the Windows
+  // helper's 7 fractional digits mis-sort lexicographically against
+  // `toISOString()`'s 3.
+  //
+  // This has to agree with the reconcile side or doctor and `host restart`
+  // disagree about the same file - doctor announcing an upgrade as applied
+  // while the restart correctly discards the marker as stale.
+  const markerAt = Date.parse(marker.attemptedAt);
+  const pendingStagedAt = Date.parse(pending.stagedAt);
   if (
     marker.stagedBinaryPath !== pending.stagedBinaryPath ||
-    marker.livePath !== pending.binaryPath
+    marker.livePath !== pending.binaryPath ||
+    !Number.isFinite(markerAt) ||
+    !Number.isFinite(pendingStagedAt) ||
+    markerAt < pendingStagedAt
   ) {
     return null;
   }

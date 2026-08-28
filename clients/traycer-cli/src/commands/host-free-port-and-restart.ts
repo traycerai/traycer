@@ -12,13 +12,21 @@ import { withCliLock } from "../store/cli-lock";
 // `traycer host free-port-and-restart --pid <pid> --port <port>` - the
 // CLI-owned mapping for Doctor's Free-Port-and-Restart fix.
 //
-// PUBLIC, because `host doctor` prints this exact line for a person to type
-// when it finds a port conflict: a command a diagnostic hands to a user is a
-// command that belongs in `--help`. Still destructive and still last-resort -
-// the renderer confirms the foreign process's identity with the user before
-// dispatching it over NDJSON, and a typed invocation re-verifies that
-// identity here (`killConflictingPortOwner` refuses to signal a PID that does
-// not own the port) rather than trusting the numbers on the command line.
+// TREATED AS USER-FACING here, even though the registration in `index.ts` on
+// THIS branch still carries `{ hidden: true }`. `host doctor` prints this
+// exact line for a person to type when it finds a port conflict, so its
+// failure messages and success contract have a human audience regardless of
+// whether `--help` lists it yet - which is why they are written for one.
+//
+// The visibility flip itself belongs to the help/human-output PR (#1505),
+// which owns every `index.ts` registration description; duplicating it here
+// would collide on the same lines. Once that lands, this command is public in
+// help too and this note can lose its qualifier. Still destructive and still
+// last-resort either way - the renderer confirms the foreign process's
+// identity with the user before dispatching it over NDJSON, and a typed
+// invocation re-verifies that identity here (`killConflictingPortOwner`
+// refuses to signal a PID that does not own the port) rather than trusting
+// the numbers on the command line.
 //
 // `cli-lock` coverage (Host Update Layer Redesign Tech Plan, "Lifecycle
 // lock coverage"): the kill (if requested), its verification, and the
@@ -140,16 +148,25 @@ export function buildHostFreePortAndRestartCommand(
         };
       },
     );
-    // "sent SIGTERM to" rather than "terminated": the signal is all this
-    // command actually did to the process. A well-behaved server can close
-    // its listener and keep running to drain connections, which satisfies the
-    // repair without dying, so claiming termination would overstate it in
-    // exactly the direction this whole change is about. What was verified is
-    // in `releaseDetail`.
+    // Rendered from what actually happened to the signal, matching the sibling
+    // `host free-port`. Three distinct paths reach success here:
+    //   - no kill requested (`--pid`/`--port` omitted): a plain restart;
+    //   - SIGTERM delivered, port then verified free;
+    //   - the owner exited on its own between the ownership probe and the kill
+    //     (ESRCH), and the port was verified free anyway - `killed` is false
+    //     and claiming SIGTERM was sent would describe an act that did not
+    //     happen.
+    //
+    // "sent SIGTERM to" rather than "terminated" in the second case: the
+    // signal is all this command did to the process, and a server that closes
+    // its listener while draining connections satisfies the repair without
+    // dying. What was verified is in `releaseDetail`.
     const human =
-      kill !== null
-        ? `sent SIGTERM to pid ${args.pid ?? "?"} (${kill.releaseDetail}); restart requested for service '${label.id}'`
-        : `restart requested for service '${label.id}'`;
+      kill === null
+        ? `restart requested for service '${label.id}'`
+        : kill.killed
+          ? `sent SIGTERM to pid ${args.pid ?? "?"} (${kill.releaseDetail}); restart requested for service '${label.id}'`
+          : `pid ${args.pid ?? "?"} exited before SIGTERM could be delivered (${kill.killError}); port verified free (${kill.releaseDetail}); restart requested for service '${label.id}'`;
     return {
       data: {
         port: args.port,

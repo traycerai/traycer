@@ -409,6 +409,35 @@ describe.skipIf(process.platform === "win32")(
       expect(result.release).not.toBe("released");
     });
 
+    // "free, could-not-tell, free" is not two CONSECUTIVE free observations.
+    // The middle sample is exactly where a replacement could have bound and
+    // unbound unseen, so letting it count would convert an intermittent
+    // inability to inspect the port into the stable interval this loop
+    // requires.
+    it("does not let an unverified probe bridge two free samples into a release", async () => {
+      responseQueue = [
+        ownsPort(TARGET_PID),
+        NO_LISTENER,
+        UNSUPPORTED,
+        NO_LISTENER,
+      ];
+      // After the bridged pair, the port is taken again - so if the streak had
+      // survived the unverified sample this would already have returned
+      // `released` and never reached here.
+      defaultResponse = ownsPort(7777);
+
+      const pending = killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
+      const result = await pending;
+
+      expect(result.release).not.toBe("released");
+      expect(result.holderPid).toBe(7777);
+    });
+
     it("still-held: target stays alive and keeps the port past the deadline", async () => {
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = ownsPort(TARGET_PID);

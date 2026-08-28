@@ -268,6 +268,9 @@ async function verifyPortReleased(
       ownership = await pidOwnsPort(pid, port);
     } catch (err) {
       lastUnverifiedProbe = `threw: ${err instanceof Error ? err.message : String(err)}`;
+      // Same reason as the probe-failure branch below: a sample we could not
+      // read breaks the consecutive-free streak rather than being skipped over.
+      consecutiveFreeObservations = 0;
       if (Date.now() >= deadline) break;
       await delay(PORT_RELEASE_POLL_INTERVAL_MS);
       continue;
@@ -281,6 +284,13 @@ async function verifyPortReleased(
       ownership.probe === "output-overflow"
     ) {
       lastUnverifiedProbe = ownership.probe;
+      // The streak breaks on a probe we could not read, not only on a sighted
+      // listener. "Free, could-not-tell, free" is not two CONSECUTIVE free
+      // observations - the middle sample is precisely where a replacement
+      // could have bound and unbound unseen - and letting it count would turn
+      // an intermittent inability to inspect the port into the stable
+      // interval this loop exists to require.
+      consecutiveFreeObservations = 0;
     } else if (ownership.probe === "no-listener") {
       // The only success verdict - but it has to hold across an interval, not
       // a single sample. One clean observation is equally consistent with "the
