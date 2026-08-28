@@ -75,6 +75,28 @@ export const CLI_ERROR_CODES = {
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
 
+  // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
+  // All three replace what used to be an `exitCode: 0` result carrying a
+  // `killError` string (audit finding CLI-011). A port-conflict repair that
+  // did not free the port is a failed repair, and the restart variant used to
+  // restart the host anyway - so Doctor and Desktop reported success over an
+  // unresolved conflict, and the user was told to look elsewhere.
+  //
+  // The confirmed owner could not be signalled at all: EPERM (another user's
+  // process), or ESRCH (it exited between the identity check and the signal).
+  HOST_PORT_KILL_FAILED: "E_HOST_PORT_KILL_FAILED",
+  // SIGTERM was delivered and the process is STILL the listener at the
+  // verification deadline - it traps or ignores the signal. Nothing escalates
+  // to SIGKILL: the user confirmed terminating this process, not force-killing
+  // it, so the remedy stays theirs.
+  HOST_PORT_STILL_HELD: "E_HOST_PORT_STILL_HELD",
+  // SIGTERM was delivered but the ownership probe could not say whether the
+  // port was released (`lsof`/`netstat` missing, hung, or over its output
+  // budget). Deliberately NOT folded into the two above: "we could not check"
+  // is not "it failed", and it is emphatically not "it worked" - the same
+  // refuse-to-act-blind rule that guards the pre-kill identity check.
+  HOST_PORT_RELEASE_UNVERIFIED: "E_HOST_PORT_RELEASE_UNVERIFIED",
+
   // --- Host install + registry (NP-2 / NP-4) ---
   HOST_NOT_INSTALLED: "E_HOST_NOT_INSTALLED",
   HOST_INSTALL_RECORD_INVALID: "E_HOST_INSTALL_RECORD_INVALID",

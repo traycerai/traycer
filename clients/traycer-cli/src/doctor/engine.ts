@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { connect, type Socket } from "node:net";
 import {
   cliCredentialsPath,
+  cliPostFinalizeMarkerPath,
   hostCredentialPath,
   hostDevIdentityPoolRoot,
   hostIdentityNeedsReauthPath,
@@ -21,7 +22,11 @@ import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
 } from "../commands/cli-upgrade";
-import { reconcilePostFinalizeMarker } from "../upgrade/finalize-helper";
+import {
+  markerDescribesUpgrade,
+  readPostFinalizeMarker,
+  type PostFinalizeMarkerRead,
+} from "../upgrade/finalize-helper";
 import {
   readBootstrapMarkers,
   type BootstrapLogEntry,
@@ -117,7 +122,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         title: "Host install record is invalid",
         message: err.message,
         fixAction: "host-install-latest",
-        terminalCommand: `traycer host install latest`,
+        terminalCommand: `traycer host install`,
         details: err.details,
       });
       record = null;
@@ -132,7 +137,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       title: "Host not installed",
       message: `No host is installed for environment=${opts.environment}.`,
       fixAction: "host-install-latest",
-      terminalCommand: `traycer host install latest`,
+      terminalCommand: `traycer host install`,
       details: { environment: opts.environment },
     });
   } else if (
@@ -147,7 +152,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       title: "Installed host binary missing",
       message: `Install record points at an executable that does not exist on disk: ${record.executablePath}`,
       fixAction: "host-install-latest",
-      terminalCommand: `traycer host install latest`,
+      terminalCommand: `traycer host install`,
       details: {
         executablePath: record.executablePath,
         version: record.version,
@@ -380,13 +385,127 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // ---- 4. Pending CLI upgrade ----
-  // First, fold in any marker the detached finalize helper wrote on a
-  // prior restart cycle. If the helper succeeded, this clears
-  // pendingUpgrade in the manifest, so the subsequent read returns
-  // null and Doctor reports "no pending upgrade" - matching reality
-  // even before the user runs another `traycer host restart`.
-  // Reconcile is idempotent and safe on the no-marker path.
-  await reconcilePostFinalizeMarker({ environment: opts.environment });
+  // READ the marker the detached finalize helper may have written on a prior
+  // restart cycle; do not consume it.
+  //
+  // This used to call `reconcilePostFinalizeMarker`, which deletes the marker
+  // file and can rewrite the CLI install manifest to clear `pendingUpgrade`.
+  // The intent was benign - make doctor's report reflect the helper's outcome
+  // without waiting for another `host restart` - but it made a diagnostic
+  // command mutate CLI upgrade state as a side effect of being asked a
+  // question (audit finding CLI-007). Running `host doctor` twice gave two
+  // different answers, and anyone inspecting a broken machine destroyed the
+  // evidence by looking at it.
+  //
+  // Reporting the marker instead gets the same honesty with none of the
+  // mutation: doctor can still say "the swap already happened, only the
+  // bookkeeping is stale", and the fix it names - `traycer host restart` - is
+  // the lifecycle command that actually performs the reconcile
+  // (commands/host-restart.ts). Observation here, mutation there.
+  const finalizeMarker = await readPostFinalizeMarker({
+    environment: opts.environment,
+  });
+  // Read here rather than at section 6 because the finalize marker's
+  // service-start report needs this history: "is the host up right now" cannot
+  // distinguish a start failure the host never recovered from, from one it
+  // recovered from before a later, unrelated stop.
+  const bootstrapMarkers = await readBootstrapMarkers(opts.environment, 20);
+  // An UNREADABLE marker is a fault in its own right, and independent of
+  // whether the manifest currently has a pending upgrade. `readPostFinalize-
+  // Marker` distinguishes `invalid` from `absent` precisely so it can be
+  // reported; consulting that only inside the pending-upgrade branch below
+  // would mean a corrupt marker on a manifest with nothing pending produces
+  // silence, and doctor calls the CLI-upgrade state clean while a file it
+  // could not parse sits on disk shaping the next `host restart`.
+  if (finalizeMarker.status === "invalid") {
+    // Whether `host restart` can actually clear this depends on a fact the
+    // marker's CONTENTS cannot tell us: reconciliation removes an unparseable
+    // marker with `safeUnlink`, which swallows its errors, so on a directory
+    // this user cannot write to the restart completes and the marker - and
+    // this warning - survive untouched, forever.
+    //
+    // `W_OK` on the parent is NECESSARY but not SUFFICIENT, and the copy below
+    // is written to match exactly that. A readable marker owned by another
+    // user inside a writable STICKY directory passes this check and still
+    // fails to unlink with EPERM, and Windows ACL delete rights can diverge
+    // from writability in their own ways. Establishing deletability for real
+    // would mean ownership plus sticky-bit inspection on POSIX and an ACL
+    // query on Windows - and a wrong prediction in EITHER direction is worse
+    // than not predicting: refusing to name the repair that would have worked,
+    // or promising one that cannot.
+    //
+    // So the negative result is still asserted (a non-writable directory
+    // definitely cannot be unlinked from, which is worth saying outright), and
+    // the positive one is described rather than guaranteed: try the restart,
+    // and here is what it means if the warning survives it.
+    const markerDirWritable = await access(
+      dirname(cliPostFinalizeMarkerPath(opts.environment)),
+      fsConstants.W_OK,
+    ).then(
+      () => true,
+      () => false,
+    );
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNPARSEABLE,
+      severity: "warning",
+      title: "CLI upgrade finalize marker is not readable as a marker",
+      message:
+        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be parsed: ` +
+        `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed. ` +
+        (markerDirWritable
+          ? "Run 'traycer host restart': its reconcile step attempts to discard a marker it cannot parse. " +
+            "If this warning is still here afterwards, the file's own ownership or permissions are preventing deletion " +
+            "(a marker left by another user, for example) - remove it by hand. " +
+            "If a CLI upgrade still appears stuck after that, re-run 'traycer cli upgrade' to re-stage it."
+          : "Its directory is not writable by this user, so 'traycer host restart' cannot delete it either - " +
+            "its reconcile step would complete while leaving this warning in place. " +
+            "Fix the ownership or permissions on that directory first."),
+      // `host restart` is the command that actually clears this. The previous
+      // `traycer cli upgrade` was inert against the reported condition - it
+      // never touches post-finalize.json, so an already-current CLI would
+      // leave the same marker in place and every later doctor run would
+      // repeat the identical warning. Offering a command that cannot resolve
+      // what it is offered for is the CLI-006 defect wearing different
+      // clothes: the string parses, it just does not do the job.
+      //
+      // Scoped to the PARSE-failure subtype for precisely that reason - see
+      // the `unreadable` branch below, where the same promise would be false -
+      // and withheld again when the directory is not writable, where the
+      // deletion that makes it true cannot happen.
+      fixAction: markerDirWritable ? "host-restart" : null,
+      terminalCommand: markerDirWritable ? `traycer host restart` : null,
+      details: {
+        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        errorMessage: finalizeMarker.errorMessage,
+        markerDirWritable,
+      },
+    });
+  }
+  // The marker file exists and cannot be READ. Deliberately no fix action and
+  // no terminal command: `reconcilePostFinalizeMarker` reads the file the same
+  // way this probe just failed to, and returns without unlinking when that
+  // read throws - so `host restart` would leave the marker, the warning, and
+  // the user's impression that they had been given a repair exactly as they
+  // were. Nothing on a command line fixes a permission; the message has to
+  // carry the actual remedy, which is what it does.
+  if (finalizeMarker.status === "unreadable") {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNREADABLE,
+      severity: "warning",
+      title: "Cannot read the CLI upgrade finalize marker",
+      message:
+        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} exists but could not be read: ` +
+        `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed, and neither can ` +
+        "'traycer host restart' - its reconcile step reads the same file and will leave it in place. " +
+        "Check the ownership and permissions on that file and its directory; they should belong to the user Traycer runs as.",
+      fixAction: null,
+      terminalCommand: null,
+      details: {
+        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        errorMessage: finalizeMarker.errorMessage,
+      },
+    });
+  }
 
   // `traycer cli upgrade` stages a new binary and records
   // `pendingUpgrade` when the live binary is locked (Windows: the
@@ -398,11 +517,146 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const pendingUpgrade = await readPendingCliUpgrade({
     environment: opts.environment,
   });
+  // A SWAPPED MARKER CARRYING A SERVICE-START FAILURE, on a manifest with
+  // nothing pending. This is not an exotic combination - it is the NORMAL
+  // on-disk state for that failure, which is why gating marker interpretation
+  // on `pendingUpgrade !== null` lost it entirely.
+  //
+  // The ordering in `commands/cli-finalize-upgrade.ts` is: run the swap
+  // (`finalizePendingCliUpgrade`, which CLEARS `pendingUpgrade` on success),
+  // then try to start the service, then write the marker recording whether
+  // that start failed. So by the time a `serviceStartError` exists to report,
+  // the pending record it would have been attached to is already gone.
+  //
+  // Other probes will notice the host is not running, but none of them can
+  // say WHY - and the helper's own error is the only artifact that explains
+  // it.
+  //
+  // The gate is DUPLICATION, not pending state. An earlier version skipped
+  // this whenever any pending upgrade existed, which lost the error in a
+  // second, entirely reachable arrangement: an old `swapped` marker carrying
+  // a `serviceStartError` survives, a later `cli upgrade` records a NEW
+  // pending upgrade, and `postFinalizeMarkerIssue` then correctly rejects
+  // that marker as stale - so nothing reported the failure at all, while the
+  // host stayed down for exactly the reason the marker names.
+  //
+  // The only case that must not double-report is a marker the pending card
+  // already covers, since that card appends the same `serviceStartError` to
+  // its own message. That is precisely `markerDescribesUpgrade`, so it is
+  // asked here rather than approximated by "is anything pending".
+  const markerCoveredByPendingCard =
+    pendingUpgrade !== null &&
+    finalizeMarker.status === "present" &&
+    markerDescribesUpgrade(finalizeMarker.marker, {
+      stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
+      livePath: pendingUpgrade.binaryPath,
+      stagedAt: pendingUpgrade.pending.stagedAt,
+    });
+  if (
+    !markerCoveredByPendingCard &&
+    finalizeMarker.status === "present" &&
+    finalizeMarker.marker.status === "swapped" &&
+    finalizeMarker.marker.serviceStartError !== null
+  ) {
+    // THE MARKER IS HISTORY, NOT A LIVE READING. It records what happened at
+    // `attemptedAt` and then persists until some later `host restart`
+    // reconciles it - so on a machine whose supervisor already recovered the
+    // host, an unconditional warning would assert "the host is down" while
+    // this same doctor run has positive evidence that it is up. That is the
+    // failure mode this PR exists to remove, and reporting it about a stale
+    // file rather than a command's return value does not make it better.
+    //
+    // Both states are worth saying, so the severity carries the difference
+    // instead of suppressing one: a host that is still down gets an
+    // actionable warning, and a host that recovered gets an info-level note
+    // explaining the outage it just had. Info keeps `host doctor`'s exit code
+    // (error/fatal only) unaffected for a machine that is now healthy.
+    //
+    // TWO SEPARATE FACTS, deliberately not merged into one boolean.
+    //
+    // An earlier revision folded "a `starting` marker exists after
+    // `attemptedAt`" into the liveness flag, and got both halves wrong at
+    // once. `starting` is written by `host-start.ts` BEFORE it opens the log
+    // fd and spawns the child, so the same attempt can go on to emit
+    // `failed-to-spawn` or `crashed` - it is evidence that another attempt
+    // BEGAN, never that one succeeded. Treating it as recovery downgraded a
+    // host that has never come up to informational and took away its fix. And
+    // because the merged flag also drove the copy, the card said "The host is
+    // running now" and reported `hostRunningNow: true` while the service probe
+    // and pid probe both said it was down - contradicting the outage the rest
+    // of the same report was describing.
+    //
+    // So liveness decides severity, because "the host is down" is the
+    // actionable part and it is the one thing here that is directly observed.
+    // History only qualifies the wording: if a start has been attempted since
+    // this failure, the current outage may well have a different cause, and
+    // saying so is useful without pretending to know that it does.
+    const markerAt = Date.parse(finalizeMarker.marker.attemptedAt);
+    const startAttemptedSince = bootstrapMarkers.some((entry) => {
+      if (entry.phase !== "starting") return false;
+      const entryAt = Date.parse(entry.timestamp);
+      return (
+        Number.isFinite(entryAt) &&
+        Number.isFinite(markerAt) &&
+        entryAt > markerAt
+      );
+    });
+    const hostRunningNow =
+      hostProcessAlive || serviceStatus?.state === "running";
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
+      severity: hostRunningNow ? "info" : "warning",
+      title: hostRunningNow
+        ? "Host briefly failed to start after a CLI upgrade (since recovered)"
+        : "CLI upgrade completed but the host service did not start",
+      message: hostRunningNow
+        ? `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. The host is running now, so this is a record of a past outage rather than a live fault - ` +
+          "quote it if you are investigating why the host was briefly unavailable around that time. The next 'traycer host restart' clears the record."
+        : `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. ` +
+          (startAttemptedSince
+            ? "The host has been started at least once since then, so the outage you are looking at now may have a different cause - check the recent activity below. "
+            : "") +
+          "Either way the host is down; start it with 'traycer host restart'.",
+      fixAction: hostRunningNow ? null : "host-restart",
+      terminalCommand: hostRunningNow ? null : `traycer host restart`,
+      details: {
+        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        attemptedAt: finalizeMarker.marker.attemptedAt,
+        serviceStartError: finalizeMarker.marker.serviceStartError,
+        livePath: finalizeMarker.marker.livePath,
+        stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
+        // Directly observed, and named for exactly what it is. Kept apart from
+        // the history flag below so nothing downstream can read one as the
+        // other, which is how the contradiction above happened.
+        hostRunningNow,
+        startAttemptedSinceFailure: startAttemptedSince,
+      },
+    });
+  }
   if (pendingUpgrade !== null) {
+    // A marker that already settled the swap outranks everything below it:
+    // the manifest still says "pending", but the disk says otherwise, and
+    // reporting the manifest alone would send the reader to re-stage an
+    // upgrade that has already happened.
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
     });
-    if (!stagedExists) {
+    const settled = postFinalizeMarkerIssue(
+      finalizeMarker,
+      {
+        version: pendingUpgrade.pending.version,
+        stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
+        currentVersion: pendingUpgrade.currentVersion,
+        binaryPath: pendingUpgrade.binaryPath,
+        stagedAt: pendingUpgrade.pending.stagedAt,
+      },
+      stagedExists,
+    );
+    if (settled !== null) {
+      issues.push(settled);
+    } else if (!stagedExists) {
       // The staged binary has been deleted out from under the manifest
       // (cleanup, AV, ...). There is no machine-driven recovery -
       // surface the terminal command so the user can re-run upgrade
@@ -426,6 +680,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           reason: pendingUpgrade.pending.reason,
           currentVersion: pendingUpgrade.currentVersion,
           binaryPath: pendingUpgrade.binaryPath,
+          finalizeMarker: finalizeMarkerDetail(finalizeMarker),
         },
       });
     } else {
@@ -449,6 +704,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           currentVersion: pendingUpgrade.currentVersion,
           binaryPath: pendingUpgrade.binaryPath,
           source: pendingUpgrade.source,
+          finalizeMarker: finalizeMarkerDetail(finalizeMarker),
         },
       });
     }
@@ -541,7 +797,9 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // ---- 6. Recent bootstrap markers ----
-  const recentMarkers = await readBootstrapMarkers(opts.environment, 20);
+  // Already read above (the finalize marker's service-start report needs the
+  // same history to tell a live failure from one the host recovered from).
+  const recentMarkers = bootstrapMarkers;
   const recentCrash = lastCrashMarker(recentMarkers);
   if (recentCrash !== null) {
     const fields = recentCrash.entry.fields;
@@ -656,6 +914,168 @@ function layer0GuaranteeIssue(
       layer0Slot: slotRecord,
     },
   };
+}
+
+/**
+ * The manifest fields the post-finalize reporting needs. Named rather than
+ * threading `readPendingCliUpgrade`'s whole anonymous return shape through,
+ * so this stays a pure projection of four strings.
+ */
+interface PendingUpgradeFacts {
+  readonly version: string;
+  readonly stagedBinaryPath: string;
+  readonly currentVersion: string;
+  readonly binaryPath: string;
+  readonly stagedAt: string;
+}
+
+/**
+ * Turns a post-finalize marker into the issue that DESCRIBES it, for the two
+ * marker states that contradict the manifest's `pendingUpgrade` record.
+ *
+ * `null` means "this marker does not override the manifest" - absent (the
+ * helper never ran or is still running), invalid, or `parent-still-alive`
+ * (the helper gave up waiting, so the upgrade really is still pending and the
+ * ordinary pending card is the honest report). Those fall through to the
+ * caller's existing branches, which carry the marker status in `details`.
+ *
+ * Doctor no longer consumes the marker (CLI-007), so both issues below name
+ * `traycer host restart` - the lifecycle command that performs the reconcile
+ * this report is describing the absence of.
+ */
+function postFinalizeMarkerIssue(
+  read: PostFinalizeMarkerRead,
+  pending: PendingUpgradeFacts,
+  stagedExists: boolean,
+): DoctorIssue | null {
+  if (read.status !== "present") return null;
+  const marker = read.marker;
+  // CORRELATE THE MARKER WITH THIS PENDING UPGRADE BEFORE BELIEVING IT.
+  //
+  // The marker carries no version - only the two paths it operated on - so
+  // "a marker exists" is not evidence about "the upgrade the manifest is
+  // currently pending". The helper writes the marker and `host restart`
+  // consumes it, but nothing guarantees that consumption happened: a helper
+  // that swapped 1.2.0 can leave its marker behind, and a later
+  // `traycer cli upgrade` will overwrite `pendingUpgrade` with 1.3.0 without
+  // clearing it. Doctor would then read the 1.2.0 marker as proof that 1.3.0
+  // is "already applied" and tell the user their upgrade was done - the
+  // opposite of true, and unfalsifiable from the card.
+  //
+  // `stagedBinaryPath` is a strong discriminator because `cli upgrade` stamps
+  // the target version into the filename it stages to
+  // (`traycer-<version>-<platform>`), so a mismatch here is precisely the
+  // stale-marker case. A mismatched marker is treated as not describing this
+  // upgrade at all: the caller falls through to the ordinary pending report,
+  // which carries the marker's status in `details` for anyone investigating.
+  // Both paths, for the reason spelled out in `reconcilePostFinalizeMarker`:
+  // the staged filename carries the version and defeats a stale-VERSION
+  // marker, but `cli re-anchor` can repoint the live binary without deleting
+  // the marker, so a same-version retry would match on staged path alone.
+  // Identity is decided by the SHARED `markerDescribesUpgrade` predicate, not
+  // re-implemented here. These two call sites disagreeing is not hypothetical:
+  // it happened in this PR's history, and produced doctor announcing an
+  // upgrade as already applied while `host restart` correctly discarded the
+  // same marker as stale. One predicate, one answer.
+  if (
+    !markerDescribesUpgrade(marker, {
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: pending.binaryPath,
+      stagedAt: pending.stagedAt,
+    })
+  ) {
+    return null;
+  }
+  // A `swap-failed` marker whose staged bytes have since been deleted is NOT
+  // the story to tell. `host restart` - the fix this branch offers - would
+  // consume the marker, find nothing to finalize, and leave the upgrade
+  // pending exactly as it was. The caller's `!stagedExists` branch has the
+  // guidance that actually recovers it ("re-run 'traycer cli upgrade' to
+  // re-stage"), so defer to it.
+  //
+  // Deliberately not applied to `swapped`: there, the staged binary is
+  // MEANT to be gone, because the helper moved it onto the live path. Absence
+  // is the expected end state of a success, so treating it as a fault would
+  // report every completed swap as a missing-stage failure.
+  if (marker.status === "swap-failed" && !stagedExists) return null;
+  if (marker.status === "swapped") {
+    // The bytes are already swapped; only the manifest is behind. INFO, not
+    // warning: nothing is broken and nothing is at risk, so this must not
+    // flip `host doctor`'s exit code (which keys off error/fatal) for a
+    // machine that is, in every way that matters, already upgraded.
+    return {
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_FINALIZED_UNRECONCILED,
+      severity: "info",
+      title: `CLI upgrade to ${pending.version} already applied`,
+      message:
+        `The finalize helper swapped ${pending.stagedBinaryPath} onto ` +
+        `${pending.binaryPath} at ${marker.attemptedAt}, so the new CLI is ` +
+        `already live. The install manifest still records the upgrade as ` +
+        `pending (version=${pending.currentVersion}) because nothing has ` +
+        "folded the helper's result in yet - 'traycer host doctor' only " +
+        "reports state, it does not change it. The next 'traycer host " +
+        "restart' reconciles the record; until then this is bookkeeping " +
+        "drift, not a failure." +
+        (marker.serviceStartError === null
+          ? ""
+          : ` Note the helper could not start the host service afterwards: ${marker.serviceStartError}`),
+      fixAction: "host-restart",
+      terminalCommand: `traycer host restart`,
+      details: {
+        stagedVersion: pending.version,
+        stagedBinaryPath: pending.stagedBinaryPath,
+        currentVersion: pending.currentVersion,
+        binaryPath: pending.binaryPath,
+        markerStatus: marker.status,
+        attemptedAt: marker.attemptedAt,
+        serviceStartError: marker.serviceStartError,
+      },
+    };
+  }
+  if (marker.status === "swap-failed") {
+    // Distinct from the ordinary pending card, which says "the live binary is
+    // locked, restart to finalise". That advice is wrong here: a helper
+    // already ran with the lock released and the swap itself failed, so
+    // repeating the restart is not obviously the cure and the operator needs
+    // the helper's error to decide.
+    return {
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_FINALIZE_FAILED,
+      severity: "warning",
+      title: `CLI upgrade to ${pending.version} failed to finalize`,
+      message:
+        `The finalize helper ran at ${marker.attemptedAt} and could not swap ` +
+        `${pending.stagedBinaryPath} onto ${pending.binaryPath}: ` +
+        `${marker.errorMessage ?? "no error message recorded"}. ` +
+        `The CLI is still ${pending.currentVersion} and the upgrade remains ` +
+        "pending. 'traycer host restart' retries the whole flow; if it keeps " +
+        "failing, the live binary's directory is likely not writable by this " +
+        "user.",
+      fixAction: "host-restart",
+      terminalCommand: `traycer host restart`,
+      details: {
+        stagedVersion: pending.version,
+        stagedBinaryPath: pending.stagedBinaryPath,
+        currentVersion: pending.currentVersion,
+        binaryPath: pending.binaryPath,
+        markerStatus: marker.status,
+        attemptedAt: marker.attemptedAt,
+        errorMessage: marker.errorMessage,
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * Compact, always-safe projection of the marker read for an issue's
+ * `details`. Support bundles want to know which of the five states doctor
+ * saw even when the marker did not change the verdict.
+ */
+function finalizeMarkerDetail(read: PostFinalizeMarkerRead): string {
+  if (read.status === "absent") return "absent";
+  if (read.status === "invalid") return `invalid: ${read.errorMessage}`;
+  if (read.status === "unreadable") return `unreadable: ${read.errorMessage}`;
+  return read.marker.status;
 }
 
 function lastCrashMarker(

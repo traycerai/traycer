@@ -53,6 +53,8 @@ export interface WorkspaceRunItem {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly modeDisabled: boolean;
   readonly modeDisabledReason: string | null;
+  /** True when this row's `currentIntent` is a staged overlay, not the binding. */
+  readonly hasStagedIntent?: boolean;
   readonly removeDisabled: boolean;
   readonly removeDisabledReason: string | null;
   readonly removePending: boolean;
@@ -69,11 +71,33 @@ export interface WorkspaceRunItem {
  * new worktree that has not been created yet (no path exists on disk).
  */
 export function workspaceRunPath(item: WorkspaceRunItem): string | null {
+  const intent = item.currentIntent;
+  if (intent?.kind === "local") return item.displayPath;
+  if (intent?.kind === "import") return intent.worktreePath;
+  if (intent?.kind === "worktree") return null;
   if (item.mode === "local") return item.displayPath;
-  if (item.currentIntent?.kind === "import") {
-    return item.currentIntent.worktreePath;
-  }
   return null;
+}
+
+/**
+ * Copy for a staged (not-yet-committed) folder change. `null` when the row
+ * is showing the committed binding.
+ */
+export function stagedFolderApplyHint(item: WorkspaceRunItem): string | null {
+  const intent = item.currentIntent;
+  if (intent === null) {
+    return item.mode === "worktree" ? "New worktree · created on send" : null;
+  }
+  const staged = item.hasStagedIntent === true;
+  if (intent.kind === "worktree") {
+    const source = workspaceRunBranchSourceLabel(intent);
+    return source === null
+      ? "New worktree · created on send"
+      : `From ${source} · created on send`;
+  }
+  if (!staged) return null;
+  if (intent.kind === "local") return "Local folder · applies on send";
+  return `Switch to ${item.branchLabel} · applies on send`;
 }
 
 export type FolderLocationValue = "local" | "worktree" | "import";

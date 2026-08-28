@@ -94,7 +94,7 @@ import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
-import { whoamiCommand } from "./commands/whoami";
+import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import {
@@ -637,14 +637,14 @@ function registerAuthCommands(program: Command): void {
       .command("login")
       .description("Sign in to Traycer via your browser")
       // Hidden per the house convention for `"Internal:"` options: the payload
-      // is produced by the Traycer Desktop app's own sign-in and piped on
-      // stdin, so there is nothing a person at a terminal can usefully type
-      // here. Its contract is pinned by `commands/__tests__/login-token.test.ts`
-      // rather than by help text.
+      // is produced by a sign-in elsewhere and piped on stdin, so there is
+      // nothing a person at a terminal can usefully type here. Its contract is
+      // pinned by `commands/__tests__/login-token.test.ts` rather than by help
+      // text. It stays reachable - hiding is presentation, not removal.
       .addOption(
         new Option(
           "--token <token>",
-          "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+          "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Scripted/support path; interactive sign-in uses no flag.",
         ).hideHelp(),
       ),
     (opts) =>
@@ -653,14 +653,93 @@ function registerAuthCommands(program: Command): void {
       }),
   );
 
+  // `logout` and `whoami` both do more than their verbs suggest, and the
+  // one-line description is the wrong place to say so - it is also the root
+  // help's command list, where a paragraph per command destroys the scan. The
+  // description names the full outcome in one line; the detail (what is
+  // deleted, what is spent, what a partial result means) goes in the leaf's
+  // `--help` body, which is where someone asking "what will this do to my
+  // machine" is already looking.
   withRunner(
-    program.command("logout").description("Forget the stored auth token"),
+    program
+      .command("logout")
+      .description(
+        "Sign out: forget the stored credentials and delete cached published-chat content",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "What this removes:",
+          "  - The stored credentials for this environment. Traycer Desktop and",
+          "    other clients read the same file, so they lose the session too, as",
+          "    each notices the change. A Traycer Host that is already running",
+          "    holds its own delegated credential and keeps it until it stops.",
+          "  - The local published-chat cache. Every entry is a copy of bytes the",
+          "    cloud still holds, so this only costs a re-fetch after signing in.",
+          "",
+          "Exit codes:",
+          "  0  credentials and cache both gone.",
+          "  1  something is unresolved - two different outcomes, and --json",
+          "     tells them apart:",
+          "       - the sign-out could not be CONFIRMED (another traycer process",
+          "         holds the credentials lock, or the commit did not complete).",
+          "         You may or may not still be signed in; logout is idempotent,",
+          "         so re-run it and check with `traycer whoami`. The cache is",
+          "         deliberately left alone. --json emits an error envelope.",
+          "       - the credentials were cleared but the cache directory could",
+          "         not be removed. --json emits an ok result with",
+          "         `data.loggedOut` and `data.chatCache` (path, `cleared`, and",
+          "         the reason).",
+          "",
+          "Exit 1 for the second case exists so an unattended caller does not treat",
+          "'content still on disk' as a clean hand-off.",
+          "",
+        ].join("\n"),
+      ),
     () => logoutCommand,
   );
 
   withRunner(
-    program.command("whoami").description("Print the signed-in user"),
-    () => whoamiCommand,
+    program
+      .command("whoami")
+      .description(
+        "Validate the stored credentials with Traycer and print the signed-in user",
+      )
+      .option(
+        "--local",
+        "Read the stored identity only: no authn call, no refresh, nothing written",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "This is a validate, not a local read. It calls the authn service, and to",
+          "answer it may rewrite the stored credentials: a profile that drifted is",
+          "written back, and a stale access token is replaced by SPENDING the stored",
+          "refresh token. `data.credentialUpdate` reports what actually happened:",
+          "'none', 'profile-refreshed', 'token-rotated', or one of the two",
+          "'-unconfirmed' values, meaning the change was attempted and this command",
+          "could not confirm what it left behind - so the stored credentials may or",
+          "may not have changed, and a later command may need a fresh",
+          "`traycer login`. A network error during the token REFRESH reports an",
+          "unconfirmed rotation for the same reason - the refresh may or may not",
+          "have reached the server - while one during the initial identity check",
+          "reports 'none', because nothing had been attempted yet.",
+          "",
+          "--local skips all of it and reports what is on disk. That answer is",
+          "weaker: it cannot see a revoked or expired session (`data.status` is",
+          "'stored', not 'valid').",
+          "",
+          "Exit codes:",
+          "  0  default: validated with Traycer. --local: a credential is stored",
+          "     here, which is NOT proof that it still works.",
+          "  1  signed out (either mode), or the stored credentials were rejected.",
+          "  2  the authn service could not be reached (default mode only).",
+          "",
+        ].join("\n"),
+      ),
+    (opts) => buildWhoamiCommand({ local: opts.local === true }),
   );
 
   withRunner(
@@ -670,6 +749,30 @@ function registerAuthCommands(program: Command): void {
       .option(
         "--no-qr",
         "Print only the typeable code (for terminals that mangle block glyphs)",
+      )
+      // The command's whole middle is a wait, and the one-line description
+      // read like a fire-and-forget print. Approval - not the scan - is what
+      // signs the phone in, so the terminal is part of the flow until it
+      // answers.
+      .addHelpText(
+        "after",
+        [
+          "",
+          "Requires an existing sign-in on this machine (`traycer login`) and an",
+          "interactive terminal. --json, a non-interactive environment (CI=1 or",
+          "TRAYCER_NONINTERACTIVE=1), and a stdin that is not a TTY are each refused",
+          "up front (exit 1), because only a human at this terminal can give the",
+          "approval this command exists to collect.",
+          "",
+          "This command waits, with no deadline of its own: it prints a code and",
+          "reprints a fresh one before each expires, then blocks until you approve",
+          "or reject the phone that scanned it. Ctrl-C is safe - an unclaimed code",
+          "is not a grant and dies with its own TTL. It installs and starts nothing.",
+          "",
+          "Exit codes: 0 approved - 1 rejected, refused as above, signed out, or the",
+          "registration was already decided elsewhere - 2 authn unreachable.",
+          "",
+        ].join("\n"),
       ),
     (opts) => buildLinkPhoneCommand({ showQr: opts.qr !== false }),
   );
@@ -792,7 +895,9 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("status")
-      .description("Show host status (pid, websocket URL, recent activity)"),
+      .description(
+        "Show host status (pid, websocket URL, recent activity). Read-only: never installs, registers, or starts the host - use 'host ensure' for that",
+      ),
     () => hostStatusCommand,
   );
 
@@ -1297,27 +1402,18 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
-      // Both or neither. The handler already refuses `--pid` without `--port`
-      // (it cannot verify ownership without the port), but `--port` alone used
-      // to fall through to a bare restart: no kill attempted, exit 0, and human
-      // output reporting a successful restart. That was survivable while this
-      // command was hidden and only Desktop's controller drove it - it passes
-      // both flags or neither - but `host doctor` now prints this spelling for
-      // a person to type, and a half-typed line must not report success for a
-      // repair it never attempted.
+      // The both-or-neither rule lives in the HANDLER
+      // (`buildHostFreePortAndRestartCommand`), not here. #1505 and #1506
+      // fixed the same `--port`-without-`--pid` hole independently and agreed
+      // to keep one: the handler's, because it also covers direct callers of
+      // `buildHostFreePortAndRestartCommand` rather than only the Commander
+      // path, and because it sits next to the `--pid`-alone guard that was
+      // always there. The registration-level copy is deleted here rather than
+      // left as harmless duplication - two guards for one rule drift, and the
+      // messages had already diverged.
       //
-      // Bare (neither flag) stays legal: Desktop's `HostController` appends
-      // `--pid`/`--port` conditionally, so `["host","free-port-and-restart"]`
-      // is a live machine call.
-      if (pid === null && port !== null) {
-        throw cliError({
-          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message:
-            "host free-port-and-restart: --port requires --pid - the PID is what gets terminated, and it is re-checked against the port first. Run 'traycer host doctor' for the filled-in command, or pass neither flag (or use 'traycer host restart') to restart without killing anything.",
-          details: { pid: null, port },
-          exitCode: 1,
-        });
-      }
+      // The `--pid <pid>` / `--port <port>` help above still states the rule,
+      // which is where a reader looks for it.
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
