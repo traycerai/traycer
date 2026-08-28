@@ -340,13 +340,15 @@ export interface IRunnerHost {
   onAuthCallback(handler: () => void): Disposable;
 
   /**
-   * OAuth 2.0 Device Authorization Grant (RFC 8628) controller, owned by the
-   * shell's privileged process. On desktop the authorize call AND the
-   * `/device/token` poll loop run in Electron main so they are CORS-safe (the
-   * authn endpoints don't allow the renderer origin) and survive renderer
-   * window close / sleep - the renderer only observes the terminal outcome.
-   * Shells with no device-flow
-   * backend (mobile, web, in-browser dev) install a no-op whose `start()`
+   * OAuth 2.0 Device Authorization Grant (RFC 8628) controller. Every shipping
+   * shell runs a real loop; what differs is WHERE. On desktop the authorize
+   * call AND the `/device/token` poll run in Electron main, so they are
+   * CORS-safe (the authn endpoints don't allow the renderer origin) and survive
+   * renderer window close / sleep - the renderer only observes the terminal
+   * outcome. The mobile and browser shells have no privileged process to
+   * escape into, so they run the same loop IN-PROCESS over HTTP, which works
+   * because their own origin is one authn allows; the cost is that the loop
+   * dies with the page. Only test doubles install a no-op whose `start()`
    * resolves `null`. Always present; callers never branch on `null`.
    */
   readonly deviceFlow: IDeviceFlowHost;
@@ -365,9 +367,12 @@ export interface IRunnerHost {
   /**
    * Typed token-storage capability shared across shells. Always present -
    * same convention as `tray` and `notifications`. Callers never branch on
-   * `null`. Desktop backs this with the OS keychain via the Electron
-   * preload bridge; mobile backs it with the native secure store; in-memory
-   * implementations (dev runner, tests) keep a single round-trippable entry.
+   * `null`. Desktop reaches a main-process `FileTokenStore` through the
+   * Electron preload bridge - one machine-local credentials file under a lock,
+   * NOT the OS keychain; mobile backs it with the native secure store; the
+   * browser shell backs it with origin-scoped storage under a Web Lock;
+   * in-memory implementations (dev runner, tests) keep a single
+   * round-trippable entry.
    */
   readonly tokenStore: ITokenStore;
 

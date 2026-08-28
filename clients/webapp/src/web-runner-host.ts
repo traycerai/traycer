@@ -572,9 +572,10 @@ class WebDeviceFlowHost implements IDeviceFlowHost {
 }
 
 /**
- * A real RFC 8628 loop running in the page, NOT the no-op the `deviceFlow` doc
- * comment still describes for web. A shell that resolved `null` here could not
- * sign in at all: device flow is the only interactive login the GUI ships.
+ * A real RFC 8628 loop running in the page - the in-process variant
+ * `IRunnerHost.deviceFlow` describes for a shell with no privileged process. A
+ * shell that resolved `null` here could not sign in at all: device flow is the
+ * only interactive login the GUI ships.
  *
  * No return scheme is threaded onto the verification URL. A tab registers no
  * custom scheme, and firing `traycer://` from a page would hand the approval
