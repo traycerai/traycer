@@ -239,14 +239,29 @@ export function formatWorktreeCreateResult(
   return lines.join("\n");
 }
 
+/**
+ * The host's `branch` when it reported one, and an explicit "it did not" when
+ * it did not.
+ *
+ * This used to fall back to `branch.name` - the name we ASKED for - and then
+ * describe it with the same "(new branch, forked from x)" / "(checked out)"
+ * confidence as a reported one. `worktreeCreatedPathEntrySchema` makes the
+ * returned branch nullable, so a null is the host declining to state the
+ * outcome, and echoing the request back dressed as a result is the same
+ * false-status defect this file already fixed for the carry row. The requested
+ * name is still shown, because it is the useful thing to print - it is just
+ * labelled as the request rather than as what happened.
+ */
 function formatBranch(
   created: string | null,
   branch: WorktreeBranchSelection,
 ): string {
-  const name = created ?? branch.name;
+  if (created === null) {
+    return `${branch.name} (requested; the host did not report the resulting branch)`;
+  }
   return branch.type === "existing"
-    ? `${name} (checked out; the branch already existed)`
-    : `${name} (new branch, forked from ${branch.source})`;
+    ? `${created} (checked out; the branch already existed)`
+    : `${created} (new branch, forked from ${branch.source})`;
 }
 
 function kvBlock(rows: readonly [string, string][]): string[] {

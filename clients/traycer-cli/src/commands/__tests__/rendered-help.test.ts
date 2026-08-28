@@ -221,175 +221,271 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
   ["agent", "role"],
 ];
 
+interface ExpectedOption {
+  readonly flags: string;
+  readonly mandatory: boolean;
+}
+
 interface ExpectedSurfaceEntry {
   readonly path: string;
-  readonly options: readonly string[];
+  readonly options: readonly ExpectedOption[];
   readonly args: readonly ExpectedArgument[];
 }
 
 // The full public command surface under `buildProgramWithAgentRoles(true)` -
 // every visible command path (`""` is the root itself; parents are listed
 // too, so deleting a whole subtree is caught, not just a leaf), each
-// command's own visible options as their FULL rendered flags term (short
-// alias included, e.g. `"-a, --all"`, not reduced to the long flag - see
-// `parseOptionRowFlagTerms`), and each command's registered arguments as
-// their full name/required/variadic signature (see `ExpectedArgument`
-// above) rather than just a name.
+// command's own visible options as their FULL rendered flags term PLUS
+// mandatory-ness (short alias included, e.g. `"-a, --all"`, not reduced to
+// the long flag - see `parseOptionRowFlagTerms`; `.requiredOption(...)` vs
+// `.option(...)` renders the IDENTICAL flags term and row, so mandatory-ness
+// has to be tracked as its own fact or a required flag silently becoming
+// optional - or vice versa - passes with nothing to disagree), and each
+// command's registered arguments as their full name/required/variadic
+// signature (see `ExpectedArgument` above) rather than just a name.
 //
 // THIS LITERAL IS MEANT TO BE EDITED whenever the public surface
 // legitimately changes - a new command, a renamed/added/removed flag or
-// alias, a new positional argument, a changed arity. That edit is the
-// enforcement mechanism, not a maintenance cost to route around: unlike
-// everything else in this file, nothing here is derived from `cmd`, so it
-// is the one check that can prove something disappeared.
+// alias, a flag becoming required/optional, a new positional argument, a
+// changed arity. That edit is the enforcement mechanism, not a maintenance
+// cost to route around: unlike everything else in this file, nothing here
+// is derived from `cmd`, so it is the one check that can prove something
+// disappeared or silently changed shape.
 const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "",
-    options: ["--json", "--no-progress", "--quiet", "-V, --version"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "-V, --version", mandatory: false },
+    ],
     args: [],
   },
-  { path: "login", options: ["--json", "--no-progress", "--quiet"], args: [] },
-  { path: "logout", options: ["--json", "--no-progress", "--quiet"], args: [] },
-  { path: "whoami", options: ["--json", "--no-progress", "--quiet"], args: [] },
+  {
+    path: "login",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "logout",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "whoami",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
   {
     path: "link-phone",
-    options: ["--json", "--no-progress", "--no-qr", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--no-qr", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   { path: "host", options: [], args: [] },
   {
     path: "host start",
-    options: ["--cwd <path>", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--cwd <path>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host capabilities",
-    options: ["--has <capability>", "--json"],
+    options: [
+      { flags: "--has <capability>", mandatory: false },
+      { flags: "--json", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host status",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host doctor",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host restart",
-    options: ["--force", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--force", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host stop",
-    options: ["--force", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--force", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   { path: "host service", options: [], args: [] },
   {
     path: "host service install",
     options: [
-      "--allow-self-invocation",
-      "--json",
-      "--no-linger",
-      "--no-progress",
-      "--quiet",
-      "--takeover",
+      { flags: "--allow-self-invocation", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-linger", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--takeover", mandatory: false },
     ],
     args: [],
   },
   {
     path: "host service status",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host service uninstall",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host install",
     options: [
-      "--allow-self-invocation",
-      "--force",
-      "--from <path>",
-      "--json",
-      "--no-linger",
-      "--no-progress",
-      "--no-service-register",
-      "--quiet",
-      "--release <version>",
+      { flags: "--allow-self-invocation", mandatory: false },
+      { flags: "--force", mandatory: false },
+      { flags: "--from <path>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-linger", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--no-service-register", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--release <version>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "host ensure",
     options: [
-      "--allow-self-invocation",
-      "--force",
-      "--from <path>",
-      "--json",
-      "--no-linger",
-      "--no-progress",
-      "--no-service-register",
-      "--quiet",
-      "--release <version>",
+      { flags: "--allow-self-invocation", mandatory: false },
+      { flags: "--force", mandatory: false },
+      { flags: "--from <path>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-linger", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--no-service-register", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--release <version>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "host apply",
-    options: ["--force", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--force", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host update",
-    options: ["--force", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--force", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host download",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [{ name: "version", required: false, variadic: false }],
   },
   {
     path: "host uninstall",
-    options: ["--all", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--all", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "host available",
     options: [
-      "--include-pre-releases",
-      "--json",
-      "--no-include-pre-releases",
-      "--no-progress",
-      "--quiet",
+      { flags: "--include-pre-releases", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-include-pre-releases", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
   {
     path: "host logs",
     options: [
-      "--follow",
-      "--json",
-      "--no-progress",
-      "--quiet",
-      "--tail <lines>",
+      { flags: "--follow", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--tail <lines>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "host free-port-and-restart",
     options: [
-      "--json",
-      "--no-progress",
-      "--pid <pid>",
-      "--port <port>",
-      "--quiet",
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--pid <pid>", mandatory: false },
+      { flags: "--port <port>", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
@@ -397,22 +493,22 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "cli upgrade",
     options: [
-      "--dry-run",
-      "--json",
-      "--no-progress",
-      "--quiet",
-      "--target <version>",
+      { flags: "--dry-run", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--target <version>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "cli re-anchor",
     options: [
-      "--binary-path <path>",
-      "--installed-version <version>",
-      "--json",
-      "--no-progress",
-      "--quiet",
+      { flags: "--binary-path <path>", mandatory: true },
+      { flags: "--installed-version <version>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
@@ -420,309 +516,417 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   { path: "config shell", options: [], args: [] },
   {
     path: "config shell get",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config shell list",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config shell set",
     options: [
-      "--clear-args",
-      "--json",
-      "--no-progress",
-      "--path <path>",
-      "--quiet",
+      { flags: "--clear-args", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--path <path>", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [{ name: "shellArgs", required: false, variadic: true }],
   },
   {
     path: "config shell add",
-    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--path <path>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config shell remove",
-    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--path <path>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config shell revert-args",
-    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--path <path>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config shell reset",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   { path: "config env", options: [], args: [] },
   {
     path: "config env list",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config env get",
-    options: ["--json", "--key <key>", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--key <key>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config env set",
     options: [
-      "--json",
-      "--key <key>",
-      "--no-progress",
-      "--quiet",
-      "--value <value>",
+      { flags: "--json", mandatory: false },
+      { flags: "--key <key>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--value <value>", mandatory: true },
     ],
     args: [],
   },
   {
     path: "config env unset",
-    options: ["--json", "--key <key>", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--key <key>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "config env delete",
-    options: ["--json", "--key <key>", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--key <key>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   { path: "comments", options: [], args: [] },
   {
     path: "comments list",
-    options: ["--json", "--no-progress", "--quiet", "--status <status>"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--status <status>", mandatory: false },
+    ],
     args: [{ name: "artifactPaths", required: false, variadic: true }],
   },
   {
     path: "comments set-status",
     options: [
-      "--artifact <path>",
-      "--json",
-      "--no-progress",
-      "--quiet",
-      "--status <status>",
+      { flags: "--artifact <path>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--status <status>", mandatory: true },
     ],
     args: [{ name: "threadIds", required: true, variadic: true }],
   },
   { path: "terminal", options: [], args: [] },
   {
     path: "terminal list",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "terminal output",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [{ name: "terminal-id", required: true, variadic: false }],
   },
   { path: "workspace", options: [], args: [] },
   {
     path: "workspace list",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   { path: "worktree", options: [], args: [] },
   {
     path: "worktree list",
     options: [
-      "--cursor <worktreePath>",
-      "--include-activity",
-      "--json",
-      "--limit <n>",
-      "--no-progress",
-      "--quiet",
+      { flags: "--cursor <worktreePath>", mandatory: false },
+      { flags: "--include-activity", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--limit <n>", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
   {
     path: "worktree delete",
-    options: ["--json", "--no-progress", "--path <path>", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--path <path>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "worktree create",
     options: [
-      "--branch <branch>",
-      "--carry-uncommitted",
-      "--existing <branch>",
-      "--json",
-      "--no-progress",
-      "--quiet",
-      "--source-branch <branch>",
-      "--workspace <path>",
+      { flags: "--branch <branch>", mandatory: false },
+      { flags: "--carry-uncommitted", mandatory: false },
+      { flags: "--existing <branch>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--source-branch <branch>", mandatory: false },
+      { flags: "--workspace <path>", mandatory: true },
     ],
     args: [],
   },
   { path: "agent", options: [], args: [] },
   {
     path: "agent list",
-    options: ["--json", "--no-progress", "--quiet", "-a, --all"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "-a, --all", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "agent create",
     options: [
-      "--cwd <path>",
-      "--fast",
-      "--harness <id>",
-      "--json",
-      "--model <id>",
-      "--name <name>",
-      "--no-progress",
-      "--permission-mode <mode>",
-      "--profile <ambient|id>",
-      "--quiet",
-      "--reasoning-effort <effort>",
-      "--surface <surface>",
-      "--workspace-entry <workspace=path>",
-      "--workspace-path <path>",
+      { flags: "--cwd <path>", mandatory: false },
+      { flags: "--fast", mandatory: false },
+      { flags: "--harness <id>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--model <id>", mandatory: false },
+      { flags: "--name <name>", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--permission-mode <mode>", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--surface <surface>", mandatory: false },
+      { flags: "--workspace-entry <workspace=path>", mandatory: false },
+      { flags: "--workspace-path <path>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "agent fork",
     options: [
-      "--agent-id <id>",
-      "--cwd <path>",
-      "--json",
-      "--name <name>",
-      "--no-progress",
-      "--permission-mode <mode>",
-      "--profile <ambient|id>",
-      "--quiet",
-      "--workspace-entry <workspace=path>",
-      "--workspace-path <path>",
+      { flags: "--agent-id <id>", mandatory: true },
+      { flags: "--cwd <path>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--name <name>", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--permission-mode <mode>", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--workspace-entry <workspace=path>", mandatory: false },
+      { flags: "--workspace-path <path>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "agent selection-guide",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "agent list-harnesses",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "agent list-harness-models",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [{ name: "harness", required: true, variadic: false }],
   },
   {
     path: "agent list-profiles",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [{ name: "harness", required: true, variadic: false }],
   },
   {
     path: "agent profile-rate-limits",
-    options: ["--json", "--no-progress", "--profile <ambient|id>", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [{ name: "harness", required: true, variadic: false }],
   },
   {
     path: "agent configure",
     options: [
-      "--agent-id <id>",
-      "--fast",
-      "--harness <id>",
-      "--json",
-      "--model <id>",
-      "--no-progress",
-      "--permission-mode <mode>",
-      "--profile <ambient|id>",
-      "--quiet",
-      "--reasoning-effort <effort>",
+      { flags: "--agent-id <id>", mandatory: true },
+      { flags: "--fast", mandatory: false },
+      { flags: "--harness <id>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--model <id>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--permission-mode <mode>", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: true },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--reasoning-effort <effort>", mandatory: false },
     ],
     args: [],
   },
   {
     path: "agent stop",
     options: [
-      "--agent-id <id>",
-      "--cascade",
-      "--json",
-      "--no-progress",
-      "--quiet",
+      { flags: "--agent-id <id>", mandatory: true },
+      { flags: "--cascade", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
   {
     path: "agent archive",
     options: [
-      "--agent-id <id>",
-      "--json",
-      "--no-progress",
-      "--quiet",
-      "--unarchive",
+      { flags: "--agent-id <id>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--unarchive", mandatory: false },
     ],
     args: [],
   },
   {
     path: "agent send",
     options: [
-      "--expect-reply",
-      "--json",
-      "--message <text>",
-      "--no-progress",
-      "--quiet",
-      "--response-id <id>",
-      "--to <agentId>",
+      { flags: "--expect-reply", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--message <text>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--response-id <id>", mandatory: false },
+      { flags: "--to <agentId>", mandatory: true },
     ],
     args: [],
   },
   {
     path: "agent transcript",
-    options: ["--agent-id <id>", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--agent-id <id>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   { path: "agent role", options: [], args: [] },
   {
     path: "agent role claim",
     options: [
-      "--agent-id <id>",
-      "--json",
-      "--no-progress",
-      "--quiet",
-      "--role <name>",
-      "--scope <scope>",
+      { flags: "--agent-id <id>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--role <name>", mandatory: true },
+      { flags: "--scope <scope>", mandatory: true },
     ],
     args: [],
   },
   {
     path: "agent role list",
-    options: ["--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
   {
     path: "agent role relinquish",
     options: [
-      "--agent-id <id>",
-      "--claim-id <id>",
-      "--json",
-      "--no-progress",
-      "--quiet",
+      { flags: "--agent-id <id>", mandatory: false },
+      { flags: "--claim-id <id>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
   {
     path: "agent inbox",
     options: [
-      "--after <createdAt:eventId>",
-      "--agent-id <id>",
-      "--json",
-      "--no-progress",
-      "--quiet",
+      { flags: "--after <createdAt:eventId>", mandatory: false },
+      { flags: "--agent-id <id>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
     ],
     args: [],
   },
   {
     path: "monitor",
-    options: ["--agent-id <id>", "--json", "--no-progress", "--quiet"],
+    options: [
+      { flags: "--agent-id <id>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
     args: [],
   },
 ];
@@ -777,13 +981,13 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       // Full flags TERM (short alias included, e.g. "-a, --all"), not
       // reduced to the long flag - a deleted `-a` alias with `--all` still
       // registered must show up as a mismatch here.
-      const actualOptions = new Set(parseOptionRowFlagTerms(help));
-      const expectedOptions = new Set(entry.options);
-      const missingOptions = [...expectedOptions].filter(
-        (f) => !actualOptions.has(f),
+      const renderedOptionTerms = new Set(parseOptionRowFlagTerms(help));
+      const expectedFlagTerms = new Set(entry.options.map((o) => o.flags));
+      const missingOptions = [...expectedFlagTerms].filter(
+        (f) => !renderedOptionTerms.has(f),
       );
-      const unexpectedOptions = [...actualOptions].filter(
-        (f) => !expectedOptions.has(f),
+      const unexpectedOptions = [...renderedOptionTerms].filter(
+        (f) => !expectedFlagTerms.has(f),
       );
       expect(
         missingOptions,
@@ -792,6 +996,31 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(
         unexpectedOptions,
         `${label}: undocumented new rendered option(s) - add to EXPECTED_PUBLIC_SURFACE if intentional: ${unexpectedOptions.join(", ")}`,
+      ).toEqual([]);
+
+      // Mandatory-ness has NO rendered representation at all -
+      // `.requiredOption("--artifact <path>", ...)` and
+      // `.option("--artifact <path>", ...)` produce the byte-identical
+      // Options: row, so this can only be checked against the live `Option`
+      // object's public `.mandatory` field, never parsed from text. Flipping
+      // a required flag to optional (or vice versa) changes the public CLI
+      // contract with nothing in rendered help to disagree - for
+      // `--artifact` specifically it would let the `opts.artifact ?? ""`
+      // empty-string fallback in `index.ts` reach the RPC.
+      const mandatoryMismatches = entry.options
+        .map((expectedOption) => {
+          const actualOption = cmd.options.find(
+            (option) => option.flags === expectedOption.flags,
+          );
+          return actualOption === undefined ||
+            actualOption.mandatory === expectedOption.mandatory
+            ? null
+            : `${expectedOption.flags} (expected mandatory=${expectedOption.mandatory}, actual=${actualOption.mandatory})`;
+        })
+        .filter((entryLabel): entryLabel is string => entryLabel !== null);
+      expect(
+        mandatoryMismatches,
+        `${label}: option mandatory-ness changed: ${mandatoryMismatches.join(", ")}`,
       ).toEqual([]);
 
       // Full argument SIGNATURE (name + required + variadic), not just the

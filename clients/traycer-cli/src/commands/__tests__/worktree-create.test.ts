@@ -392,6 +392,73 @@ describe("formatWorktreeCreateResult", () => {
     expect(summary).not.toContain("Uncommitted changes");
   });
 
+  // Regression: `entry.branch` is nullable
+  // (`worktreeCreatedPathEntrySchema`), and the requested name used to fill
+  // the gap dressed as an observed outcome - "(new branch, forked from x)"
+  // even though the host never said the branch materialized. A null is the
+  // host DECLINING to state the result, not "same as requested".
+  it("REGRESSION: new-branch success with entry.branch: null reports the request was made, not an assumed outcome", () => {
+    const branch = newBranchSelection({ name: "feature/x", source: "main" });
+    const response = createResponse({
+      entries: [
+        {
+          workspacePath: WORKSPACE,
+          path: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
+          mode: "worktree",
+          repoIdentifier: { owner: "acme", repo: "web" },
+          branch: null,
+        },
+      ],
+      perEntry: [
+        {
+          workspacePath: WORKSPACE,
+          ok: true,
+          worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
+          branch: null,
+          errorMessage: null,
+        },
+      ],
+    });
+
+    const summary = formatWorktreeCreateResult(response, branch);
+
+    expect(summary).toContain(
+      "feature/x (requested; the host did not report the resulting branch)",
+    );
+    expect(summary).not.toContain("new branch, forked from");
+  });
+
+  it("REGRESSION: existing-branch success with entry.branch: null reports the request was made, not an assumed outcome", () => {
+    const branch = existingBranchSelection("release/1.0");
+    const response = createResponse({
+      entries: [
+        {
+          workspacePath: WORKSPACE,
+          path: "/Users/dev/.traycer/worktrees/acme__web/release-1.0",
+          mode: "worktree",
+          repoIdentifier: { owner: "acme", repo: "web" },
+          branch: null,
+        },
+      ],
+      perEntry: [
+        {
+          workspacePath: WORKSPACE,
+          ok: true,
+          worktreePath: "/Users/dev/.traycer/worktrees/acme__web/release-1.0",
+          branch: null,
+          errorMessage: null,
+        },
+      ],
+    });
+
+    const summary = formatWorktreeCreateResult(response, branch);
+
+    expect(summary).toContain(
+      "release/1.0 (requested; the host did not report the resulting branch)",
+    );
+    expect(summary).not.toContain("checked out; the branch already existed");
+  });
+
   it("repoIdentifier: null renders the no-parseable-remote wording", () => {
     const branch = newBranchSelection({});
     const response = createResponse({
