@@ -12,7 +12,7 @@ import {
 } from "@traycer/protocol/comments/comments-xml-formatting";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -41,7 +41,11 @@ export function buildCommentsListCommand(opts: {
         status,
       }),
     );
-    const parsed = parseHostResponse(commentsListThreadsResponseSchema, result);
+    const parsed = parseCanonicalHostResponse(
+      "comments.listThreads",
+      commentsListThreadsResponseSchema,
+      result,
+    );
     return {
       data: parsed,
       human: formatCommentsListThreadsXml({
@@ -79,7 +83,8 @@ export function buildCommentsSetStatusCommand(opts: {
         ],
       }),
     );
-    const parsed = parseHostResponse(
+    const parsed = parseCanonicalHostResponse(
+      "comments.setThreadStatus",
       commentsSetThreadStatusResponseSchema,
       result,
     );

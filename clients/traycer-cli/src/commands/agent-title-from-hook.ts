@@ -7,7 +7,7 @@ import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import { GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   callHostRpcFastFail,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -125,7 +125,8 @@ export function buildAgentTitleFromHookCommand(opts: {
       return noop("host-unreachable");
     }
 
-    const { accepted } = parseHostResponse(
+    const { accepted } = parseCanonicalHostResponse(
+      "agent.tui.generateTitle",
       generateTuiAgentTitleResponseSchema,
       rpcResult,
     );

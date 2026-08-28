@@ -4,9 +4,10 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  worktreeDeleteByPathServerFrameSchema,
+  worktreeDeleteByPathServerFrameSchemaV11,
   type WorktreeDeleteOutputChannel,
 } from "@traycer/protocol/host/worktree-delete-stream";
+import type { WorktreeBusyHolders } from "@traycer/protocol/framework/worktree-busy-holders";
 import type {
   WorktreeDeleteBatchOutputChannel,
   WorktreeDeleteBatchPhase,
@@ -241,7 +242,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason),
+            error: deleteFailedCliError(reason, null),
           }),
         // With one target this normally arrives after its terminal frame and
         // is a no-op under the settled guard. It matters when it does NOT: an
@@ -257,7 +258,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason),
+            error: deleteFailedCliError(reason, null),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
         onConnectionStatus: (
@@ -319,7 +320,15 @@ async function runLegacyDeleteStream(
       act();
     };
     session.onServerFrame((envelope) => {
-      const parsed = worktreeDeleteByPathServerFrameSchema.safeParse(envelope);
+      // The CANONICAL v1.1 frame, not the v1.0 base schema. v1.1 added
+      // `holders` to the `failed` arm - the typed inventory naming which chats
+      // and terminal agents still hold the worktree. It is declared
+      // `.optional().catch(undefined)` so that adding it could never reject an
+      // older envelope, which also means a v1.0 decode drops it silently
+      // instead of failing: the busy refusal kept its prose `reason` and lost
+      // the one part a caller could act on.
+      const parsed =
+        worktreeDeleteByPathServerFrameSchemaV11.safeParse(envelope);
       if (!parsed.success) return;
       const frame = parsed.data;
       switch (frame.kind) {
@@ -341,7 +350,9 @@ async function runLegacyDeleteStream(
           finish(() => resolve(frame.deleted));
           return;
         case "failed":
-          finish(() => reject(deleteFailedCliError(frame.reason)));
+          finish(() =>
+            reject(deleteFailedCliError(frame.reason, frame.holders ?? null)),
+          );
           return;
         case "pong":
           return;
@@ -428,11 +439,25 @@ function relayOutput(
 }
 
 /** The host reported this delete as failed, with a displayable reason. */
-function deleteFailedCliError(reason: string): CliError {
+/**
+ * `holders` is the host's typed inventory of what still holds the worktree,
+ * present only on a busy refusal from a v1.1+ host (`null` otherwise). It rides
+ * `details` so `--json` callers get the structured list, and the human message
+ * names the holders rather than leaving "worktree is busy" for the user to
+ * investigate by hand.
+ */
+function deleteFailedCliError(
+  reason: string,
+  holders: WorktreeBusyHolders | null,
+): CliError {
+  const named =
+    holders === null || holders.length === 0
+      ? ""
+      : ` Held by ${holders.map((holder) => holder.label).join(", ")}.`;
   return cliError({
     code: CLI_ERROR_CODES.UNEXPECTED,
-    message: `traycer: worktree delete failed - ${reason}`,
-    details: null,
+    message: `traycer: worktree delete failed - ${reason}${named}`,
+    details: holders === null ? null : { holders },
     exitCode: 1,
   });
 }
