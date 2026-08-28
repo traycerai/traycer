@@ -220,6 +220,33 @@ const placeholderRowsBySkeleton = new WeakMap<
   Map<number, TranscriptListRow>
 >();
 
+const MAX_INVALIDATED_PLACEHOLDER_SETS = 16;
+const invalidatedPlaceholdersByRowCount = new Map<
+  number,
+  readonly TranscriptListRow[]
+>();
+
+function invalidatedPlaceholderRows(
+  rowCount: number,
+): readonly TranscriptListRow[] {
+  const cached = invalidatedPlaceholdersByRowCount.get(rowCount);
+  if (cached !== undefined) return cached;
+  const rows = Array.from({ length: rowCount }, (_unused, ordinal) => ({
+    kind: "placeholder" as const,
+    key: unplacedRowKey(ordinal),
+    ordinal,
+    entry: null,
+  }));
+  invalidatedPlaceholdersByRowCount.set(rowCount, rows);
+  if (
+    invalidatedPlaceholdersByRowCount.size > MAX_INVALIDATED_PLACEHOLDER_SETS
+  ) {
+    const oldest = invalidatedPlaceholdersByRowCount.keys().next();
+    if (!oldest.done) invalidatedPlaceholdersByRowCount.delete(oldest.value);
+  }
+  return rows;
+}
+
 /**
  * Seat the live records the index has started naming, in place.
  *
@@ -306,12 +333,7 @@ export function transcriptListRows(input: {
           liveRowIds.has(model.persistentMessageId)),
     );
     return [
-      ...Array.from({ length: window.rowCount }, (_unused, ordinal) => ({
-        kind: "placeholder" as const,
-        key: unplacedRowKey(ordinal),
-        ordinal,
-        entry: null,
-      })),
+      ...invalidatedPlaceholderRows(window.rowCount),
       ...unplacedRendered.map((model) => ({
         kind: "hydrated" as const,
         key: model.id,

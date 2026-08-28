@@ -444,6 +444,24 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
   });
 
+  it("reuses invalidated placeholder objects across streaming renders", () => {
+    const window = windowOf({
+      rowCount: 2,
+      spans: [],
+      skeleton: [],
+      skeletonComplete: false,
+      invalidated: true,
+    });
+    const first = transcriptListRows({ window, rendered: [] });
+    const streamed = transcriptListRows({
+      window,
+      rendered: [modelWithoutPersistentMessageId("pending-user")],
+    });
+
+    expect(streamed[0]).toBe(first[0]);
+    expect(streamed[1]).toBe(first[1]);
+  });
+
   it("drops a span row that claims an ordinal past rowCount", () => {
     const rows = transcriptListRows({
       window: windowOf({

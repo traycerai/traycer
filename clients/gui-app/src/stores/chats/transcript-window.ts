@@ -509,10 +509,11 @@ function pruneSupersededLiveRecords(
   return { ...window, liveMessages, liveEvents };
 }
 
-function assistantTurnKeys(messages: readonly Message[]): ReadonlySet<string> {
+function assistantTurnKeys(rowIds: readonly string[]): ReadonlySet<string> {
   const keys = new Set<string>();
-  for (const message of messages) {
-    if (message.role === "assistant") keys.add(assistantTurnKey(message));
+  for (const rowId of rowIds) {
+    const turnKey = assistantRowTurnKey(rowId);
+    if (turnKey !== null) keys.add(turnKey);
   }
   return keys;
 }
@@ -1267,7 +1268,7 @@ export function applyWindowedSnapshot(
       spans,
       hydratedBytes: totalBytes(spans),
     },
-    assistantTurnKeys(input.tail.messages),
+    assistantTurnKeys(tailRowIds),
   );
 }
 
@@ -1436,7 +1437,11 @@ export function applySkeletonChunk(
 function reconcileProvisionalMessagesWithSkeleton(
   window: TranscriptWindow,
 ): TranscriptWindow {
-  if (!window.skeletonComplete || window.liveMessages.length === 0) {
+  if (
+    window.invalidated ||
+    !window.skeletonComplete ||
+    window.liveMessages.length === 0
+  ) {
     return window;
   }
   const skeletonAssistantTurnKeys = new Set<string>();
@@ -2071,7 +2076,7 @@ export function applyRangeResponse(
       hydratedBytes: totalBytes(spans),
       clock,
     },
-    assistantTurnKeys(response.messages),
+    assistantTurnKeys(response.rowIds),
   );
 }
 

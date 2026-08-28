@@ -7,7 +7,10 @@ import type {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
-import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import {
+  assistantRowId,
+  queueSteerRowId,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import {
   appendLiveRecords,
@@ -2073,6 +2076,73 @@ describe("what an overlap keeps", () => {
     expect(
       unrelatedServe.liveMessages.map((message) => message.messageId),
     ).toEqual([transientId]);
+  });
+
+  it("does not retire a completion stand-in when only a steer row is served", () => {
+    const turnId = "turn-steer-only";
+    const steerRowId = queueSteerRowId("queue-1");
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry(assistantRowId(turnId), 0),
+          skeletonEntry(steerRowId, 1),
+        ],
+        isFinal: true,
+      },
+    );
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(indexed, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const steerOnly = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 1,
+        rowIds: [steerRowId],
+        messages: [assistantMessage("assistant-shared", turnId, 1)],
+      }),
+    );
+
+    expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not reconcile stand-ins against a completed void skeleton", () => {
+    const turnId = "turn-void-skeleton";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live: TranscriptWindow = {
+      ...appendLiveRecords(emptyTranscriptWindow(), {
+        messages: [assistantMessage(transientId, turnId, 1)],
+        events: [],
+      }),
+      epoch: 1,
+      rowCount: 1,
+      invalidated: true,
+    };
+
+    const completed = applySkeletonChunk(live, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(completed.invalidated).toBe(true);
+    expect(completed.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
   });
 
   it("retires a frozen assistant once the complete replacement skeleton omits its turn", () => {
