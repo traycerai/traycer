@@ -1,8 +1,13 @@
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
-import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
+import {
+  worktreeFolderIntentSchema,
+  type WorktreeBindingOwnerKind,
+  type WorktreeFolderIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   readMetadataNumber,
   readMetadataString,
+  readMetadataValue,
 } from "@/lib/chat/event-metadata";
 import { SETUP_EVENT_TYPES } from "@/lib/chat/setup-tone";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
@@ -300,6 +305,17 @@ function deriveWorkspace(
     // Only a `failed` state surfaces an exit code; the failing event carries it.
     setupExitCode:
       state === "failed" ? readMetadataNumber(latest, "setupExitCode") : null,
+    // The failure reason the host stamped on the failing event (a provision
+    // failure's git error, or null for a script failure - those surface the
+    // exit code + terminal instead).
+    errorMessage:
+      state === "failed" ? readMetadataString(latest, "errorMessage") : null,
+    // A provision failure carries the exact folder intent it attempted, so
+    // Retry can re-provision via `worktree.create`. Schema-validated: an
+    // older event without it (or a malformed value) resolves to null and
+    // Retry falls back to `worktree.retrySetup`.
+    retryFolderIntent:
+      state === "failed" ? readRetryFolderIntent(latest) : null,
     terminalSessionId: latestMetadataString(groupEvents, "terminalSessionId"),
     // Where + what was created, for the expanded view. Carried on every setup.*
     // event now, but read newest-first non-empty so a workspace inherits it even
@@ -307,6 +323,20 @@ function deriveWorkspace(
     worktreePath: latestMetadataString(groupEvents, "worktreePath"),
     branch: latestMetadataString(groupEvents, "branch"),
   };
+}
+
+/**
+ * Parse the `folderIntent` a provision-failure `setup.failed` event carries.
+ * Only a `worktree`-kind intent is retryable through `worktree.create`; a
+ * missing/malformed value (older hosts) yields null and the caller falls back
+ * to the script-retry path.
+ */
+function readRetryFolderIntent(event: ChatEvent): WorktreeFolderIntent | null {
+  const parsed = worktreeFolderIntentSchema.safeParse(
+    readMetadataValue(event, "folderIntent"),
+  );
+  if (!parsed.success) return null;
+  return parsed.data.kind === "worktree" ? parsed.data : null;
 }
 
 /**

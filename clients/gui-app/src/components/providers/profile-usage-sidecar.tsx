@@ -13,6 +13,7 @@ import { MeterRow } from "@/components/settings/panels/traycer-subscription-view
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   formatRelativeTimestamp,
   formatResetCountdown,
@@ -166,29 +167,33 @@ function ProfileUsageSidecarContent({
           </div>
           <FreshnessLine entry={entry} now={now} />
         </div>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label={`${refreshLabel} usage for ${profile.label}`}
-          aria-keyshortcuts="R"
-          disabled={!isHostReady || refreshing}
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={() => void entry.refresh()}
-        >
-          {refreshing ? (
-            <AgentSpinningDots
-              className="text-muted-foreground"
-              testId="profile-usage-refresh-spinner"
-              variant={undefined}
-            />
-          ) : null}
-          {refreshLabel}
-          <Kbd className="ml-0.5 font-mono">R</Kbd>
-        </Button>
+        {entry.fetchEligible ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-label={`${refreshLabel} usage for ${profile.label}`}
+            aria-keyshortcuts="R"
+            disabled={!isHostReady || refreshing}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => void entry.refresh()}
+          >
+            {refreshing ? (
+              <AgentSpinningDots
+                className="text-muted-foreground"
+                testId="profile-usage-refresh-spinner"
+                variant={undefined}
+              />
+            ) : null}
+            {refreshLabel}
+            <ShortcutHint>
+              <Kbd className="ml-0.5 font-mono">R</Kbd>
+            </ShortcutHint>
+          </Button>
+        ) : null}
       </div>
       {!isHostReady ? (
-        <p className="mt-2.5 rounded-md bg-muted/60 px-2 py-1.5 text-ui-xs text-muted-foreground">
+        <p className="mt-2.5 rounded-md bg-foreground/6 px-2 py-1.5 text-ui-xs text-muted-foreground">
           Run host unavailable. Cached usage is shown when available.
         </p>
       ) : null}
@@ -373,7 +378,7 @@ function ProfileUsageEmptyState({
   return (
     <div
       className={cn(
-        "rounded-md border border-border/60 bg-muted/35 px-2.5 py-2",
+        "rounded-md border border-border/60 bg-foreground/4 px-2.5 py-2",
         tone === "warning" && "border-warning/30 bg-warning/10",
         tone === "destructive" && "border-destructive/30 bg-destructive/10",
       )}

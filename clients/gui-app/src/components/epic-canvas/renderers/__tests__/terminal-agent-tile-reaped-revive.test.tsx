@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -69,7 +68,7 @@ vi.mock("@/lib/host", () => {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:1/rpc",
     version: null,
-    status: "available",
+    transportDialability: "dialable",
   };
   return {
     useHostBinding: () => null,

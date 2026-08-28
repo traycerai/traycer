@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -22,40 +20,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the hostile-labeled row without fighting Radix's pointerdown-based open
 // gesture in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
-vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
-  return {
-    DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
-    DropdownMenuItem: (props: {
-      readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
-      readonly "aria-label": string | undefined;
-      readonly "aria-current": "true" | undefined;
-      readonly className: string | undefined;
-    }): ReactNode => (
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={props["aria-label"]}
-        aria-current={props["aria-current"]}
-        className={props.className}
-        onClick={props.onSelect}
-      >
-        {props.children}
-      </button>
-    ),
-    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
-    DropdownMenuShortcut: (props: {
-      readonly children: ReactNode;
-      readonly "data-testid": string | undefined;
-    }): ReactNode => (
-      <span data-testid={props["data-testid"]}>{props.children}</span>
-    ),
-  };
-});
+vi.mock("@/components/ui/dropdown-menu", async () => ({
+  ...(await import("./dropdown-menu-passthrough-mock")),
+}));
 
 const providerMocks = vi.hoisted(() => ({
   listResult: {
@@ -69,6 +36,13 @@ const providerMocks = vi.hoisted(() => ({
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));
+// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
+// goes through TanStack Query. Mocked here alongside the other provider
+// mutations so this panel test keeps rendering without a QueryClientProvider.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -211,8 +185,8 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
   useRefreshProviderRateLimitsOnMount: () => {},
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({
@@ -221,7 +195,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         hostId: "local",
         kind: "local",
         label: "Local host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://127.0.0.1:0",
       },
     ],
@@ -230,9 +204,25 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
 }));
+// The refresh button resolves a client PINNED to its host id rather than the
+// app-wide one, and that resolution dereferences `useHostClient()` during
+// render - which the `@/lib/host` stub below makes `null`. Stub the pinned
+// resolution too, matching the other host-less panel suites.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
+});
+
+// Panels depend on the host SCOPE, not on the hooks it composes.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: null }),
+  };
 });
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
@@ -245,13 +235,17 @@ function renderProvidersSettingsPanel() {
       mutations: { retry: false },
     },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  // Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
+  // tab. Radix Tabs activate on mouseDown, not click.
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
+  return view;
 }
 
 const VERY_LONG_LABEL = "C".repeat(2000);
@@ -261,6 +255,7 @@ const HTML_LOOKING_EMAIL = '<img src=x onerror="alert(1)">@example.com';
 function hostileProfile(label: string, email: string): ProviderProfile {
   return {
     profileId: "hostile-uuid",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,
@@ -273,6 +268,7 @@ function hostileProfile(label: string, email: string): ProviderProfile {
     identity: { email, tier: null, accountUuid: "acct-1" },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -282,6 +278,7 @@ function hostileProfile(label: string, email: string): ProviderProfile {
 function ambientProfile(): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -294,6 +291,7 @@ function ambientProfile(): ProviderProfile {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -322,6 +320,16 @@ function claudeStateWithProfiles(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...profiles],
   };
 }

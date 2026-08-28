@@ -18,16 +18,27 @@ import type { Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CreateCommentThreadResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
+import {
+  usePaneFocused,
+  usePanePortalContainer,
+} from "@/components/epic-tabs/pane-visibility-context";
 import {
   useCommentThreadsStore,
   useDraftRange,
 } from "@/stores/comments/comment-threads-store";
-import { useCreateCommentThread } from "@/hooks/comments/use-comment-thread-mutations";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useCreateCommentThreadForClient } from "@/hooks/comments/use-comment-thread-mutations";
 import { CommentComposer } from "./comment-composer";
 
 export interface FloatingDraftPopoverProps {
   readonly epicId: string;
+  /** The host serving the TILE this draft was opened over - passed down by
+   *  `collab-tile-body.tsx` from `useTabHostClient()`. The thread must be
+   *  created on the host that serves the artifact being annotated, not on
+   *  whichever one the app is currently pointed at (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   readonly tileId: string;
@@ -55,7 +66,15 @@ export interface FloatingDraftPopoverProps {
  * if the composer has content).
  */
 export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
-  const { epicId, artifactType, artifactId, tileId, editor, onCreated } = props;
+  const {
+    epicId,
+    hostClient,
+    artifactType,
+    artifactId,
+    tileId,
+    editor,
+    onCreated,
+  } = props;
 
   const draft = useDraftRange(epicId);
   const ownedDraft =
@@ -63,9 +82,18 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
       ? draft
       : null;
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
-  const createThread = useCreateCommentThread();
+  const createThread = useCreateCommentThreadForClient(hostClient);
   const floatingRef = useRef<HTMLDialogElement | null>(null);
   const isDirtyRef = useRef(false);
+  // Render into the pane's portal host so this kept-mounted composer (its typed
+  // draft survives focus changes) is hidden with the pane instead of covering a
+  // focused split partner. `null` outside a pane falls back to `document.body`.
+  const paneContainer = usePanePortalContainer();
+  // The kept-mounted draft stays MOUNTED while its pane is a background split
+  // member, so its global (window, capture-phase) Escape listener must be gated
+  // on pane focus — otherwise Escape typed in the focused partner would dismiss
+  // this hidden draft.
+  const paneFocused = usePaneFocused();
 
   const dismiss = useCallback(
     (force: boolean) => {
@@ -107,13 +135,17 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     };
     reposition();
     return autoUpdate(virtualReference, floating, reposition);
-  }, [editor, ownedDraft]);
+    // `paneContainer` is a dependency: when the portal host settles (initially
+    // null → the pane container), createPortal remounts the floating node, so
+    // the positioning effect must re-run to bind `autoUpdate` to the live node
+    // instead of the detached first-mount node.
+  }, [editor, ownedDraft, paneContainer]);
 
   // Esc cancels (with dirty-confirm) at the document level so the editor
   // doesn't have to forward keystrokes. The Tiptap editor's own Escape
   // handler already lets unhandled keys bubble.
   useEffect(() => {
-    if (!draftActive) return;
+    if (!draftActive || !paneFocused) return;
     window.addEventListener("keydown", handleDocumentKeyDown, {
       capture: true,
     });
@@ -122,7 +154,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
         capture: true,
       });
     };
-  }, [draftActive]);
+  }, [draftActive, paneFocused]);
 
   // Re-map the saved draft range through every editor transaction so local
   // and remote edits keep the from/to offsets aligned with the original
@@ -206,6 +238,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     >
       <CommentComposer
         epicId={epicId}
+        hostClient={hostClient}
         initialContent={null}
         placeholder="Start a thread…"
         focusOnMount
@@ -218,7 +251,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
         className={undefined}
       />
     </dialog>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }
 

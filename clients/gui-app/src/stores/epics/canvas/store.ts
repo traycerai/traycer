@@ -13,7 +13,9 @@ import {
   type StateStorage,
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { basePersistOptions, epicCanvasKey } from "@/lib/persist";
+import { appLogger } from "@/lib/logger";
 import {
   DEFAULT_EPIC_NODE_NAMES,
   type EpicNodeKind,
@@ -40,7 +42,22 @@ import type {
   DesktopPerWindowStatePatch,
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
-import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
+import { evictChatTabState } from "@/stores/chats/chat-tab-state-cache";
+import { evictPendingHydrationRestores } from "@/stores/chats/chat-tab-pending-hydration-restore";
+import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
+import { evictActivityGroupOpenStores } from "@/stores/chats/activity-group-open-store-core";
+import { evictA2AOpenStores } from "@/stores/chats/a2a-open-store-context";
+import {
+  toolOpenInitializedScopes,
+  useToolOpenStore,
+} from "@/stores/chats/tool-open-store";
+import {
+  subagentOpenInitializedScopes,
+  useSubagentOpenStore,
+} from "@/stores/chats/subagent-open-store";
+import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
+import { promoteChatTabPersistenceToDurable } from "@/stores/chats/chat-tab-persistence-eviction";
+import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import {
   closeAllTabs,
   closeOtherTabs as closeOtherTileTabs,
@@ -54,9 +71,15 @@ import {
   openTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
+  findPaneTabForRef,
+  openSingletonTileInPane as openSingletonTileInPaneCanvas,
   promotePreview,
+  restorePreview,
   renameArtifact,
   renameTerminalTiles,
+  adoptHostTerminalProjection,
+  removeTerminalTiles,
+  restoreTilePreview as restoreTilePreviewCanvas,
   resizeSplit,
   setActivePane,
   setActiveTab as setActiveTileTabCanvas,
@@ -64,24 +87,36 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
+  updatePrDiffTileView,
+  togglePrDiffFileCollapsed,
 } from "@/stores/epics/canvas/actions";
 import {
   EMPTY_CANVAS,
   collectLiveTileInstanceIds,
   createEmptyCanvas,
 } from "@/stores/epics/canvas/canvas-state";
-import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
+  collectPanes,
+  findPaneById,
+  paneRemovalDissolveHandoffTargets,
+  resolveActivePaneTab,
+} from "@/stores/epics/canvas/tile-tree";
+import {
+  isUnsupportedEpicTerminalRef,
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
   type EdgeDropPosition,
   type EpicCanvasTileRef,
   type EpicCanvasState,
+  type CommGraphTileViewState,
   type EpicViewTab,
   type GitDiffTileViewState,
+  type PrDiffTileViewState,
   type SplitDirection,
+  type TilesByInstanceId,
 } from "@/stores/epics/canvas/types";
 import {
   EMPTY_TREES,
@@ -94,6 +129,10 @@ import {
 } from "@/stores/epics/canvas/canvas-desktop-projection";
 import { serializeEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import {
+  isTabCloseLocked,
+  isTabStructurallyLocked,
+} from "@/stores/tabs/tab-structural-lock";
+import {
   chatTitleTimers,
   clearAllScheduledTitlePending,
   clearScheduledTitlePending,
@@ -101,6 +140,20 @@ import {
   scheduleTitlePendingClear,
   type PendingTitleEntry,
 } from "@/stores/epics/canvas/canvas-title-timers";
+import {
+  collectTileIdentityRegistry,
+  enforceTileIdentityInvariant,
+} from "@/stores/epics/canvas/tile-identity-invariant";
+import { requestEpicTerminalClose } from "@/lib/terminals/epic-terminal-close-coordinator";
+import {
+  purgeEpicTerminalDurableCreatesForEpic,
+  shouldPreserveEpicTerminalPendingCreate,
+} from "@/lib/terminals/epic-terminal-durable-create-coordinator";
+import {
+  hasTerminalPendingCreate,
+  withTerminalPendingCreate,
+  withoutTerminalPendingCreate,
+} from "@/lib/terminals/pending-create-identity";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
 
 function trackOpenedCanvasTile(
@@ -166,6 +219,32 @@ function trackClosedCanvasTiles(
   });
 }
 
+function requestedLocalCloseIds(
+  canvas: EpicCanvasState,
+  instanceIds: readonly string[],
+): readonly string[] {
+  const refs = instanceIds.flatMap((instanceId) => {
+    const ref = canvas.tilesByInstanceId[instanceId];
+    return ref === undefined ? [] : [ref];
+  });
+  return requestEpicTerminalClose(refs).localInstanceIds;
+}
+
+function closeRequestedTabs(
+  canvas: EpicCanvasState,
+  paneId: string,
+  requestedIds: readonly string[],
+  closeAllRequested: (state: EpicCanvasState) => EpicCanvasState,
+): EpicCanvasState {
+  const localIds = requestedLocalCloseIds(canvas, requestedIds);
+  if (localIds.length === requestedIds.length) return closeAllRequested(canvas);
+  if (localIds.length === 0) return canvas;
+  return localIds.reduce(
+    (current, instanceId) => closeTileTab(current, paneId, instanceId),
+    canvas,
+  );
+}
+
 export interface TabMoveArgs {
   readonly sourcePaneId: string;
   // Tab instanceId (per-tab identity), not the content id.
@@ -180,6 +259,11 @@ export interface TabSplitArgs {
   readonly tabId: string;
   readonly targetPaneId: string;
   readonly position: EdgeDropPosition;
+}
+
+export interface ClosedTilePayload {
+  readonly node: EpicCanvasTileRef;
+  readonly pendingCreate: boolean;
 }
 
 export interface EpicCanvasStore {
@@ -197,6 +281,21 @@ export interface EpicCanvasStore {
    * its `tabsById` entry.
    */
   readonly canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>;
+  /**
+   * Payloads of tiles closed out of a tab's canvas, keyed by `tabId` then by
+   * the closed tile's (now-defunct) `instanceId`. Lets back/forward reopen a
+   * closed sub-tab as a preview (`openTilePreviewInTab`) even though
+   * `tilesByInstanceId` itself discards the payload on close - the href/search
+   * params alone don't carry enough to reconstruct a tile node. Session-only
+   * (not in `partialize`) and bounded per tab (`captureClosedTilePayloads`),
+   * so a stale miss just falls back to the existing stale-route restore.
+   */
+  readonly closedTilePayloadsByTabId: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
+    >
+  >;
   /**
    * Header-strip order for tabs currently visible in this window. Removing an
    * id from this list closes the visible tab without necessarily discarding its
@@ -216,6 +315,13 @@ export interface EpicCanvasStore {
   >;
   readonly selfDeletedArtifactIds: ReadonlySet<string>;
   readonly pendingCreateArtifactIds: ReadonlySet<string>;
+  /**
+   * Terminal pending-create identities, keyed by canonical
+   * `plainTerminalFleetIdentityKey` (`JSON.stringify([hostId, terminalId])`).
+   * Separate from `pendingCreateArtifactIds` so a chat/artifact id cannot be
+   * claimed as a terminal marker. Not persisted.
+   */
+  readonly pendingCreateTerminalIdentities: ReadonlySet<string>;
   readonly preAckRootCreatesByEpic: Readonly<
     Record<string, ReadonlyArray<{ tempId: string; name: string }> | undefined>
   >;
@@ -226,6 +332,18 @@ export interface EpicCanvasStore {
   readonly pendingChatTitles: Readonly<Record<string, PendingTitleEntry>>;
 
   openEpicTab: (epicId: string, name: string | undefined) => string;
+  /** Coordinator-only stable-id source creation. */
+  openEpicTabWithId: (
+    tabId: string,
+    epicId: string,
+    name: string | undefined,
+  ) => string;
+  /** Coordinator-only stable-id source creation for a Phase migration tab. */
+  openPhaseMigrationTabWithId: (
+    tabId: string,
+    phaseId: string,
+    name: string | undefined,
+  ) => string;
   /**
    * Open an epic tab in the header strip WITHOUT activating it - the active
    * tab and current route are left untouched. Reuses an existing tab for the
@@ -324,6 +442,32 @@ export interface EpicCanvasStore {
     source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
+   * Reopens a preserved `closedTilePayloadsByTabId` entry as a preview,
+   * preferring `preferredPaneId` (the history entry's original pane) when it
+   * still exists and falling back to the active pane otherwise. `node` keeps
+   * its ORIGINAL `instanceId` (not a fresh one) so a landing history href
+   * addressing that exact instanceId resolves directly after the reopen.
+   * Evicts the now-live entry from `closedTilePayloadsByTabId` - a later
+   * close re-captures it - and restores its pending-create marker while the
+   * optimistic record is still projecting. Back/forward's preview-reopen path
+   * (`history-navigation.ts`) is the only caller.
+   */
+  restoreClosedTilePreview: (
+    tabId: string,
+    preferredPaneId: string | null,
+    node: EpicCanvasTileRef,
+  ) => void;
+  /**
+   * Drops one entry from `closedTilePayloadsByTabId` without reopening it.
+   * Back/forward's preview-reopen path calls this when a preserved payload's
+   * backing record has since been permanently deleted (checked via
+   * `isTileRefRecordLive`) - the entry is unusable, so it's discarded and the
+   * landing treats it as a cache miss (existing stale-target fallback takes
+   * over) rather than resurrecting a tile the record-sync effect would
+   * immediately close again.
+   */
+  discardClosedTilePayload: (tabId: string, instanceId: string) => void;
+  /**
    * Add `node` as a tab in the active pane without changing the active
    * tab/pane (persists a server-created terminal as a saved tab without
    * stealing focus). Idempotent.
@@ -360,6 +504,16 @@ export interface EpicCanvasStore {
     source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
+   * Opener path for a SINGLETON tile (one instance per content id, e.g. the
+   * per-epic comm graph): focus the existing tab if there is one, otherwise
+   * open into `paneId`. See {@link openSingletonTileInPaneCanvas}.
+   */
+  prepareOpenSingletonTileInPaneFocusTarget: (
+    tabId: string,
+    paneId: string,
+    ref: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
+  /**
    * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
    * a no-op-ish focus when the pane's active tab is already blank.
    * See {@link openBlankTabInPaneCanvas}.
@@ -379,6 +533,16 @@ export interface EpicCanvasStore {
     tileId: string,
     view: GitDiffTileViewState,
   ) => void;
+  updateCommGraphTileViewInTab: (
+    tabId: string,
+    tileId: string,
+    view: CommGraphTileViewState,
+  ) => void;
+  updatePrDiffTileViewInTab: (
+    tabId: string,
+    tileId: string,
+    view: PrDiffTileViewState,
+  ) => void;
   toggleGitDiffBundleFileCollapsedInTab: (
     tabId: string,
     tileId: string,
@@ -389,7 +553,20 @@ export interface EpicCanvasStore {
     tileId: string,
     filePath: string,
   ) => void;
+  // `fileKey` is a tagged canonical key (`prLocalDiffFileKey`), never a bare
+  // path - PR collapse entries live in their own key space (`PrDiffTileViewState`).
+  togglePrDiffFileCollapsedInTab: (
+    tabId: string,
+    tileId: string,
+    fileKey: string,
+  ) => void;
   promotePreviewInTab: (tabId: string, paneId: string) => void;
+  /** Inverse of `promotePreviewInTab`, for a cancelled preview-tile drag. */
+  readonly restorePreviewInTab: (
+    tabId: string,
+    paneId: string,
+    previewTabId: string,
+  ) => void;
   applyNestedRouteFocus: (tabId: string, target: NestedFocusTarget) => void;
   setActiveTileTab: (tabId: string, paneId: string, tileTabId: string) => void;
   prepareSetActiveTileTabFocusTarget: (
@@ -457,6 +634,11 @@ export interface EpicCanvasStore {
     targetPaneId: string,
   ) => string | null;
   closeCanvasTab: (tabId: string, paneId: string, tileTabId: string) => void;
+  closeConfirmedDeletedChatTiles: (
+    epicId: string,
+    chatId: string,
+    hostId: string,
+  ) => void;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
     paneId: string,
@@ -519,6 +701,13 @@ export interface EpicCanvasStore {
     sessionId: string,
     name: string,
   ) => void;
+  /** Rewrite matching legacy refs only after capable-host acknowledgement. */
+  adoptHostTerminalProjection: (
+    hostId: string,
+    terminal: PlainTerminalProjection,
+  ) => void;
+  /** Apply an authoritative host deletion to every matching local ref. */
+  removeHostTerminalRefs: (hostId: string, terminalId: string) => void;
 
   seedEpic: (
     epicId: string,
@@ -545,6 +734,8 @@ export interface EpicCanvasStore {
   unmarkArtifactSelfDeleted: (artifactId: string) => void;
   markArtifactPendingCreate: (artifactId: string) => void;
   unmarkArtifactPendingCreate: (artifactId: string) => void;
+  markTerminalPendingCreate: (hostId: string, terminalId: string) => void;
+  unmarkTerminalPendingCreate: (hostId: string, terminalId: string) => void;
   beginPreAckRootCreate: (epicId: string, tempId: string, name: string) => void;
   endPreAckRootCreate: (epicId: string, tempId: string) => void;
   registerPendingRootCreate: (
@@ -657,6 +848,18 @@ export function resolveTabIdForEpic(
   return firstTabIdForEpicInState(state, epicId);
 }
 
+export function resolveTabIdForPhaseMigration(
+  state: Pick<EpicCanvasStore, "tabsById">,
+  phaseId: string,
+): string | null {
+  const tab = Object.values(state.tabsById).find(
+    (candidate) =>
+      candidate?.surfaceMode?.kind === "phase-migration" &&
+      candidate.surfaceMode.phaseId === phaseId,
+  );
+  return tab?.tabId ?? null;
+}
+
 function createEpicViewTab(
   epicId: string,
   name: string | undefined,
@@ -716,6 +919,169 @@ function withoutCanvasByTabIds(
   return Object.fromEntries(
     Object.entries(record).filter(([id]) => !ids.has(id)),
   );
+}
+
+/** Drop `ids` from `closedTilePayloadsByTabId` (permanent tab deletes). */
+function withoutClosedTilePayloadsByTabIds(
+  record: EpicCanvasStore["closedTilePayloadsByTabId"],
+  ids: ReadonlySet<string>,
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
+  if (ids.size === 0) return record;
+  return Object.fromEntries(
+    Object.entries(record).filter(([id]) => !ids.has(id)),
+  );
+}
+
+/**
+ * Per-tab cap on preserved closed-tile payloads. Bounds
+ * `closedTilePayloadsByTabId` memory growth across a long session of
+ * open/close churn; a payload evicted before its history entry is just a
+ * cache miss - the preview-reopen lookup falls back to the existing
+ * stale-route restore.
+ */
+const MAX_CLOSED_TILE_PAYLOADS_PER_TAB = 20;
+
+/** Adds `ref` to a tab's closed-tile payload map, FIFO-evicting the oldest
+ * entry once the per-tab cap is exceeded. */
+function withClosedTilePayload(
+  forTab: Readonly<Record<string, ClosedTilePayload | undefined>>,
+  ref: EpicCanvasTileRef,
+  pendingCreate: boolean,
+): Readonly<Record<string, ClosedTilePayload | undefined>> {
+  const withoutDuplicate = Object.entries(forTab).filter(
+    ([instanceId]) => instanceId !== ref.instanceId,
+  );
+  const entries = [
+    ...withoutDuplicate,
+    [ref.instanceId, { node: ref, pendingCreate }] as const,
+  ];
+  const bounded =
+    entries.length > MAX_CLOSED_TILE_PAYLOADS_PER_TAB
+      ? entries.slice(entries.length - MAX_CLOSED_TILE_PAYLOADS_PER_TAB)
+      : entries;
+  return Object.fromEntries(bounded);
+}
+
+/** Drops a single `instanceId` entry from a tab's closed-tile payload map -
+ * used once `restoreClosedTilePreview` brings it back to life. */
+function withoutClosedTilePayload(
+  forTab: Readonly<Record<string, ClosedTilePayload | undefined>>,
+  instanceId: string,
+): Readonly<Record<string, ClosedTilePayload | undefined>> {
+  return Object.fromEntries(
+    Object.entries(forTab).filter(([id]) => id !== instanceId),
+  );
+}
+
+/** Prunes reopenable supported refs after a conclusive host deletion. */
+function withoutDeletedTerminalPayloads(
+  record: EpicCanvasStore["closedTilePayloadsByTabId"],
+  hostId: string,
+  terminalId: string,
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
+  const entries = Object.entries(record).map(([tabId, forTab]) => {
+    if (forTab === undefined) {
+      return { entry: [tabId, forTab] as const, changed: false };
+    }
+    const retained = Object.entries(forTab).filter(([, payload]) => {
+      const node = payload?.node;
+      return !(
+        node?.type === "terminal" &&
+        !isUnsupportedEpicTerminalRef(node) &&
+        node.hostId === hostId &&
+        node.id === terminalId
+      );
+    });
+    const changed = retained.length !== Object.keys(forTab).length;
+    return {
+      entry: [tabId, changed ? Object.fromEntries(retained) : forTab] as const,
+      changed,
+    };
+  });
+  return entries.some((entry) => entry.changed)
+    ? Object.fromEntries(entries.map((entry) => entry.entry))
+    : record;
+}
+
+/**
+ * Diffs a tab's `tilesByInstanceId` before/after a canvas update and folds
+ * every removed tile's payload into `closedTilePayloadsByTabId`, so a later
+ * back/forward navigation can reopen it as a preview
+ * (`openTilePreviewInTab`). Returns the SAME map reference when nothing was
+ * removed, matching the no-op-skips-the-write convention `updateTabCanvas`
+ * relies on.
+ */
+function pendingCreateForClosedRef(
+  state: EpicCanvasStore,
+  ref: EpicCanvasTileRef,
+): boolean {
+  if (ref.type === "terminal") {
+    return hasTerminalPendingCreate(
+      state.pendingCreateTerminalIdentities,
+      ref.hostId,
+      ref.id,
+    );
+  }
+  return state.pendingCreateArtifactIds.has(ref.id);
+}
+
+function captureClosedTilePayloads(
+  state: EpicCanvasStore,
+  tabId: string,
+  before: TilesByInstanceId,
+  after: TilesByInstanceId,
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
+  const removed = Object.entries(before).flatMap(([instanceId, ref]) =>
+    ref !== undefined && after[instanceId] === undefined ? [ref] : [],
+  );
+  if (removed.length === 0) return state.closedTilePayloadsByTabId;
+  const nextForTab = removed.reduce(
+    (forTab, ref) =>
+      withClosedTilePayload(forTab, ref, pendingCreateForClosedRef(state, ref)),
+    state.closedTilePayloadsByTabId[tabId] ?? {},
+  );
+  return { ...state.closedTilePayloadsByTabId, [tabId]: nextForTab };
+}
+
+function clearClosedTilePendingCreate(
+  closedTilePayloadsByTabId: EpicCanvasStore["closedTilePayloadsByTabId"],
+  artifactId: string,
+  hostId: string | null,
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
+  const entries = Object.entries(closedTilePayloadsByTabId).map(
+    ([tabId, forTab]) => {
+      if (forTab === undefined) {
+        return { entry: [tabId, forTab] as const, changed: false };
+      }
+      const payloads = Object.entries(forTab).map(([instanceId, payload]) => {
+        if (
+          payload === undefined ||
+          !payload.pendingCreate ||
+          payload.node.id !== artifactId ||
+          (hostId !== null &&
+            (payload.node.type !== "terminal" ||
+              payload.node.hostId !== hostId))
+        ) {
+          return {
+            entry: [instanceId, payload] as const,
+            changed: false,
+          };
+        }
+        return {
+          entry: [instanceId, { ...payload, pendingCreate: false }] as const,
+          changed: true,
+        };
+      });
+      const changed = payloads.some((payload) => payload.changed);
+      const nextForTab = changed
+        ? Object.fromEntries(payloads.map((payload) => payload.entry))
+        : forTab;
+      return { entry: [tabId, nextForTab] as const, changed };
+    },
+  );
+  return entries.some((entry) => entry.changed)
+    ? Object.fromEntries(entries.map((entry) => entry.entry))
+    : closedTilePayloadsByTabId;
 }
 
 function withoutRecentTabIds(
@@ -824,7 +1190,50 @@ function updateTabCanvas(
       ...state.canvasByTabId,
       [tabId]: next,
     },
+    closedTilePayloadsByTabId: captureClosedTilePayloads(
+      state,
+      tabId,
+      current.tilesByInstanceId,
+      next.tilesByInstanceId,
+    ),
   };
+}
+
+function removeClosedTilePendingCreate(
+  args: Readonly<{
+    state: EpicCanvasStore;
+    updated: Partial<EpicCanvasStore>;
+    tabId: string;
+    tileTabId: string;
+    tile: EpicCanvasTileRef | null;
+  }>,
+): Partial<EpicCanvasStore> {
+  const { state, updated, tabId, tileTabId, tile } = args;
+  if (tile === null) return updated;
+  const tileRemoved =
+    updated.canvasByTabId?.[tabId]?.tilesByInstanceId[tileTabId] === undefined;
+  if (!tileRemoved) return updated;
+  if (tile.type === "terminal") {
+    if (shouldPreserveEpicTerminalPendingCreate(tile.hostId, tile.id)) {
+      return updated;
+    }
+    const pendingCreateTerminalIdentities = withoutTerminalPendingCreate(
+      state.pendingCreateTerminalIdentities,
+      tile.hostId,
+      tile.id,
+    );
+    return pendingCreateTerminalIdentities ===
+      state.pendingCreateTerminalIdentities
+      ? updated
+      : { ...updated, pendingCreateTerminalIdentities };
+  }
+  const pendingCreateArtifactIds = withoutId(
+    state.pendingCreateArtifactIds,
+    tile.id,
+  );
+  return pendingCreateArtifactIds === state.pendingCreateArtifactIds
+    ? updated
+    : { ...updated, pendingCreateArtifactIds };
 }
 
 function canvasForExistingTab(
@@ -903,1214 +1312,1860 @@ function appendArtifactRecord(args: AppendArtifactRecordArgs): {
   };
 }
 
+/**
+ * Options for `guardCanvasMutation`. This guard is always strict: the sole
+ * sanctioned epicId resolution (`resolveTabEpicIdentity`) does not call it at
+ * all - it commits through the module-private raw setter directly, so
+ * provenance is enforced by module privacy rather than a parameter every
+ * ingress has to thread and every caller of this function has to reason
+ * about.
+ */
+interface CanvasMutationGuardOptions {
+  readonly ingressContext: string;
+  readonly throwOnViolation: boolean;
+}
+
+/**
+ * Shared identity guard for every canvas-mutation ingress: the closure-local
+ * `set` below (which delegates to the guarded public `setState` wrapper) and
+ * persisted hydration. `epicId` lives on `tabsById`, not `canvasByTabId`, so
+ * a candidate must be checked whenever EITHER map changes - a
+ * `tabsById`-only patch can repoint every tile in a tab without ever
+ * touching `canvasByTabId`.
+ */
+function guardCanvasMutation(
+  state: EpicCanvasStore,
+  resolved: Partial<EpicCanvasStore>,
+  options: CanvasMutationGuardOptions,
+): boolean {
+  const { ingressContext, throwOnViolation } = options;
+  const nextCanvasByTabId = resolved.canvasByTabId ?? state.canvasByTabId;
+  const nextTabsById = resolved.tabsById ?? state.tabsById;
+  if (
+    nextCanvasByTabId === state.canvasByTabId &&
+    nextTabsById === state.tabsById
+  ) {
+    return true;
+  }
+  return enforceTileIdentityInvariant(
+    collectTileIdentityRegistry(
+      state.canvasByTabId,
+      (tabId) => state.tabsById[tabId]?.epicId ?? null,
+    ),
+    {
+      canvasByTabId: nextCanvasByTabId,
+      epicIdForTabId: (tabId) => nextTabsById[tabId]?.epicId ?? null,
+      ingressContext,
+    },
+    throwOnViolation,
+  );
+}
+
 export const useEpicCanvasStore = create<EpicCanvasStore>()(
   persist(
-    (set, get) => ({
-      tabsById: {},
-      canvasByTabId: {},
-      openTabOrder: [],
-      activeTabId: null,
-      mostRecentTabIdByEpicId: {},
-      artifactTreeByEpicId: EMPTY_TREES,
-      selfDeletedArtifactIds: new Set<string>(),
-      pendingCreateArtifactIds: new Set<string>(),
-      preAckRootCreatesByEpic: {},
-      pendingRootCreatesByEpic: {},
-      pendingEpicTitles: {},
-      pendingChatTitles: {},
+    (_rawSet, get) => {
+      // Single choke point for every internal canvas mutation (all ~60 call
+      // sites below funnel through this closure's `set`, including the ones
+      // that write `canvasByTabId` directly rather than via `updateTabCanvas`
+      // - e.g. `tearOffTabIntoNewHeaderTab`, `duplicateTab`). Delegates to
+      // the guarded public `setState` wrapper (defined after this store is
+      // created) rather than duplicating its guard logic - persisted
+      // hydration is the only other ingress point, since it runs through the
+      // `merge` option below instead of this closure.
+      const set = (
+        partial:
+          | Partial<EpicCanvasStore>
+          | ((state: EpicCanvasStore) => Partial<EpicCanvasStore>),
+      ): void => {
+        useEpicCanvasStore.setState(partial, undefined);
+      };
+      return {
+        tabsById: {},
+        canvasByTabId: {},
+        closedTilePayloadsByTabId: {},
+        openTabOrder: [],
+        activeTabId: null,
+        mostRecentTabIdByEpicId: {},
+        artifactTreeByEpicId: EMPTY_TREES,
+        selfDeletedArtifactIds: new Set<string>(),
+        pendingCreateArtifactIds: new Set<string>(),
+        pendingCreateTerminalIdentities: new Set<string>(),
+        preAckRootCreatesByEpic: {},
+        pendingRootCreatesByEpic: {},
+        pendingEpicTitles: {},
+        pendingChatTitles: {},
 
-      openEpicTab: (epicId, name) => {
-        const tab = createEpicViewTab(epicId, name);
-        set((state) => ({
-          ...appendedEpicTabState(state, tab),
-          activeTabId: tab.tabId,
-        }));
-        return tab.tabId;
-      },
+        openEpicTab: (epicId, name) => {
+          const tab = createEpicViewTab(epicId, name);
+          set((state) => ({
+            ...appendedEpicTabState(state, tab),
+            activeTabId: tab.tabId,
+          }));
+          return tab.tabId;
+        },
 
-      openEpicTabInBackground: (epicId, name) => {
-        const existing = resolveTabIdForEpic(get(), epicId);
-        if (existing !== null) {
-          // Reveal a preserved-but-hidden tab in the strip without activating
-          // it; an already-visible tab is left exactly where it is. The
-          // functional updater is the single guard - it no-ops (returns the
-          // same state, which Zustand bails on) when the tab is already shown.
-          set((current) =>
-            current.openTabOrder.includes(existing)
-              ? current
-              : { openTabOrder: [...current.openTabOrder, existing] },
-          );
-          return existing;
-        }
-        const tab = createEpicViewTab(epicId, name);
-        // activeTabId is intentionally left untouched - the tab opens behind
-        // the current surface and never steals focus.
-        set((current) => appendedEpicTabState(current, tab));
-        return tab.tabId;
-      },
-
-      closeTab: (tabId) => {
-        set((state) => {
-          const tab = state.tabsById[tabId];
-          if (tab === undefined) return state;
-          const openTabOrder = state.openTabOrder.filter((id) => id !== tabId);
-          const activeTabId =
-            state.activeTabId === tabId
-              ? nextOpenTabAfterClose(state.openTabOrder, tabId)
-              : state.activeTabId;
-          // The tab record stays untouched in `tabsById` (preserved for reopen);
-          // hiding only updates order/active/recent pointers.
-          return {
-            openTabOrder,
-            activeTabId,
-            mostRecentTabIdByEpicId: {
-              ...state.mostRecentTabIdByEpicId,
-              [tab.epicId]: tabId,
-            },
+        openEpicTabWithId: (tabId, epicId, name) => {
+          // `closeTab` preserves the record in `tabsById` so the tab can be
+          // reopened, which means an existing record is NOT the same thing as an
+          // open tab. Returning the id without revealing it hands the caller a
+          // ref that `tabSourceRefs()` does not back, and strip reconciliation
+          // then deletes the layout item the caller just placed. `setActiveTab`
+          // re-pushes onto `openTabOrder` and no-ops when already open + active.
+          if (get().tabsById[tabId] !== undefined) {
+            get().setActiveTab(tabId);
+            return tabId;
+          }
+          const tab: EpicViewTab = {
+            tabId,
+            epicId,
+            name: name ?? UNTITLED_EPIC_TITLE,
           };
-        });
-      },
+          set((state) => ({
+            ...appendedEpicTabState(state, tab),
+            activeTabId: tab.tabId,
+          }));
+          return tab.tabId;
+        },
 
-      closeTabsForEpics: (epicIds) => {
-        const targetEpicIds = new Set(epicIds);
-        if (targetEpicIds.size === 0) return;
-        // Cancel any in-flight epic-title backstop timers so a deletion
-        // can't strand a 30s no-op timer in the map.
-        for (const epicId of targetEpicIds) {
-          clearScheduledTitlePending(epicTitleTimers, epicId);
-        }
-        set((state) => {
-          const removedTabIds = new Set(
-            Object.keys(state.tabsById).filter((tabId) => {
-              const tab = state.tabsById[tabId];
-              return tab !== undefined && targetEpicIds.has(tab.epicId);
-            }),
-          );
-          if (removedTabIds.size === 0) return state;
-          const openTabOrder = state.openTabOrder.filter(
-            (tabId) => !removedTabIds.has(tabId),
-          );
-          return {
-            tabsById: withoutTabIds(state.tabsById, removedTabIds),
-            canvasByTabId: withoutCanvasByTabIds(
-              state.canvasByTabId,
-              removedTabIds,
-            ),
-            openTabOrder,
-            activeTabId: nextOpenTabAfterBulkClose(
-              state.openTabOrder,
-              state.activeTabId,
-              removedTabIds,
-            ),
-            mostRecentTabIdByEpicId: withoutRecentTabIds(
-              state.mostRecentTabIdByEpicId,
-              removedTabIds,
-            ),
-            artifactTreeByEpicId: Object.fromEntries(
-              Object.entries(state.artifactTreeByEpicId).filter(
-                ([epicId]) => !targetEpicIds.has(epicId),
-              ),
-            ),
-            preAckRootCreatesByEpic: Object.fromEntries(
-              Object.entries(state.preAckRootCreatesByEpic).filter(
-                ([epicId]) => !targetEpicIds.has(epicId),
-              ),
-            ),
-            pendingRootCreatesByEpic: Object.fromEntries(
-              Object.entries(state.pendingRootCreatesByEpic).filter(
-                ([epicId]) => !targetEpicIds.has(epicId),
-              ),
-            ),
-            pendingEpicTitles: Object.fromEntries(
-              Object.entries(state.pendingEpicTitles).filter(
-                ([epicId]) => !targetEpicIds.has(epicId),
-              ),
-            ),
+        openPhaseMigrationTabWithId: (tabId, phaseId, name) => {
+          const existingId = resolveTabIdForPhaseMigration(get(), phaseId);
+          if (existingId !== null) {
+            get().setActiveTab(existingId);
+            return existingId;
+          }
+          const existing = get().tabsById[tabId];
+          if (existing !== undefined) return existing.tabId;
+          const tab: EpicViewTab = {
+            tabId,
+            epicId: phaseId,
+            name: name ?? UNTITLED_EPIC_TITLE,
+            surfaceMode: { kind: "phase-migration", phaseId },
           };
-        });
-      },
+          set((state) => ({
+            ...appendedEpicTabState(state, tab),
+            activeTabId: tab.tabId,
+          }));
+          return tab.tabId;
+        },
 
-      closeOtherTabs: (tabId) => {
-        set((state) => {
-          const keep = state.tabsById[tabId];
-          if (keep === undefined) return state;
-          // Hidden tabs stay in `tabsById` untouched (preserved for reopen);
-          // only order/active/recent change.
-          return {
-            openTabOrder: [tabId],
-            activeTabId: tabId,
-            mostRecentTabIdByEpicId: {
-              ...state.mostRecentTabIdByEpicId,
-              [keep.epicId]: tabId,
-            },
-          };
-        });
-      },
+        openEpicTabInBackground: (epicId, name) => {
+          const existing = resolveTabIdForEpic(get(), epicId);
+          if (existing !== null) {
+            // Reveal a preserved-but-hidden tab in the strip without activating
+            // it; an already-visible tab is left exactly where it is. The
+            // functional updater is the single guard - it no-ops (returns the
+            // same state, which Zustand bails on) when the tab is already shown.
+            set((current) =>
+              current.openTabOrder.includes(existing)
+                ? current
+                : { openTabOrder: [...current.openTabOrder, existing] },
+            );
+            return existing;
+          }
+          const tab = createEpicViewTab(epicId, name);
+          // activeTabId is intentionally left untouched - the tab opens behind
+          // the current surface and never steals focus.
+          set((current) => appendedEpicTabState(current, tab));
+          return tab.tabId;
+        },
 
-      moveOpenTab: (tabId, targetIndex) => {
-        set((state) => {
-          const next = moveId(state.openTabOrder, tabId, targetIndex);
-          return next === state.openTabOrder ? state : { openTabOrder: next };
-        });
-      },
-
-      duplicateTab: (tabId) => {
-        const state = get();
-        const source = state.tabsById[tabId];
-        if (source === undefined) return null;
-        const newId = uuidv4();
-        const siblingNames = epicTabNames(state.tabsById, source.epicId);
-        const sourceCanvas = state.canvasByTabId[tabId] ?? createEmptyCanvas();
-        const newTab: EpicViewTab = {
-          tabId: newId,
-          epicId: source.epicId,
-          name: nextCopyName(source.name, siblingNames),
-        };
-        set((current) => {
-          const insertAt = current.openTabOrder.indexOf(tabId) + 1;
-          return {
-            tabsById: { ...current.tabsById, [newId]: newTab },
-            canvasByTabId: {
-              ...current.canvasByTabId,
-              [newId]: cloneEpicCanvasState(sourceCanvas),
-            },
-            openTabOrder: [
-              ...current.openTabOrder.slice(0, insertAt),
-              newId,
-              ...current.openTabOrder.slice(insertAt),
-            ],
-            activeTabId: newId,
-            mostRecentTabIdByEpicId: {
-              ...current.mostRecentTabIdByEpicId,
-              [newTab.epicId]: newId,
-            },
-          };
-        });
-        return newId;
-      },
-
-      openTileInNewTab: (epicId, node, insertIndex) => {
-        const state = get();
-        const sourceTabId = resolveTabIdForEpic(state, epicId);
-        const sourceTab =
-          sourceTabId === null ? null : (state.tabsById[sourceTabId] ?? null);
-        const tabId = uuidv4();
-        const siblingNames = epicTabNames(state.tabsById, epicId);
-        const tabName =
-          sourceTab === null
-            ? node.name
-            : nextCopyName(sourceTab.name, siblingNames);
-        const tab: EpicViewTab = {
-          tabId,
-          epicId,
-          name: tabName,
-        };
-        set((current) => {
-          const insertAt =
-            insertIndex === null
-              ? current.openTabOrder.length
-              : Math.max(0, Math.min(insertIndex, current.openTabOrder.length));
-          return {
-            tabsById: { ...current.tabsById, [tabId]: tab },
-            canvasByTabId: {
-              ...current.canvasByTabId,
-              [tabId]: createSingleTileCanvas(node),
-            },
-            openTabOrder: [
-              ...current.openTabOrder.slice(0, insertAt),
-              tabId,
-              ...current.openTabOrder.slice(insertAt),
-            ],
-            activeTabId: tabId,
-            mostRecentTabIdByEpicId: {
-              ...current.mostRecentTabIdByEpicId,
-              [epicId]: tabId,
-            },
-          };
-        });
-        const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
-        if (analyticsTarget !== null) {
-          Analytics.getInstance().track(AnalyticsEvent.TabCreated, {
-            target: analyticsTarget,
-          });
-        }
-        return tabId;
-      },
-
-      tearOffTabIntoNewHeaderTab: (args) => {
-        const state = get();
-        const sourceTab = state.tabsById[args.sourceTabId];
-        if (sourceTab === undefined) return null;
-        const sourceCanvas =
-          state.canvasByTabId[args.sourceTabId] ?? EMPTY_CANVAS;
-        const pane = findPaneById(sourceCanvas.root, args.sourcePaneId);
-        const node =
-          pane !== null && pane.tabInstanceIds.includes(args.sourceTileTabId)
-            ? (sourceCanvas.tilesByInstanceId[args.sourceTileTabId] ?? null)
-            : null;
-        if (pane === null || node === null) return null;
-        const newId = uuidv4();
-        const siblingNames = epicTabNames(state.tabsById, sourceTab.epicId);
-        const newTab: EpicViewTab = {
-          tabId: newId,
-          epicId: sourceTab.epicId,
-          name: nextCopyName(sourceTab.name, siblingNames),
-        };
-        set((current) => {
-          const currentSource = current.tabsById[args.sourceTabId];
-          if (currentSource === undefined) return current;
-          const currentSourceCanvas =
-            current.canvasByTabId[args.sourceTabId] ?? EMPTY_CANVAS;
-          const insertAt = Math.max(
-            0,
-            Math.min(args.insertIndex, current.openTabOrder.length),
-          );
-          return {
-            tabsById: {
-              ...current.tabsById,
-              [newId]: newTab,
-            },
-            canvasByTabId: {
-              ...current.canvasByTabId,
-              [args.sourceTabId]: closeTileTab(
-                currentSourceCanvas,
-                args.sourcePaneId,
-                args.sourceTileTabId,
-              ),
-              [newId]: createSingleTileCanvas(node),
-            },
-            openTabOrder: [
-              ...current.openTabOrder.slice(0, insertAt),
-              newId,
-              ...current.openTabOrder.slice(insertAt),
-            ],
-            activeTabId: newId,
-            mostRecentTabIdByEpicId: {
-              ...current.mostRecentTabIdByEpicId,
-              [newTab.epicId]: newId,
-            },
-          };
-        });
-        const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
-        if (analyticsTarget !== null) {
-          Analytics.getInstance().track(AnalyticsEvent.TabMoved, {
-            target: analyticsTarget,
-          });
-        }
-        return newId;
-      },
-
-      setActiveTab: (tabId) => {
-        set((state) => {
-          const tab = state.tabsById[tabId];
-          if (tab === undefined) return state;
-          const isOpen = state.openTabOrder.includes(tabId);
-          if (state.activeTabId === tabId && isOpen) return state;
-          // Activation only moves order/active/recent pointers; the tab record
-          // stays stable so header-strip / command-palette consumers (which read
-          // tab metadata) don't re-render on every tab switch.
-          return {
-            openTabOrder: isOpen
-              ? state.openTabOrder
-              : [...state.openTabOrder, tabId],
-            activeTabId: tabId,
-            mostRecentTabIdByEpicId: {
-              ...state.mostRecentTabIdByEpicId,
-              [tab.epicId]: tabId,
-            },
-          };
-        });
-      },
-
-      renameTab: (tabId, name) => {
-        const trimmed = name.trim();
-        if (trimmed.length === 0) return;
-        set((state) => {
-          const tab = state.tabsById[tabId];
-          if (tab === undefined || tab.name === trimmed) return state;
-          return {
-            tabsById: {
-              ...state.tabsById,
-              [tabId]: { ...tab, name: trimmed },
-            },
-          };
-        });
-      },
-
-      discardTabState: (tabId) => {
-        const tab = get().tabsById[tabId];
-        if (tab === undefined) return null;
-        set((state) => {
-          const removed = new Set([tabId]);
-          return {
-            tabsById: withoutTabIds(state.tabsById, removed),
-            canvasByTabId: withoutCanvasByTabIds(state.canvasByTabId, removed),
-            openTabOrder: state.openTabOrder.filter((id) => id !== tabId),
-            activeTabId:
+        closeTab: (tabId) => {
+          if (isTabCloseLocked({ kind: "epic", id: tabId })) return;
+          set((state) => {
+            const tab = state.tabsById[tabId];
+            if (tab === undefined) return state;
+            const openTabOrder = state.openTabOrder.filter(
+              (id) => id !== tabId,
+            );
+            const activeTabId =
               state.activeTabId === tabId
                 ? nextOpenTabAfterClose(state.openTabOrder, tabId)
-                : state.activeTabId,
-            mostRecentTabIdByEpicId: withoutRecentTabIds(
-              state.mostRecentTabIdByEpicId,
-              removed,
-            ),
-          };
-        });
-        return {
-          epicTabs: projectTabsForDesktop(get()),
-          activeTabId: get().activeTabId,
-          canvasByTabId: { [tabId]: null },
-        };
-      },
+                : state.activeTabId;
+            // The tab record stays untouched in `tabsById` (preserved for reopen);
+            // hiding only updates order/active/recent pointers.
+            return {
+              openTabOrder,
+              activeTabId,
+              mostRecentTabIdByEpicId: {
+                ...state.mostRecentTabIdByEpicId,
+                [tab.epicId]: tabId,
+              },
+            };
+          });
+        },
 
-      resolveTargetTabForEpic: (epicId, name) => {
-        const state = get();
-        const existing = resolveTabIdForEpic(state, epicId);
-        if (existing !== null) {
-          if (!state.openTabOrder.includes(existing)) {
-            state.setActiveTab(existing);
+        closeTabsForEpics: (epicIds) => {
+          const targetEpicIds = new Set(epicIds);
+          if (targetEpicIds.size === 0) return;
+          // Cancel any in-flight epic-title backstop timers so a deletion
+          // can't strand a 30s no-op timer in the map.
+          for (const epicId of targetEpicIds) {
+            clearScheduledTitlePending(epicTitleTimers, epicId);
           }
-          return existing;
-        }
-        // Caller-supplied name comes from the row the user clicked on
-        // (history list, command palette, deep link). Falls back to
-        // "Untitled epic" only when the caller has no title in hand.
-        return state.openEpicTab(epicId, name ?? UNTITLED_EPIC_TITLE);
-      },
-
-      resolveTabIdForEpic: (epicId) => resolveTabIdForEpic(get(), epicId),
-
-      openTileInTab: (tabId, node) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            openTile(canvas, node, false),
-          ),
-        );
-      },
-
-      prepareOpenTileInTabFocusTarget: (tabId, node) => {
-        get().openTileInTab(tabId, node);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        return after;
-      },
-
-      prepareOpenTileInTabFocusTargetFromSource: (tabId, node, source) => {
-        const before = canvasForExistingTab(get(), tabId);
-        get().openTileInTab(tabId, node);
-        const canvas = canvasForExistingTab(get(), tabId);
-        if (before !== canvas) trackOpenedCanvasTile(node, source);
-        return currentNestedFocusTargetForTab(get(), tabId);
-      },
-
-      openTilePreviewInTab: (tabId, node) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            openTile(canvas, node, true),
-          ),
-        );
-      },
-
-      prepareOpenTilePreviewInTabFocusTarget: (tabId, node) => {
-        get().openTilePreviewInTab(tabId, node);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        return after;
-      },
-
-      prepareOpenTilePreviewInTabFocusTargetFromSource: (
-        tabId,
-        node,
-        source,
-      ) => {
-        const before = canvasForExistingTab(get(), tabId);
-        get().openTilePreviewInTab(tabId, node);
-        const canvas = canvasForExistingTab(get(), tabId);
-        if (before !== canvas) trackOpenedCanvasTile(node, source);
-        return currentNestedFocusTargetForTab(get(), tabId);
-      },
-
-      openTileInBackgroundTab: (tabId, node) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            openTileInBackgroundTabCanvas(canvas, node),
-          ),
-        );
-      },
-
-      prepareOpenTileInBackgroundTabFocusTarget: (tabId, node) => {
-        get().openTileInBackgroundTab(tabId, node);
-        return null;
-      },
-
-      prepareOpenTileInBackgroundTabFocusTargetFromSource: (
-        tabId,
-        node,
-        source,
-      ) => {
-        const before = canvasForExistingTab(get(), tabId);
-        get().openTileInBackgroundTab(tabId, node);
-        const after = canvasForExistingTab(get(), tabId);
-        if (before !== after) trackOpenedCanvasTile(node, source);
-        return null;
-      },
-
-      openTileInPane: (tabId, paneId, ref) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            openTileInPaneCanvas(canvas, paneId, ref),
-          ),
-        );
-      },
-
-      prepareOpenTileInPaneFocusTarget: (tabId, paneId, ref) => {
-        const before = canvasForExistingTab(get(), tabId);
-        const targetPane =
-          before === null ? null : findPaneById(before.root, paneId);
-        get().openTileInPane(tabId, paneId, ref);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = targetPane === null ? null : after;
-        return target;
-      },
-
-      prepareOpenTileInPaneFocusTargetFromSource: (
-        tabId,
-        paneId,
-        ref,
-        source,
-      ) => {
-        const before = canvasForExistingTab(get(), tabId);
-        const targetPane =
-          before === null ? null : findPaneById(before.root, paneId);
-        get().openTileInPane(tabId, paneId, ref);
-        const canvas = canvasForExistingTab(get(), tabId);
-        if (before !== canvas) trackOpenedCanvasTile(ref, source);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = targetPane === null ? null : after;
-        return target;
-      },
-
-      openBlankTabInPane: (tabId, paneId) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            openBlankTabInPaneCanvas(canvas, paneId),
-          ),
-        );
-      },
-
-      prepareOpenBlankTabInPaneFocusTarget: (tabId, paneId) => {
-        const before = canvasForExistingTab(get(), tabId);
-        const targetPane =
-          before === null ? null : findPaneById(before.root, paneId);
-        get().openBlankTabInPane(tabId, paneId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = targetPane === null ? null : after;
-        return target;
-      },
-
-      updateGitDiffTileViewInTab: (tabId, tileId, view) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            updateGitDiffTileView(canvas, tileId, view),
-          ),
-        );
-      },
-
-      updateSnapshotDiffTileViewInTab: (tabId, tileId, view) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            updateSnapshotDiffTileView(canvas, tileId, view),
-          ),
-        );
-      },
-
-      toggleGitDiffBundleFileCollapsedInTab: (tabId, tileId, filePath) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            toggleGitDiffBundleFileCollapsed(canvas, tileId, filePath),
-          ),
-        );
-      },
-
-      toggleSnapshotDiffBundleFileCollapsedInTab: (tabId, tileId, filePath) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            toggleSnapshotDiffBundleFileCollapsed(canvas, tileId, filePath),
-          ),
-        );
-      },
-
-      promotePreviewInTab: (tabId, paneId) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            promotePreview(canvas, paneId),
-          ),
-        );
-      },
-
-      applyNestedRouteFocus: (tabId, target) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            target.tileInstanceId === undefined
-              ? setActivePane(canvas, target.paneId)
-              : setActiveTileTabCanvas(
-                  canvas,
-                  target.paneId,
-                  target.tileInstanceId,
+          const purgedCreates = epicIds.flatMap((epicId) => [
+            ...purgeEpicTerminalDurableCreatesForEpic(epicId),
+          ]);
+          set((state) => {
+            const removedTabIds = new Set(
+              Object.keys(state.tabsById).filter((tabId) => {
+                const tab = state.tabsById[tabId];
+                return tab !== undefined && targetEpicIds.has(tab.epicId);
+              }),
+            );
+            if (removedTabIds.size === 0 && purgedCreates.length === 0) {
+              return state;
+            }
+            let pendingCreateTerminalIdentities =
+              state.pendingCreateTerminalIdentities;
+            for (const job of purgedCreates) {
+              pendingCreateTerminalIdentities = withoutTerminalPendingCreate(
+                pendingCreateTerminalIdentities,
+                job.hostId,
+                job.terminalId,
+              );
+            }
+            if (removedTabIds.size === 0) {
+              return pendingCreateTerminalIdentities ===
+                state.pendingCreateTerminalIdentities
+                ? state
+                : { pendingCreateTerminalIdentities };
+            }
+            const openTabOrder = state.openTabOrder.filter(
+              (tabId) => !removedTabIds.has(tabId),
+            );
+            return {
+              tabsById: withoutTabIds(state.tabsById, removedTabIds),
+              canvasByTabId: withoutCanvasByTabIds(
+                state.canvasByTabId,
+                removedTabIds,
+              ),
+              closedTilePayloadsByTabId: withoutClosedTilePayloadsByTabIds(
+                state.closedTilePayloadsByTabId,
+                removedTabIds,
+              ),
+              openTabOrder,
+              activeTabId: nextOpenTabAfterBulkClose(
+                state.openTabOrder,
+                state.activeTabId,
+                removedTabIds,
+              ),
+              mostRecentTabIdByEpicId: withoutRecentTabIds(
+                state.mostRecentTabIdByEpicId,
+                removedTabIds,
+              ),
+              artifactTreeByEpicId: Object.fromEntries(
+                Object.entries(state.artifactTreeByEpicId).filter(
+                  ([epicId]) => !targetEpicIds.has(epicId),
                 ),
-          ),
-        );
-      },
+              ),
+              preAckRootCreatesByEpic: Object.fromEntries(
+                Object.entries(state.preAckRootCreatesByEpic).filter(
+                  ([epicId]) => !targetEpicIds.has(epicId),
+                ),
+              ),
+              pendingRootCreatesByEpic: Object.fromEntries(
+                Object.entries(state.pendingRootCreatesByEpic).filter(
+                  ([epicId]) => !targetEpicIds.has(epicId),
+                ),
+              ),
+              pendingEpicTitles: Object.fromEntries(
+                Object.entries(state.pendingEpicTitles).filter(
+                  ([epicId]) => !targetEpicIds.has(epicId),
+                ),
+              ),
+              pendingCreateTerminalIdentities,
+            };
+          });
+        },
 
-      setActiveTileTab: (tabId, paneId, tileTabId) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            setActiveTileTabCanvas(canvas, paneId, tileTabId),
-          ),
-        );
-      },
+        closeOtherTabs: (tabId) => {
+          set((state) => {
+            const keep = state.tabsById[tabId];
+            if (keep === undefined) return state;
+            // Hidden tabs stay in `tabsById` untouched (preserved for reopen);
+            // only order/active/recent change.
+            return {
+              openTabOrder: [tabId],
+              activeTabId: tabId,
+              mostRecentTabIdByEpicId: {
+                ...state.mostRecentTabIdByEpicId,
+                [keep.epicId]: tabId,
+              },
+            };
+          });
+        },
 
-      prepareSetActiveTileTabFocusTarget: (tabId, paneId, tileTabId) => {
-        get().setActiveTileTab(tabId, paneId, tileTabId);
-        const target = exactNestedFocusTargetForTab(get(), tabId, {
-          paneId,
-          tileInstanceId: tileTabId,
-        });
-        return target;
-      },
+        moveOpenTab: (tabId, targetIndex) => {
+          if (isTabStructurallyLocked({ kind: "epic", id: tabId })) return;
+          set((state) => {
+            const next = moveId(state.openTabOrder, tabId, targetIndex);
+            return next === state.openTabOrder ? state : { openTabOrder: next };
+          });
+        },
 
-      setActiveTilePane: (tabId, paneId) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            setActivePane(canvas, paneId),
-          ),
-        );
-      },
+        duplicateTab: (tabId) => {
+          if (isTabStructurallyLocked({ kind: "epic", id: tabId })) {
+            return null;
+          }
+          const state = get();
+          const source = state.tabsById[tabId];
+          if (source === undefined) return null;
+          if (source.surfaceMode?.kind === "phase-migration") return null;
+          const newId = uuidv4();
+          const siblingNames = epicTabNames(state.tabsById, source.epicId);
+          const sourceCanvas =
+            state.canvasByTabId[tabId] ?? createEmptyCanvas();
+          const newTab: EpicViewTab = {
+            tabId: newId,
+            epicId: source.epicId,
+            name: nextCopyName(source.name, siblingNames),
+          };
+          set((current) => {
+            const insertAt = current.openTabOrder.indexOf(tabId) + 1;
+            return {
+              tabsById: { ...current.tabsById, [newId]: newTab },
+              canvasByTabId: {
+                ...current.canvasByTabId,
+                [newId]: cloneEpicCanvasState(sourceCanvas),
+              },
+              openTabOrder: [
+                ...current.openTabOrder.slice(0, insertAt),
+                newId,
+                ...current.openTabOrder.slice(insertAt),
+              ],
+              activeTabId: newId,
+              mostRecentTabIdByEpicId: {
+                ...current.mostRecentTabIdByEpicId,
+                [newTab.epicId]: newId,
+              },
+            };
+          });
+          return newId;
+        },
 
-      prepareSetActiveTilePaneFocusTarget: (tabId, paneId) => {
-        get().setActiveTilePane(tabId, paneId);
-        const target = currentNestedFocusTargetForTab(get(), tabId);
-        const returned = target?.paneId === paneId ? target : null;
-        return returned;
-      },
+        openTileInNewTab: (epicId, node, insertIndex) => {
+          const state = get();
+          const sourceTabId = resolveTabIdForEpic(state, epicId);
+          const sourceTab =
+            sourceTabId === null ? null : (state.tabsById[sourceTabId] ?? null);
+          const tabId = uuidv4();
+          const siblingNames = epicTabNames(state.tabsById, epicId);
+          const tabName =
+            sourceTab === null
+              ? node.name
+              : nextCopyName(sourceTab.name, siblingNames);
+          const tab: EpicViewTab = {
+            tabId,
+            epicId,
+            name: tabName,
+          };
+          set((current) => {
+            const insertAt =
+              insertIndex === null
+                ? current.openTabOrder.length
+                : Math.max(
+                    0,
+                    Math.min(insertIndex, current.openTabOrder.length),
+                  );
+            return {
+              tabsById: { ...current.tabsById, [tabId]: tab },
+              canvasByTabId: {
+                ...current.canvasByTabId,
+                [tabId]: createSingleTileCanvas(node),
+              },
+              openTabOrder: [
+                ...current.openTabOrder.slice(0, insertAt),
+                tabId,
+                ...current.openTabOrder.slice(insertAt),
+              ],
+              activeTabId: tabId,
+              mostRecentTabIdByEpicId: {
+                ...current.mostRecentTabIdByEpicId,
+                [epicId]: tabId,
+              },
+            };
+          });
+          const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
+          if (analyticsTarget !== null) {
+            Analytics.getInstance().track(AnalyticsEvent.TabCreated, {
+              target: analyticsTarget,
+            });
+          }
+          return tabId;
+        },
 
-      insertNodeOnTabStrip: (tabId, targetPaneId, targetIndex, node) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            dropOnTabStrip(
-              canvas,
-              { kind: "node", node },
-              targetPaneId,
-              targetIndex,
+        tearOffTabIntoNewHeaderTab: (args) => {
+          const state = get();
+          const sourceTab = state.tabsById[args.sourceTabId];
+          if (sourceTab === undefined) return null;
+          const sourceCanvas =
+            state.canvasByTabId[args.sourceTabId] ?? EMPTY_CANVAS;
+          const pane = findPaneById(sourceCanvas.root, args.sourcePaneId);
+          const node =
+            pane !== null && pane.tabInstanceIds.includes(args.sourceTileTabId)
+              ? (sourceCanvas.tilesByInstanceId[args.sourceTileTabId] ?? null)
+              : null;
+          if (pane === null || node === null) return null;
+          // Ticket 20: the torn-off tile always remounts - it moves from the
+          // source header tab's canvas root into a brand-new header tab's
+          // canvas root, a completely different React parent chain (MOVE
+          // semantics, same instanceId - see the corrected comment at
+          // `commitHeaderStripDrop`'s call site). When it was its source
+          // pane's only tab, `closeTileTab` below falls through to
+          // `closePane`, which can also dissolve that pane's parent group and
+          // remount a sibling. Flush both before `set()` commits the move.
+          flushChatTabViewportHandoff([
+            args.sourceTileTabId,
+            ...(pane.tabInstanceIds.length === 1
+              ? paneRemovalDissolveHandoffTargets(
+                  sourceCanvas.root,
+                  args.sourcePaneId,
+                )
+              : []),
+          ]);
+          const newId = uuidv4();
+          const siblingNames = epicTabNames(state.tabsById, sourceTab.epicId);
+          const newTab: EpicViewTab = {
+            tabId: newId,
+            epicId: sourceTab.epicId,
+            name: nextCopyName(sourceTab.name, siblingNames),
+          };
+          set((current) => {
+            const currentSource = current.tabsById[args.sourceTabId];
+            if (currentSource === undefined) return current;
+            const currentSourceCanvas =
+              current.canvasByTabId[args.sourceTabId] ?? EMPTY_CANVAS;
+            const insertAt = Math.max(
+              0,
+              Math.min(args.insertIndex, current.openTabOrder.length),
+            );
+            return {
+              tabsById: {
+                ...current.tabsById,
+                [newId]: newTab,
+              },
+              canvasByTabId: {
+                ...current.canvasByTabId,
+                [args.sourceTabId]: closeTileTab(
+                  currentSourceCanvas,
+                  args.sourcePaneId,
+                  args.sourceTileTabId,
+                ),
+                [newId]: createSingleTileCanvas(node),
+              },
+              openTabOrder: [
+                ...current.openTabOrder.slice(0, insertAt),
+                newId,
+                ...current.openTabOrder.slice(insertAt),
+              ],
+              activeTabId: newId,
+              mostRecentTabIdByEpicId: {
+                ...current.mostRecentTabIdByEpicId,
+                [newTab.epicId]: newId,
+              },
+            };
+          });
+          const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
+          if (analyticsTarget !== null) {
+            Analytics.getInstance().track(AnalyticsEvent.TabMoved, {
+              target: analyticsTarget,
+            });
+          }
+          return newId;
+        },
+
+        setActiveTab: (tabId) => {
+          set((state) => {
+            const tab = state.tabsById[tabId];
+            if (tab === undefined) return state;
+            const isOpen = state.openTabOrder.includes(tabId);
+            if (state.activeTabId === tabId && isOpen) return state;
+            // Activation only moves order/active/recent pointers; the tab record
+            // stays stable so header-strip / command-palette consumers (which read
+            // tab metadata) don't re-render on every tab switch.
+            return {
+              openTabOrder: isOpen
+                ? state.openTabOrder
+                : [...state.openTabOrder, tabId],
+              activeTabId: tabId,
+              mostRecentTabIdByEpicId: {
+                ...state.mostRecentTabIdByEpicId,
+                [tab.epicId]: tabId,
+              },
+            };
+          });
+        },
+
+        renameTab: (tabId, name) => {
+          const trimmed = name.trim();
+          if (trimmed.length === 0) return;
+          set((state) => {
+            const tab = state.tabsById[tabId];
+            if (tab === undefined || tab.name === trimmed) return state;
+            return {
+              tabsById: {
+                ...state.tabsById,
+                [tabId]: { ...tab, name: trimmed },
+              },
+            };
+          });
+        },
+
+        discardTabState: (tabId) => {
+          if (isTabStructurallyLocked({ kind: "epic", id: tabId })) {
+            return null;
+          }
+          const tab = get().tabsById[tabId];
+          if (tab === undefined) return null;
+          set((state) => {
+            const removed = new Set([tabId]);
+            return {
+              tabsById: withoutTabIds(state.tabsById, removed),
+              canvasByTabId: withoutCanvasByTabIds(
+                state.canvasByTabId,
+                removed,
+              ),
+              closedTilePayloadsByTabId: withoutClosedTilePayloadsByTabIds(
+                state.closedTilePayloadsByTabId,
+                removed,
+              ),
+              openTabOrder: state.openTabOrder.filter((id) => id !== tabId),
+              activeTabId:
+                state.activeTabId === tabId
+                  ? nextOpenTabAfterClose(state.openTabOrder, tabId)
+                  : state.activeTabId,
+              mostRecentTabIdByEpicId: withoutRecentTabIds(
+                state.mostRecentTabIdByEpicId,
+                removed,
+              ),
+            };
+          });
+          return {
+            epicTabs: projectTabsForDesktop(get()),
+            activeTabId: get().activeTabId,
+            canvasByTabId: { [tabId]: null },
+          };
+        },
+
+        resolveTargetTabForEpic: (epicId, name) => {
+          const state = get();
+          const existing = resolveTabIdForEpic(state, epicId);
+          if (existing !== null) {
+            if (!state.openTabOrder.includes(existing)) {
+              state.setActiveTab(existing);
+            }
+            return existing;
+          }
+          // Caller-supplied name comes from the row the user clicked on
+          // (history list, command palette, deep link). Falls back to
+          // "Untitled task" only when the caller has no title in hand.
+          return state.openEpicTab(epicId, name ?? UNTITLED_EPIC_TITLE);
+        },
+
+        resolveTabIdForEpic: (epicId) => resolveTabIdForEpic(get(), epicId),
+
+        openTileInTab: (tabId, node) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              openTile(canvas, node, false, null),
             ),
-          ),
-        );
-      },
+          );
+        },
 
-      prepareInsertNodeOnTabStripFocusTarget: (
-        tabId,
-        targetPaneId,
-        targetIndex,
-        node,
-      ) => {
-        const before = canvasForExistingTab(get(), tabId);
-        const targetPane =
-          before === null ? null : findPaneById(before.root, targetPaneId);
-        get().insertNodeOnTabStrip(tabId, targetPaneId, targetIndex, node);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = targetPane === null ? null : after;
-        return target;
-      },
+        prepareOpenTileInTabFocusTarget: (tabId, node) => {
+          get().openTileInTab(tabId, node);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          return after;
+        },
 
-      moveTabOnTabStrip: (tabId, args) => {
-        const before = canvasForExistingTab(get(), tabId);
-        const node = before?.tilesByInstanceId[args.tabId];
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) => {
-            const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
-            const node = canvas.tilesByInstanceId[args.tabId];
-            if (sourcePane === null || node === undefined) return canvas;
-            return dropOnTabStrip(
-              canvas,
-              {
+        prepareOpenTileInTabFocusTargetFromSource: (tabId, node, source) => {
+          const before = canvasForExistingTab(get(), tabId);
+          get().openTileInTab(tabId, node);
+          const canvas = canvasForExistingTab(get(), tabId);
+          if (before !== canvas) trackOpenedCanvasTile(node, source);
+          return currentNestedFocusTargetForTab(get(), tabId);
+        },
+
+        openTilePreviewInTab: (tabId, node) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              openTile(canvas, node, true, null),
+            ),
+          );
+        },
+
+        prepareOpenTilePreviewInTabFocusTarget: (tabId, node) => {
+          get().openTilePreviewInTab(tabId, node);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          return after;
+        },
+
+        prepareOpenTilePreviewInTabFocusTargetFromSource: (
+          tabId,
+          node,
+          source,
+        ) => {
+          const before = canvasForExistingTab(get(), tabId);
+          get().openTilePreviewInTab(tabId, node);
+          const canvas = canvasForExistingTab(get(), tabId);
+          if (before !== canvas) trackOpenedCanvasTile(node, source);
+          return currentNestedFocusTargetForTab(get(), tabId);
+        },
+
+        restoreClosedTilePreview: (tabId, preferredPaneId, node) => {
+          set((state) => {
+            const forTab = state.closedTilePayloadsByTabId[tabId];
+            const restoredPayload = forTab?.[node.instanceId];
+            const withoutRestored =
+              forTab === undefined || restoredPayload === undefined
+                ? state.closedTilePayloadsByTabId
+                : {
+                    ...state.closedTilePayloadsByTabId,
+                    [tabId]: withoutClosedTilePayload(forTab, node.instanceId),
+                  };
+            const pendingCreateArtifactIds =
+              restoredPayload?.pendingCreate && node.type !== "terminal"
+                ? withId(state.pendingCreateArtifactIds, node.id)
+                : state.pendingCreateArtifactIds;
+            const pendingCreateTerminalIdentities =
+              restoredPayload?.pendingCreate && node.type === "terminal"
+                ? withTerminalPendingCreate(
+                    state.pendingCreateTerminalIdentities,
+                    node.hostId,
+                    node.id,
+                  )
+                : state.pendingCreateTerminalIdentities;
+            // Strip the entry being restored BEFORE the canvas update runs its
+            // own eviction-capture: capturing against a map that still counts
+            // the restored entry can push a same-transaction preview eviction
+            // (e.g. the destination pane's prior preview) past the per-tab FIFO
+            // cap and needlessly evict an unrelated payload.
+            const baseState = {
+              ...state,
+              closedTilePayloadsByTabId: withoutRestored,
+              pendingCreateArtifactIds,
+              pendingCreateTerminalIdentities,
+            };
+            const canvasUpdate = updateTabCanvas(baseState, tabId, (canvas) =>
+              restoreTilePreviewCanvas(canvas, node, preferredPaneId),
+            );
+            if (canvasUpdate === baseState) {
+              return withoutRestored === state.closedTilePayloadsByTabId
+                ? state
+                : { closedTilePayloadsByTabId: withoutRestored };
+            }
+            const pendingUnchanged =
+              pendingCreateArtifactIds === state.pendingCreateArtifactIds &&
+              pendingCreateTerminalIdentities ===
+                state.pendingCreateTerminalIdentities;
+            return pendingUnchanged
+              ? canvasUpdate
+              : {
+                  ...canvasUpdate,
+                  pendingCreateArtifactIds,
+                  pendingCreateTerminalIdentities,
+                };
+          });
+        },
+
+        discardClosedTilePayload: (tabId, instanceId) => {
+          set((state) => {
+            const forTab = state.closedTilePayloadsByTabId[tabId];
+            if (forTab === undefined || forTab[instanceId] === undefined) {
+              return state;
+            }
+            return {
+              closedTilePayloadsByTabId: {
+                ...state.closedTilePayloadsByTabId,
+                [tabId]: withoutClosedTilePayload(forTab, instanceId),
+              },
+            };
+          });
+        },
+
+        openTileInBackgroundTab: (tabId, node) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              openTileInBackgroundTabCanvas(canvas, node),
+            ),
+          );
+        },
+
+        prepareOpenTileInBackgroundTabFocusTarget: (tabId, node) => {
+          get().openTileInBackgroundTab(tabId, node);
+          return null;
+        },
+
+        prepareOpenTileInBackgroundTabFocusTargetFromSource: (
+          tabId,
+          node,
+          source,
+        ) => {
+          const before = canvasForExistingTab(get(), tabId);
+          get().openTileInBackgroundTab(tabId, node);
+          const after = canvasForExistingTab(get(), tabId);
+          if (before !== after) trackOpenedCanvasTile(node, source);
+          return null;
+        },
+
+        openTileInPane: (tabId, paneId, ref) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              openTileInPaneCanvas(canvas, paneId, ref),
+            ),
+          );
+        },
+
+        prepareOpenTileInPaneFocusTarget: (tabId, paneId, ref) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const targetPane =
+            before === null ? null : findPaneById(before.root, paneId);
+          get().openTileInPane(tabId, paneId, ref);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = targetPane === null ? null : after;
+          return target;
+        },
+
+        prepareOpenSingletonTileInPaneFocusTarget: (tabId, paneId, ref) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const targetPane =
+            before === null ? null : findPaneById(before.root, paneId);
+          const existingSingleton =
+            before === null ? null : findPaneTabForRef(before, ref);
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              openSingletonTileInPaneCanvas(canvas, paneId, ref),
+            ),
+          );
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          // A focus of an ALREADY-OPEN singleton is still a real focus target
+          // even when the requested pane is stale - the canvas focused the
+          // existing instance in ITS pane regardless. Null only when nothing
+          // could have happened: no pane to insert into AND no existing
+          // instance to focus.
+          return targetPane === null && existingSingleton === null
+            ? null
+            : after;
+        },
+
+        prepareOpenTileInPaneFocusTargetFromSource: (
+          tabId,
+          paneId,
+          ref,
+          source,
+        ) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const targetPane =
+            before === null ? null : findPaneById(before.root, paneId);
+          get().openTileInPane(tabId, paneId, ref);
+          const canvas = canvasForExistingTab(get(), tabId);
+          if (before !== canvas) trackOpenedCanvasTile(ref, source);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = targetPane === null ? null : after;
+          return target;
+        },
+
+        openBlankTabInPane: (tabId, paneId) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              openBlankTabInPaneCanvas(canvas, paneId),
+            ),
+          );
+        },
+
+        prepareOpenBlankTabInPaneFocusTarget: (tabId, paneId) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const targetPane =
+            before === null ? null : findPaneById(before.root, paneId);
+          get().openBlankTabInPane(tabId, paneId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = targetPane === null ? null : after;
+          return target;
+        },
+
+        updateGitDiffTileViewInTab: (tabId, tileId, view) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateGitDiffTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updateSnapshotDiffTileViewInTab: (tabId, tileId, view) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateSnapshotDiffTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updateCommGraphTileViewInTab: (tabId, tileId, view) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateCommGraphTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updatePrDiffTileViewInTab: (tabId, tileId, view) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updatePrDiffTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        togglePrDiffFileCollapsedInTab: (tabId, tileId, fileKey) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              togglePrDiffFileCollapsed(canvas, tileId, fileKey),
+            ),
+          );
+        },
+
+        toggleGitDiffBundleFileCollapsedInTab: (tabId, tileId, filePath) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              toggleGitDiffBundleFileCollapsed(canvas, tileId, filePath),
+            ),
+          );
+        },
+
+        toggleSnapshotDiffBundleFileCollapsedInTab: (
+          tabId,
+          tileId,
+          filePath,
+        ) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              toggleSnapshotDiffBundleFileCollapsed(canvas, tileId, filePath),
+            ),
+          );
+        },
+
+        promotePreviewInTab: (tabId, paneId) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              promotePreview(canvas, paneId),
+            ),
+          );
+        },
+
+        restorePreviewInTab: (tabId, paneId, previewTabId) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              restorePreview(canvas, paneId, previewTabId),
+            ),
+          );
+        },
+
+        applyNestedRouteFocus: (tabId, target) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              target.tileInstanceId === undefined
+                ? setActivePane(canvas, target.paneId)
+                : setActiveTileTabCanvas(
+                    canvas,
+                    target.paneId,
+                    target.tileInstanceId,
+                  ),
+            ),
+          );
+        },
+
+        setActiveTileTab: (tabId, paneId, tileTabId) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              setActiveTileTabCanvas(canvas, paneId, tileTabId),
+            ),
+          );
+        },
+
+        prepareSetActiveTileTabFocusTarget: (tabId, paneId, tileTabId) => {
+          get().setActiveTileTab(tabId, paneId, tileTabId);
+          const target = exactNestedFocusTargetForTab(get(), tabId, {
+            paneId,
+            tileInstanceId: tileTabId,
+          });
+          return target;
+        },
+
+        setActiveTilePane: (tabId, paneId) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              setActivePane(canvas, paneId),
+            ),
+          );
+        },
+
+        prepareSetActiveTilePaneFocusTarget: (tabId, paneId) => {
+          get().setActiveTilePane(tabId, paneId);
+          const target = currentNestedFocusTargetForTab(get(), tabId);
+          const returned = target?.paneId === paneId ? target : null;
+          return returned;
+        },
+
+        insertNodeOnTabStrip: (tabId, targetPaneId, targetIndex, node) => {
+          // Ticket 20: mirrors `dropOnTabStrip`'s own node-kind resolution -
+          // dropping a node already open in a DIFFERENT pane routes through
+          // `moveTabAcrossPanes` there, remounting that pane's painted tile
+          // exactly like an explicit cross-pane drag (and, if it empties its
+          // source pane, can also dissolve a sibling's parent group). Flush
+          // both before `set()` commits the move.
+          const before = canvasForExistingTab(get(), tabId);
+          if (before !== null) {
+            const existing = findPaneTabForRef(before, node);
+            if (existing !== null && existing.pane.id !== targetPaneId) {
+              flushChatTabViewportHandoff([
+                existing.instanceId,
+                ...(existing.pane.tabInstanceIds.length === 1
+                  ? paneRemovalDissolveHandoffTargets(
+                      before.root,
+                      existing.pane.id,
+                    )
+                  : []),
+              ]);
+            }
+          }
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              dropOnTabStrip(
+                canvas,
+                { kind: "node", node },
+                targetPaneId,
+                targetIndex,
+              ),
+            ),
+          );
+        },
+
+        prepareInsertNodeOnTabStripFocusTarget: (
+          tabId,
+          targetPaneId,
+          targetIndex,
+          node,
+        ) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const targetPane =
+            before === null ? null : findPaneById(before.root, targetPaneId);
+          get().insertNodeOnTabStrip(tabId, targetPaneId, targetIndex, node);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = targetPane === null ? null : after;
+          return target;
+        },
+
+        moveTabOnTabStrip: (tabId, args) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const node = before?.tilesByInstanceId[args.tabId];
+          // Ticket 20: a cross-pane move remounts the dragged tab's painted
+          // chat (the keyed layer moves from the source `TabGroupView` to the
+          // target one - `moveTabAcrossPanes`). When the dragged tab was its
+          // source pane's only tab, that pane also closes and can dissolve its
+          // parent group, remounting a SIBLING pane too. Flush both before
+          // `set()` commits. A same-pane reorder never remounts anything.
+          if (before !== null && args.sourcePaneId !== args.targetPaneId) {
+            const sourcePane = findPaneById(before.root, args.sourcePaneId);
+            flushChatTabViewportHandoff([
+              args.tabId,
+              ...(sourcePane !== null && sourcePane.tabInstanceIds.length === 1
+                ? paneRemovalDissolveHandoffTargets(
+                    before.root,
+                    args.sourcePaneId,
+                  )
+                : []),
+            ]);
+          }
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) => {
+              const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
+              const node = canvas.tilesByInstanceId[args.tabId];
+              if (sourcePane === null || node === undefined) return canvas;
+              return dropOnTabStrip(
+                canvas,
+                {
+                  kind: "tab",
+                  sourcePaneId: args.sourcePaneId,
+                  tabId: args.tabId,
+                  node,
+                },
+                args.targetPaneId,
+                args.targetIndex,
+              );
+            }),
+          );
+          const after = canvasForExistingTab(get(), tabId);
+          const analyticsTarget =
+            node === undefined
+              ? null
+              : analyticsTargetForCanvasTileType(node.type);
+          if (before !== after && analyticsTarget !== null) {
+            Analytics.getInstance().track(AnalyticsEvent.TabMoved, {
+              target: analyticsTarget,
+            });
+          }
+        },
+
+        prepareMoveActiveTabOnTabStripFocusTarget: (tabId, args) => {
+          const beforeCanvas = canvasForExistingTab(get(), tabId);
+          const before = currentNestedFocusTargetForTab(get(), tabId);
+          get().moveTabOnTabStrip(tabId, args);
+          const afterCanvas = canvasForExistingTab(get(), tabId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target =
+            before?.tileInstanceId !== args.tabId ||
+            beforeCanvas === null ||
+            afterCanvas === null ||
+            beforeCanvas === afterCanvas
+              ? null
+              : changedNestedFocusTarget(before, after);
+          return target;
+        },
+
+        splitPaneWithNode: (tabId, targetPaneId, position, node) => {
+          const before = canvasForExistingTab(get(), tabId);
+          // Ticket 20 (review round 1, finding 1): when the target pane's
+          // parent group runs perpendicular to `position` (or the target is
+          // the bare root pane), inserting beside it WRAPS the target instead
+          // of a flat insertion (`insertPaneAtEdge`) - the target's own
+          // painted chat remounts even though this call never touches its
+          // content. Flushing its active tab's viewport unconditionally is
+          // cheap and correct either way (a flat, non-wrapping insertion
+          // leaves it mounted, and the flush is simply harmless there).
+          //
+          // Separately: `splitPaneAtEdge` (actions.ts) resolves a `node`
+          // source whose content is ALREADY OPEN somewhere into a `tab`-kind
+          // move BEFORE doing anything else - the same "already open"
+          // resolution `insertNodeOnTabStrip`/`dropOnTabStrip` perform, but
+          // this call creates a BRAND NEW pane for the moved tab unconditionally
+          // (`createPaneWithTab`), regardless of whether the existing tab's
+          // source pane is the same as `targetPaneId` - so the moved instance
+          // always remounts, not just on a genuine cross-pane move. When its
+          // source pane empties (and isn't the target itself - the
+          // `splitsIntoItself` case deliberately keeps that pane alive as the
+          // split's other half instead of dissolving it), flush the promoted
+          // dissolve survivors too.
+          if (before !== null) {
+            const targetPane = findPaneById(before.root, targetPaneId);
+            const targetInstanceId =
+              targetPane === null
+                ? null
+                : resolveActivePaneTab(
+                    targetPane.activeTabId,
+                    targetPane.tabInstanceIds,
+                  );
+            const existing = findPaneTabForRef(before, node);
+            flushChatTabViewportHandoff([
+              ...(targetInstanceId === null ? [] : [targetInstanceId]),
+              ...(existing !== null ? [existing.instanceId] : []),
+              ...(existing !== null &&
+              existing.pane.tabInstanceIds.length === 1 &&
+              existing.pane.id !== targetPaneId
+                ? paneRemovalDissolveHandoffTargets(
+                    before.root,
+                    existing.pane.id,
+                  )
+                : []),
+            ]);
+          }
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              splitPaneAtEdge(canvas, targetPaneId, position, {
+                kind: "node",
+                node,
+              }),
+            ),
+          );
+          const after = canvasForExistingTab(get(), tabId);
+          const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
+          if (before !== after && analyticsTarget !== null) {
+            Analytics.getInstance().track(AnalyticsEvent.TabSplit, {
+              target: analyticsTarget,
+            });
+          }
+        },
+
+        prepareSplitPaneWithNodeFocusTarget: (
+          tabId,
+          targetPaneId,
+          position,
+          node,
+        ) => {
+          const before = canvasForExistingTab(get(), tabId);
+          get().splitPaneWithNode(tabId, targetPaneId, position, node);
+          const after = canvasForExistingTab(get(), tabId);
+          const target = changedCanvasFocusTarget(before, after);
+          return target;
+        },
+
+        splitPaneWithTab: (tabId, args) => {
+          const before = canvasForExistingTab(get(), tabId);
+          const node = before?.tilesByInstanceId[args.tabId];
+          // Ticket 20: the dragged tab always lands in a brand-new pane
+          // (`createPaneWithTab` inside `splitPaneAtEdge`) - it remounts
+          // unconditionally, unlike a same-pane/same-axis flat split of a
+          // DIFFERENT tab. The target pane can also wrap (see
+          // `splitPaneWithNode`'s comment) and, when the drag emptied its
+          // source pane, that pane's own close can dissolve a THIRD pane's
+          // parent. Flush all three defensively before `set()`.
+          if (before !== null) {
+            const targetPane = findPaneById(before.root, args.targetPaneId);
+            const targetInstanceId =
+              targetPane === null
+                ? null
+                : resolveActivePaneTab(
+                    targetPane.activeTabId,
+                    targetPane.tabInstanceIds,
+                  );
+            const sourcePane = findPaneById(before.root, args.sourcePaneId);
+            flushChatTabViewportHandoff([
+              args.tabId,
+              ...(targetInstanceId === null ? [] : [targetInstanceId]),
+              ...(sourcePane !== null &&
+              sourcePane.tabInstanceIds.length === 1 &&
+              args.sourcePaneId !== args.targetPaneId
+                ? paneRemovalDissolveHandoffTargets(
+                    before.root,
+                    args.sourcePaneId,
+                  )
+                : []),
+            ]);
+          }
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) => {
+              const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
+              const node = canvas.tilesByInstanceId[args.tabId];
+              if (sourcePane === null || node === undefined) return canvas;
+              return splitPaneAtEdge(canvas, args.targetPaneId, args.position, {
                 kind: "tab",
                 sourcePaneId: args.sourcePaneId,
                 tabId: args.tabId,
                 node,
-              },
-              args.targetPaneId,
-              args.targetIndex,
-            );
-          }),
-        );
-        const after = canvasForExistingTab(get(), tabId);
-        const analyticsTarget =
-          node === undefined
-            ? null
-            : analyticsTargetForCanvasTileType(node.type);
-        if (before !== after && analyticsTarget !== null) {
-          Analytics.getInstance().track(AnalyticsEvent.TabMoved, {
-            target: analyticsTarget,
-          });
-        }
-      },
-
-      prepareMoveActiveTabOnTabStripFocusTarget: (tabId, args) => {
-        const beforeCanvas = canvasForExistingTab(get(), tabId);
-        const before = currentNestedFocusTargetForTab(get(), tabId);
-        get().moveTabOnTabStrip(tabId, args);
-        const afterCanvas = canvasForExistingTab(get(), tabId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target =
-          before?.tileInstanceId !== args.tabId ||
-          beforeCanvas === null ||
-          afterCanvas === null ||
-          beforeCanvas === afterCanvas
-            ? null
-            : changedNestedFocusTarget(before, after);
-        return target;
-      },
-
-      splitPaneWithNode: (tabId, targetPaneId, position, node) => {
-        const before = canvasForExistingTab(get(), tabId);
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            splitPaneAtEdge(canvas, targetPaneId, position, {
-              kind: "node",
-              node,
+              });
             }),
-          ),
-        );
-        const after = canvasForExistingTab(get(), tabId);
-        const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
-        if (before !== after && analyticsTarget !== null) {
-          Analytics.getInstance().track(AnalyticsEvent.TabSplit, {
-            target: analyticsTarget,
-          });
-        }
-      },
-
-      prepareSplitPaneWithNodeFocusTarget: (
-        tabId,
-        targetPaneId,
-        position,
-        node,
-      ) => {
-        const before = canvasForExistingTab(get(), tabId);
-        get().splitPaneWithNode(tabId, targetPaneId, position, node);
-        const after = canvasForExistingTab(get(), tabId);
-        const target = changedCanvasFocusTarget(before, after);
-        return target;
-      },
-
-      splitPaneWithTab: (tabId, args) => {
-        const before = canvasForExistingTab(get(), tabId);
-        const node = before?.tilesByInstanceId[args.tabId];
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) => {
-            const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
-            const node = canvas.tilesByInstanceId[args.tabId];
-            if (sourcePane === null || node === undefined) return canvas;
-            return splitPaneAtEdge(canvas, args.targetPaneId, args.position, {
-              kind: "tab",
-              sourcePaneId: args.sourcePaneId,
-              tabId: args.tabId,
-              node,
+          );
+          const after = canvasForExistingTab(get(), tabId);
+          const analyticsTarget =
+            node === undefined
+              ? null
+              : analyticsTargetForCanvasTileType(node.type);
+          if (before !== after && analyticsTarget !== null) {
+            Analytics.getInstance().track(AnalyticsEvent.TabSplit, {
+              target: analyticsTarget,
             });
-          }),
-        );
-        const after = canvasForExistingTab(get(), tabId);
-        const analyticsTarget =
-          node === undefined
-            ? null
-            : analyticsTargetForCanvasTileType(node.type);
-        if (before !== after && analyticsTarget !== null) {
-          Analytics.getInstance().track(AnalyticsEvent.TabSplit, {
-            target: analyticsTarget,
-          });
-        }
-      },
-
-      prepareSplitPaneWithTabFocusTarget: (tabId, args) => {
-        const before = canvasForExistingTab(get(), tabId);
-        get().splitPaneWithTab(tabId, args);
-        const after = canvasForExistingTab(get(), tabId);
-        const target = changedCanvasFocusTarget(before, after);
-        return target;
-      },
-
-      splitPaneEmptyInTab: (tabId, targetPaneId, direction) => {
-        let newPaneId: string | null = null;
-        set((state) => {
-          const tab = state.tabsById[tabId];
-          if (tab === undefined) return state;
-          const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
-          const nextCanvas = splitPaneEmpty(canvas, targetPaneId, direction);
-          if (nextCanvas === canvas) return state;
-          newPaneId = nextCanvas.activePaneId;
-          return {
-            canvasByTabId: {
-              ...state.canvasByTabId,
-              [tabId]: nextCanvas,
-            },
-          };
-        });
-        return newPaneId;
-      },
-
-      prepareSplitPaneEmptyFocusTarget: (tabId, targetPaneId, direction) => {
-        const paneId = get().splitPaneEmptyInTab(
-          tabId,
-          targetPaneId,
-          direction,
-        );
-        const target =
-          paneId === null ? null : { paneId, tileInstanceId: undefined };
-        return target;
-      },
-
-      splitPaneEmptyRightInTab: (tabId, targetPaneId) =>
-        get().splitPaneEmptyInTab(tabId, targetPaneId, "horizontal"),
-
-      closeCanvasTab: (tabId, paneId, tileTabId) => {
-        const beforeCanvas = get().canvasByTabId[tabId];
-        // `tileTabId` is a tab instanceId; pendingCreate tracking is keyed by
-        // content id, so resolve the closed tab's content id before clearing.
-        set((state) => {
-          const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
-          const pane = findPaneById(canvas.root, paneId);
-          const contentId =
-            pane !== null && pane.tabInstanceIds.includes(tileTabId)
-              ? (canvas.tilesByInstanceId[tileTabId]?.id ?? null)
-              : null;
-          const pendingNext =
-            contentId === null
-              ? state.pendingCreateArtifactIds
-              : withoutId(state.pendingCreateArtifactIds, contentId);
-          const updated = updateTabCanvas(state, tabId, (canvas) =>
-            closeTileTab(canvas, paneId, tileTabId),
-          );
-          return pendingNext === state.pendingCreateArtifactIds
-            ? updated
-            : { ...updated, pendingCreateArtifactIds: pendingNext };
-        });
-        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-      },
-
-      prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
-        const before = currentNestedFocusTargetForTab(get(), tabId);
-        get().closeCanvasTab(tabId, paneId, tileTabId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = changedNestedFocusTarget(before, after);
-        return target;
-      },
-
-      prepareCloseOtherCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
-        const before = currentNestedFocusTargetForTab(get(), tabId);
-        get().closeOtherCanvasTabs(tabId, paneId, tileTabId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = changedNestedFocusTarget(before, after);
-        return target;
-      },
-
-      closeOtherCanvasTabs: (tabId, paneId, tileTabId) => {
-        const beforeCanvas = get().canvasByTabId[tabId];
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            closeOtherTileTabs(canvas, paneId, tileTabId),
-          ),
-        );
-        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-      },
-
-      closeRightCanvasTabs: (tabId, paneId, tileTabId) => {
-        const beforeCanvas = get().canvasByTabId[tabId];
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            closeRightTabs(canvas, paneId, tileTabId),
-          ),
-        );
-        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-      },
-
-      prepareCloseRightCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
-        const before = currentNestedFocusTargetForTab(get(), tabId);
-        get().closeRightCanvasTabs(tabId, paneId, tileTabId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = changedNestedFocusTarget(before, after);
-        return target;
-      },
-
-      closeAllCanvasTabs: (tabId, paneId) => {
-        const beforeCanvas = get().canvasByTabId[tabId];
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            closeAllTabs(canvas, paneId),
-          ),
-        );
-        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-      },
-
-      prepareCloseAllCanvasTabsFocusTarget: (tabId, paneId) => {
-        const before = currentNestedFocusTargetForTab(get(), tabId);
-        get().closeAllCanvasTabs(tabId, paneId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = changedNestedFocusTarget(before, after);
-        return target;
-      },
-
-      closeCanvasPane: (tabId, paneId) => {
-        const beforeCanvas = get().canvasByTabId[tabId];
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) => closePane(canvas, paneId)),
-        );
-        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-      },
-
-      prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {
-        const before = currentNestedFocusTargetForTab(get(), tabId);
-        get().closeCanvasPane(tabId, paneId);
-        const after = currentNestedFocusTargetForTab(get(), tabId);
-        const target = changedNestedFocusTarget(before, after);
-        return target;
-      },
-
-      resizeSplitInTab: (tabId, groupId, sizes) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            resizeSplit(canvas, groupId, sizes),
-          ),
-        );
-      },
-
-      prepareResizeSplitFocusTarget: (tabId, groupId, sizes) => {
-        get().resizeSplitInTab(tabId, groupId, sizes);
-        return null;
-      },
-
-      renameArtifactInTab: (tabId, artifactId, name) => {
-        const trimmed = name.trim();
-        if (trimmed.length === 0) return;
-        set((state) => {
-          const tab = state.tabsById[tabId];
-          if (tab === undefined) return state;
-          const canvasPatch = updateTabCanvas(state, tabId, (canvas) =>
-            renameArtifact(canvas, artifactId, trimmed),
-          );
-          const records = state.artifactTreeByEpicId[tab.epicId] ?? [];
-          const target = records.find((r) => r.id === artifactId);
-          if (target === undefined || target.name === trimmed) {
-            return canvasPatch;
           }
-          return {
-            ...canvasPatch,
-            artifactTreeByEpicId: {
-              ...state.artifactTreeByEpicId,
-              [tab.epicId]: records.map((r) =>
-                r.id === artifactId ? { ...r, name: trimmed } : r,
-              ),
-            },
-          };
-        });
-      },
+        },
 
-      updateTerminalNameSnapshots: (hostId, sessionId, name) => {
-        const trimmed = name.trim();
-        if (trimmed.length === 0) return;
-        set((state) => {
-          const entries = Object.entries(state.canvasByTabId).map(
-            ([tabId, canvas]) =>
-              [
-                tabId,
-                canvas === undefined
-                  ? canvas
-                  : renameTerminalTiles(canvas, hostId, sessionId, trimmed),
-              ] as const,
-          );
-          if (
-            entries.every(
-              ([tabId, canvas]) => canvas === state.canvasByTabId[tabId],
-            )
-          ) {
-            return state;
+        prepareSplitPaneWithTabFocusTarget: (tabId, args) => {
+          const before = canvasForExistingTab(get(), tabId);
+          get().splitPaneWithTab(tabId, args);
+          const after = canvasForExistingTab(get(), tabId);
+          const target = changedCanvasFocusTarget(before, after);
+          return target;
+        },
+
+        splitPaneEmptyInTab: (tabId, targetPaneId, direction) => {
+          let newPaneId: string | null = null;
+          // Ticket 20: an empty placeholder pane can still WRAP the target
+          // (same `insertPaneAtEdge` mechanism as `splitPaneWithNode`), even
+          // though this action opens no content of its own.
+          const before = canvasForExistingTab(get(), tabId);
+          if (before !== null) {
+            const targetPane = findPaneById(before.root, targetPaneId);
+            const targetInstanceId =
+              targetPane === null
+                ? null
+                : resolveActivePaneTab(
+                    targetPane.activeTabId,
+                    targetPane.tabInstanceIds,
+                  );
+            if (targetInstanceId !== null) {
+              flushChatTabViewportHandoff([targetInstanceId]);
+            }
           }
-          return { canvasByTabId: Object.fromEntries(entries) };
-        });
-      },
-
-      seedEpic: (epicId, tab, artifacts) => {
-        set((state) => {
-          const existing = state.tabsById[tab.tabId];
-          if (existing !== undefined) {
+          set((state) => {
+            const tab = state.tabsById[tabId];
+            if (tab === undefined) return state;
+            const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+            const nextCanvas = splitPaneEmpty(canvas, targetPaneId, direction);
+            if (nextCanvas === canvas) return state;
+            newPaneId = nextCanvas.activePaneId;
             return {
+              canvasByTabId: {
+                ...state.canvasByTabId,
+                [tabId]: nextCanvas,
+              },
+            };
+          });
+          return newPaneId;
+        },
+
+        prepareSplitPaneEmptyFocusTarget: (tabId, targetPaneId, direction) => {
+          const paneId = get().splitPaneEmptyInTab(
+            tabId,
+            targetPaneId,
+            direction,
+          );
+          const target =
+            paneId === null ? null : { paneId, tileInstanceId: undefined };
+          return target;
+        },
+
+        splitPaneEmptyRightInTab: (tabId, targetPaneId) =>
+          get().splitPaneEmptyInTab(tabId, targetPaneId, "horizontal"),
+
+        closeCanvasTab: (tabId, paneId, tileTabId) => {
+          const beforeCanvas = get().canvasByTabId[tabId];
+          // Ticket 20: closing a pane's LAST tab removes the pane itself
+          // (`closeTab` falls through to `closePane`), which can dissolve its
+          // parent group and remount a sibling's painted chat. Predict this
+          // BEFORE `set()`, from the state as it stands right now.
+          if (beforeCanvas !== undefined) {
+            const pane = findPaneById(beforeCanvas.root, paneId);
+            if (pane !== null && pane.tabInstanceIds.length === 1) {
+              flushChatTabViewportHandoff(
+                paneRemovalDissolveHandoffTargets(beforeCanvas.root, paneId),
+              );
+            }
+          }
+          // `tileTabId` is a tab instanceId; pendingCreate tracking is keyed by
+          // content id, so resolve the closed tab's content id before clearing.
+          set((state) => {
+            const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+            const pane = findPaneById(canvas.root, paneId);
+            const tile =
+              pane !== null && pane.tabInstanceIds.includes(tileTabId)
+                ? (canvas.tilesByInstanceId[tileTabId] ?? null)
+                : null;
+            const updated = updateTabCanvas(state, tabId, (canvas) =>
+              closeRequestedTabs(canvas, paneId, [tileTabId], (current) =>
+                closeTileTab(current, paneId, tileTabId),
+              ),
+            );
+            return removeClosedTilePendingCreate({
+              state,
+              updated,
+              tabId,
+              tileTabId,
+              tile,
+            });
+          });
+          trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+        },
+
+        closeConfirmedDeletedChatTiles: (epicId, chatId, hostId) => {
+          // Snapshot every matching instance before closing any of them: a
+          // close can dissolve its pane and rewrite the surrounding tree.
+          // The host is part of chat identity, so a same-id peer on another
+          // machine must remain open.
+          const targets: Array<{
+            readonly tabId: string;
+            readonly paneId: string;
+            readonly instanceId: string;
+          }> = [];
+          const state = get();
+          Object.entries(state.tabsById).forEach(([tabId, tab]) => {
+            if (tab?.epicId !== epicId) return;
+            const canvas = state.canvasByTabId[tabId];
+            if (canvas === undefined) return;
+            collectPanes(canvas.root).forEach((pane) => {
+              pane.tabInstanceIds.forEach((instanceId) => {
+                const tile = canvas.tilesByInstanceId[instanceId];
+                if (
+                  tile?.type === "chat" &&
+                  tile.id === chatId &&
+                  tile.hostId === hostId
+                ) {
+                  targets.push({ tabId, paneId: pane.id, instanceId });
+                }
+              });
+            });
+          });
+
+          targets.forEach(({ tabId, paneId, instanceId }) => {
+            get().closeCanvasTab(tabId, paneId, instanceId);
+          });
+        },
+
+        prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
+          const before = currentNestedFocusTargetForTab(get(), tabId);
+          get().closeCanvasTab(tabId, paneId, tileTabId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = changedNestedFocusTarget(before, after);
+          return target;
+        },
+
+        prepareCloseOtherCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
+          const before = currentNestedFocusTargetForTab(get(), tabId);
+          get().closeOtherCanvasTabs(tabId, paneId, tileTabId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = changedNestedFocusTarget(before, after);
+          return target;
+        },
+
+        closeOtherCanvasTabs: (tabId, paneId, tileTabId) => {
+          const beforeCanvas = get().canvasByTabId[tabId];
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) => {
+              const pane = findPaneById(canvas.root, paneId);
+              if (pane === null) return canvas;
+              const requestedIds = pane.tabInstanceIds.filter(
+                (instanceId) => instanceId !== tileTabId,
+              );
+              return closeRequestedTabs(
+                canvas,
+                paneId,
+                requestedIds,
+                (current) => closeOtherTileTabs(current, paneId, tileTabId),
+              );
+            }),
+          );
+          trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+        },
+
+        closeRightCanvasTabs: (tabId, paneId, tileTabId) => {
+          const beforeCanvas = get().canvasByTabId[tabId];
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) => {
+              const pane = findPaneById(canvas.root, paneId);
+              if (pane === null) return canvas;
+              const index = pane.tabInstanceIds.indexOf(tileTabId);
+              if (index === -1) return canvas;
+              const requestedIds = pane.tabInstanceIds.slice(index + 1);
+              return closeRequestedTabs(
+                canvas,
+                paneId,
+                requestedIds,
+                (current) => closeRightTabs(current, paneId, tileTabId),
+              );
+            }),
+          );
+          trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+        },
+
+        prepareCloseRightCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
+          const before = currentNestedFocusTargetForTab(get(), tabId);
+          get().closeRightCanvasTabs(tabId, paneId, tileTabId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = changedNestedFocusTarget(before, after);
+          return target;
+        },
+
+        closeAllCanvasTabs: (tabId, paneId) => {
+          const beforeCanvas = get().canvasByTabId[tabId];
+          // Ticket 20: `closeAllTabs` always falls through to `closePane` for
+          // a non-empty pane - same dissolve risk as `closeCanvasTab`.
+          if (beforeCanvas !== undefined) {
+            const pane = findPaneById(beforeCanvas.root, paneId);
+            if (pane !== null && pane.tabInstanceIds.length > 0) {
+              flushChatTabViewportHandoff(
+                paneRemovalDissolveHandoffTargets(beforeCanvas.root, paneId),
+              );
+            }
+          }
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) => {
+              const pane = findPaneById(canvas.root, paneId);
+              if (pane === null) return canvas;
+              return closeRequestedTabs(
+                canvas,
+                paneId,
+                pane.tabInstanceIds,
+                (current) => closeAllTabs(current, paneId),
+              );
+            }),
+          );
+          trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+        },
+
+        prepareCloseAllCanvasTabsFocusTarget: (tabId, paneId) => {
+          const before = currentNestedFocusTargetForTab(get(), tabId);
+          get().closeAllCanvasTabs(tabId, paneId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = changedNestedFocusTarget(before, after);
+          return target;
+        },
+
+        closeCanvasPane: (tabId, paneId) => {
+          const beforeCanvas = get().canvasByTabId[tabId];
+          // Ticket 20: same dissolve risk as `closeCanvasTab`/`closeAllCanvasTabs`
+          // - `closePane` always removes the whole pane.
+          if (beforeCanvas !== undefined) {
+            flushChatTabViewportHandoff(
+              paneRemovalDissolveHandoffTargets(beforeCanvas.root, paneId),
+            );
+          }
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) => {
+              const pane = findPaneById(canvas.root, paneId);
+              if (pane === null) return canvas;
+              return closeRequestedTabs(
+                canvas,
+                paneId,
+                pane.tabInstanceIds,
+                (current) => closePane(current, paneId),
+              );
+            }),
+          );
+          trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+        },
+
+        prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {
+          const before = currentNestedFocusTargetForTab(get(), tabId);
+          get().closeCanvasPane(tabId, paneId);
+          const after = currentNestedFocusTargetForTab(get(), tabId);
+          const target = changedNestedFocusTarget(before, after);
+          return target;
+        },
+
+        resizeSplitInTab: (tabId, groupId, sizes) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              resizeSplit(canvas, groupId, sizes),
+            ),
+          );
+        },
+
+        prepareResizeSplitFocusTarget: (tabId, groupId, sizes) => {
+          get().resizeSplitInTab(tabId, groupId, sizes);
+          return null;
+        },
+
+        renameArtifactInTab: (tabId, artifactId, name) => {
+          const trimmed = name.trim();
+          if (trimmed.length === 0) return;
+          set((state) => {
+            const tab = state.tabsById[tabId];
+            if (tab === undefined) return state;
+            const canvasPatch = updateTabCanvas(state, tabId, (canvas) =>
+              renameArtifact(canvas, artifactId, trimmed),
+            );
+            const records = state.artifactTreeByEpicId[tab.epicId] ?? [];
+            const target = records.find((r) => r.id === artifactId);
+            if (target === undefined || target.name === trimmed) {
+              return canvasPatch;
+            }
+            return {
+              ...canvasPatch,
+              artifactTreeByEpicId: {
+                ...state.artifactTreeByEpicId,
+                [tab.epicId]: records.map((r) =>
+                  r.id === artifactId ? { ...r, name: trimmed } : r,
+                ),
+              },
+            };
+          });
+        },
+
+        updateTerminalNameSnapshots: (hostId, sessionId, name) => {
+          const trimmed = name.trim();
+          if (trimmed.length === 0) return;
+          set((state) => {
+            const entries = Object.entries(state.canvasByTabId).map(
+              ([tabId, canvas]) =>
+                [
+                  tabId,
+                  canvas === undefined
+                    ? canvas
+                    : renameTerminalTiles(canvas, hostId, sessionId, trimmed),
+                ] as const,
+            );
+            if (
+              entries.every(
+                ([tabId, canvas]) => canvas === state.canvasByTabId[tabId],
+              )
+            ) {
+              return state;
+            }
+            return { canvasByTabId: Object.fromEntries(entries) };
+          });
+        },
+
+        adoptHostTerminalProjection: (hostId, terminal) => {
+          set((state) => {
+            const entries = Object.entries(state.canvasByTabId).map(
+              ([tabId, canvas]) =>
+                [
+                  tabId,
+                  canvas === undefined
+                    ? canvas
+                    : adoptHostTerminalProjection(canvas, hostId, terminal),
+                ] as const,
+            );
+            if (
+              entries.every(
+                ([tabId, canvas]) => canvas === state.canvasByTabId[tabId],
+              )
+            ) {
+              return state;
+            }
+            return { canvasByTabId: Object.fromEntries(entries) };
+          });
+        },
+
+        removeHostTerminalRefs: (hostId, terminalId) => {
+          set((state) => {
+            const entries = Object.entries(state.canvasByTabId).map(
+              ([tabId, canvas]) =>
+                [
+                  tabId,
+                  canvas === undefined
+                    ? canvas
+                    : removeTerminalTiles(canvas, hostId, terminalId),
+                ] as const,
+            );
+            const closedTilePayloadsByTabId = withoutDeletedTerminalPayloads(
+              state.closedTilePayloadsByTabId,
+              hostId,
+              terminalId,
+            );
+            const pendingCreateTerminalIdentities =
+              withoutTerminalPendingCreate(
+                state.pendingCreateTerminalIdentities,
+                hostId,
+                terminalId,
+              );
+            const canvasesUnchanged = entries.every(
+              ([tabId, canvas]) => canvas === state.canvasByTabId[tabId],
+            );
+            const canvasByTabId = canvasesUnchanged
+              ? state.canvasByTabId
+              : Object.fromEntries(entries);
+            if (
+              canvasesUnchanged &&
+              closedTilePayloadsByTabId === state.closedTilePayloadsByTabId &&
+              pendingCreateTerminalIdentities ===
+                state.pendingCreateTerminalIdentities
+            ) {
+              return state;
+            }
+            return {
+              canvasByTabId,
+              closedTilePayloadsByTabId,
+              pendingCreateTerminalIdentities,
+            };
+          });
+        },
+
+        seedEpic: (epicId, tab, artifacts) => {
+          set((state) => {
+            const existing = state.tabsById[tab.tabId];
+            if (existing !== undefined) {
+              return {
+                artifactTreeByEpicId: {
+                  ...state.artifactTreeByEpicId,
+                  [epicId]: artifacts,
+                },
+                activeTabId: tab.tabId,
+                mostRecentTabIdByEpicId: {
+                  ...state.mostRecentTabIdByEpicId,
+                  [epicId]: tab.tabId,
+                },
+              };
+            }
+            const viewTab: EpicViewTab = {
+              tabId: tab.tabId,
+              epicId,
+              name: tab.name,
+            };
+            return {
+              tabsById: { ...state.tabsById, [viewTab.tabId]: viewTab },
+              canvasByTabId: {
+                ...state.canvasByTabId,
+                [viewTab.tabId]: createEmptyCanvas(),
+              },
+              openTabOrder: [...state.openTabOrder, viewTab.tabId],
+              activeTabId: viewTab.tabId,
+              mostRecentTabIdByEpicId: {
+                ...state.mostRecentTabIdByEpicId,
+                [epicId]: viewTab.tabId,
+              },
               artifactTreeByEpicId: {
                 ...state.artifactTreeByEpicId,
                 [epicId]: artifacts,
               },
-              activeTabId: tab.tabId,
-              mostRecentTabIdByEpicId: {
-                ...state.mostRecentTabIdByEpicId,
-                [epicId]: tab.tabId,
-              },
             };
-          }
-          const viewTab: EpicViewTab = {
-            tabId: tab.tabId,
+          });
+        },
+
+        createEpicFromPrompt: (prompt) => {
+          const epicId = uuidv4();
+          // `createEpicName` yields "" for an empty/whitespace prompt; this create
+          // path bakes a non-empty stored tab name, so apply the "Untitled task"
+          // fallback here.
+          const name = createEpicName(prompt) || UNTITLED_EPIC_TITLE;
+          const tabId = uuidv4();
+          const tab: EpicViewTab = {
+            tabId,
             epicId,
-            name: tab.name,
+            name,
           };
-          return {
-            tabsById: { ...state.tabsById, [viewTab.tabId]: viewTab },
+          set((state) => ({
+            tabsById: { ...state.tabsById, [tabId]: tab },
             canvasByTabId: {
               ...state.canvasByTabId,
-              [viewTab.tabId]: createEmptyCanvas(),
+              [tabId]: createEmptyCanvas(),
             },
-            openTabOrder: [...state.openTabOrder, viewTab.tabId],
-            activeTabId: viewTab.tabId,
+            openTabOrder: [...state.openTabOrder, tabId],
+            activeTabId: tabId,
             mostRecentTabIdByEpicId: {
               ...state.mostRecentTabIdByEpicId,
-              [epicId]: viewTab.tabId,
+              [epicId]: tabId,
             },
             artifactTreeByEpicId: {
               ...state.artifactTreeByEpicId,
-              [epicId]: artifacts,
+              [epicId]: [],
             },
-          };
-        });
-      },
+          }));
+          return { epicId, name, tabId };
+        },
 
-      createEpicFromPrompt: (prompt) => {
-        const epicId = uuidv4();
-        // `createEpicName` yields "" for an empty/whitespace prompt; this create
-        // path bakes a non-empty stored tab name, so apply the "Untitled epic"
-        // fallback here.
-        const name = createEpicName(prompt) || UNTITLED_EPIC_TITLE;
-        const tabId = uuidv4();
-        const tab: EpicViewTab = {
-          tabId,
-          epicId,
-          name,
-        };
-        set((state) => ({
-          tabsById: { ...state.tabsById, [tabId]: tab },
-          canvasByTabId: {
-            ...state.canvasByTabId,
-            [tabId]: createEmptyCanvas(),
-          },
-          openTabOrder: [...state.openTabOrder, tabId],
-          activeTabId: tabId,
-          mostRecentTabIdByEpicId: {
-            ...state.mostRecentTabIdByEpicId,
-            [epicId]: tabId,
-          },
-          artifactTreeByEpicId: {
-            ...state.artifactTreeByEpicId,
-            [epicId]: [],
-          },
-        }));
-        return { epicId, name, tabId };
-      },
-
-      addRootArtifact: (tabId, type, hostId) => {
-        let createdId = "";
-        set((state) => {
-          const tab = state.tabsById[tabId];
-          if (tab === undefined) return state;
-          const result = appendArtifactRecord({
-            state,
-            epicId: tab.epicId,
-            parentId: null,
-            type,
-            hostId,
+        addRootArtifact: (tabId, type, hostId) => {
+          let createdId = "";
+          set((state) => {
+            const tab = state.tabsById[tabId];
+            if (tab === undefined) return state;
+            const result = appendArtifactRecord({
+              state,
+              epicId: tab.epicId,
+              parentId: null,
+              type,
+              hostId,
+            });
+            if (result === null) return state;
+            createdId = result.id;
+            if (result.node === null) return result.patch;
+            const node = result.node;
+            return {
+              ...result.patch,
+              ...updateTabCanvas(state, tabId, (canvas) =>
+                openTile(canvas, node, false, null),
+              ),
+            };
           });
-          if (result === null) return state;
-          createdId = result.id;
-          if (result.node === null) return result.patch;
-          const node = result.node;
-          return {
-            ...result.patch,
-            ...updateTabCanvas(state, tabId, (canvas) =>
-              openTile(canvas, node, false),
-            ),
-          };
-        });
-        return createdId;
-      },
+          return createdId;
+        },
 
-      addChildArtifact: (epicId, parentId, type, hostId) => {
-        let createdId: string | null = null;
-        set((state) => {
-          const result = appendArtifactRecord({
-            state,
-            epicId,
-            parentId,
-            type,
-            hostId,
+        addChildArtifact: (epicId, parentId, type, hostId) => {
+          let createdId: string | null = null;
+          set((state) => {
+            const result = appendArtifactRecord({
+              state,
+              epicId,
+              parentId,
+              type,
+              hostId,
+            });
+            if (result === null) return state;
+            createdId = result.id;
+            return result.patch;
           });
-          if (result === null) return state;
-          createdId = result.id;
-          return result.patch;
-        });
-        return createdId;
-      },
+          return createdId;
+        },
 
-      markArtifactSelfDeleted: (artifactId) => {
-        // Pending-title map is id-keyed so a stale spinner anchor would
-        // orphan the 30s backstop timer until it fires as a no-op.
-        // `clearScheduledTitlePending` is a no-op when the id isn't present.
-        clearScheduledTitlePending(chatTitleTimers, artifactId);
-        set((s) => {
-          const next = withId(s.selfDeletedArtifactIds, artifactId);
-          const nextChat = Object.hasOwn(s.pendingChatTitles, artifactId)
-            ? (() => {
-                const c = { ...s.pendingChatTitles };
-                delete c[artifactId];
-                return c;
-              })()
-            : s.pendingChatTitles;
-          if (
-            next === s.selfDeletedArtifactIds &&
-            nextChat === s.pendingChatTitles
-          ) {
-            return s;
-          }
-          return {
-            selfDeletedArtifactIds: next,
-            pendingChatTitles: nextChat,
-          };
-        });
-      },
+        markArtifactSelfDeleted: (artifactId) => {
+          // Pending-title map is id-keyed so a stale spinner anchor would
+          // orphan the 30s backstop timer until it fires as a no-op.
+          // `clearScheduledTitlePending` is a no-op when the id isn't present.
+          clearScheduledTitlePending(chatTitleTimers, artifactId);
+          set((s) => {
+            const next = withId(s.selfDeletedArtifactIds, artifactId);
+            const nextChat = Object.hasOwn(s.pendingChatTitles, artifactId)
+              ? (() => {
+                  const c = { ...s.pendingChatTitles };
+                  delete c[artifactId];
+                  return c;
+                })()
+              : s.pendingChatTitles;
+            if (
+              next === s.selfDeletedArtifactIds &&
+              nextChat === s.pendingChatTitles
+            ) {
+              return s;
+            }
+            return {
+              selfDeletedArtifactIds: next,
+              pendingChatTitles: nextChat,
+            };
+          });
+        },
 
-      unmarkArtifactSelfDeleted: (artifactId) => {
-        set((s) => {
-          const next = withoutId(s.selfDeletedArtifactIds, artifactId);
-          return next === s.selfDeletedArtifactIds
-            ? s
-            : { selfDeletedArtifactIds: next };
-        });
-      },
+        unmarkArtifactSelfDeleted: (artifactId) => {
+          set((s) => {
+            const next = withoutId(s.selfDeletedArtifactIds, artifactId);
+            return next === s.selfDeletedArtifactIds
+              ? s
+              : { selfDeletedArtifactIds: next };
+          });
+        },
 
-      markArtifactPendingCreate: (artifactId) => {
-        set((s) => {
-          const next = withId(s.pendingCreateArtifactIds, artifactId);
-          return next === s.pendingCreateArtifactIds
-            ? s
-            : { pendingCreateArtifactIds: next };
-        });
-      },
+        markArtifactPendingCreate: (artifactId) => {
+          set((s) => {
+            const next = withId(s.pendingCreateArtifactIds, artifactId);
+            return next === s.pendingCreateArtifactIds
+              ? s
+              : { pendingCreateArtifactIds: next };
+          });
+        },
 
-      unmarkArtifactPendingCreate: (artifactId) => {
-        set((s) => {
-          const next = withoutId(s.pendingCreateArtifactIds, artifactId);
-          return next === s.pendingCreateArtifactIds
-            ? s
-            : { pendingCreateArtifactIds: next };
-        });
-      },
+        unmarkArtifactPendingCreate: (artifactId) => {
+          set((s) => {
+            const next = withoutId(s.pendingCreateArtifactIds, artifactId);
+            const nextClosedTilePayloads = clearClosedTilePendingCreate(
+              s.closedTilePayloadsByTabId,
+              artifactId,
+              null,
+            );
+            return next === s.pendingCreateArtifactIds &&
+              nextClosedTilePayloads === s.closedTilePayloadsByTabId
+              ? s
+              : {
+                  pendingCreateArtifactIds: next,
+                  closedTilePayloadsByTabId: nextClosedTilePayloads,
+                };
+          });
+        },
 
-      beginPreAckRootCreate: (epicId, tempId, name) => {
-        set((s) => {
-          const cur = s.preAckRootCreatesByEpic[epicId] ?? [];
-          return {
-            preAckRootCreatesByEpic: {
-              ...s.preAckRootCreatesByEpic,
-              [epicId]: [...cur, { tempId, name }],
+        markTerminalPendingCreate: (hostId, terminalId) => {
+          set((s) => {
+            const next = withTerminalPendingCreate(
+              s.pendingCreateTerminalIdentities,
+              hostId,
+              terminalId,
+            );
+            return next === s.pendingCreateTerminalIdentities
+              ? s
+              : { pendingCreateTerminalIdentities: next };
+          });
+        },
+
+        unmarkTerminalPendingCreate: (hostId, terminalId) => {
+          set((s) => {
+            const next = withoutTerminalPendingCreate(
+              s.pendingCreateTerminalIdentities,
+              hostId,
+              terminalId,
+            );
+            const nextClosedTilePayloads = clearClosedTilePendingCreate(
+              s.closedTilePayloadsByTabId,
+              terminalId,
+              hostId,
+            );
+            return next === s.pendingCreateTerminalIdentities &&
+              nextClosedTilePayloads === s.closedTilePayloadsByTabId
+              ? s
+              : {
+                  pendingCreateTerminalIdentities: next,
+                  closedTilePayloadsByTabId: nextClosedTilePayloads,
+                };
+          });
+        },
+
+        beginPreAckRootCreate: (epicId, tempId, name) => {
+          set((s) => {
+            const cur = s.preAckRootCreatesByEpic[epicId] ?? [];
+            return {
+              preAckRootCreatesByEpic: {
+                ...s.preAckRootCreatesByEpic,
+                [epicId]: [...cur, { tempId, name }],
+              },
+            };
+          });
+        },
+
+        endPreAckRootCreate: (epicId, tempId) => {
+          set((s) => {
+            const cur = s.preAckRootCreatesByEpic[epicId];
+            if (cur === undefined) return s;
+            return {
+              preAckRootCreatesByEpic: {
+                ...s.preAckRootCreatesByEpic,
+                [epicId]: cur.filter((e) => e.tempId !== tempId),
+              },
+            };
+          });
+        },
+
+        registerPendingRootCreate: (epicId, pendingId, name) => {
+          set((s) => {
+            const cur = s.pendingRootCreatesByEpic[epicId] ?? [];
+            return {
+              pendingRootCreatesByEpic: {
+                ...s.pendingRootCreatesByEpic,
+                [epicId]: [...cur, { id: pendingId, name }],
+              },
+            };
+          });
+        },
+
+        clearPendingRootCreate: (epicId, pendingId) => {
+          set((s) => {
+            const cur = s.pendingRootCreatesByEpic[epicId];
+            if (cur === undefined || !cur.some((e) => e.id === pendingId)) {
+              return s;
+            }
+            return {
+              pendingRootCreatesByEpic: {
+                ...s.pendingRootCreatesByEpic,
+                [epicId]: cur.filter((e) => e.id !== pendingId),
+              },
+            };
+          });
+        },
+
+        markEpicTitlePending: (epicId, expectedTitle) => {
+          scheduleTitlePendingClear(epicTitleTimers, epicId, () =>
+            get().clearEpicTitlePending(epicId),
+          );
+          set((s) => ({
+            pendingEpicTitles: {
+              ...s.pendingEpicTitles,
+              [epicId]: { expectedTitle, startedAt: Date.now() },
             },
-          };
-        });
-      },
+          }));
+        },
 
-      endPreAckRootCreate: (epicId, tempId) => {
-        set((s) => {
-          const cur = s.preAckRootCreatesByEpic[epicId];
-          if (cur === undefined) return s;
-          return {
-            preAckRootCreatesByEpic: {
-              ...s.preAckRootCreatesByEpic,
-              [epicId]: cur.filter((e) => e.tempId !== tempId),
+        clearEpicTitlePending: (epicId) => {
+          clearScheduledTitlePending(epicTitleTimers, epicId);
+          set((s) => {
+            if (!Object.hasOwn(s.pendingEpicTitles, epicId)) return s;
+            const next = { ...s.pendingEpicTitles };
+            delete next[epicId];
+            return { pendingEpicTitles: next };
+          });
+        },
+
+        markChatTitlePending: (chatId, expectedTitle) => {
+          scheduleTitlePendingClear(chatTitleTimers, chatId, () =>
+            get().clearChatTitlePending(chatId),
+          );
+          set((s) => ({
+            pendingChatTitles: {
+              ...s.pendingChatTitles,
+              [chatId]: { expectedTitle, startedAt: Date.now() },
             },
-          };
-        });
-      },
+          }));
+        },
 
-      registerPendingRootCreate: (epicId, pendingId, name) => {
-        set((s) => {
-          const cur = s.pendingRootCreatesByEpic[epicId] ?? [];
-          return {
-            pendingRootCreatesByEpic: {
-              ...s.pendingRootCreatesByEpic,
-              [epicId]: [...cur, { id: pendingId, name }],
-            },
-          };
-        });
-      },
+        clearChatTitlePending: (chatId) => {
+          clearScheduledTitlePending(chatTitleTimers, chatId);
+          set((s) => {
+            if (!Object.hasOwn(s.pendingChatTitles, chatId)) return s;
+            const next = { ...s.pendingChatTitles };
+            delete next[chatId];
+            return { pendingChatTitles: next };
+          });
+        },
 
-      clearPendingRootCreate: (epicId, pendingId) => {
-        set((s) => {
-          const cur = s.pendingRootCreatesByEpic[epicId];
-          if (cur === undefined || !cur.some((e) => e.id === pendingId)) {
-            return s;
-          }
-          return {
-            pendingRootCreatesByEpic: {
-              ...s.pendingRootCreatesByEpic,
-              [epicId]: cur.filter((e) => e.id !== pendingId),
-            },
-          };
-        });
-      },
-
-      markEpicTitlePending: (epicId, expectedTitle) => {
-        scheduleTitlePendingClear(epicTitleTimers, epicId, () =>
-          get().clearEpicTitlePending(epicId),
-        );
-        set((s) => ({
-          pendingEpicTitles: {
-            ...s.pendingEpicTitles,
-            [epicId]: { expectedTitle, startedAt: Date.now() },
-          },
-        }));
-      },
-
-      clearEpicTitlePending: (epicId) => {
-        clearScheduledTitlePending(epicTitleTimers, epicId);
-        set((s) => {
-          if (!Object.hasOwn(s.pendingEpicTitles, epicId)) return s;
-          const next = { ...s.pendingEpicTitles };
-          delete next[epicId];
-          return { pendingEpicTitles: next };
-        });
-      },
-
-      markChatTitlePending: (chatId, expectedTitle) => {
-        scheduleTitlePendingClear(chatTitleTimers, chatId, () =>
-          get().clearChatTitlePending(chatId),
-        );
-        set((s) => ({
-          pendingChatTitles: {
-            ...s.pendingChatTitles,
-            [chatId]: { expectedTitle, startedAt: Date.now() },
-          },
-        }));
-      },
-
-      clearChatTitlePending: (chatId) => {
-        clearScheduledTitlePending(chatTitleTimers, chatId);
-        set((s) => {
-          if (!Object.hasOwn(s.pendingChatTitles, chatId)) return s;
-          const next = { ...s.pendingChatTitles };
-          delete next[chatId];
-          return { pendingChatTitles: next };
-        });
-      },
-
-      clearAllTitleGenerationPending: () => {
-        clearAllScheduledTitlePending(epicTitleTimers);
-        clearAllScheduledTitlePending(chatTitleTimers);
-        set({
-          pendingEpicTitles: {},
-          pendingChatTitles: {},
-        });
-      },
-    }),
+        clearAllTitleGenerationPending: () => {
+          clearAllScheduledTitlePending(epicTitleTimers);
+          clearAllScheduledTitlePending(chatTitleTimers);
+          set({
+            pendingEpicTitles: {},
+            pendingChatTitles: {},
+          });
+        },
+      };
+    },
     {
       ...basePersistOptions(epicCanvasKey(null)),
       storage: createJSONStorage(() => epicCanvasStorage),
@@ -2124,22 +3179,164 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         mostRecentTabIdByEpicId: state.mostRecentTabIdByEpicId,
         artifactTreeByEpicId: state.artifactTreeByEpicId,
       }),
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        ...sanitizePersistedCanvasState(persistedState),
-      }),
+      merge: (persistedState, currentState) => {
+        const sanitized = sanitizePersistedCanvasState(persistedState);
+        // Never throw here, even in dev/test: zustand's `hydrate()` swallows
+        // a `merge()` throw internally and never rethrows, which also skips
+        // `set(stateFromStorage, true)` - so `hasHydrated`/`onFinishHydration`
+        // never fire and consumers waiting on hydration (history-prune-
+        // provider.tsx, epic-tab-existence-reconciler.tsx) hang forever. Fail
+        // closed by rejecting the candidate and returning normally instead;
+        // the diagnostic below is the surfaced signal in every mode.
+        const accepted = guardCanvasMutation(currentState, sanitized, {
+          ingressContext: "persisted-migration",
+          throwOnViolation: false,
+        });
+        if (!accepted) return currentState;
+        return {
+          ...currentState,
+          ...sanitized,
+        };
+      },
     },
   ),
 );
+
+const rawPublicSetState = useEpicCanvasStore.setState.bind(useEpicCanvasStore);
+/**
+ * Guards every PUBLIC-API canvas mutation. The closure-local `set` above
+ * delegates here; anything else reaching the store through the public API -
+ * `applyEpicCanvasDesktopProjection`, or a future caller - goes through this
+ * wrapper too. Reassigning `setState` itself - rather than adding a guard at
+ * each known call site - means a caller added later is covered too. This
+ * path is always strict: `resolveTabEpicIdentity` below is the one function
+ * that changes a tab's epicId, and it bypasses this wrapper entirely,
+ * committing straight through `rawPublicSetState` - provenance is enforced
+ * by that module privacy, not by a parameter threaded through this guard.
+ */
+useEpicCanvasStore.setState = (
+  partial:
+    | EpicCanvasStore
+    | Partial<EpicCanvasStore>
+    | ((state: EpicCanvasStore) => EpicCanvasStore | Partial<EpicCanvasStore>),
+  replace: boolean | undefined,
+): void => {
+  const state = useEpicCanvasStore.getState();
+  const resolved = typeof partial === "function" ? partial(state) : partial;
+  if (
+    resolved !== state &&
+    !guardCanvasMutation(state, resolved, {
+      ingressContext: "public-setstate",
+      throwOnViolation: import.meta.env.DEV,
+    })
+  ) {
+    return;
+  }
+  if (replace === true) {
+    // `replace: true` callers (store resets in tests) pass a full state by
+    // contract; the union param type above can't express that correlation to
+    // zustand's overloaded signature without this cast.
+    rawPublicSetState(resolved as EpicCanvasStore, true);
+  } else {
+    rawPublicSetState(resolved);
+  }
+};
+
+/**
+ * The ONLY function authorized to change a tab's `epicId` for an
+ * already-live tile set. It bypasses the guarded public `setState` wrapper
+ * above (which is always strict) and commits through `rawPublicSetState`
+ * directly - provenance is enforced by this function being the sole caller
+ * of that module-private raw setter, not by a parameter every guarded
+ * ingress has to understand. `tab-command-coordinator.ts`'s
+ * `resolveMigratedEpicActivation` and `completePhaseMigration` are its only
+ * two callers; both publish success from a POST-commit `getState()`
+ * read-back rather than trusting this function's return, because a
+ * synchronous subscriber can re-enter and move the same tab's epicId again
+ * before the outer caller regains control (see their own doc comments) - so
+ * this function reports nothing about outcome.
+ *
+ * Also owns the `mostRecentTabIdByEpicId` reindex (move the entry from the
+ * prior epicId to the resolved one) - both call sites needed the exact same
+ * bookkeeping, so it lives here once instead of twice.
+ *
+ * Preconditions, enforced here rather than trusted from the caller:
+ * - the tab exists;
+ * - `resolvedEpicId` actually differs from the tab's current epicId (a
+ *   same-value call is a silent no-op, not an error - safe for an
+ *   idempotent retry);
+ * - the tab's CURRENT epicId equals `expectedCurrentEpicId`. This is the
+ *   strongest precondition genuinely available to BOTH real callers today:
+ *   `resolveMigratedEpicActivation` already checks the tab's epicId against
+ *   `target.sourceEpicId` before calling, and `completePhaseMigration`
+ *   already checks it against `command.phaseId` (via `surfaceMode.phaseId`).
+ *   A tab-level `surfaceMode.kind === "phase-migration"` check was
+ *   considered and REJECTED as a UNIVERSAL precondition here:
+ *   `resolveMigratedEpicActivation`'s own existing check never examines
+ *   `surfaceMode` at all (its target is a more general "migrated-epic"
+ *   activation, not necessarily a phase-migration tab), so requiring it
+ *   would incorrectly narrow this action to serve only
+ *   `completePhaseMigration`. Each coordinator call site keeps its own
+ *   additional, shape-specific precondition (surfaceMode+phaseId, or
+ *   sourceEpicId-or-already-resolved) before ever calling this action - this
+ *   action's `expectedCurrentEpicId` check is a second, independent layer
+ *   against a stale/racing caller, not a replacement for those.
+ */
+export function resolveTabEpicIdentity(
+  tabId: string,
+  expectedCurrentEpicId: string,
+  resolvedEpicId: string,
+): void {
+  const state = useEpicCanvasStore.getState();
+  const current = state.tabsById[tabId];
+  if (current === undefined) return;
+  if (current.epicId === resolvedEpicId) return;
+  if (current.epicId !== expectedCurrentEpicId) {
+    appLogger.error(
+      "resolveTabEpicIdentity precondition failed: tab's current epicId does not match the caller's expectation",
+      {
+        tabId,
+        expectedCurrentEpicId,
+        actualCurrentEpicId: current.epicId,
+        resolvedEpicId,
+      },
+      new Error("resolveTabEpicIdentity precondition failed"),
+    );
+    return;
+  }
+  const nextMostRecentTabIdByEpicId = {
+    ...state.mostRecentTabIdByEpicId,
+    [resolvedEpicId]: tabId,
+  };
+  if (nextMostRecentTabIdByEpicId[expectedCurrentEpicId] === tabId) {
+    delete nextMostRecentTabIdByEpicId[expectedCurrentEpicId];
+  }
+  rawPublicSetState({
+    tabsById: {
+      ...state.tabsById,
+      [tabId]: { ...current, epicId: resolvedEpicId },
+    },
+    mostRecentTabIdByEpicId: nextMostRecentTabIdByEpicId,
+  });
+}
 
 export function applyEpicCanvasDesktopProjection(
   snapshot: DesktopPerWindowSnapshot,
 ): void {
   applyingDesktopProjection = true;
-  useEpicCanvasStore.setState((state) =>
-    buildDesktopProjectionPatch(state, snapshot),
-  );
-  applyingDesktopProjection = false;
+  try {
+    // The guarded public `setState` wrapper validates this patch itself -
+    // no separate guard call needed here, it would just re-check the
+    // identical patch a second time.
+    useEpicCanvasStore.setState((state) =>
+      buildDesktopProjectionPatch(state, snapshot),
+    );
+  } finally {
+    // Always release the suppression flag, even when the dev/test guard
+    // throws mid-`setState` - otherwise every later outbound projection is
+    // silently dropped by the subscriber below for the module's lifetime.
+    applyingDesktopProjection = false;
+  }
 }
 
 useEpicCanvasStore.subscribe((state) => {
@@ -2151,6 +3348,39 @@ useEpicCanvasStore.subscribe((state) => {
   });
 });
 
+/**
+ * Ticket 15 review round 3: resolves the `(epicId, chatId)` identity a
+ * removed tile HAD, using the canvas/tab snapshots as they stood just
+ * BEFORE this update - `tilesByInstanceId` lives on `canvasByTabId`, but
+ * `epicId` lives on the PARALLEL `tabsById` map (`tabsById[tabId].epicId`),
+ * and a whole-tab close/delete can clear both together in the SAME update,
+ * so a removed tile's tab record can already be gone from the CURRENT
+ * state by the time this runs - both snapshots must be the prior ones.
+ * `null` for a non-chat tile (diff/terminal/workspace-file tiles have no
+ * dual-key persistence family) or if either snapshot is missing the entry.
+ */
+function resolveClosedChatIdentity(
+  priorCanvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
+  priorTabsById: Readonly<Record<string, EpicViewTab | undefined>>,
+  tileInstanceId: string,
+): ChatTabPersistenceIdentity | null {
+  for (const [tabId, canvas] of Object.entries(priorCanvasByTabId)) {
+    if (canvas === undefined) continue;
+    const node = canvas.tilesByInstanceId[tileInstanceId];
+    if (node === undefined) continue;
+    if (!("type" in node) || node.type !== "chat") return null;
+    const epicId = priorTabsById[tabId]?.epicId;
+    if (epicId === undefined) return null;
+    return {
+      tileInstanceId,
+      epicId,
+      chatId: node.id,
+      hostId: node.hostId,
+    };
+  }
+  return null;
+}
+
 // Evict session scroll anchors for tile instanceIds removed from the canvas.
 // `useScrollRestoration` also checks tile liveness before unmount persistence,
 // so a close cannot clear an anchor here and then have the unmount cleanup
@@ -2159,10 +3389,21 @@ let previousTileInstanceIds: ReadonlySet<string> = new Set<string>();
 let previousCanvasByTabId: Readonly<
   Record<string, EpicCanvasState | undefined>
 > | null = null;
+let previousTabsById: Readonly<Record<string, EpicViewTab | undefined>> | null =
+  null;
 useEpicCanvasStore.subscribe((state) => {
+  // Ticket 15 review round 3: `tabsById` (epicId) and `canvasByTabId` (the
+  // tile tree) can update in SEPARATE `set()` calls (e.g. `openEpicTab`
+  // creates the tab record before any tile is opened into it) - tracking
+  // this UNCONDITIONALLY, not gated behind the `canvasByTabId` equality
+  // check below, is what keeps it from going stale relative to whichever
+  // `canvasByTabId` snapshot this sweep ends up diffing against.
+  const priorTabsById = previousTabsById;
+  previousTabsById = state.tabsById;
   // Tile membership only changes when the canvas map itself changes; skip the
   // live-id scan for unrelated writes (active tab, titles, pane sizes, ...).
   if (state.canvasByTabId === previousCanvasByTabId) return;
+  const priorCanvasByTabId = previousCanvasByTabId;
   previousCanvasByTabId = state.canvasByTabId;
   const current = collectLiveTileInstanceIds(state.canvasByTabId);
   const removed = [...previousTileInstanceIds].filter(
@@ -2170,7 +3411,46 @@ useEpicCanvasStore.subscribe((state) => {
   );
   previousTileInstanceIds = current;
   if (removed.length > 0) {
-    useTileScrollAnchorStore.getState().clearAnchors(removed);
+    // Ticket 15 review round 3 (the ONE close-commit choke point): promote
+    // each removed chat tile's live tab-side state to durable BEFORE any
+    // of the eviction calls below run - this is the only place that can
+    // commit for an INACTIVE (never-mounted) view's close, since it reads
+    // store state directly rather than depending on a component's own
+    // unmount lifecycle firing (which, for an inactive tab, never does).
+    if (priorCanvasByTabId !== null && priorTabsById !== null) {
+      for (const instanceId of removed) {
+        const identity = resolveClosedChatIdentity(
+          priorCanvasByTabId,
+          priorTabsById,
+          instanceId,
+        );
+        if (identity !== null) promoteChatTabPersistenceToDurable(identity);
+      }
+    }
+    // Ticket 5: chat-tile-only per-tab persistence, evicted the same way -
+    // proactively on a permanent close, not just LRU/registry-capped. The
+    // reading-position cache and the collapse-state registries key by the
+    // exact same tile instanceId, so one `removed` list covers all of them;
+    // tool/subagent are global stores namespaced by that id via `reset`.
+    evictChatTabState(removed);
+    evictPendingHydrationRestores(removed);
+    evictActivityGroupOpenStores(removed);
+    evictA2AOpenStores(removed);
+    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -
+    // a tile whose adapter unregistered while still live (switched-away, not
+    // closed) is skipped by scheduleUiReclaim's own liveness check and never
+    // revisited if it is later closed without remounting. This sweep is that
+    // revisit.
+    evictTileFindUi(removed);
+    removed.forEach((instanceId) => {
+      useToolOpenStore.getState().reset(instanceId);
+      useSubagentOpenStore.getState().reset(instanceId);
+      // Ticket 15 review round 3: bounds the initialized-scope markers -
+      // this tileInstanceId can never be seen again (a reopen always mints
+      // a fresh one), so nothing else will ever need this entry.
+      toolOpenInitializedScopes.delete(instanceId);
+      subagentOpenInitializedScopes.delete(instanceId);
+    });
   }
 });
 
@@ -2182,15 +3462,20 @@ export {
   collectOpenEpicIds,
   epicTabName,
   findOpenArtifactInTab,
+  findOpenTileInTab,
   getCanvasRootForTab,
+  isTileRefRecordLive,
   makeSelectActiveEpicArtifactId,
+  makeSelectActiveEpicArtifactRef,
   makeSelectEpicArtifactRecords,
   makeSelectEpicCanvas,
   makeSelectEpicTab,
   makeSelectIsActiveEpicArtifact,
   makeSelectIsActivePane,
+  makeSelectIsActiveTile,
   makeSelectTabActivation,
   useActiveEpicArtifactId,
+  useActiveEpicArtifactRef,
   useActiveEpicId,
   useActiveTabId,
   useEpicArtifactRecords,
@@ -2198,7 +3483,9 @@ export {
   useEpicTab,
   useIsActiveEpicArtifact,
   useIsActivePane,
+  useIsActiveTile,
   useOpenEpicTabs,
+  useOpenTileContentIds,
   usePaneTabRefs,
   useTabActivation,
 } from "@/stores/epics/canvas/canvas-selectors";

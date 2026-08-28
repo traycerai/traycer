@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
@@ -84,6 +83,7 @@ describe("DiffWorkerPoolProvider", () => {
 
     expect(mockSetRenderOptions).toHaveBeenCalledWith({
       theme: "pierre-light",
+      useTokenTransformer: true,
     });
   });
 
@@ -105,6 +105,7 @@ describe("DiffWorkerPoolProvider", () => {
 
     expect(mockSetRenderOptions).toHaveBeenCalledWith({
       theme: "pierre-dark",
+      useTokenTransformer: true,
     });
   });
 });

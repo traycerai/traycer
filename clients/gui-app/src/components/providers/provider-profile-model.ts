@@ -23,6 +23,18 @@ export function profileDisplayLabel(profile: ProviderProfile): string {
   return profile.label;
 }
 
+/**
+ * A row-level admission verdict overlaid onto a profile row by a caller that
+ * has its own reason to forbid picking a particular profile (e.g. the TUI
+ * continue-under-another-profile dialog's bulk fork-admission preflight).
+ * Independent of a profile's own auth status - `profileRowStatusSuffix`
+ * still renders "Signed out"/"Unavailable" alongside a `disabled` row.
+ */
+export interface ProfileRowAdmission {
+  readonly disabled: boolean;
+  readonly reason: string | null;
+}
+
 export function profileAuthStatusText(profile: ProviderProfile): string {
   if (profile.auth.status === "authenticated") return "Signed in";
   if (profile.auth.status === "configured") return "Configured";
@@ -42,25 +54,47 @@ export function profileRowStatusSuffix(
   return null;
 }
 
-// Ambient always sorts first, matching the rail dot / picker dropdown / old
-// row-list convention, so "default to ambient/first" resolves to the same
-// profile everywhere.
-export function orderProfiles(
+export function profileEnablementTooltipText(
+  enabled: boolean,
+  disabledReason: string | null,
+): string {
+  if (disabledReason !== null) return disabledReason;
+  return enabled
+    ? "Enabled: agents can use this profile."
+    : "Disabled: agents can’t use this profile.";
+}
+
+export function profileEligibilityToggleDisabledReason(
+  providerEnabled: boolean,
+  profile: ProviderProfile,
   profiles: readonly ProviderProfile[],
-): ReadonlyArray<ProviderProfile> {
-  return [...profiles].sort((a, b) => {
-    if (a.kind === b.kind) return 0;
-    return a.kind === "ambient" ? -1 : 1;
-  });
+): string | null {
+  if (!providerEnabled || !profile.enabled) return null;
+  return profiles.some(
+    (candidate) =>
+      candidate.profileId !== profile.profileId && candidate.enabled,
+  )
+    ? null
+    : "Enable another profile before disabling this one.";
+}
+
+export function eligibleProfilesForShortcut(
+  profiles: readonly ProviderProfile[],
+  profileEnablementPending: (profileId: string | null) => boolean,
+): ProviderProfile[] {
+  return profiles.filter(
+    (profile) =>
+      profile.enabled && !profileEnablementPending(profileCommitId(profile)),
+  );
 }
 
 /** The profile a fresh section instance (new provider, or first mount) should
- *  select - ambient/first per `orderProfiles`. `null` when the provider
+ *  select - first in the host's stable order. `null` when the provider
  *  reports no profiles (callers don't render profile-scoped UI then anyway). */
 export function defaultSelectedProfileId(
   profiles: readonly ProviderProfile[],
 ): string | null {
-  const first = orderProfiles(profiles).at(0);
+  const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
 

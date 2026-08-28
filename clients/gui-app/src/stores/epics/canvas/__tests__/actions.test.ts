@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import {
+  adoptHostTerminalProjection,
   closeAllTabs,
   closeOtherTabs,
   closePane,
@@ -15,6 +17,7 @@ import {
   openTileInBackgroundTab,
   openTileInPane,
   promotePreview,
+  restorePreview,
   renameArtifact,
   resizeSplit,
   setActivePane,
@@ -52,13 +55,14 @@ import {
   rootGroup,
   rootPane,
 } from "./canvas-test-fixtures";
+import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 
 /** Permanent (pinned) open - `openTile` with `preview: false`. */
 function openPinned(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
-  return openTile(state, node, false);
+  return openTile(state, node, false, null);
 }
 
 /** Preview open - `openTile` with `preview: true`. */
@@ -66,7 +70,7 @@ function openPreview(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
-  return openTile(state, node, true);
+  return openTile(state, node, true, null);
 }
 
 /** Max depth of the tree under `state.root` (a bare pane is depth 1). */
@@ -277,6 +281,29 @@ describe("openTile (preview open)", () => {
     const paneId = rootPane(a).id;
     const promoted = promotePreview(a, paneId);
     expect(rootPane(promoted).previewTabId).toBeNull();
+  });
+
+  it("restorePreview puts back a promotion a cancelled drag should undo", () => {
+    const a = openPreview(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(a).id;
+    const previewTabId = rootPane(a).previewTabId;
+    expect(previewTabId).not.toBeNull();
+    const promoted = promotePreview(a, paneId);
+    expect(rootPane(promoted).previewTabId).toBeNull();
+    const restored = restorePreview(promoted, paneId, previewTabId ?? "");
+    expect(rootPane(restored).previewTabId).toBe(previewTabId);
+    expectCanvasInvariants(restored);
+  });
+
+  it("restorePreview refuses to resurrect a preview for a departed tab", () => {
+    // A cancel must not conjure a preview slot pointing at a tile that is no
+    // longer in the pane - that would be a residual of its own.
+    const a = openPreview(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(a).id;
+    const promoted = promotePreview(a, paneId);
+    const restored = restorePreview(promoted, paneId, "not-in-this-pane");
+    expect(rootPane(restored).previewTabId).toBeNull();
+    expect(restored).toBe(promoted);
   });
 });
 
@@ -643,14 +670,70 @@ describe("splitPaneAtEdge", () => {
     expectCanvasInvariants(next);
   });
 
-  it("does not split a sole tab onto its own pane edge", () => {
+  // Dropping a pane's ONLY tab on that pane's own edge is the common way to
+  // split a freshly opened Git Diff / Terminal, and the pane drop zone paints
+  // the half-pane split preview for it. The commit must produce that split -
+  // the dragged tile in the highlighted half, the source pane left behind as
+  // an empty opener pane - instead of silently discarding the drop.
+  it("splits a sole tab onto its own pane edge, leaving an empty opener pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
+
     const next = splitPaneAtEdge(state, paneId, "right", {
       kind: "node",
       node: SPEC_A,
     });
-    expect(next).toBe(state);
+
+    const group = rootGroup(next);
+    expect(group.direction).toBe("horizontal");
+    const [leading, trailing] = collectPanes(next.root);
+    expect(leading.id).toBe(paneId);
+    expect(leading.tabInstanceIds).toEqual([]);
+    expect(paneTabIds(next, trailing)).toEqual([SPEC_A.id]);
+    expect(next.activePaneId).toBe(trailing.id);
+    expectCanvasInvariants(next);
+  });
+
+  it("splits a sole tab onto the leading edge with the tile in the leading pane", () => {
+    const state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+
+    const next = splitPaneAtEdge(state, paneId, "left", {
+      kind: "tab",
+      sourcePaneId: paneId,
+      tabId: SPEC_A.instanceId,
+      node: SPEC_A,
+    });
+
+    const [leading, trailing] = collectPanes(next.root);
+    expect(paneTabIds(next, leading)).toEqual([SPEC_A.id]);
+    expect(trailing.id).toBe(paneId);
+    expect(trailing.tabInstanceIds).toEqual([]);
+    expectCanvasInvariants(next);
+  });
+
+  // Only the SAME-pane drop keeps the emptied pane: dragging a pane's last tab
+  // into a DIFFERENT pane still collapses the pane it came from.
+  it("still collapses the source pane when its last tab lands on another pane's edge", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const targetPaneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, targetPaneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+    const sourcePaneId = state.activePaneId;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    const next = splitPaneAtEdge(state, targetPaneId, "bottom", {
+      kind: "tab",
+      sourcePaneId,
+      tabId: SPEC_B.instanceId,
+      node: SPEC_B,
+    });
+
+    expect(findPaneById(next.root, sourcePaneId)).toBeNull();
+    expect(collectPanes(next.root)).toHaveLength(2);
+    expectCanvasInvariants(next);
   });
 
   it("rejects an edge split that would exceed MAX_TREE_DEPTH (no-op)", () => {
@@ -778,6 +861,80 @@ describe("dropOnTabStrip", () => {
       SPEC_A.id,
     ]);
     expect(next.activePaneId).toBe(paneId);
+  });
+
+  it("activates an already-open sidebar node dropped at its current position", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)[0]).toBe(SPEC_A.id);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
+  });
+
+  it("focuses an inactive pane when its already-active tab is dropped in place", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, paneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+
+    expect(state.activePaneId).not.toBe(paneId);
+    expect(activationContentIds(state, paneById(state, paneId))).toEqual([
+      SPEC_A.id,
+    ]);
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(next.activePaneId).toBe(paneId);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("promotes a preview tab dropped at its current position", () => {
+    let state = openPreview(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    expect(rootPane(state).previewTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(state, rootPane(state))).toEqual([
+      SPEC_A.id,
+      SPEC_B.id,
+    ]);
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(pane.previewTabId).toBeNull();
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
   });
 });
 
@@ -941,6 +1098,34 @@ describe("instanceId / content-id decoupling", () => {
     expect(pane.tabInstanceIds).toHaveLength(1);
     expect(pane.tabInstanceIds[0]).toBe("inst-1");
     expect(pane.activeTabId).toBe("inst-1");
+  });
+
+  it("keeps one tab per host for the same host-minted content id", () => {
+    // Host-minted ids (a chat, a shell) are unique per host, not globally: a
+    // cross-host clone carries the source's ids verbatim. Dedup on the id
+    // alone handed the second host back a tab bound to the FIRST - a window
+    // onto a machine that does not own that content and cannot stream it.
+    const onHostA = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: TEST_HOST_ID,
+    });
+    const onHostB = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: "other-host",
+    });
+
+    let state = openPinned(createEmptyCanvas(), onHostA);
+    state = openPinned(state, onHostB);
+
+    expect(rootPane(state).tabInstanceIds).toEqual([
+      onHostA.instanceId,
+      onHostB.instanceId,
+    ]);
+
+    // ...while re-opening a host's own window still focuses the tab it has.
+    const reopened = openPinned(state, onHostA);
+    expect(rootPane(reopened).tabInstanceIds).toHaveLength(2);
+    expect(rootPane(reopened).activeTabId).toBe(onHostA.instanceId);
   });
 
   it("setActiveTab resolves by instanceId; content id is a no-op", () => {
@@ -1196,25 +1381,25 @@ describe("findActiveGitFileDiffTile", () => {
 describe("openTile no-op short-circuits (same reference)", () => {
   it("returns the same reference for a pinned re-open of the active tab in the focused pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, false)).toBe(state);
+    expect(openTile(state, SPEC_A, false, null)).toBe(state);
   });
 
   it("returns the same reference for a preview open of an already-active pinned tab in the focused pane", () => {
     // Previously `openTilePreview` rebuilt an identical state object here;
     // the unified `openTile` short-circuits to the same reference.
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, true)).toBe(state);
+    expect(openTile(state, SPEC_A, true, null)).toBe(state);
   });
 
   it("returns the same reference for a preview re-open of the active preview tab in the focused pane", () => {
     const state = openPreview(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, true)).toBe(state);
+    expect(openTile(state, SPEC_A, true, null)).toBe(state);
   });
 
   it("is NOT a no-op when a pinned open promotes the active preview tab", () => {
     // Promote-on-pin must still produce a new state with the preview cleared.
     const state = openPreview(createEmptyCanvas(), SPEC_A);
-    const next = openTile(state, SPEC_A, false);
+    const next = openTile(state, SPEC_A, false, null);
     expect(next).not.toBe(state);
     expect(rootPane(next).previewTabId).toBeNull();
     expect(rootPane(next).activeTabId).toBe(SPEC_A.instanceId);
@@ -1229,9 +1414,95 @@ describe("openTile no-op short-circuits (same reference)", () => {
       node: SPEC_B,
     });
     expect(state.activePaneId).not.toBe(holdingPaneId);
-    const next = openTile(state, SPEC_A, false);
+    const next = openTile(state, SPEC_A, false, null);
     expect(next).not.toBe(state);
     expect(next.root).toBe(state.root);
     expect(next.activePaneId).toBe(holdingPaneId);
+  });
+});
+
+describe("adoptHostTerminalProjection", () => {
+  const TERMINAL_ID = "terminal-adopt";
+
+  function projection(overrides: {
+    readonly manualTitle?: string | null;
+    readonly cwd?: string;
+    readonly shellArgs?: string[];
+  }): PlainTerminalProjection {
+    return {
+      record: {
+        terminalId: TERMINAL_ID,
+        hostId: TEST_HOST_ID,
+        scope: { kind: "epic", epicId: "epic-1" },
+        launch: {
+          cwd: overrides.cwd ?? "/work",
+          shellCommand: "/bin/zsh",
+          shellArgs: overrides.shellArgs ?? ["-l"],
+        },
+        manualTitle: overrides.manualTitle ?? null,
+        revision: 1,
+        createdAt: "2026-08-16T10:00:00.000Z",
+        updatedAt: "2026-08-16T10:00:00.000Z",
+      },
+      runtime: {
+        status: "running",
+        sessionId: TERMINAL_ID,
+        currentCwd: "/work",
+        activeProcessName: "bun",
+        cols: 100,
+        rows: 30,
+      },
+    };
+  }
+
+  const LEGACY_REF: EpicCanvasTileRef = {
+    id: TERMINAL_ID,
+    instanceId: "instance-adopt",
+    type: "terminal",
+    name: "Shell",
+    hostId: TEST_HOST_ID,
+    titleSource: "default",
+    cwd: "/work",
+  };
+
+  it("adopts a legacy ref once and then leaves the canvas identity alone", () => {
+    const state = openPinned(createEmptyCanvas(), LEGACY_REF);
+    const adopted = adoptHostTerminalProjection(
+      state,
+      TEST_HOST_ID,
+      projection({}),
+    );
+    expect(adopted).not.toBe(state);
+    const adoptedRef = adopted.tilesByInstanceId[LEGACY_REF.instanceId];
+    expect(adoptedRef?.type === "terminal" && adoptedRef.authority).toBe(
+      "host",
+    );
+
+    // A repeated stream projection carrying the same values must not mint a
+    // new canvas identity, or every tick re-renders every canvas subscriber.
+    const again = adoptHostTerminalProjection(
+      adopted,
+      TEST_HOST_ID,
+      projection({}),
+    );
+    expect(again).toBe(adopted);
+    expect(again.tilesByInstanceId[LEGACY_REF.instanceId]).toBe(adoptedRef);
+  });
+
+  it("still re-projects when a projected field actually changes", () => {
+    const state = adoptHostTerminalProjection(
+      openPinned(createEmptyCanvas(), LEGACY_REF),
+      TEST_HOST_ID,
+      projection({}),
+    );
+    for (const changed of [
+      projection({ manualTitle: "Renamed" }),
+      projection({ cwd: "/elsewhere" }),
+      projection({ shellArgs: ["-l", "-i"] }),
+    ]) {
+      expect(
+        adoptHostTerminalProjection(state, TEST_HOST_ID, changed),
+      ).not.toBe(state);
+    }
   });
 });

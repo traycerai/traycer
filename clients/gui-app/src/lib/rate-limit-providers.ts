@@ -1,20 +1,19 @@
 import type {
+  ProviderAuthStatus,
   ProviderCliState,
   ProviderId,
+  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   rateLimitCapableProviderIdSchema,
   type RateLimitCapableProviderId,
 } from "@traycer/protocol/host/rate-limit";
+import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 
 /**
- * The two providers `host.getRateLimitUsage @1.2`'s `providerRateLimits`
- * union reports full native detail for. Every other `ProviderId` (including
- * `traycer`, which uses the flat aperture fields on the same RPC) resolves
- * to the `available: false` arm if ever queried - the GUI simply never asks
- * for it. Re-exported from the protocol's own enum (rather than hand-listed
- * here again) so the host's dispatch, the wire schema's two available arms,
- * and this GUI type can't silently drift apart.
+ * Providers whose `host.getRateLimitUsage` arm carries native account detail.
+ * Re-exported from the protocol enum so host dispatch and GUI eligibility
+ * cannot silently drift apart.
  */
 export type RateLimitProviderId = RateLimitCapableProviderId;
 
@@ -23,8 +22,10 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  * the polling scheduler branches on:
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
- *   plain GET (openrouter, kilocode). Cheap and safe to run concurrently, so
- *   these poll on their own independent `refetchInterval` and never enter the
+ *   plain HTTP call (openrouter, kilocode, huggingface, opencode, cursor).
+ *   Cheap and safe to
+ *   run concurrently, so
+ *   their observers opt into the table-owned fixed cadence and never enter the
  *   serial queue.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
  *   (codex, claude-code). Expensive; these are funnelled through a shared
@@ -33,6 +34,16 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *   out its configured profiles together before the next item begins.
  */
 export type RateLimitFetchLane = "httpFetch" | "ephemeralProcess";
+
+/**
+ * Credential eligibility is scoped to the target that owns the credential:
+ * terminal/ambient usage reads depend on the provider's ambient auth summary,
+ * while managed profiles own and report their own credentials.
+ */
+export interface RateLimitFetchEligibility {
+  readonly ambient: boolean;
+  readonly managedProfiles: boolean;
+}
 
 /**
  * Shared "how fresh is fresh enough" floor for provider rate-limit reads: the
@@ -57,7 +68,7 @@ export function isRateLimitCapableProvider(
 
 /**
  * The one named home for the provider -> lane mapping. Load-bearing in the
- * query options (which lane gets a `refetchInterval`), the turn-completion
+ * query options (which lane enables the table-owned fixed cadence), the turn-completion
  * refresh hook (which trigger routes through the serial queue), and the
  * interval timer (which providers it walks) - so it lives here once rather
  * than being re-derived at each of those three sites.
@@ -68,38 +79,102 @@ export function rateLimitFetchLane(
   switch (providerId) {
     case "openrouter":
     case "kilocode":
+    case "huggingface":
+    case "opencode":
+    case "cursor":
+      // Two round trips (the API key mints a dashboard session before the
+      // usage read), but still credential-and-fetch - no subprocess - so it
+      // keeps the table-owned fixed cadence rather than the serial queue.
       return "httpFetch";
     case "codex":
     case "claude-code":
+    case "grok":
+      // Grok reads usage over the vendored CLI's own `_x.ai/billing` ACP
+      // extension (a subprocess RPC, so Traycer never touches the grok OAuth
+      // token) - an ephemeral spawn like codex/claude-code, despite grok's
+      // credit-shaped payload resembling the httpFetch providers'.
       return "ephemeralProcess";
   }
 }
 
 /**
- * Whether `state` currently reports valid credentials for a rate-limit pull -
- * the gate both polling lanes share, read from the same `providers.list` auth
- * state the popover rail keys off. A provider enters a lane only while this is
- * `true`; because these subscriptions are now persistent (app-shell level, not
- * the transient Settings card that re-gates on every mount), a credential
- * removed mid-session drops the provider out on the very next tick.
+ * Whether the terminal/ambient credential is currently valid for a rate-limit
+ * pull. This gates the persistent ambient app-shell queue; managed profiles
+ * instead use `resolveRateLimitFetchEligibility` plus their own profile auth.
  *
- * - `authPending` / `availabilityPending`: the host has not settled a verdict
- *   yet, so acting on the row would be premature - treated as not-yet-eligible.
+ * - `availabilityPending`: provider availability has not settled, so no target
+ *   may use it yet. `authPending` is deliberately target-local: it is an
+ *   aggregate bit once profiles exist, and must not suppress a settled sibling.
  * - `"authenticated"`: verified good credentials.
  * - `"configured"`: credentials are present but unverified (e.g. an API key set
- *   for openrouter/kilocode before the first probe) - included because the pull
+ *   for openrouter/kilocode/huggingface before the first probe) - included
+ *   because the pull
  *   itself is what verifies them, and it degrades gracefully if they are bad.
  * - `"unauthenticated"` / `"unavailable"` / `"unknown"`: no usable credential
  *   to authenticate a usage call, so the provider is not polled.
  * - `enabled: false`: the user turned the provider off; don't spend a fetch on
  *   a provider they have disabled.
  */
-export function isRateLimitProviderConfigured(
+function isRateLimitProviderAvailableForUsage(
   state: ProviderCliState,
 ): boolean {
   if (!state.enabled) return false;
-  if (state.authPending || state.availabilityPending) return false;
-  return (
-    state.auth.status === "authenticated" || state.auth.status === "configured"
+  if (state.availabilityPending) return false;
+  return true;
+}
+
+function hasUsableCredential(status: ProviderAuthStatus): boolean {
+  return status === "authenticated" || status === "configured";
+}
+
+function hasUsableProfileCredential(profile: ProviderProfile): boolean {
+  return hasUsableCredential(profile.auth.status);
+}
+
+function ambientFetchEligible(state: ProviderCliState): boolean {
+  if (!isRateLimitProviderAvailableForUsage(state)) return false;
+  if (isProviderAmbientSignedOut(state)) return false;
+  const ambientProfile = state.profiles.find(
+    (profile) => profile.kind === "ambient",
   );
+  if (ambientProfile !== undefined) {
+    return hasUsableProfileCredential(ambientProfile);
+  }
+  if (state.authPending) return false;
+  return hasUsableCredential(state.auth.status);
+}
+
+export function resolveRateLimitFetchEligibility(
+  state: ProviderCliState,
+): RateLimitFetchEligibility {
+  const managedProfiles = isRateLimitProviderAvailableForUsage(state);
+  return {
+    managedProfiles,
+    ambient: ambientFetchEligible(state),
+  };
+}
+
+/**
+ * Whether a profile can perform its own usage read under the provider's
+ * settled availability state. Managed profiles deliberately do not inherit
+ * terminal/ambient sign-out: they authenticate independently.
+ */
+export function isRateLimitProfileFetchEligible(
+  eligibility: RateLimitFetchEligibility,
+  profile: ProviderProfile,
+): boolean {
+  return (
+    profile.enabled &&
+    (profile.kind === "ambient"
+      ? eligibility.ambient
+      : eligibility.managedProfiles) &&
+    hasUsableProfileCredential(profile)
+  );
+}
+
+/** Backward-compatible ambient/legacy alias for the app-shell queue. */
+export function isRateLimitProviderConfigured(
+  state: ProviderCliState,
+): boolean {
+  return resolveRateLimitFetchEligibility(state).ambient;
 }

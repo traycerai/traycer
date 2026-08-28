@@ -1,13 +1,22 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 import type {
+  GetTaskContextsResponse,
+  ListTaskLight,
   ListTasksFacets,
   ListTasksResponse,
+  TaskContextResult,
   TaskLight,
   TaskRepoIdentifier,
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { formatRepoIdentifier } from "@traycer/protocol/host/epic/unary-schemas";
-import { isCloudEpicTasksQueryKey } from "@/lib/query-keys";
+import {
+  formatRepoIdentifier,
+  isFoundTaskContext,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  isCloudEpicTasksQueryKey,
+  isEpicTaskContextsQueryKey,
+} from "@/lib/query-keys";
 
 export interface CloudEpicTasksCacheScope {
   readonly hostId: string | null;
@@ -89,6 +98,46 @@ export function updateEpicTitleInCloudTaskCaches(
     if (next === response) continue;
     queryClient.setQueryData<ListTasksResponse>(queryKey, next);
   }
+  // Batch-title entries (`epic.getTaskContexts`) are a second copy of the same
+  // ListTaskLight rows. Patch them in the same write so rename never leaves a
+  // stale owner chip in Settings ▸ Worktrees.
+  updateEpicTitleInTaskContextsCaches(
+    queryClient,
+    scope,
+    epicId,
+    normalizedTitle,
+  );
+}
+
+/**
+ * Patches every matching `epic.getTaskContexts` cache entry for `epicId`.
+ * Invoked from `updateEpicTitleInCloudTaskCaches` so all rename call sites
+ * keep both cache families coherent without a second call.
+ */
+export function updateEpicTitleInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  title: string,
+): void {
+  const normalizedTitle = normalizeEpicTitle(title);
+  if (normalizedTitle === null) return;
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = updateEpicTitleInTaskContextsResponse(
+      response,
+      epicId,
+      normalizedTitle,
+    );
+    if (next === response) continue;
+    queryClient.setQueryData<GetTaskContextsResponse>(queryKey, next);
+  }
 }
 
 export function setEpicPinnedInCloudTaskCaches(
@@ -97,17 +146,41 @@ export function setEpicPinnedInCloudTaskCaches(
   epicId: string,
   pinned: boolean,
 ): void {
-  for (const [
-    queryKey,
-    response,
-  ] of queryClient.getQueriesData<ListTasksResponse>({
-    predicate: (query) =>
-      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+  patchMatchingQueries(
+    queryClient,
+    (query) => cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+    (response: ListTasksResponse) =>
+      setEpicPinnedInCloudTasksResponse(response, epicId, pinned),
+  );
+  setEpicPinnedInTaskContextsCaches(queryClient, scope, epicId, pinned);
+}
+
+export function setEpicPinnedInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  pinned: boolean,
+): void {
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) =>
+      setEpicPinnedInTaskContextsResponse(response, epicId, pinned),
+  );
+}
+
+function patchMatchingQueries<TResponse>(
+  queryClient: QueryClient,
+  predicate: (query: Query) => boolean,
+  patch: (response: TResponse) => TResponse,
+): void {
+  for (const [queryKey, response] of queryClient.getQueriesData<TResponse>({
+    predicate,
   })) {
     if (response === undefined) continue;
-    const next = setEpicPinnedInCloudTasksResponse(response, epicId, pinned);
+    const next = patch(response);
     if (next === response) continue;
-    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
+    queryClient.setQueryData<TResponse>(queryKey, next);
   }
 }
 
@@ -131,6 +204,36 @@ export function setEpicPinnedInCloudTasksResponse(
   return changed ? { ...response, tasks } : response;
 }
 
+function setEpicPinnedInTaskContextsResponse(
+  response: GetTaskContextsResponse,
+  epicId: string,
+  pinned: boolean,
+): GetTaskContextsResponse {
+  const entry = Object.entries(response.tasks).find(
+    ([, resolution]) =>
+      isFoundTaskContext(resolution) &&
+      resolution.task.epic?.light?.id === epicId,
+  );
+  if (entry === undefined) return response;
+  const [taskId, resolution] = entry;
+  if (
+    !isFoundTaskContext(resolution) ||
+    (resolution.task.pinned ?? false) === pinned
+  ) {
+    return response;
+  }
+  return {
+    ...response,
+    tasks: {
+      ...response.tasks,
+      [taskId]: {
+        ...resolution,
+        task: { ...resolution.task, pinned },
+      },
+    },
+  };
+}
+
 export function cloudEpicTasksQueryKeyMatchesScope(
   queryKey: readonly unknown[],
   scope: CloudEpicTasksCacheScope,
@@ -140,6 +243,35 @@ export function cloudEpicTasksQueryKeyMatchesScope(
     queryKey[0] === "host" &&
     (scope.hostId === null || queryKey[1] === scope.hostId) &&
     queryKey[5] === scope.userId
+  );
+}
+
+export function cloudEpicTasksLastViewedQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  if (!cloudEpicTasksQueryKeyMatchesScope(queryKey, scope)) return false;
+  const request = queryKey[3];
+  return (
+    request !== null &&
+    typeof request === "object" &&
+    "sort" in request &&
+    request.sort === "last-viewed"
+  );
+}
+
+/**
+ * Scope match for `epic.getTaskContexts` keys:
+ * `["host", hostId, "epic.getTaskContexts", { taskIds }, userId]`.
+ */
+export function epicTaskContextsQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isEpicTaskContextsQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[4] === scope.userId
   );
 }
 
@@ -171,29 +303,65 @@ function updateEpicTitleInCloudTasksResponse(
   title: string,
 ): ListTasksResponse {
   const tasks = response.tasks.map((task) => {
-    const epic = task.epic;
-    const light = epic?.light;
-    if (epic === null || epic === undefined) return task;
-    if (light === null || light === undefined) return task;
-    if (light.id !== epicId || light.title === title) return task;
-    return {
-      ...task,
-      epic: {
-        ...epic,
-        light: {
-          ...light,
-          title,
-        },
-      },
-    };
+    const next = updateEpicTitleInListTaskLight(task, epicId, title);
+    return next ?? task;
   });
   const changed = tasks.some((task, index) => task !== response.tasks[index]);
   return changed ? { ...response, tasks } : response;
 }
 
+function updateEpicTitleInTaskContextsResponse(
+  response: GetTaskContextsResponse,
+  epicId: string,
+  title: string,
+): GetTaskContextsResponse {
+  let changed = false;
+  const tasks: Record<string, TaskContextResult> = {};
+  for (const [taskId, resolution] of Object.entries(response.tasks)) {
+    if (!isFoundTaskContext(resolution)) {
+      tasks[taskId] = resolution;
+      continue;
+    }
+    const next = updateEpicTitleInListTaskLight(resolution.task, epicId, title);
+    if (next === null) {
+      tasks[taskId] = resolution;
+      continue;
+    }
+    changed = true;
+    tasks[taskId] = { ...resolution, task: next };
+  }
+  return changed ? { ...response, tasks } : response;
+}
+
+/**
+ * Returns a new row with the epic title updated, or `null` when the row does
+ * not carry `epicId` / already has `title` (identity-preserving skip).
+ */
+function updateEpicTitleInListTaskLight(
+  task: ListTaskLight,
+  epicId: string,
+  title: string,
+): ListTaskLight | null {
+  const epic = task.epic;
+  const light = epic?.light;
+  if (epic === null || epic === undefined) return null;
+  if (light === null || light === undefined) return null;
+  if (light.id !== epicId || light.title === title) return null;
+  return {
+    ...task,
+    epic: {
+      ...epic,
+      light: {
+        ...light,
+        title,
+      },
+    },
+  };
+}
+
 function removeTasksFromFacets(
   facets: ListTasksFacets,
-  tasks: ReadonlyArray<TaskLight>,
+  tasks: ReadonlyArray<ListTaskLight>,
   userId: string,
 ): ListTasksFacets {
   return {
@@ -206,7 +374,42 @@ function removeTasksFromFacets(
       facets.ownershipScopes,
       ownershipScopesFromTasks(tasks, userId),
     ),
+    // Rebuilding this object DROPS `chatHosts` unless it is carried, and its
+    // absence is not cosmetic: the history gate reads a missing group as proof
+    // that the server never applied the host filter and withholds every row
+    // (`use-history-query`). A local delete would then present as "this host
+    // is too old to filter by host" - permanently, since these entries are
+    // cached with `staleTime`/`gcTime` at Infinity and never refetch on their
+    // own. Any future facet group must be carried here for the same reason.
+    chatHosts: decrementChatHostFacets(facets.chatHosts, tasks),
   };
+}
+
+/**
+ * Decrements per-host task counts for the removed rows, and drops a host whose
+ * last task just went.
+ *
+ * A row with no `chatHostIds` (an older peer that cannot report them) is
+ * skipped rather than treated as contributing to no host: its counts stay
+ * high until the next fetch, which is a stale number rather than a wrong
+ * shape. Losing the GROUP entirely is the failure that matters.
+ */
+function decrementChatHostFacets(
+  current: ListTasksFacets["chatHosts"],
+  removed: ReadonlyArray<ListTaskLight>,
+): ListTasksFacets["chatHosts"] {
+  if (current === undefined) return undefined;
+  const removedCounts = new Map<string, number>();
+  for (const task of removed) {
+    for (const hostId of new Set(task.chatHostIds ?? [])) {
+      removedCounts.set(hostId, (removedCounts.get(hostId) ?? 0) + 1);
+    }
+  }
+  if (removedCounts.size === 0) return current;
+  return current.flatMap((facet) => {
+    const count = facet.count - (removedCounts.get(facet.hostId) ?? 0);
+    return count > 0 ? [{ hostId: facet.hostId, count }] : [];
+  });
 }
 
 function reposFromTasks(

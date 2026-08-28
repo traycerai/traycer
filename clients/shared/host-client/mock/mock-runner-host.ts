@@ -1,14 +1,17 @@
 import type { Disposable } from "../../platform/uri-callback";
 import type {
-  AuthTokenRefreshResult,
-  AuthTokenValidationResult,
+  CredentialsMigrationOutcome,
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  HostRestartRequestResult,
   IDeviceFlowHost,
-  IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationFeedSource,
+  NotificationShowOutcome,
+  NotificationForegroundDisplay,
+  NotificationForegroundAppLocal,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -16,7 +19,13 @@ import type {
   ITraycerCli,
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
+  RegisteredHostsChange,
   StoredAuthTokens,
+  SystemResumeEvent,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
@@ -28,12 +37,64 @@ import type {
 } from "../../platform/runner-host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
-  refreshAuthTokenViaHttp,
-  validateAuthTokenIdentityViaHttp,
-  validateAuthTokenViaHttp,
+  listUserSessionsViaHttp,
+  requestStepUpChallengeViaHttp,
+  mintHostCredentialViaHttp,
+  revokeAllSessionsViaHttp,
+  revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
+  verifyStepUpChallengeViaHttp,
+  type ListUserSessionsFetchResult,
+  type MintHostCredentialFetchResult,
+  type RetainedStepUpVerifyFetchResult,
+  type RevokeAllSessionsFetchResult,
+  type RevokeUserSessionFetchResult,
+  type StepUpChallengeFetchResult,
+} from "../../auth/devices-sessions-fetcher";
+import {
+  linkLoginStatusViaHttp,
+  mintLinkLoginCodeViaHttp,
+  respondLinkLoginViaHttp,
+  type LinkLoginStatusFetchResult,
+  type MintLinkLoginCodeFetchResult,
+  type RespondLinkLoginFetchResult,
+} from "../../auth/link-login";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+import {
+  credentialsIdentityFromAuthenticatedUser,
+  refreshOnceAbortable,
+  validateAuthTokenIdentityAccessOnceAbortable,
+  validateAuthTokenIdentityAccessOnly,
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
+import type { SelectionAuthorityClient } from "../../host-selection/selection-authority-contract";
+import {
+  createInProcessSelectionAuthority,
+  inertLocalHostOutageSignal,
+  InMemoryAuthorityIdentitySource,
+  InMemoryHostFleetSource,
+  InMemoryPreferredHostStore,
+  type InProcessSelectionAuthority,
+} from "../../host-selection/in-process-selection-authority";
+import {
+  createIncrementingIncarnationIds,
+  silentAuthorityLog,
+  systemAuthorityClock,
+} from "../../host-selection/selection-authority-engine";
+import {
+  fetchRegisteredHostsViaHttp,
+  type HostListFetchResult,
+} from "../remote-fetcher";
+import {
+  updateHostVersionPolicyViaHttp,
+  type UpdateHostVersionPolicyFetchResult,
+  type UpdateHostVersionPolicyInput,
+} from "../host-version-policy-fetcher";
+import {
+  deregisterHostViaHttp,
+  type DeregisterHostFetchResult,
+} from "../host-deregister-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -56,9 +117,24 @@ export interface MockRunnerHostOptions {
    */
   readonly traycerCli: ITraycerCli | null | undefined;
   readonly hostManagement?: IHostManagement | null;
+  /**
+   * Mirrors `IRunnerHost.getLastKnownLocalHostId()` - the durable host id read
+   * from pid metadata, which still answers while the host is down. Omit it and
+   * the mock derives the id from `localHost`, which is what a machine with a
+   * running host reports. Set it explicitly (usually alongside
+   * `localHost: null`) to model the case the real bridge exists for: a host
+   * that has published metadata before but is not reachable right now.
+   */
+  readonly lastKnownLocalHostId?: string | null;
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+const STEP_UP_EXPIRY_SKEW_MS = 5_000;
+
+interface RetainedStepUpCredential {
+  readonly accessToken: string;
+  readonly expiresAtMs: number;
+}
 
 /** Ordered flag-list equality, for the mock's family-default canonicalisation. */
 function sameFlags(a: readonly string[], b: readonly string[]): boolean {
@@ -78,6 +154,10 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
 export class MockRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  // Fixed test-only value: no test constructs a real remote transport against
+  // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
+  // instead), so this never needs to vary per test the way `authnBaseUrl` does.
+  readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
@@ -85,11 +165,27 @@ export class MockRunnerHost implements IRunnerHost {
     readonly body: string;
     readonly payload: unknown;
     readonly replaceKey: string | null;
+    readonly deliveryKey: string | null;
+    readonly feedSource: NotificationFeedSource | null;
+    readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
-  readonly tokenStoreEntries: Map<string, StoredAuthTokens> = new Map();
+  readonly tokenStoreEntries: Map<string, StoredCredentials> = new Map();
   workspaceFolderPickerPaths: readonly string[];
   hosts: readonly HostDirectoryEntry[];
+
+  // In-memory token-store change fan-out (§4). Tests mutate entries then call
+  // `notifyTokenStoreChanged()` to simulate an external write/delete.
+  private readonly tokenStoreChangeListeners = new Set<
+    (change: TokenStoreChange) => void
+  >();
+  private tokenStoreRevision = 0;
+  // Mirrors the real store authority's quarantine: a token whose conditional
+  // delete was requested but has not landed is never served by `get` and
+  // never advertised present by the change fan-out. Tests inject
+  // `tokenStoreConditionalDeleteError` to make the delete fail.
+  readonly tokenStoreQuarantinedTokens = new Set<string>();
+  tokenStoreConditionalDeleteError: Error | null = null;
 
   private readonly authCallbackHandlers = new Set<() => void>();
   private readonly localHostHandlers = new Set<
@@ -98,12 +194,78 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly notificationClickHandlers = new Set<
     (payload: unknown) => void
   >();
-  private readonly systemResumedHandlers = new Set<() => void>();
+  private readonly notificationForegroundDisplayHandlers = new Set<
+    (display: NotificationForegroundDisplay) => void
+  >();
+  private readonly systemResumedHandlers = new Set<
+    (event: SystemResumeEvent) => void
+  >();
+  private readonly networkPathChangedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
+  private readonly explicitLastKnownLocalHostId: string | null | undefined;
+  /**
+   * The in-window selection authority (D16 browser/dev binding) and the two
+   * ports that drive it. They are fields rather than constructor locals so a
+   * dev shell or test can move the fleet (`setHosts`) and the identity
+   * (`setSelectionIdentity`) and watch the authority react exactly as it
+   * would on desktop.
+   */
+  readonly selectionFleet = new InMemoryHostFleetSource({
+    revision: 0,
+    identityGeneration: 0,
+    localHostId: null,
+    hosts: [],
+  });
+  readonly selectionIdentity = new InMemoryAuthorityIdentitySource(null);
+  /** Identity-scoped preferred-host persistence for the in-window authority. */
+  readonly selectionPreferredStore = new InMemoryPreferredHostStore();
+  private readonly selectionAuthorityMount: InProcessSelectionAuthority;
+  readonly selectionAuthority: SelectionAuthorityClient;
+  private retainedStepUpCredential: RetainedStepUpCredential | null = null;
+
+  /**
+   * The authority runs IN-WINDOW here, so membership changes reach it through
+   * the fleet source directly and there is no stale main-process copy to
+   * invalidate (F6's gap is a consequence of the process split, not of the
+   * design). Republishing the current snapshot keeps the call meaningful
+   * rather than making it a lie: a caller that says "membership changed" still
+   * gets one atomic fleet transaction out of it.
+   */
+  /**
+   * `null`: this shell owns no registry cadence, so a consumer keeps its own
+   * timer - the same answer the browser/dev topology gives, and the reason the
+   * capability is nullable rather than assumed.
+   *
+   * The handler parameter is declared even though this implementation ignores
+   * it, and that is not decoration: dropping it makes the MEMBER's type
+   * `() => Disposable | null`, which no longer accepts a handler-taking
+   * function, so a test that installs a pushing shell on the instance - the
+   * only way to exercise the push path against this mock - fails to type-check
+   * at the assignment. Matching the interface's arity keeps the substitution
+   * legal.
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null {
+    void handler;
+    return null;
+  }
+
+  refreshHostFleet(): Promise<void> {
+    const current = this.selectionFleet.snapshot();
+    this.selectionFleet.publish(
+      current.identityGeneration,
+      current.localHostId,
+      current.hosts,
+    );
+    return Promise.resolve();
+  }
 
   readonly tray: MockTrayState = new MockTrayState();
-  readonly hostPicker: MockHostPicker = new MockHostPicker();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
+    // The mock stands in for a desktop-style shell with a native dialog.
+    canPickNatively: true,
     pickFolders: async (): Promise<readonly string[]> => [
       ...this.workspaceFolderPickerPaths,
     ],
@@ -120,6 +282,7 @@ export class MockRunnerHost implements IRunnerHost {
     ): Promise<readonly string[]> => {
       return paths;
     },
+    readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
@@ -127,6 +290,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
   readonly zoom: null = null;
+  readonly pushPermission: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
@@ -147,7 +311,55 @@ export class MockRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
     this.localHost = options.localHost;
+    this.explicitLastKnownLocalHostId = options.lastKnownLocalHostId;
     this.hosts = options.hosts;
+    // Browser/dev topology (D16): the SAME authority engine mounted in the
+    // single window behind the in-process adapter. Nothing about the rules
+    // changes here - one reporter, the engine's own allocator, the same
+    // claim and atomic-inventory semantics - which is what keeps the two
+    // bindings from drifting.
+    this.selectionAuthorityMount = createInProcessSelectionAuthority({
+      fleet: this.selectionFleet,
+      identity: this.selectionIdentity,
+      // MIRRORS `createDesktopLocalHostEnsurePort`. When this shell has host
+      // management, D14's ensure goes where the real one goes - through
+      // `convergeReady` - because that call IS the observable event. A mock
+      // that answered `ok` directly satisfied the engine while leaving the
+      // provisioning invisible to anything watching the controller, so a test
+      // asserting "the authority started the host" could not see it happen
+      // even when it did.
+      //
+      // With no management there is no controller to ask, and the answer is
+      // read off the FIXTURE rather than being a constant: a mock built WITH a
+      // `localHost` snapshot is modelling a shell whose host is already
+      // running, so the ensure has nothing to do. Refusing there used to be
+      // invisible, because the engine only asked when the local lease was
+      // already `dead`; once P1.3's F3(b) ruling let derivation ask for a
+      // NEVER-DIALED local host too, the constant refusal fired on every such
+      // mock at boot, drove the local lease to `dead` for the retry cooldown
+      // (registry §5's ∅ made real), and left `effectiveHostId` null - so the
+      // window unbound its host client and every gate/compat surface in the
+      // gui-app suite hung on a probe that could no longer run. `localHost ===
+      // null` is the only shape that genuinely cannot provision.
+      localHostEnsure: {
+        // THE DEFERRAL IS LOAD-BEARING, not style. This authority is being
+        // constructed right here, and its constructor derives immediately -
+        // which calls `ensureReady()` SYNCHRONOUSLY, before the assignment of
+        // `this.hostManagement` further down this same constructor has run.
+        // An inline read would see `undefined` on the very first ensure, which
+        // is the cold-start one that matters most. One microtask puts the read
+        // after the constructor completes.
+        ensureReady: () =>
+          Promise.resolve().then(() => this.ensureLocalHostReady()),
+      },
+      localOutage: inertLocalHostOutageSignal,
+      preferredStore: this.selectionPreferredStore,
+      clock: systemAuthorityClock,
+      newIncarnationId: createIncrementingIncarnationIds(),
+      log: silentAuthorityLog,
+    });
+    this.selectionAuthority = this.selectionAuthorityMount.client;
+    this.publishSelectionFleet();
     this.workspaceFolderPickerPaths =
       options.workspaceFolderPickerPaths === undefined
         ? []
@@ -164,29 +376,200 @@ export class MockRunnerHost implements IRunnerHost {
     this.beginAuthAttemptCalls += 1;
   }
 
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult> {
-    return validateAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
-  }
-
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult> {
-    return validateAuthTokenIdentityViaHttp(
+    // Access-only (§3): the mock mirrors the desktop IPC, which no longer
+    // refreshes on a failed lookup — the spend routes through `tokenStore.rotate`.
+    return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
+  }
+
+  /**
+   * D14's local ensure for this shell - see the port's own note at the
+   * authority mount for why it is deferred and why the no-management answer
+   * reads the fixture. Kept as a method rather than a closure so that
+   * ordering constraint has one place to be explained.
+   */
+  private async ensureLocalHostReady(): Promise<
+    { ok: true } | { ok: false; reason: string; deferred: boolean }
+  > {
+    const management = this.hostManagement;
+    if (management === null) {
+      return this.localHost === null
+        ? {
+            ok: false,
+            reason: "local-provisioning-unavailable",
+            deferred: false,
+          }
+        : { ok: true };
+    }
+    const outcome = await management.convergeReady(false);
+    if (outcome.kind === "ok") return { ok: true };
+    // Mirrors `createDesktopLocalHostEnsurePort`: a busy lane and a busy host
+    // are deferrals (nothing dead-worthy was learned); everything else ran
+    // and concluded.
+    return {
+      ok: false,
+      reason: outcome.kind,
+      deferred: outcome.kind === "deferred" || outcome.kind === "busy",
+    };
+  }
+
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return fetchRegisteredHostsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above. Owning the
+    // request in-process, it can hand the caller's signal straight to `fetch`
+    // and abort the real request.
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
+  }
+
+  async revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    const stepUpToken = useStepUpCredential
+      ? this.activeRetainedStepUpToken()
+      : null;
+    const result = await revokeUserSessionViaHttp(
       this.authnBaseUrl,
-      token,
-      refreshToken,
+      stepUpToken ?? bearerToken,
+      familyId,
+    );
+    // Parity with the desktop main-process handler (`auth-ipc.ts`): a
+    // step-up-required verdict on a retained credential means the server just
+    // rejected it, so holding it would make the next revoke re-send a
+    // credential known to be dead and re-prompt in a loop.
+    if (result.kind === "step-up-required" && useStepUpCredential) {
+      this.retainedStepUpCredential = null;
+    }
+    return result;
+  }
+
+  async revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    const result = await revokeAllSessionsViaHttp(
+      this.authnBaseUrl,
+      this.activeRetainedStepUpToken() ?? bearerToken,
+    );
+    this.retainedStepUpCredential = null;
+    return result;
+  }
+
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    // The caller's own bearer: the mint is not step-up gated, so this double
+    // must not substitute a retained step-up credential either.
+    return mintHostCredentialViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+      null,
     );
   }
 
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult> {
-    return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  mintLinkLoginCode(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult> {
+    return mintLinkLoginCodeViaHttp(this.authnBaseUrl, bearerToken, signal);
+  }
+  linkLoginStatus(
+    bearerToken: string,
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult> {
+    return linkLoginStatusViaHttp(this.authnBaseUrl, bearerToken, code, signal);
+  }
+
+  respondLinkLogin(
+    bearerToken: string,
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult> {
+    return respondLinkLoginViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+      approve,
+    );
+  }
+
+  readonly linkCodeScanner = null;
+  readonly deviceDescriber = null;
+  readonly linkLoginDeepLinks = null;
+
+  async verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    const result = await verifyStepUpChallengeViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+    );
+    if (result.kind === "ok") {
+      this.retainedStepUpCredential = {
+        accessToken: result.response.access_token,
+        expiresAtMs:
+          Date.now() +
+          Math.max(
+            0,
+            result.response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+          ),
+      };
+    }
+    return toRetainedStepUpVerifyResult(result);
+  }
+
+  private activeRetainedStepUpToken(): string | null {
+    if (this.retainedStepUpCredential === null) {
+      return null;
+    }
+    if (this.retainedStepUpCredential.expiresAtMs <= Date.now()) {
+      this.retainedStepUpCredential = null;
+      return null;
+    }
+    return this.retainedStepUpCredential.accessToken;
+  }
+
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return updateHostVersionPolicyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      hostId,
+      input,
+    );
+  }
+
+  deregisterHostFromAccount(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return deregisterHostViaHttp(this.authnBaseUrl, bearerToken, hostId);
   }
 
   async openExternalLink(url: string): Promise<void> {
@@ -231,20 +614,182 @@ export class MockRunnerHost implements IRunnerHost {
   };
 
   readonly tokenStore: ITokenStore = {
-    get: async (): Promise<StoredAuthTokens | null> => {
+    get: async (): Promise<StoredCredentials | null> => {
       const value = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
-      return value === undefined ? null : value;
+      if (value === undefined) return null;
+      // Quarantine suppression, exactly as the real store authority: a pair
+      // whose conditional delete is pending is served to NO reader.
+      return this.tokenStoreQuarantinedTokens.has(value.token) ? null : value;
     },
-    set: async (tokens: StoredAuthTokens): Promise<void> => {
-      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, tokens);
+    signIn: async (
+      tokens: StoredAuthTokens,
+      identity: StoredCredentialsIdentity,
+    ): Promise<void> => {
+      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
+        token: tokens.token,
+        refreshToken: tokens.refreshToken,
+        savedAt: new Date().toISOString(),
+        user: identity,
+      });
+      this.notifyTokenStoreChangedAfterMutation();
+    },
+    rotate: async (expected: {
+      readonly userId: string;
+      readonly token: string;
+    }): Promise<TokenRotateResult> => {
+      // In-memory analogue of the locked rotate: the same guards, then a real
+      // (test-faked) refresh HTTP call — no file, no lock. Lets gui-app tests
+      // drive every rotate outcome by stubbing `fetch` on the authn base URL.
+      // Quarantine-filtered like the real authority's mutation view: a pair
+      // whose conditional delete is pending can never be returned as
+      // `superseded` nor refreshed into a successor.
+      const raw = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      const stored =
+        raw !== null && this.tokenStoreQuarantinedTokens.has(raw.token)
+          ? null
+          : raw;
+      if (stored === null) {
+        return { outcome: "deleted", pair: null };
+      }
+      if (stored.user.id !== expected.userId) {
+        return { outcome: "user-mismatch", pair: stored };
+      }
+      if (stored.token !== expected.token) {
+        return { outcome: "superseded", pair: stored };
+      }
+      const refreshed = await refreshOnceAbortable({
+        authnBaseUrl: this.authnBaseUrl,
+        token: stored.token,
+        refreshToken: stored.refreshToken,
+        clientKind: "desktop",
+        signal: null,
+      });
+      if (refreshed.kind === "network-error") {
+        return { outcome: "refresh-network", pair: null };
+      }
+      if (refreshed.kind === "rejected") {
+        return { outcome: "refresh-rejected", pair: null };
+      }
+      const next: StoredCredentials = {
+        ...stored,
+        token: refreshed.token,
+        refreshToken: refreshed.refreshToken,
+        savedAt: new Date().toISOString(),
+      };
+      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, next);
+      this.notifyTokenStoreChangedAfterMutation();
+      return { outcome: "applied", pair: next };
     },
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
+      this.notifyTokenStoreChangedAfterMutation();
+    },
+    deleteIfToken: async (
+      expectedToken: string,
+    ): Promise<"deleted" | "kept"> => {
+      // In-memory analogue of the store-authority conditional delete: the
+      // compare and delete are synchronous over the map, hence atomic — and
+      // the token is QUARANTINED before the attempt, so a failed delete
+      // leaves it suppressed for every reader until a retry lands.
+      this.tokenStoreQuarantinedTokens.add(expectedToken);
+      if (this.tokenStoreConditionalDeleteError !== null) {
+        throw this.tokenStoreConditionalDeleteError;
+      }
+      const stored = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      if (stored === null || stored.token !== expectedToken) {
+        this.tokenStoreQuarantinedTokens.delete(expectedToken);
+        return "kept";
+      }
+      this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
+      this.tokenStoreQuarantinedTokens.delete(expectedToken);
+      this.notifyTokenStoreChangedAfterMutation();
+      return "deleted";
+    },
+    subscribe: (listener: (change: TokenStoreChange) => void): Disposable => {
+      this.tokenStoreChangeListeners.add(listener);
+      return {
+        dispose: () => {
+          this.tokenStoreChangeListeners.delete(listener);
+        },
+      };
+    },
+    migrateLegacyCredentials: async (
+      legacy: StoredAuthTokens,
+    ): Promise<CredentialsMigrationOutcome> => {
+      // In-memory analogue of the §6 migration (no lock/WAL; real, test-faked
+      // probe + refresh HTTP). Faithful on the branches gui-app renderer tests
+      // need — a present file wins, an absent file adopts the spent legacy pair;
+      // the deep re-entry / rotate-fallback branching is covered against the
+      // real store in the desktop suite.
+      const existing = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      if (existing !== null) {
+        return "file-wins";
+      }
+      const lProbe = await validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: this.authnBaseUrl,
+        token: legacy.token,
+        signal: null,
+      });
+      if (lProbe.kind === "network-error") return "retryable";
+      if (lProbe.kind !== "valid") return "identity-unknown";
+      const refreshed = await refreshOnceAbortable({
+        authnBaseUrl: this.authnBaseUrl,
+        token: legacy.token,
+        refreshToken: legacy.refreshToken,
+        clientKind: "desktop",
+        signal: null,
+      });
+      if (refreshed.kind === "network-error") return "retryable";
+      if (refreshed.kind === "rejected") return "terminal-dead";
+      this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
+        token: refreshed.token,
+        refreshToken: refreshed.refreshToken,
+        savedAt: new Date().toISOString(),
+        user: credentialsIdentityFromAuthenticatedUser(lProbe.user),
+      });
+      this.notifyTokenStoreChangedAfterMutation();
+      return "committed";
     },
   };
 
-  async requestHostRespawn(): Promise<void> {
+  /**
+   * Fan out a revisioned `TokenStoreChange` from the current in-memory map.
+   * Tests call this after mutating `tokenStoreEntries` to simulate an external
+   * write/delete that the owned watcher would have observed.
+   *
+   * Self-writes from signIn/rotate/delete schedule the notify on a microtask so
+   * the AuthService apply path can finish first (mirrors production: the FS
+   * watcher fires after the write returns, with a debounce). That keeps the
+   * same-bearer reconcile no-op honest instead of racing applyLiveRotateOutcome.
+   */
+  notifyTokenStoreChanged(): void {
+    this.tokenStoreRevision += 1;
+    const raw = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
+    // The fan-out is quarantine-aware like the real authority's: a pending
+    // conditional delete is never advertised as a present credential.
+    const stored =
+      raw !== undefined && this.tokenStoreQuarantinedTokens.has(raw.token)
+        ? undefined
+        : raw;
+    const change: TokenStoreChange = {
+      present: stored !== undefined,
+      userId: stored?.user.id ?? null,
+      revision: this.tokenStoreRevision,
+    };
+    for (const listener of this.tokenStoreChangeListeners) {
+      listener(change);
+    }
+  }
+
+  private notifyTokenStoreChangedAfterMutation(): void {
+    queueMicrotask(() => {
+      this.notifyTokenStoreChanged();
+    });
+  }
+
+  async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
+    return { kind: "restarted" };
   }
 
   readonly notifications: INotificationHost = {
@@ -253,8 +798,26 @@ export class MockRunnerHost implements IRunnerHost {
       body: string,
       payload: unknown,
       replaceKey: string | null,
-    ): Promise<void> => {
-      this.notificationsSent.push({ title, body, payload, replaceKey });
+      deliveryKey: string | null,
+      feedSource: NotificationFeedSource | null,
+      foregroundAppLocal: NotificationForegroundAppLocal | null,
+    ): Promise<NotificationShowOutcome> => {
+      this.notificationsSent.push({
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+        feedSource,
+        foregroundAppLocal,
+      });
+      // Recording the request is not presenting it: this shell has no native
+      // notification capability (see the class doc - notifications are a
+      // no-op on web preview), so nothing is shown or relayed and the caller
+      // owns the fallback cue. Claiming `presented` here would suppress that
+      // cue and leave a blurred dev/preview window with an unseen toast and
+      // nothing else.
+      return "undeliverable";
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
       this.notificationClickHandlers.add(handler);
@@ -264,7 +827,25 @@ export class MockRunnerHost implements IRunnerHost {
         },
       };
     },
+    onForegroundDisplay: (
+      handler: (display: NotificationForegroundDisplay) => void,
+    ): Disposable => {
+      this.notificationForegroundDisplayHandlers.add(handler);
+      return {
+        dispose: () => {
+          this.notificationForegroundDisplayHandlers.delete(handler);
+        },
+      };
+    },
   };
+
+  emitForegroundNotificationDisplay(
+    display: NotificationForegroundDisplay,
+  ): void {
+    for (const handler of this.notificationForegroundDisplayHandlers) {
+      handler(display);
+    }
+  }
 
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,
@@ -278,11 +859,28 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  getLastKnownLocalHostId(): Promise<string | null> {
+    if (this.explicitLastKnownLocalHostId !== undefined) {
+      return Promise.resolve(this.explicitLastKnownLocalHostId);
+    }
+    // A running host is exactly the case where pid metadata carries its id.
+    return Promise.resolve(this.localHost?.hostId ?? null);
+  }
+
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
       dispose: () => {
         this.systemResumedHandlers.delete(handler);
+      },
+    };
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    this.networkPathChangedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.networkPathChangedHandlers.delete(handler);
       },
     };
   }
@@ -302,20 +900,72 @@ export class MockRunnerHost implements IRunnerHost {
 
   setLocalHost(snapshot: LocalHostSnapshot | null): void {
     this.localHost = snapshot;
+    this.publishSelectionFleet();
     for (const handler of this.localHostHandlers) {
       handler(snapshot);
     }
   }
 
   /** Test helper: fire the OS-wake signal to every `onSystemResumed` subscriber. */
-  emitSystemResumed(): void {
+  emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
+      handler(event);
+    }
+  }
+
+  /** Test helper: fire the network-path signal to every subscriber. */
+  emitNetworkPathChanged(): void {
+    for (const handler of this.networkPathChangedHandlers) {
       handler();
     }
   }
 
   setHosts(hosts: readonly HostDirectoryEntry[]): void {
     this.hosts = hosts;
+    this.publishSelectionFleet();
+  }
+
+  /**
+   * Republishes the authority's fleet from the mock's directory state.
+   *
+   * Only identity and membership cross: the directory entries carry a
+   * dialability verdict, and projecting it here would hand the authority a
+   * cloud-shaped liveness signal that invariant 5 forbids it to hold. The
+   * `mock` kind counts as remote - it is not this machine's own host.
+   *
+   * The local host is always a member once known, even when it is absent
+   * from `this.hosts` (the mock's separate multi-host directory list): on
+   * desktop the local machine reports its own fleet membership directly, not
+   * through the registered-hosts directory, so a caller that only sets
+   * `localHost`/`hosts: []` to boot a single-host suite must still get a
+   * real local candidate rather than an empty fleet the authority can never
+   * derive an effective host from.
+   */
+  private publishSelectionFleet(): void {
+    const localHostId = this.getLocalHostIdForSelection();
+    const hosts = this.hosts.map((entry) => ({
+      hostId: entry.hostId,
+      kind:
+        entry.hostId === localHostId ? ("local" as const) : ("remote" as const),
+    }));
+    if (
+      localHostId !== null &&
+      !hosts.some((entry) => entry.hostId === localHostId)
+    ) {
+      hosts.push({ hostId: localHostId, kind: "local" as const });
+    }
+    this.selectionFleet.publish(
+      this.selectionIdentity.current().generation,
+      localHostId,
+      hosts,
+    );
+  }
+
+  private getLocalHostIdForSelection(): string | null {
+    if (this.explicitLastKnownLocalHostId !== undefined) {
+      return this.explicitLastKnownLocalHostId;
+    }
+    return this.localHost?.hostId ?? null;
   }
 
   setWorkspaceFolderPickerPaths(paths: readonly string[]): void {
@@ -421,10 +1071,6 @@ export class MockTraycerCli implements ITraycerCli {
   ]);
   /** Path the next `pickShellProgramFile` resolves with, or null to cancel. */
   pickedProgramFile: string | null = null;
-  /** Last bearer seeded via `cliLogin`, so tests can assert it was forwarded. */
-  lastLoginToken: string | null = null;
-  /** Last refresh token seeded via `cliLogin`, so tests can assert it too. */
-  lastLoginRefreshToken: string | null = null;
 
   async hostStatus(): Promise<TraycerHostStatusSnapshot> {
     return this.hostStatusSnapshot;
@@ -579,16 +1225,6 @@ export class MockTraycerCli implements ITraycerCli {
       (row) => row.key !== input.key,
     );
   }
-
-  async cliLogin(token: string, refreshToken: string): Promise<void> {
-    this.lastLoginToken = token;
-    this.lastLoginRefreshToken = refreshToken;
-  }
-
-  async cliLogout(): Promise<void> {
-    this.lastLoginToken = null;
-    this.lastLoginRefreshToken = null;
-  }
 }
 
 /**
@@ -688,50 +1324,5 @@ export class MockDeviceFlowSession implements DeviceFlowSession {
       handler(result);
     }
     this.handlers.clear();
-  }
-}
-
-/**
- * In-memory `IHostPicker`. Tracks open/closed state and fires `onChange`
- * on every transition; `gui-app` tests drive open/close via the public
- * request methods, mirroring the real shell contract.
- */
-export class MockHostPicker implements IHostPicker {
-  private open = false;
-  private readonly handlers = new Set<(isOpen: boolean) => void>();
-
-  get isOpen(): boolean {
-    return this.open;
-  }
-
-  requestOpen(): void {
-    if (this.open) {
-      return;
-    }
-    this.open = true;
-    this.emit();
-  }
-
-  requestClose(): void {
-    if (!this.open) {
-      return;
-    }
-    this.open = false;
-    this.emit();
-  }
-
-  onChange(handler: (isOpen: boolean) => void): Disposable {
-    this.handlers.add(handler);
-    return {
-      dispose: () => {
-        this.handlers.delete(handler);
-      },
-    };
-  }
-
-  private emit(): void {
-    for (const handler of this.handlers) {
-      handler(this.open);
-    }
   }
 }

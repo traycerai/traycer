@@ -1,6 +1,20 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hostDirectoryEntryEquals,
+  subscribeHostRowChanged,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import { useHostDirectory } from "@/lib/host";
+
+/**
+ * Re-exported from the connection registry, which OWNS this predicate now
+ * (redesign P4.1): it is the rule the registry uses to decide whether a
+ * host's row actually moved, and a second copy here would let the hook and
+ * the registry disagree about what "changed" means for the same row. Kept as
+ * a named export from this module because `useReactiveLocalHostEntry` imports
+ * it from here.
+ */
+export { hostDirectoryEntryEquals };
 
 /**
  * Reactively projects a single host directory entry, returning a
@@ -20,7 +34,8 @@ import { useHostDirectory } from "@/lib/host";
  * source, keeps the reference stable for all of them: we cache the last value
  * and return it unchanged whenever the fields match, so `useSyncExternalStore`
  * sees `Object.is`-equal snapshots and nothing downstream re-runs. A genuine
- * change (url/version/status/label) is not field-equal, so it still propagates.
+ * change (url/version/reachability/label) is not field-equal, so it still
+ * propagates.
  */
 export function useHostDirectoryEntry(
   hostId: string,
@@ -29,14 +44,22 @@ export function useHostDirectoryEntry(
   const cacheRef = useRef<HostDirectoryEntry | null>(null);
   const subscribe = useCallback(
     (callback: () => void) => {
+      // The registry's PER-HOST arm (redesign P4.1). It answers the question
+      // this hook is actually asking - "did host X's row move" - and it is
+      // the arm that survives P4.2. The directory arm below stays because
+      // this hook's own `getSnapshot` reads the directory directly, so a
+      // harness that supplies a directory without installing a registry
+      // source keeps working unchanged.
+      const unsubscribeRegistry = subscribeHostRowChanged(hostId, callback);
       const subscription = directory.onChange(() => {
         callback();
       });
       return () => {
         subscription.dispose();
+        unsubscribeRegistry();
       };
     },
-    [directory],
+    [directory, hostId],
   );
   const getSnapshot = useCallback(() => {
     const next = directory.findById(hostId);
@@ -48,20 +71,4 @@ export function useHostDirectoryEntry(
   }, [hostId, directory]);
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
-function hostDirectoryEntryEquals(
-  a: HostDirectoryEntry | null,
-  b: HostDirectoryEntry | null,
-): boolean {
-  if (a === b) return true;
-  if (a === null || b === null) return false;
-  return (
-    a.hostId === b.hostId &&
-    a.label === b.label &&
-    a.kind === b.kind &&
-    a.websocketUrl === b.websocketUrl &&
-    a.version === b.version &&
-    a.status === b.status
-  );
 }

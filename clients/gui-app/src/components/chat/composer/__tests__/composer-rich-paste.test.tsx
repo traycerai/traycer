@@ -1,8 +1,9 @@
-import "../../../../../__tests__/test-browser-apis";
 import { fireEvent } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
+import { DOMSerializer } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SlashCommand } from "@/lib/composer/types";
 
 import {
   buildComposerClipboardHtml,
@@ -12,6 +13,14 @@ import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-pas
 
 import { buildComposerExtensions } from "../editor/editor-config";
 import { createComposerPickerStore } from "../picker/composer-picker-store";
+
+const mocks = vi.hoisted(() => ({
+  reportableErrorToast: vi.fn(),
+}));
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: mocks.reportableErrorToast,
+}));
 
 const editors: Editor[] = [];
 
@@ -62,6 +71,8 @@ const STRUCTURED_CONTENT: JsonContent = {
 
 afterEach(() => {
   editors.splice(0).forEach((editor) => editor.destroy());
+  mocks.reportableErrorToast.mockClear();
+  vi.useRealTimers();
 });
 
 describe("composer rich clipboard paste", () => {
@@ -172,6 +183,249 @@ describe("composer rich clipboard paste", () => {
         },
       ],
     });
+  });
+
+  it("preserves a hash-only image when the destination has its bytes", () => {
+    const hasBytes = vi.fn((hash: string) => hash === "same-epic-hash");
+    const editor = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+
+    pasteComposerContent(editor, hashOnlyImageContent("same-epic-hash"));
+
+    expect(hasBytes).toHaveBeenCalledWith("same-epic-hash");
+    expect(collectImageIds(editor)).toEqual(["pasted-image"]);
+    expect(editor.state.doc.textContent).toBe("describe it");
+    expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
+  });
+
+  it("strips an unresolved cross-context image synchronously", () => {
+    const hasBytes = vi.fn(() => false);
+    const editor = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+
+    pasteComposerContent(editor, hashOnlyImageContent("other-epic-hash"));
+
+    expect(hasBytes).toHaveBeenCalledWith("other-epic-hash");
+    expect(collectImageIds(editor)).toEqual([]);
+    expect(editor.state.doc.textContent).toBe("describe it");
+    expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+      "Pasted image unavailable",
+      {
+        description:
+          "1 image could not be found in this composer and was removed.",
+      },
+      {
+        title: "Pasted image unavailable",
+        message: null,
+        code: null,
+        source: "Chat composer",
+      },
+    );
+  });
+
+  it("filters hash-only images copied directly as editor HTML", () => {
+    const source = makeEditor(KNOWN_SLASH_NAMES);
+    source.commands.setContent(hashOnlyImageContent("other-epic-hash"));
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(
+      DOMSerializer.fromSchema(source.schema).serializeFragment(
+        source.state.doc.content,
+      ),
+    );
+    const hasBytes = vi.fn(() => false);
+    const destination = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+
+    fireEvent.paste(destination.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) =>
+          type === "text/html" ? wrapper.innerHTML : "",
+      },
+    });
+    expect(hasBytes).toHaveBeenCalledWith("other-epic-hash");
+    expect(collectImageIds(destination)).toEqual([]);
+    expect(destination.state.doc.textContent).toBe("describe it");
+    expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges an available hash-only image pasted as inline editor HTML into the surrounding paragraph instead of splitting it", () => {
+    const source = makeEditor(KNOWN_SLASH_NAMES);
+    source.commands.setContent(
+      hashOnlyImageContentWithText("same-epic-hash", "suffix"),
+    );
+    // Serialize just the paragraph's own (inline) content - not the doc-level
+    // fragment - so the wrapper carries no block wrapper, mirroring a real
+    // mid-paragraph copy rather than a whole-paragraph one.
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(
+      DOMSerializer.fromSchema(source.schema).serializeFragment(
+        source.state.doc.firstChild?.content ?? source.state.doc.content,
+      ),
+    );
+    const hasBytes = vi.fn((hash: string) => hash === "same-epic-hash");
+    const destination = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+    destination.commands.setContent({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "prefix " }] },
+      ],
+    });
+    destination.commands.setTextSelection(
+      destination.state.doc.content.size - 1,
+    );
+
+    fireEvent.paste(destination.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) =>
+          type === "text/html" ? wrapper.innerHTML : "",
+      },
+    });
+
+    expect(hasBytes).toHaveBeenCalledWith("same-epic-hash");
+    // Nothing needed stripping, so the original (open) slice is dispatched
+    // unchanged - merging into the SAME paragraph as "prefix" rather than the
+    // JSON round-trip's closed 0/0 slice splitting it into a new block.
+    expect(destination.state.doc.childCount).toBe(1);
+    expect(collectImageIds(destination)).toEqual(["pasted-image"]);
+    expect(destination.state.doc.textContent).toBe("prefix suffix");
+    expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
+  });
+
+  it("keeps a stripped unavailable image's surviving text merged into the surrounding paragraph instead of splitting it", () => {
+    const source = makeEditor(KNOWN_SLASH_NAMES);
+    source.commands.setContent(
+      hashOnlyImageContentWithText("other-epic-hash", "suffix"),
+    );
+    // Same inline-only serialization as the merge case above - no block
+    // wrapper, mirroring a real mid-paragraph copy.
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(
+      DOMSerializer.fromSchema(source.schema).serializeFragment(
+        source.state.doc.firstChild?.content ?? source.state.doc.content,
+      ),
+    );
+    const hasBytes = vi.fn(() => false);
+    const destination = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+    destination.commands.setContent({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "prefix " }] },
+      ],
+    });
+    destination.commands.setTextSelection(
+      destination.state.doc.content.size - 1,
+    );
+
+    fireEvent.paste(destination.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) =>
+          type === "text/html" ? wrapper.innerHTML : "",
+      },
+    });
+
+    expect(hasBytes).toHaveBeenCalledWith("other-epic-hash");
+    expect(collectImageIds(destination)).toEqual([]);
+    // The image was stripped, but the surviving text must still merge into
+    // the SAME paragraph as "prefix" - a JSON round-trip through
+    // `pasteComposerContent`'s closed 0/0 slice would instead split it into
+    // a second paragraph.
+    expect(destination.state.doc.childCount).toBe(1);
+    expect(destination.state.doc.textContent).toBe("prefix suffix");
+    expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves landing-composer rich pastes unvalidated", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pasteComposerContent(editor, hashOnlyImageContent("landing-hash"));
+
+    expect(collectImageIds(editor)).toEqual(["pasted-image"]);
+    expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
+  });
+
+  it("keeps cold-open pastes unvalidated, then validates after snapshot readiness", () => {
+    let hasPastedImageBytes: ((hash: string) => boolean) | null = null;
+    const editor = makeEditorWithPastedImagePresenceGetter(
+      KNOWN_SLASH_NAMES,
+      () => hasPastedImageBytes,
+      () => undefined,
+    );
+
+    pasteComposerContent(
+      editor,
+      hashOnlyImageContentWithIdAndText(
+        "early-hash",
+        "early-image",
+        "early paste",
+      ),
+    );
+
+    expect(collectImageIds(editor)).toEqual(["early-image"]);
+    expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
+
+    hasPastedImageBytes = (hash) => hash === "valid-hash";
+    pasteComposerContent(
+      editor,
+      hashOnlyImageContentWithIdAndText(
+        "missing-hash",
+        "missing-image",
+        "missing paste",
+      ),
+    );
+    pasteComposerContent(
+      editor,
+      hashOnlyImageContentWithIdAndText(
+        "valid-hash",
+        "valid-image",
+        "valid paste",
+      ),
+    );
+
+    expect(collectImageIds(editor)).toEqual(["early-image", "valid-image"]);
+    expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits validated pasted content on immediate Enter", () => {
+    let submitted: JsonContent | null = null;
+    const editor = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      () => true,
+      () => {
+        submitted = editor.getJSON();
+      },
+    );
+
+    pasteComposerContent(editor, hashOnlyImageContent("same-epic-hash"));
+    fireEvent.keyDown(editor.view.dom, { key: "Enter" });
+
+    expect(submitted).toEqual(editor.getJSON());
+    expect(collectImageIds(editor)).toEqual(["pasted-image"]);
   });
 
   it("pastes plain text Markdown as structured editor content", () => {
@@ -298,6 +552,57 @@ describe("composer rich clipboard paste", () => {
     });
   });
 
+  it("keeps every line of a multi-line plain text paste inside a code block", () => {
+    const editor = makeCodeBlockEditor("existing\n");
+
+    pastePlainText(editor, "line one\nline two\nline three");
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { language: null },
+          content: [
+            { type: "text", text: "existing\nline one\nline two\nline three" },
+          ],
+        },
+        { type: "paragraph" },
+      ],
+    });
+  });
+
+  it("keeps markdown-looking text literal inside a code block, with CRLF normalized", () => {
+    const editor = makeCodeBlockEditor("");
+
+    pastePlainText(editor, "# Title\r\n- first\r\n**bold**");
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe(
+      "# Title\n- first\n**bold**",
+    );
+  });
+
+  it("degrades an HTML-flavored paste inside a code block to its plain text sibling", () => {
+    const editor = makeCodeBlockEditor("");
+
+    fireEvent.paste(editor.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html", "text/plain"],
+        getData: (type: string) => {
+          if (type === "text/html") return "<p>one</p><p>two</p>";
+          if (type === "text/plain") return "one\ntwo";
+          return "";
+        },
+      },
+    });
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe("one\ntwo");
+  });
+
   it("converts a leading slash command paste into a chip with literal args", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 
@@ -306,6 +611,46 @@ describe("composer rich clipboard paste", () => {
     const slash = collectSlashCommands(editor);
     expect(slash).toEqual(["plan"]);
     expect(remainderText(editor)).toBe(" review the diff");
+  });
+
+  // `$` is the picker's other trigger, so raw text leading with it has to chip
+  // exactly like `/` does - and the chip records which character the paste led
+  // with, so it reads back as what was pasted.
+  it("converts a leading $ skill paste into a chip that reads back as $name", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pastePlainText(editor, "$plan review the diff");
+
+    expect(collectSlashCommands(editor)).toEqual(["plan"]);
+    expect(collectSlashTriggers(editor)).toEqual(["$"]);
+    expect(remainderText(editor)).toBe(" review the diff");
+  });
+
+  // A pasted chip has to carry the resolved option's `kind`, not just its name:
+  // the host reads skills structurally off `kind`, and the editor's leading
+  // guard deletes a kindless chip the moment it stops being leading.
+  it("carries the catalog option's kind and path onto a pasted skill chip", () => {
+    const editor = makeEditor([...KNOWN_SLASH_NAMES, "frontend-design"]);
+
+    pastePlainText(editor, "$frontend-design polish the header");
+
+    expect(collectSlashAttrs(editor)).toEqual([
+      {
+        commandName: "frontend-design",
+        kind: "skill",
+        path: "/repo/.agents/skills/frontend-design/SKILL.md",
+        trigger: "$",
+      },
+    ]);
+  });
+
+  it("does not convert a $ name that is not in the catalog", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pastePlainText(editor, "$not-a-command do the thing");
+
+    expect(collectSlashCommands(editor)).toEqual([]);
+    expect(remainderText(editor)).toBe("$not-a-command do the thing");
   });
 
   it("keeps an existing leading slash chip when another slash command is pasted before it", () => {
@@ -432,6 +777,25 @@ describe("composer rich clipboard paste", () => {
   });
 });
 
+// A composer opening with a code block, caret at the end of its text — the
+// state right after typing ``` and some content. The caret is positioned
+// explicitly inside the code block because the schema keeps a trailing
+// paragraph after it.
+function makeCodeBlockEditor(text: string): Editor {
+  const editor = makeEditor(KNOWN_SLASH_NAMES);
+  editor.commands.setContent({
+    type: "doc",
+    content: [
+      {
+        type: "codeBlock",
+        content: text.length > 0 ? [{ type: "text", text }] : [],
+      },
+    ],
+  });
+  editor.commands.setTextSelection(1 + text.length);
+  return editor;
+}
+
 function pastePlainText(editor: Editor, text: string): void {
   fireEvent.paste(editor.view.dom, {
     clipboardData: {
@@ -455,6 +819,33 @@ function collectSlashCommands(editor: Editor): string[] {
     }
   });
   return names;
+}
+
+function collectSlashTriggers(editor: Editor): string[] {
+  const triggers: string[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "slashCommand") {
+      triggers.push(
+        typeof node.attrs.trigger === "string" ? node.attrs.trigger : "",
+      );
+    }
+  });
+  return triggers;
+}
+
+function collectSlashAttrs(editor: Editor): Record<string, unknown>[] {
+  const attrs: Record<string, unknown>[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== "slashCommand") return true;
+    attrs.push({
+      commandName: node.attrs.commandName,
+      kind: node.attrs.kind,
+      path: node.attrs.path,
+      trigger: node.attrs.trigger,
+    });
+    return false;
+  });
+  return attrs;
 }
 
 function collectImageIds(editor: Editor): string[] {
@@ -491,6 +882,27 @@ function remainderText(editor: Editor): string {
 
 const KNOWN_SLASH_NAMES = ["plan", "code-review", "implement"];
 
+// `frontend-design` is the catalog's only skill, so a test can tell a chip built
+// from a resolved option (carries `kind`) from the bare lexical fallback.
+function catalogCommand(name: string): SlashCommand {
+  const isSkill = name.toLowerCase() === "frontend-design";
+  return {
+    harnessId: "claude",
+    name,
+    description: `Use ${name}`,
+    argumentHint: null,
+    kind: isSkill ? "skill" : "slash-command",
+    metadata: isSkill ? { path: `/repo/.agents/skills/${name}/SKILL.md` } : {},
+    source: "provider",
+    preview: {
+      kind: "text",
+      primary: `Use ${name}`,
+      secondary: null,
+      mono: false,
+    },
+  };
+}
+
 function imageAttrs(id: string) {
   return {
     id,
@@ -502,6 +914,26 @@ function imageAttrs(id: string) {
 }
 
 function makeEditor(slashNames: ReadonlyArray<string> | null): Editor {
+  return makeEditorWithPastedImagePresence(slashNames, null, () => undefined);
+}
+
+function makeEditorWithPastedImagePresence(
+  slashNames: ReadonlyArray<string> | null,
+  hasPastedImageBytes: ((hash: string) => boolean) | null,
+  onSubmit: () => void,
+): Editor {
+  return makeEditorWithPastedImagePresenceGetter(
+    slashNames,
+    () => hasPastedImageBytes,
+    onSubmit,
+  );
+}
+
+function makeEditorWithPastedImagePresenceGetter(
+  slashNames: ReadonlyArray<string> | null,
+  getHasPastedImageBytes: () => ((hash: string) => boolean) | null,
+  onSubmit: () => void,
+): Editor {
   const element = document.createElement("div");
   document.body.appendChild(element);
   const pickerStore = createComposerPickerStore();
@@ -509,19 +941,75 @@ function makeEditor(slashNames: ReadonlyArray<string> | null): Editor {
     pickerStore
       .getState()
       .setKnownSlashCommands(
-        new Map(slashNames.map((name) => [name.toLowerCase(), name])),
+        new Map(
+          slashNames.map((name) => [name.toLowerCase(), catalogCommand(name)]),
+        ),
       );
   }
   const editor = new Editor({
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
-      onSubmit: { current: () => undefined },
+      getPlaceholder: () => "test",
+      onSubmit: { current: onSubmit },
       slashProviderId: "claude",
+      getHasPastedImageBytes,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });
   editors.push(editor);
   return editor;
+}
+
+function pasteComposerContent(editor: Editor, content: JsonContent): void {
+  const html = buildComposerClipboardHtml(
+    content,
+    composerClipboardPlainText(content),
+  );
+  fireEvent.paste(editor.view.dom, {
+    clipboardData: {
+      files: [],
+      items: [],
+      types: ["text/html"],
+      getData: (type: string) => (type === "text/html" ? html : ""),
+    },
+  });
+}
+
+function hashOnlyImageContent(hash: string): JsonContent {
+  return hashOnlyImageContentWithText(hash, "describe it");
+}
+
+function hashOnlyImageContentWithText(hash: string, text: string): JsonContent {
+  return hashOnlyImageContentWithIdAndText(hash, "pasted-image", text);
+}
+
+function hashOnlyImageContentWithIdAndText(
+  hash: string,
+  id: string,
+  text: string,
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id,
+              fileName: "pasted.png",
+              b64content: null,
+              hash,
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+          { type: "text", text },
+        ],
+      },
+    ],
+  };
 }

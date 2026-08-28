@@ -4,11 +4,7 @@ import { dialog } from "electron";
 import { isShellExecutablePathSupported } from "@traycer/protocol/config/shell-executable";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type { TraycerShellProbeResult } from "../../ipc-contracts/traycer-cli-types";
-import {
-  runTraycerCli,
-  runTraycerCliJson,
-  runTraycerCliWithStdin,
-} from "../cli/traycer-cli";
+import { runTraycerCli, runTraycerCliJson } from "../cli/traycer-cli";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -82,9 +78,11 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
   // `host status` is now a runner-aware command (Native Packaging
   // cutover): it emits the shared NDJSON envelope and integrates Core
   // Flow 7 auto-bootstrap. Desktop always passes `--no-bootstrap` here
-  // because Setup splash and Settings → Host drive the install
-  // pipeline explicitly - host-status from Desktop is informational
-  // only and must never implicitly install the host.
+  // because the launch reconciler (`HostController`) and Settings → Host
+  // drive the install pipeline explicitly - host-status from Desktop is
+  // informational only (the renderer's boot card reads it for its
+  // `Show details` bootstrap.log tail) and must never implicitly install
+  // the host.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostStatus, async () => {
     return runTraycerCliJson(["host", "status", "--no-bootstrap"]);
   });
@@ -257,37 +255,4 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
       });
     },
   );
-
-  // Seed the CLI's stored credentials from the renderer's captured bearer +
-  // refresh token so the CLI keeps using them for host comms (and can
-  // self-refresh on a 401). A JSON `{ token, refreshToken }` payload is piped
-  // over stdin (`--token -`) rather than passed in argv, so the secrets never
-  // appear in the process list. Rejects (via TraycerCliError) if authn rejected
-  // the token.
-  bridge.handleInvoke(
-    RunnerHostInvoke.traycerCliLogin,
-    async (_event, raw: unknown) => {
-      const token = requireString(raw, "token", "traycerCliLogin");
-      const refreshToken = requireString(
-        raw,
-        "refreshToken",
-        "traycerCliLogin",
-      );
-      await runTraycerCliWithStdin({
-        args: ["login", "--token", "-"],
-        stdin: JSON.stringify({ token, refreshToken }),
-        timeoutMs: 10_000,
-      });
-    },
-  );
-
-  // Delete the CLI's stored credentials at sign-out so the host's
-  // owner-binding gate falls back to deny-by-default on this machine.
-  bridge.handleInvoke(RunnerHostInvoke.traycerCliLogout, async () => {
-    await runTraycerCli({
-      args: ["logout"],
-      maxBuffer: 64 * 1024,
-      timeoutMs: 10_000,
-    });
-  });
 }

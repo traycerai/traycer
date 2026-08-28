@@ -31,7 +31,10 @@ const epicArtifactKindSchema = getRecordSchema(
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 export type EpicNodeKind =
-  EpicArtifactKind | "chat" | "terminal-agent" | "terminal";
+  | EpicArtifactKind
+  | "chat"
+  | "terminal-agent"
+  | "terminal";
 
 export const EPIC_NODE_KINDS: ReadonlyArray<EpicNodeKind> = [
   "chat",
@@ -97,6 +100,27 @@ export const EPIC_NODE_LABELS: Readonly<Record<EpicNodeKind, string>> = {
   review: "Review",
   terminal: "Terminal",
 };
+
+/**
+ * Lower-case noun naming a node inside a sentence - destructive confirmations,
+ * summaries, and similar prose.
+ *
+ * `chat` and `terminal-agent` both collapse to **agent**: Agent is the durable
+ * entity the action operates on and Chat/Terminal are only the interfaces used
+ * to reach it, so "Delete agent "Foo"?" is true for either. Interpolating the
+ * raw node kind here previously leaked the hyphenated `terminal-agent` into
+ * user-facing copy.
+ */
+export const EPIC_NODE_SENTENCE_NOUNS: Readonly<Record<EpicNodeKind, string>> =
+  {
+    chat: "agent",
+    "terminal-agent": "agent",
+    spec: "spec",
+    ticket: "ticket",
+    story: "story",
+    review: "review",
+    terminal: "terminal",
+  };
 
 export type EpicNodeIconColors = Readonly<Record<EpicNodeKind, string>>;
 
@@ -170,6 +194,8 @@ export const TUI_AGENT_HARNESS_LABELS: Readonly<Record<TuiHarnessId, string>> =
     claude: "Claude Code",
     codex: "Codex",
     opencode: "OpenCode",
+    // Reserved schema value; current runtime catalogs and epic projection hide
+    // Cursor terminal agents until the TUI surface is supported.
     cursor: "Cursor",
   };
 

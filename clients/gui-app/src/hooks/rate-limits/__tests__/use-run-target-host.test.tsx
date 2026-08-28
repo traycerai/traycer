@@ -12,7 +12,9 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { ReactNode } from "react";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
+import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 // One global (default-host) client shared between the mocked `useHostClient`
 // and the tests, mirroring `use-host-client-for.test.tsx`'s harness so
@@ -24,8 +26,18 @@ const globalClientRef = vi.hoisted(() => ({
 const directoryRef = vi.hoisted(() => ({
   entries: [] as HostDirectoryEntry[],
 }));
+const messengerRef = vi.hoisted(() => ({
+  value: null as MockHostMessenger<HostRpcRegistry> | null,
+}));
 
 vi.mock("@/lib/host/runtime", () => ({
+  // Spine and app-wide client are separate exports since redesign P2.1.
+  useHostRuntimeClient: () => {
+    if (globalClientRef.value === null) {
+      throw new Error("test global client not configured");
+    }
+    return globalClientRef.value;
+  },
   useHostClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
@@ -35,6 +47,12 @@ vi.mock("@/lib/host/runtime", () => ({
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryRef.entries }),
+}));
+// The remote transport in `useHostClientFor` reads `runnerHost.authnBaseUrl`
+// for attach-grant minting; local targets never touch it. Stub the minimum
+// shape, mirroring `use-host-client-for.test.tsx`.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
 }));
 
 import { useRunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
@@ -50,22 +68,28 @@ function buildClient(
   websocketUrl: string,
   responder: () => RateLimitUsageResponse,
 ): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = { ...mockLocalHostEntry, hostId, websocketUrl };
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "host.getRateLimitUsage": () => responder(),
+    },
+  });
+  messengerRef.value = messenger;
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {
-        "host.getRateLimitUsage": () => responder(),
-      },
-    }),
+    messenger,
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    findHostById: (requestedHostId) =>
+      directoryRef.entries.find((entry) => entry.hostId === requestedHostId) ??
+      (requestedHostId === entry.hostId ? entry : null),
   });
-  client.bind({ ...mockLocalHostEntry, hostId, websocketUrl });
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return client;
+  return spine.createRequester(entry);
 }
 
 function wrapperFor(queryClient: QueryClient) {
@@ -81,6 +105,7 @@ describe("useRunTargetHost", () => {
     cleanup();
     globalClientRef.value = null;
     directoryRef.entries = [];
+    messengerRef.value = null;
   });
 
   it("resolves the app-wide default host's client when runTargetHostId is null", () => {
@@ -128,16 +153,6 @@ describe("useRunTargetHost", () => {
       TAB_HOST.websocketUrl,
     );
 
-    // The queue scope's request function must route through the tab host's
-    // OWN client instance, not silently execute against the default host.
-    const client = result.current.client;
-    if (client === null) throw new Error("Expected a resolved tab-host client");
-    const tabHostRequest = vi.spyOn(client, "request").mockResolvedValue({
-      totalTokens: 0,
-      remainingTokens: 0,
-      providerRateLimits: null,
-    });
-
     await result.current.queueScope?.request(
       "tab-host",
       "host.getRateLimitUsage",
@@ -146,9 +161,13 @@ describe("useRunTargetHost", () => {
         providerId: "codex",
         profileId: null,
       },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     );
-    expect(tabHostRequest).toHaveBeenCalledTimes(1);
-    expect(defaultRequest).not.toHaveBeenCalled();
+    expect(messengerRef.value?.calls).toHaveLength(1);
+    expect(messengerRef.value?.calls[0]?.authority.endpoint).toEqual({
+      hostId: TAB_HOST.hostId,
+      websocketUrl: TAB_HOST.websocketUrl,
+    });
   });
 
   it("never falls back to the default host when the tab host cannot be resolved (not yet in the directory)", () => {

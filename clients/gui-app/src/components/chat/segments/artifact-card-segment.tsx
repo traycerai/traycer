@@ -5,8 +5,8 @@ import { v4 as uuidv4 } from "uuid";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
 import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import {
@@ -19,9 +19,11 @@ import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
 import { useArtifactDragSource } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ArtifactCardSegmentProps {
   readonly operation: ArtifactOperationAction;
   readonly artifactKind: EpicArtifactKind;
@@ -45,25 +47,31 @@ function ArtifactDiffToggle(props: {
 }) {
   const label = props.open ? "Hide diff" : "View diff";
   return (
-    <button
-      type="button"
-      aria-label={label}
-      aria-expanded={props.open}
-      title={label}
-      onClick={(event) => {
-        event.stopPropagation();
-        props.onToggle();
-      }}
-      className={cn(
-        "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md border transition-colors",
-        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-        props.open
-          ? "border-border bg-muted/60 text-foreground"
-          : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-      )}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <FileDiff aria-hidden className="size-3.5" />
-    </button>
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={props.open}
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onToggle();
+        }}
+        className={cn(
+          "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md border transition-colors",
+          "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+          props.open
+            ? "border-border bg-muted/60 text-foreground"
+            : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+        )}
+      >
+        <FileDiff aria-hidden className="size-3.5" />
+      </button>
+    </TooltipWrapper>
   );
 }
 
@@ -212,46 +220,64 @@ function ArtifactOperationBadge(props: {
   const label = artifactOperationVerb(props.operation);
   if (props.operation === "create") {
     return (
-      <span
-        className={cn(
-          base,
-          "border-emerald-500 bg-emerald-50 text-emerald-600 dark:border-emerald-400 dark:bg-emerald-950/60 dark:text-emerald-300",
-        )}
-        title={label}
+      <TooltipWrapper
+        label={label}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <span className="sr-only">{label}</span>
-        <span aria-hidden>+</span>
-      </span>
+        <span
+          className={cn(
+            base,
+            "border-emerald-500 bg-emerald-50 text-emerald-600 dark:border-emerald-400 dark:bg-emerald-950/60 dark:text-emerald-300",
+          )}
+        >
+          <span className="sr-only">{label}</span>
+          <span aria-hidden>+</span>
+        </span>
+      </TooltipWrapper>
     );
   }
   if (props.operation === "update") {
     return (
-      <span
-        className={cn(
-          base,
-          "border-amber-500 bg-amber-50 shadow-amber-950/5 dark:border-amber-400 dark:bg-amber-950/60",
-        )}
-        title={label}
+      <TooltipWrapper
+        label={label}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <span className="sr-only">{label}</span>
         <span
-          className="size-1.5 rounded-sm bg-amber-500 dark:bg-amber-300"
-          aria-hidden
-        />
-      </span>
+          className={cn(
+            base,
+            "border-amber-500 bg-amber-50 shadow-amber-950/5 dark:border-amber-400 dark:bg-amber-950/60",
+          )}
+        >
+          <span className="sr-only">{label}</span>
+          <span
+            className="size-1.5 rounded-sm bg-amber-500 dark:bg-amber-300"
+            aria-hidden
+          />
+        </span>
+      </TooltipWrapper>
     );
   }
   return (
-    <span
-      className={cn(
-        base,
-        "border-red-500 bg-red-50 text-red-600 dark:border-red-500 dark:bg-red-950/60 dark:text-red-300",
-      )}
-      title={label}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <span className="sr-only">{label}</span>
-      <span aria-hidden>−</span>
-    </span>
+      <span
+        className={cn(
+          base,
+          "border-red-500 bg-red-50 text-red-600 dark:border-red-500 dark:bg-red-950/60 dark:text-red-300",
+        )}
+      >
+        <span className="sr-only">{label}</span>
+        <span aria-hidden>−</span>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -390,15 +416,21 @@ function ArtifactTitle(props: {
     );
   }
   return (
-    <span
-      className={cn(
-        "min-w-0 flex-1 truncate text-ui-base font-semibold text-foreground/95",
-        props.isDeleted && "text-muted-foreground line-through",
-      )}
-      title={props.isDeleted ? "This artifact was deleted." : undefined}
+    <TooltipWrapper
+      label={props.isDeleted ? "This artifact was deleted." : undefined}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.title}
-    </span>
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-ui-base font-semibold text-foreground/95",
+          props.isDeleted && "text-muted-foreground line-through",
+        )}
+      >
+        {props.title}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -468,7 +500,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   const live = useArtifactById(artifactId);
   const tombstone = useEpicDeletedArtifact(artifactId);
   const epicId = useOpenEpicId();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useTabHostId();
   const tileNavigation = useEpicTileNavigation();
   const [diffOpen, setDiffOpen] = useState(false);
 
@@ -497,20 +529,21 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   });
   const status = isDeleted ? null : (resolved?.status ?? null);
   const openTitle = title ?? EPIC_NODE_LABELS[displayKind];
+  const viewTabId = useEpicViewTabId();
 
   // Only a live artifact can open in the canvas; a tombstone has no body, and a
   // not-yet-resolved id has no host binding target.
   const canOpen = canOpenArtifactCard({
     isDeleted,
     hasLiveArtifact,
-    hasHost: activeHostId !== null,
+    hasHost: true,
   });
 
   // Drag source (mirrors the sidebar): the card opens its artifact in the
   // canvas. Identity is present only when a host is bound (`activeHostId`);
   // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
-  // The shared hook owns the pure `viewTabId` resolution (C1), the
-  // occurrence-unique drag id (C3), and the identity-only payload (C2). The card
+  // The surrounding Epic surface supplies the exact owning view tab (C1); the
+  // shared hook owns the occurrence-unique drag id (C3) and identity payload (C2). The card
   // attaches `setNodeRef` + `listeners` to the whole header row (no
   // `attributes`).
   const {
@@ -520,22 +553,19 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     isDragging,
   } = useArtifactDragSource({
     epicId,
-    viewTabId: undefined,
-    identity:
-      activeHostId === null
-        ? null
-        : {
-            id: artifactId,
-            type: displayKind,
-            name: openTitle,
-            hostId: activeHostId,
-          },
+    viewTabId,
+    identity: {
+      id: artifactId,
+      type: displayKind,
+      name: openTitle,
+      hostId: activeHostId,
+    },
     enabled: canOpen,
   });
 
   const openArtifact = (): void => {
     // Re-check the raw conditions so the host id narrows to a non-null string.
-    if (isDeleted || live === null || activeHostId === null) return;
+    if (isDeleted || live === null) return;
     tileNavigation.openTileInEpic(epicId, {
       id: artifactId,
       instanceId: uuidv4(),

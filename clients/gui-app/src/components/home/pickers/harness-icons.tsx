@@ -1,4 +1,8 @@
 import type { ReactElement, SVGProps } from "react";
+import {
+  TRAYCER_MARK_PATH_D,
+  TRAYCER_MARK_VIEWBOX,
+} from "@/lib/brand/traycer-mark";
 import CodexMono from "@lobehub/icons/es/Codex/components/Mono";
 import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
 import OpenCodeMono from "@lobehub/icons/es/OpenCode/components/Mono";
@@ -11,6 +15,8 @@ import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
 import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
+import HermesAgentMono from "@lobehub/icons/es/HermesAgent/components/Mono";
+import HuggingFaceColor from "@lobehub/icons/es/HuggingFace/components/Color";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -40,6 +46,11 @@ export const DroidIcon: HarnessIcon = (props) => (
 export const OpenRouterIcon: HarnessIcon = (props) => (
   <OpenRouterMono {...props} />
 );
+// Hugging Face uses the colored smiley (the official brand mark) so it keeps
+// its brand yellow in both themes, like the Claude sunburst.
+export const HuggingFaceIcon: HarnessIcon = (props) => (
+  <HuggingFaceColor {...props} />
+);
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 
 // Amp (Ampcode / Sourcegraph) has no lobehub entry — the official brand mark
@@ -66,6 +77,12 @@ export const AmpIcon: HarnessIcon = (props) => (
 // Devin (Cognition) — lobehub monochrome brand mark (`currentColor` theming).
 export const DevinIcon: HarnessIcon = (props) => <DevinMono {...props} />;
 
+// Hermes Agent (Nous Research) — lobehub monochrome brand mark (`currentColor`
+// theming), same pattern as Devin.
+export const HermesIcon: HarnessIcon = (props) => (
+  <HermesAgentMono {...props} />
+);
+
 // Pi (pi.dev) has no lobehub entry — official badge mark from pi.dev/favicon.svg
 // (press kit). Brand dark plate + white glyph so it keeps identity in both themes
 // (same idea as Amp brand red / Claude colored sunburst).
@@ -81,13 +98,51 @@ export const PiIcon: HarnessIcon = (props) => (
   </svg>
 );
 
+// omp (Oh My Pi, can1357/oh-my-pi) has no lobehub entry, so this is upstream's
+// own mark from `assets/icon.svg`: a Greek π whose short right leg ends in a
+// plug connector. Geometry and the brand orange are verbatim; the viewBox is
+// upstream's too, so the mark keeps its intended framing and renders wider than
+// tall next to the square sibling icons.
+//
+// One deliberate deviation: upstream fills the π strokes `#fafafa`, which is
+// near-white because its icon sits on a dark plate. Ours has no plate, so the
+// strokes use `currentColor` and follow the theme — `#fafafa` would be
+// invisible in light mode. The `#f97316` connector and dots stay literal: they
+// are the brand accent and read on both themes, and they are also what keeps
+// this distinguishable from `PiIcon` in the adjacent "Pi" / "Oh My Pi" provider
+// rows (the two products are unrelated despite the shared lineage).
+export const OmpIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 120 90" fill="currentColor">
+    {/* π: horizontal bar, long left leg, short right leg */}
+    <rect x="10" y="8" width="100" height="12" rx="2" />
+    <rect x="25" y="20" width="12" height="62" rx="2" />
+    <rect x="75" y="20" width="12" height="45" rx="2" />
+    {/* Plug connector terminating the right leg */}
+    <rect x="71" y="55" width="20" height="16" rx="3" fill="#f97316" />
+    <rect x="76" y="59" width="3" height="8" rx="1" fill="#0d0d0d" />
+    <rect x="82" y="59" width="3" height="8" rx="1" fill="#0d0d0d" />
+    <circle cx="18" cy="14" r="2" fill="#f97316" opacity="0.8" />
+    <circle cx="102" cy="14" r="2" fill="#f97316" opacity="0.8" />
+  </svg>
+);
+
+// Reasonix's official app badge, from the upstream website favicon. Keep the
+// literal brand blue and white glyph: unlike the monochrome harness marks, the
+// blue rounded square is part of Reasonix's identity and remains legible in
+// both themes.
+export const ReasonixIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 64 64" fill="none">
+    <rect width="64" height="64" rx="20.22" fill="#0153e5" />
+    <path
+      fill="#fff"
+      d="M40.53 37.67c2.26-.67 4.24-1.86 5.83-3.59 1.73-1.94 2.82-4.29 3.2-6.87.86-5.64-1.94-10.79-7.21-12.97-1.85-.74-3.76-1.06-5.78-1.04h-19.6v37.56h9.64V38.08c1.05.34 2.16.52 3.29.52l3.15 4.35 5.73 7.83 11.44-.02-9.7-13.1Zm-.39-1.73c-1.31.43-2.72.37-4.06-.02-2.3-1.74-3.55-3.6-5.52-5.37-2.52-2.27-5.84-3.84-9.25-3.69.27-.74.66-1.45 1.17-2.11 1.76-2.2 4.16-2.9 6.92-2.51 1.02.14 2.11-1.05 4.18-.82.14.02.28.12.29.2.05.28-.75.44-.75 1.21 0 .32.15.7.45.92 1.06.74 1.97 1.57 2.93 2.43.47.42 2.04 1.59 2.44.64.24-.56.39-1.14.54-1.74.08-.29-.09-.47-.32-.61-1.63-.96-2.24-2.97-1.6-4.75.06-.17.22-.25.36-.26.55-.02.25.99 1.61 1.4 1.28.4 1.32 1.46 1.94 1.04 1.45-.99 1.97-.18 3.32-1.45.14-.13.38-.14.52-.04.09.06.17.22.16.41-.04 1.07-.46 2.1-1.19 2.88-1.39 1.49-2.55.77-2.62 1.82-.22 3.06-1.22 6.11-3.39 8.33-.07.07-.11.17-.1.24.01.07.1.14.19.17l1.83.62c.26.09.45.32.41.57-.03.22-.2.41-.45.49Z"
+    />
+  </svg>
+);
+
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
-  <svg {...props} viewBox="0 0 211 218" fill="currentColor">
-    <path
-      fillRule="evenodd"
-      clipRule="evenodd"
-      d="m42.181 178.442 2.409 2.427.233.24c7.46 7.952 7.39 20.732-.233 28.564-7.623 7.832-20.062 7.904-27.802.24l-.233-.24-2.409-2.45-6.523-6.727c-7.693-7.904-7.693-20.853 0-28.804 7.692-7.904 20.342-7.904 28.035 0l6.523 6.75ZM174.384 67.021l2.338-2.379 27.1-27.843c7.693-7.928 7.693-20.877 0-28.804-7.74-7.928-20.343-7.928-28.035 0l-29.415 30.221-14.029 14.39c-7.693 7.928-7.693 20.877 0 28.805l14.029 14.39 2.502 2.546 27.1 27.844c7.692 7.928 20.295 7.928 28.035 0 7.693-7.904 7.693-20.877 0-28.78l-27.1-27.844-2.525-2.546ZM8.744 8.187v-.024c7.694-7.928 20.32-7.928 28.036 0l166.855 171.456c7.716 7.904 7.716 20.877 0 28.781a19.496 19.496 0 0 1-28.035 0L8.745 36.943c-7.693-7.904-7.693-20.852 0-28.756Zm-.233 82.065c7.693-7.904 20.296-7.904 28.035 0l18.986 19.531 68.206 70.077c7.716 7.903 7.716 20.876 0 28.804a19.537 19.537 0 0 1-28.035 0l-27.077-27.843-60.115-61.765c-7.716-7.904-7.716-20.9 0-28.804Z"
-    />
+  <svg {...props} viewBox={TRAYCER_MARK_VIEWBOX} fill="currentColor">
+    <path fillRule="evenodd" clipRule="evenodd" d={TRAYCER_MARK_PATH_D} />
   </svg>
 );

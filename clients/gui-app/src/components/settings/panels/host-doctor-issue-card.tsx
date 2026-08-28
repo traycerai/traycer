@@ -7,8 +7,16 @@ import {
   severityBorderClass,
 } from "@/components/settings/panels/host-doctor-actions";
 import { modLabel } from "@/lib/keybindings/platform";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { cn } from "@/lib/utils";
 import type { HostDoctorIssue } from "@traycer-clients/shared/platform/runner-host";
+
+// The modifier glyph rides in the label rather than a separate chip, so it is
+// dropped from the string where shortcut hints are suppressed.
+function openInTerminalLabel(): string {
+  if (!shortcutHintsVisible()) return "Open in Terminal";
+  return `${modLabel()} Open in Terminal`;
+}
 
 interface HostDoctorIssueCardProps {
   readonly issue: HostDoctorIssue;
@@ -68,7 +76,7 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
                 size="sm"
                 onClick={() => copyTerminalCommand(issue.terminalCommand ?? "")}
               >
-                {modLabel()} Open in Terminal
+                {openInTerminalLabel()}
               </Button>
             ) : null}
             <Button
@@ -82,13 +90,13 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
           {expanded && issue.terminalCommand !== null ? (
             <pre
               data-testid="host-doctor-issue-terminal-command"
-              className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground"
+              className="mt-2 max-h-40 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground"
             >
               {issue.terminalCommand}
             </pre>
           ) : null}
           {expanded && issue.details !== null ? (
-            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground">
+            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground">
               {JSON.stringify(issue.details, null, 2)}
             </pre>
           ) : null}

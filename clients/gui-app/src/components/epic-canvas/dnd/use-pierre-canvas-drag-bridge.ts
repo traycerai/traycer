@@ -37,6 +37,7 @@ import {
   unregisterPierreDragHost,
   type PierreDragHost,
 } from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import type { EpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 
 export interface PierreCanvasDragBridgeInput {
@@ -44,8 +45,8 @@ export interface PierreCanvasDragBridgeInput {
   /**
    * Resolves the dnd-kit source payload for the Pierre row under the
    * activating pointer event, or `null` when the press is not on a draggable
-   * file row (directory rows, empty space, panel chrome). Returning `null`
-   * vetoes the canvas drag and leaves the gesture to Pierre.
+   * file or directory row (empty space and panel chrome stay non-draggable).
+   * Returning `null` vetoes the canvas drag and leaves the gesture to Pierre.
    */
   readonly resolveSourceData: (
     event: PointerEvent,
@@ -61,9 +62,13 @@ export function usePierreCanvasDragBridge(
   input: PierreCanvasDragBridgeInput,
 ): PierreCanvasDragBridge {
   const { id } = input;
+  // The wrapper carries the sensor's listeners for EVERY row of the tree, so
+  // a coarse pointer would hand the whole tree's scroll gesture to the drag.
+  const dragDisabled = useDragSourceDisabled();
   const { listeners, setNodeRef } = useDraggable({
     id,
     data: PIERRE_HOST_DATA,
+    disabled: dragDisabled,
   });
 
   const resolveSourceData = input.resolveSourceData;

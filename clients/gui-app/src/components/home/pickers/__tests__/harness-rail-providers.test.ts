@@ -3,12 +3,16 @@ import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
+  railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
+  visibleRailHarnesses,
 } from "@/components/home/pickers/harness-rail-providers";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
+import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 
 const NO_ACTIVE_PROFILE_OVERRIDES = new Map<GuiHarnessId, string | null>();
+const NO_PREPARING = new Map<GuiHarnessId, ProviderPackPreparing>();
 
 function harness(id: "claude" | "codex"): HarnessOption {
   return {
@@ -31,6 +35,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -43,6 +48,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -55,6 +61,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("claude")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         [
           "claude",
@@ -78,6 +85,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("codex")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         ["codex", [profile("ambient", "ambient", "Codex Terminal account")]],
       ]),
@@ -89,6 +97,7 @@ describe("visibleRailEntries", () => {
         harness: harness("codex"),
         degraded: false,
         accentDot: null,
+        preparing: null,
       },
     ]);
   });
@@ -98,6 +107,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("claude")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         [
           "claude",
@@ -124,6 +134,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("claude")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         [
           "claude",
@@ -141,6 +152,356 @@ describe("visibleRailEntries", () => {
       accentColor: null,
       label: "Claude Terminal account",
     });
+  });
+});
+
+describe("visibleRailEntries: managed-pack readiness", () => {
+  function unavailable(id: "claude" | "codex"): HarnessOption {
+    return { ...harness(id), available: false };
+  }
+  // `fallbackRunnable: false` on purpose: this block is about the provider
+  // that has NO binary yet (see the comment below), which is exactly the case
+  // that still gates.
+  const downloading: ProviderPackPreparing = {
+    kind: "downloading",
+    percent: 42,
+    retryAtMs: null,
+    reason: null,
+    fallbackRunnable: false,
+  };
+
+  // The load-bearing one. On a first boot the host converges EVERY enabled
+  // provider (~1.6 GB), so a provider that is downloading is also
+  // `available: false` - it has no binary yet. Under the pre-R11 visibility
+  // rule that combination is invisible, which would empty the picker on first
+  // run and then silently repopulate it. The user must see the row and be told
+  // why it is not pickable.
+  it("keeps a downloading provider VISIBLE even though it has no binary yet", () => {
+    const entries = visibleRailEntries({
+      harnesses: [unavailable("claude")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([["claude", downloading]]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].harness.id).toBe("claude");
+    expect(entries[0].preparing).toEqual(downloading);
+  });
+
+  it("carries a null percent through untouched - the live-sibling observer state", () => {
+    const entries = visibleRailEntries({
+      harnesses: [unavailable("claude")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([
+        [
+          "claude",
+          {
+            kind: "downloading",
+            percent: null,
+            retryAtMs: null,
+            reason: null,
+            fallbackRunnable: false,
+          },
+        ],
+      ]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    // Must stay null, never coerced to 0 - a 0% bar and an unknown-progress
+    // spinner say different things, and only one of them is true.
+    expect(entries[0].preparing?.percent).toBeNull();
+  });
+
+  it("sorts a preparing provider below the ready ones", () => {
+    // Preparing `codex`, which sorts FIRST canonically. Preparing `claude`
+    // here - as this test used to - asserted the order the canonical sort
+    // already produces, so it passed with the deprioritization removed
+    // entirely.
+    const entries = visibleRailEntries({
+      harnesses: [harness("claude"), unavailable("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([["codex", downloading]]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries.map((entry) => entry.harness.id)).toEqual([
+      "claude",
+      "codex",
+    ]);
+  });
+
+  // P5. The rail deprioritized on "has a pack state at all", which was
+  // coherent while a preparing tab was unselectable. Once a download behind a
+  // runnable binary stopped taking the provider away, that rule made the rail
+  // reorder itself throughout a first-boot convergence - every provider sinks,
+  // then pops back up as its own install finishes - and `PickerLeaderBadge`
+  // reads the rail index, so every Cmd-digit reassigns each time.
+  //
+  // The control below is the whole point: the SAME downloading state, differing
+  // only in whether a runnable binary exists, must sort differently.
+  const downloadingBehindRunnableBinary: ProviderPackPreparing = {
+    kind: "downloading",
+    percent: 30,
+    retryAtMs: null,
+    reason: null,
+    fallbackRunnable: true,
+  };
+
+  it("does not move a provider that is downloading behind a runnable binary", () => {
+    // Preparing the provider that sorts FIRST canonically. Doing it to the one
+    // that already sorts last proves nothing - the expected order would hold
+    // whether or not anything was deprioritized.
+    const order = (preparing: ProviderPackPreparing): readonly string[] =>
+      visibleRailEntries({
+        harnesses: [harness("claude"), harness("codex")],
+        fallbackHarnesses: [],
+        degradedHarnessIds: new Set(),
+        preparingByHarnessId: new Map([["codex", preparing]]),
+        profilesByHarnessId: new Map(),
+        activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      }).map((entry) => entry.harness.id);
+
+    expect(order(downloadingBehindRunnableBinary)).toEqual(["codex", "claude"]);
+    // ...and a pack that genuinely blocks still sinks, so this is a narrowing
+    // rather than a removal.
+    expect(order(downloading)).toEqual(["claude", "codex"]);
+  });
+
+  it("leaves a ready provider's entry with preparing: null", () => {
+    const entries = visibleRailEntries({
+      harnesses: [harness("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([["claude", downloading]]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries[0].preparing).toBeNull();
+  });
+});
+
+describe("railHarnessDegraded", () => {
+  it("degrades a signed-out provider even while its harness reports available", () => {
+    // Availability probes binary presence, never auth - an installed but
+    // signed-out provider (Copilot after a real logout) keeps reporting
+    // `available: true`. The signed-out set must degrade WITHOUT the
+    // availability gate, or the rail offers a fully-lit, selectable tab for a
+    // provider the send gate then refuses to run.
+    expect(
+      railHarnessDegraded(harness("claude"), new Set<GuiHarnessId>(["claude"])),
+    ).toBe(true);
+  });
+
+  it("keeps a healthy available provider non-degraded", () => {
+    expect(railHarnessDegraded(harness("claude"), new Set())).toBe(false);
+  });
+
+  it("keeps the API-key arm availability-gated", () => {
+    const apiKeyHarness: HarnessOption = {
+      ...harness("codex"),
+      requiresApiKey: true,
+    };
+    // An available API-key provider is running on SOME key - not degraded.
+    expect(railHarnessDegraded(apiKeyHarness, new Set())).toBe(false);
+    // Unavailable, it stays visible-but-degraded for the add-key CTA.
+    expect(
+      railHarnessDegraded({ ...apiKeyHarness, available: false }, new Set()),
+    ).toBe(true);
+  });
+
+  it("leaves an unavailable keyless provider non-degraded - the hidden path", () => {
+    expect(
+      railHarnessDegraded({ ...harness("codex"), available: false }, new Set()),
+    ).toBe(false);
+  });
+});
+
+describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7.1)", () => {
+  it("degrades on a definitive unauthenticated row even when the providers.list-derived set is empty - the staleness-window fix", () => {
+    const signedOut: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unauthenticated",
+    };
+    // Empty set: no other source flags this provider, which is exactly the
+    // window a separately-timed `providers.list` query can lag through.
+    expect(railHarnessDegraded(signedOut, new Set())).toBe(true);
+  });
+
+  it("still degrades when providers.list-derived membership flags it and the row's own authStatus is absent (old host)", () => {
+    const noRowVerdict: HarnessOption = { ...harness("claude") };
+    expect(noRowVerdict.authStatus).toBeUndefined();
+    expect(
+      railHarnessDegraded(noRowVerdict, new Set<GuiHarnessId>(["claude"])),
+    ).toBe(true);
+  });
+
+  it("still degrades when providers.list-derived membership flags it even though the row's own authStatus reads authenticated - the two sources are OR'd, not one replacing the other", () => {
+    const rowSaysAuthenticated: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "authenticated",
+    };
+    expect(
+      railHarnessDegraded(
+        rowSaysAuthenticated,
+        new Set<GuiHarnessId>(["claude"]),
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT degrade on a row's unknown authStatus - fail-open, non-definitive", () => {
+    const unknownRow: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unknown",
+    };
+    expect(railHarnessDegraded(unknownRow, new Set())).toBe(false);
+  });
+
+  it("does NOT degrade on a row's unavailable authStatus - fail-open, non-definitive", () => {
+    const unavailableRow: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unavailable",
+    };
+    expect(railHarnessDegraded(unavailableRow, new Set())).toBe(false);
+  });
+
+  it("widening authStatus to unknown/unavailable would also widen visibility - asserted through visibleRailHarnesses, not just degradation", () => {
+    // A sticky-enabled provider reporting `available: false` (no CLI
+    // installed) with a non-definitive row verdict must stay HIDDEN, not
+    // merely non-degraded - `railHarnessVisible` ORs degraded into
+    // visibility, so widening the predicate to `unknown`/`unavailable` would
+    // give this provider a permanent, un-runnable tab.
+    const unreachable: HarnessOption = {
+      ...harness("claude"),
+      available: false,
+      authStatus: "unknown",
+    };
+    const visible = visibleRailHarnesses(
+      [unreachable],
+      [],
+      new Set(),
+      new Map(),
+    );
+    expect(visible).toEqual([]);
+
+    // Contrast: a DEFINITIVE unauthenticated row on the same unreachable
+    // provider keeps it visible - that is the "recoverable, needs
+    // attention" case the degraded set exists to surface.
+    const signedOutUnreachable: HarnessOption = {
+      ...harness("claude"),
+      available: false,
+      authStatus: "unauthenticated",
+    };
+    const visibleSignedOut = visibleRailHarnesses(
+      [signedOutUnreachable],
+      [],
+      new Set(),
+      new Map(),
+    );
+    expect(visibleSignedOut.map((h) => h.id)).toEqual(["claude"]);
+  });
+});
+
+describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) gate", () => {
+  it("does not degrade or show an explicitly-off, signed-out, unavailable provider", () => {
+    const explicitlyOff: HarnessOption = {
+      ...harness("claude"),
+      enabled: false,
+      available: false,
+      authStatus: "unauthenticated",
+    };
+    expect(railHarnessDegraded(explicitlyOff, new Set())).toBe(false);
+    expect(
+      visibleRailHarnesses([explicitlyOff], [], new Set(), new Map()),
+    ).toEqual([]);
+  });
+
+  // Enablement is no longer tri-state: there is no "auto, undetected" middle
+  // ground distinct from an explicit off, so a disabled provider can no
+  // longer stay visible as a "sign in to enable" offer - it is gone from the
+  // picker like any other disabled provider, same as the case above.
+  // Removed: "still degrades and shows an auto-mode, signed-out provider even
+  // though enabled is false", which asserted exactly that now-nonexistent
+  // distinction.
+
+  it("still degrades and shows a sticky-on, signed-out provider", () => {
+    const stickyOn: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unauthenticated",
+    };
+    expect(railHarnessDegraded(stickyOn, new Set())).toBe(true);
+    expect(
+      visibleRailHarnesses([stickyOn], [], new Set(), new Map()).map(
+        (h) => h.id,
+      ),
+    ).toEqual(["claude"]);
+  });
+
+  // Was "keeps the other two degradation arms unaffected by an explicit off -
+  // the gate is narrow": under the retired tri-state model the disabled early
+  // return only covered the signed-out arm, so `degradedHarnessIds`
+  // membership and the API-key arm still fired underneath it. The current
+  // gate is one unconditional `if (!harness.enabled) return false` ahead of
+  // all three arms (see the doc comment on `railHarnessDegraded`), so it is
+  // no longer narrow - disabled now blocks every arm, which is what this case
+  // asserts instead.
+  it("an explicit off blocks every degradation arm, not just the signed-out one", () => {
+    const offButFlagged: HarnessOption = {
+      ...harness("claude"),
+      enabled: false,
+    };
+    expect(
+      railHarnessDegraded(offButFlagged, new Set<GuiHarnessId>(["claude"])),
+    ).toBe(false);
+
+    const offApiKeyUnavailable: HarnessOption = {
+      ...harness("codex"),
+      enabled: false,
+      available: false,
+      requiresApiKey: true,
+    };
+    expect(railHarnessDegraded(offApiKeyUnavailable, new Set())).toBe(false);
+  });
+
+  it("behaves exactly as before on an old host with no authStatus", () => {
+    const oldHost: HarnessOption = { ...harness("claude") };
+    expect(oldHost.authStatus).toBeUndefined();
+    expect(railHarnessDegraded(oldHost, new Set())).toBe(false);
+    expect(
+      railHarnessDegraded(oldHost, new Set<GuiHarnessId>(["claude"])),
+    ).toBe(true);
+  });
+});
+
+describe("visibleRailEntries: signed-out while available", () => {
+  it("keeps a signed-out-but-available provider IN PLACE, carrying only the degraded flag", () => {
+    // Degrading codex, which sorts FIRST canonically (see the pack-readiness
+    // block above). The old rail sank degraded rows below the ready ones;
+    // that re-sort is deliberately gone - a late auth verdict may change a
+    // row's appearance (the dim), never its position, so rows stop moving
+    // under the pointer seconds after the rail rendered.
+    const entries = visibleRailEntries({
+      harnesses: [harness("claude"), harness("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set<GuiHarnessId>(["codex"]),
+      preparingByHarnessId: NO_PREPARING,
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+      "claude",
+    ]);
+    expect(entries[0].degraded).toBe(true);
+    expect(entries[1].degraded).toBe(false);
   });
 });
 

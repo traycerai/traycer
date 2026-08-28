@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { GitStatusBadge } from "./git-status-badge";
 import { HighlightedText } from "./highlighted-text";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export type GitChangedFileRowDensity = "panel" | "tile";
 
 export interface GitChangedFileRowProps {
@@ -23,6 +24,7 @@ export interface GitChangedFileRowProps {
   readonly active: boolean;
   readonly leading: ReactNode | null;
   readonly trailing: ReactNode | null;
+  readonly showStats: boolean;
   /** Filter match ranges into `file.path`; empty when no filter is active. */
   readonly pathRanges: HighlightRanges;
   readonly onClick: (() => void) | null;
@@ -37,9 +39,12 @@ interface RowStatsProps {
   readonly className: string | undefined;
 }
 
-function RowStats(props: RowStatsProps): ReactNode {
+export function GitChangedFileStats(props: RowStatsProps): ReactNode {
   return (
-    <span className={cn("shrink-0 items-center gap-1", props.className)}>
+    <span
+      className={cn("shrink-0 items-center gap-1", props.className)}
+      data-testid="git-changed-file-stats"
+    >
       <span className="shrink-0 text-ui-xs font-medium tabular-nums text-success">
         +{props.file.insertions}
       </span>
@@ -127,6 +132,7 @@ function PanelRowContent(props: {
   readonly metadata: GitFileRowMetadata;
   readonly pathRanges: HighlightRanges;
   readonly trailing: ReactNode | null;
+  readonly showStats: boolean;
 }): ReactNode {
   const { metadata } = props;
   const hasDirectory = metadata.directoryName.length > 0;
@@ -142,7 +148,7 @@ function PanelRowContent(props: {
         letter={metadata.statusLetter}
         tone={metadata.statusTone}
         label={metadata.statusLabel}
-        withNativeTitle={false}
+        withTooltip={false}
       />
       <WorkspaceFileIcon fileName={metadata.fileName} className="size-3.5" />
       <MiddleTruncatedFileName
@@ -159,10 +165,19 @@ function PanelRowContent(props: {
         </span>
       ) : null}
       {props.trailing}
-      <RowStats
-        file={props.file}
-        className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
-      />
+      {props.showStats ? (
+        <GitChangedFileStats
+          file={props.file}
+          className={cn(
+            "pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex",
+            // A coarse pointer never hovers, so the overlay above would never
+            // appear and the row's +/- counts would be mobile-only invisible.
+            // Render them in flow at the end of the row instead: nothing is
+            // covered, and the directory name simply truncates sooner.
+            "pointer-coarse:static pointer-coarse:flex pointer-coarse:translate-y-0 pointer-coarse:bg-transparent pointer-coarse:px-0 pointer-coarse:shadow-none",
+          )}
+        />
+      ) : null}
     </>
   );
 }
@@ -176,6 +191,10 @@ function gitChangedFileRowClassName(args: {
 }): string {
   return cn(
     "group relative flex w-full items-center text-left text-ui-sm",
+    // The 24/28px densities below are mouse densities. On touch the row is the
+    // tap target that opens the diff (or collapses the bundle section), so it
+    // takes the 44px guideline height; the fine-pointer list is untouched.
+    "pointer-coarse:min-h-11",
     args.isPanel && args.nested && "min-h-6 gap-1.5 py-0.5 pl-10 pr-3",
     args.isPanel && !args.nested && "min-h-6 gap-1.5 px-3 py-0.5",
     !args.isPanel && "min-h-7 gap-2 px-2 py-1",
@@ -193,6 +212,7 @@ function TileRowContent(props: {
   readonly metadata: GitFileRowMetadata;
   readonly leading: ReactNode | null;
   readonly trailing: ReactNode | null;
+  readonly showStats: boolean;
 }): ReactNode {
   const { metadata } = props;
   return (
@@ -202,12 +222,22 @@ function TileRowContent(props: {
         letter={metadata.statusLetter}
         tone={metadata.statusTone}
         label={metadata.statusLabel}
-        withNativeTitle
+        withTooltip
       />
       <WorkspaceFileIcon fileName={metadata.fileName} className="size-3.5" />
-      <span className="min-w-0 truncate font-mono text-ui-sm">
-        {metadata.fileName}
-      </span>
+      {/* Scoped to the filename rather than the whole row: the row also holds
+          the status badge, which owns a tooltip of its own at this density. A
+          row-wide trigger opened both at once. */}
+      <TooltipWrapper
+        label={props.file.path}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span className="min-w-0 truncate font-mono text-ui-sm">
+          {metadata.fileName}
+        </span>
+      </TooltipWrapper>
       {metadata.previousFileName ? (
         <span className="truncate text-ui-xs text-muted-foreground">
           from {metadata.previousFileName}
@@ -219,7 +249,9 @@ function TileRowContent(props: {
         </span>
       ) : null}
       <span aria-hidden className="ml-auto" />
-      <RowStats file={props.file} className="flex" />
+      {props.showStats ? (
+        <GitChangedFileStats file={props.file} className="flex" />
+      ) : null}
       {props.trailing}
     </>
   );
@@ -235,6 +267,7 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
       metadata={metadata}
       pathRanges={props.pathRanges}
       trailing={props.trailing}
+      showStats={props.showStats}
     />
   ) : (
     <TileRowContent
@@ -242,6 +275,7 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
       metadata={metadata}
       leading={props.leading}
       trailing={props.trailing}
+      showStats={props.showStats}
     />
   );
 
@@ -276,7 +310,6 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
         props.active ? "hover:bg-accent" : "hover:bg-accent/50",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
       )}
-      title={isPanel ? undefined : props.file.path}
       aria-label={ariaLabel}
       aria-expanded={props.ariaExpanded}
       aria-current={props.active ? true : undefined}

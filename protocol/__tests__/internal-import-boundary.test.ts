@@ -132,7 +132,7 @@ describe("@traycer/protocol _internal/ privacy boundary", () => {
           "Files are importing from `@traycer/protocol/.../_internal/...`",
           "outside the registry / _internal/ allow-list.",
           "",
-          "Use `getRecordSchema(<registry>, \"<record-name>\")` instead.",
+          'Use `getRecordSchema(<registry>, "<record-name>")` instead.',
           "",
           ...violations,
         ].join("\n"),

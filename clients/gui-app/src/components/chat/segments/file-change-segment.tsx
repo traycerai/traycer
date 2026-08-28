@@ -7,6 +7,15 @@ import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { cn } from "@/lib/utils";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import {
+  payloadTruncationNotice,
+  usePublishedChatSource,
+  usePublishedSnapshotDiff,
+  type PayloadExtent,
+  type PayloadReadFailure,
+  type PublishedChatSource,
+} from "@/lib/chats/published-chat-source";
 import {
   DiffContentFrame,
   DiffContentPrimitive,
@@ -29,12 +38,17 @@ interface FileChangeSegmentProps {
   segment: FileChangeSegmentModel;
   variant: "card" | "row";
   headerFindUnitId: string | null;
+  // Seeds the disclosure at mount, once. Open state is local here, so the copy
+  // of this row inside the bounded live activity window cannot hand its own
+  // over: a click there promotes, and this is how the copy that replaces it
+  // knows it was the row asked for.
+  initiallyOpen: boolean;
 }
 
 export function FileChangeSegment(props: FileChangeSegmentProps) {
   const { segment, variant } = props;
   const { filePath, operation, reason, isStreaming, endState } = segment;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(props.initiallyOpen);
   // Counts come precomputed on the segment (computed at capture time); no
   // content fetch is needed to render the collapsed header.
   const hasDiff = segment.additions > 0 || segment.deletions > 0;
@@ -72,6 +86,7 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}
@@ -130,32 +145,108 @@ function fileChangeBody(
  * lazy-fetched from the host's snapshot blob store by hash on first expand
  * (this component only mounts when the row is open), then synthesized into a
  * unified patch client-side. While pending, a spinner shows; if the blob can't
- * be served the matching reason copy is shown.
+ * be served the matching reason copy is shown; and on a published copy, whose
+ * fetch crosses the network, a read that FAILED gets a retry instead of that
+ * copy - it is not the same fact.
  */
 function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   const { segment } = props;
+  // Hookless dispatcher, the same shape `ChatNodeShell` uses: a live chat must
+  // not merely SKIP the cloud read, it must not mount its query observer at
+  // all. A transcript can hold dozens of these, and the live path stays exactly
+  // the code that shipped - no extra observer, no new provider requirement.
+  const published = usePublishedChatSource();
+  if (published === null) return <LiveFileChangeInlineDiff segment={segment} />;
+  return <PublishedFileChangeInlineDiff segment={segment} source={published} />;
+}
+
+function LiveFileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   const query = useSnapshotDiffQuery({
-    beforeHash: segment.beforeHash,
-    afterHash: segment.afterHash,
+    // The transcript only ever renders inside a chat TILE (`chat-tile.tsx` is
+    // the sole mount of `<ChatMessages>`), and the snapshot blobs this row
+    // expands were written by that tab's host - which is also the client the
+    // PUBLISHED arm beside this one reads off `PublishedChatSource` (D15).
+    client: useTabHostClient(),
+    beforeHash: props.segment.beforeHash,
+    afterHash: props.segment.afterHash,
     enabled: true,
   });
+  return (
+    <FileChangeDiffView
+      segment={props.segment}
+      data={query.data}
+      isLoading={query.isLoading}
+      truncation={null}
+      // The local snapshot store either holds the blob or does not; there is no
+      // wire to fail, so this arm has nothing to retry.
+      failure={null}
+    />
+  );
+}
 
+function PublishedFileChangeInlineDiff(props: {
+  segment: FileChangeSegmentModel;
+  source: PublishedChatSource;
+}) {
+  const query = usePublishedSnapshotDiff({
+    source: props.source,
+    beforeHash: props.segment.beforeHash,
+    afterHash: props.segment.afterHash,
+    enabled: true,
+  });
+  return (
+    <FileChangeDiffView
+      segment={props.segment}
+      data={query.data}
+      isLoading={query.isLoading}
+      truncation={query.truncation}
+      failure={query.failure}
+    />
+  );
+}
+
+/** The rendering both sources share; only where `data` came from differs. */
+function FileChangeDiffView(props: {
+  segment: FileChangeSegmentModel;
+  data:
+    | {
+        readonly beforeContent: string | null;
+        readonly afterContent: string | null;
+        readonly reason: FileEditReason;
+      }
+    | undefined;
+  isLoading: boolean;
+  /**
+   * Set when the content is a PREFIX. Always null on the live path, where the
+   * snapshot store serves whole blobs; a cloud payload above the reader's
+   * preview bound is served truncated, and a diff built from a prefix must not
+   * read as the complete set of changes.
+   */
+  truncation: PayloadExtent | null;
+  /**
+   * Set when a side's read FAILED. Always null on the live path. Drawn INSTEAD
+   * of the reason copy, because "snapshot blob missing" is a verdict about the
+   * owner's upload and this is a verdict about the network.
+   */
+  failure: PayloadReadFailure | null;
+}) {
+  const { segment, data, isLoading } = props;
   const patch = useMemo(() => {
-    if (query.data === undefined || query.data.reason !== "snapshot") {
+    if (data === undefined || data.reason !== "snapshot") {
       return null;
     }
     return buildSnapshotUnifiedPatch({
       filePath: segment.filePath,
-      beforeContent: query.data.beforeContent,
-      afterContent: query.data.afterContent,
+      beforeContent: data.beforeContent,
+      afterContent: data.afterContent,
       ignoreWhitespace: false,
     });
-  }, [query.data, segment.filePath]);
+  }, [data, segment.filePath]);
 
   // isLoading (not isPending): a disabled query (e.g. both hashes null) keeps
   // isPending true forever; only show the spinner while genuinely fetching, and
   // otherwise fall through to the reason copy.
-  if (query.isLoading) {
+  if (isLoading) {
     return (
       <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
@@ -167,8 +258,29 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
       </div>
     );
   }
+  // Before the reason copy: a failed read has no `data`, so falling through
+  // would print "Skipped - snapshot blob missing." for content the next request
+  // may well return.
+  if (props.failure !== null) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground">
+        <span>Couldn&apos;t load this diff.</span>
+        <button
+          type="button"
+          onClick={props.failure.retry}
+          data-testid="file-change-diff-retry"
+          className={cn(
+            "underline underline-offset-2",
+            "hover:text-foreground focus-visible:outline-none focus-visible:text-foreground",
+          )}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (patch === null) {
-    const reason: FileEditReason = query.data?.reason ?? "blob_missing";
+    const reason: FileEditReason = data?.reason ?? "blob_missing";
     return (
       <div className="text-ui-sm text-muted-foreground">
         {FILE_EDIT_REASON_COPY[reason]}
@@ -178,9 +290,22 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   return (
     <DiffContentFrame
       sizing="content"
-      banner={null}
+      // A prefix must not read as the whole file. The frame already has a slot
+      // for exactly this kind of statement, so the notice sits with the diff
+      // rather than in a branch that forks the rendering.
+      banner={
+        props.truncation === null ? null : (
+          <p
+            className="px-2 py-1 text-ui-xs italic text-muted-foreground"
+            data-testid="file-change-truncated-notice"
+          >
+            {payloadTruncationNotice(props.truncation)}
+          </p>
+        )
+      }
       scrollContainerRef={null}
       onScroll={null}
+      fileIdentity={null}
     >
       <DiffContentPrimitive
         patch={patch}
@@ -191,6 +316,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
         lineNumbers={false}
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );

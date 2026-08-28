@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformMock } from "@/__tests__/create-platform-mock";
@@ -11,6 +10,8 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
@@ -26,6 +27,7 @@ import type { ReasoningFooterConfig } from "@/components/home/pickers/harness-mo
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { ReactNode } from "react";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -36,6 +38,22 @@ interface SeededTabs {
   readonly firstTabId: string;
   readonly secondTabId: string;
   readonly thirdTabId: string;
+}
+
+function specRef(id: "spec-a" | "spec-b"): EpicNodeRef {
+  return {
+    id,
+    instanceId: `${id}-instance`,
+    type: "spec",
+    name: id === "spec-a" ? "Spec A" : "Spec B",
+    hostId: "host-a",
+  };
+}
+
+function activePaneTabId(epicTabId: string): string | null {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[epicTabId];
+  if (canvas === undefined || canvas.activePaneId === null) return null;
+  return findPaneById(canvas.root, canvas.activePaneId)?.activeTabId ?? null;
 }
 
 interface MutableRouterSource {
@@ -52,8 +70,10 @@ function LeaderProbe() {
       data-testid="leader-probe"
       data-mod-held={String(leader.modHeld)}
       data-alt-held={String(leader.altHeld)}
+      data-mod-shift-held={String(leader.modShiftHeld)}
       data-mod-owner={leader.modOwnerScopeId ?? ""}
       data-alt-owner={leader.altOwnerScopeId ?? ""}
+      data-mod-shift-owner={leader.modShiftOwnerScopeId ?? ""}
       data-pathname={leader.pathname}
       data-tab-leader={tabLeader ?? ""}
       data-canvas-leader={canvasLeader ?? ""}
@@ -147,6 +167,7 @@ function expectTaskTabHintsVisible(visible: boolean): void {
 function testProfile(profileId: string, label: string): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,
@@ -159,6 +180,7 @@ function testProfile(profileId: string, label: string): ProviderProfile {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -184,6 +206,8 @@ function PickerReasoningScopeProbe(props: {
     reasoningActionable: props.reasoningActionable,
     activeProviderId: "codex",
     activeProviderProfiles: [],
+    activeProviderProfileAdmission: null,
+    profileEnablementPending: () => false,
     onProfileChange: NOOP_PROFILE_CHANGE,
   });
   return null;
@@ -215,6 +239,8 @@ function PickerBadgeProbe(props: {
     reasoningActionable: props.reasoningActionable,
     activeProviderId: "codex",
     activeProviderProfiles: props.profiles,
+    activeProviderProfileAdmission: null,
+    profileEnablementPending: () => false,
     onProfileChange: props.onProfileChange,
   });
   const providerLeader = usePickerProviderLeaderForIndex(0);
@@ -251,6 +277,23 @@ function keyDown(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keydown", init);
 }
 
+function terminalKeyDown(init: KeyboardEventInit): KeyboardEvent {
+  const terminalHost = document.createElement("div");
+  terminalHost.setAttribute("data-terminal-host", "");
+  const textarea = document.createElement("textarea");
+  terminalHost.append(textarea);
+  document.body.append(terminalHost);
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  act(() => {
+    textarea.dispatchEvent(event);
+  });
+  return event;
+}
+
 function keyUp(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keyup", init);
 }
@@ -263,10 +306,8 @@ function advance(ms: number): void {
 
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useTabsStore.setState({
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  __resetTabNavigationControllerForTesting();
 }
 
 function seedEpicTabCount(count: number): ReadonlyArray<string> {
@@ -283,6 +324,10 @@ function seedEpicTabCount(count: number): ReadonlyArray<string> {
       .getState()
       .openTabOrder.map((id) => ({ kind: "epic", id })),
   }));
+  // Make the first epic the active/focused layout item (the state a committed
+  // /epics/e1 route leaves behind); focusRef rebuilds `items` from `stripOrder`
+  // and points `activeItemId` at it.
+  useTabsStore.getState().focusRef({ kind: "epic", id: tabIds[0] });
   return tabIds;
 }
 
@@ -421,6 +466,122 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expectTaskTabHintsVisible(true);
   });
 
+  // Ordinary sibling policy is not exact-owner: holding Cmd with only an alt
+  // owner (landing has header tabs, no canvas/mod owner) must still publish
+  // the header Option badges. Exact-owner admission applies only to modShift.
+  it("publishes the opposite ordinary sibling when only the alt owner is active", () => {
+    renderProbe("/");
+
+    act(() => {
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expect(probe().getAttribute("data-mod-held")).toBe("false");
+    expect(probe().getAttribute("data-mod-owner")).toBe("");
+    expect(probe().getAttribute("data-canvas-leader")).toBe("");
+    expect(probe().getAttribute("data-alt-held")).toBe("true");
+    expect(probe().getAttribute("data-alt-owner")).toBe("header-tabs");
+    expect(probe().getAttribute("data-tab-leader")).toBe("alt");
+  });
+
+  // Symmetric case: unbind the alt digit action so only the canvas mod owner
+  // remains; holding Alt must still publish the canvas Cmd sibling badges.
+  it("publishes the opposite ordinary sibling when only the mod owner is active", () => {
+    useKeybindingStore.setState({
+      bindings: { ...getDefaultBindings(), "epic.switch.byDigit": null },
+    });
+    renderProbe("/epics/e1");
+
+    act(() => {
+      keyDown({ code: "AltLeft", key: "Alt", altKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expect(probe().getAttribute("data-alt-held")).toBe("false");
+    expect(probe().getAttribute("data-alt-owner")).toBe("");
+    expect(probe().getAttribute("data-tab-leader")).toBe("");
+    expect(probe().getAttribute("data-mod-held")).toBe("true");
+    expect(probe().getAttribute("data-mod-owner")).toBe("canvas-tabs");
+    expect(probe().getAttribute("data-canvas-leader")).toBe("mod");
+  });
+
+  it("does not reveal ordinary hints for an unowned Cmd+Shift hold", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    // Model the macOS screenshot path where the OS consumes the final digit,
+    // so the renderer only sees the modifier keydowns.
+    act(() => {
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expectTaskTabHintsVisible(false);
+    expect(probe().getAttribute("data-mod-shift-held")).toBe("false");
+    expect(probe().getAttribute("data-mod-shift-owner")).toBe("");
+  });
+
+  it("spends visible ordinary hints when Shift starts an unowned Cmd+Shift session", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    act(() => {
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectTaskTabHintsVisible(true);
+
+    act(() => {
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+
+    expectTaskTabHintsVisible(false);
+    advance(LEADER_HINT_DELAY_MS);
+    expectTaskTabHintsVisible(false);
+  });
+
+  it("allows a fresh Cmd hint session after an unowned Cmd+Shift release", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    act(() => {
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectTaskTabHintsVisible(false);
+
+    act(() => {
+      keyUp({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+      });
+      keyUp({ code: "MetaLeft", key: "Meta" });
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expectTaskTabHintsVisible(true);
+  });
+
   it("does not reveal hints when the leader is released before the delay", () => {
     renderProbe("/epics/e1");
 
@@ -502,6 +663,41 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expectAltHintVisible(false);
     advance(LEADER_HINT_DELAY_MS);
     expectAltHintVisible(false);
+  });
+
+  it("dispatches macOS Cmd+digit to inner tabs through the provider", () => {
+    platformMock.mac = true;
+    const tabs = seedEpicTabs();
+    useEpicCanvasStore
+      .getState()
+      .openTileInTab(tabs.firstTabId, specRef("spec-a"));
+    useEpicCanvasStore
+      .getState()
+      .openTileInTab(tabs.firstTabId, specRef("spec-b"));
+    const router = createAppRouter(`/epics/e1/${tabs.firstTabId}`, null);
+    renderProbeWithRouter(router);
+
+    // The second inner tab is active after the two opens; Cmd+1 must select
+    // the first one through the same window listener used by the desktop app.
+    expect(activePaneTabId(tabs.firstTabId)).toBe("spec-b-instance");
+    act(() => {
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectTaskTabHintsVisible(true);
+
+    let digitEvent: KeyboardEvent | undefined;
+    act(() => {
+      digitEvent = keyDown({
+        code: "Digit1",
+        key: "1",
+        metaKey: true,
+      });
+    });
+
+    expect(digitEvent?.defaultPrevented).toBe(true);
+    expect(activePaneTabId(tabs.firstTabId)).toBe("spec-a-instance");
+    expectTaskTabHintsVisible(false);
   });
 
   it("dispatches multi-digit header tab navigation while the leader is held", () => {
@@ -590,6 +786,137 @@ describe("<KeybindingProvider /> visual leader hints", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expectModHintVisible(false);
+  });
+
+  it("passes non-mac shell-policy Ctrl chords through when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const palette = terminalKeyDown({
+      code: "KeyK",
+      key: "k",
+      ctrlKey: true,
+    });
+    const closeOthers = terminalKeyDown({
+      code: "KeyW",
+      key: "w",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const split = terminalKeyDown({
+      code: "KeyN",
+      key: "n",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const toggleTerminal = terminalKeyDown({
+      code: "KeyJ",
+      key: "j",
+      ctrlKey: true,
+    });
+    const maximizeTerminal = terminalKeyDown({
+      code: "KeyJ",
+      key: "j",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const stash = terminalKeyDown({
+      code: "KeyS",
+      key: "s",
+      ctrlKey: true,
+    });
+
+    expect(palette.defaultPrevented).toBe(false);
+    expect(closeOthers.defaultPrevented).toBe(false);
+    expect(split.defaultPrevented).toBe(false);
+    expect(toggleTerminal.defaultPrevented).toBe(false);
+    expect(maximizeTerminal.defaultPrevented).toBe(false);
+    expect(stash.defaultPrevented).toBe(false);
+  });
+
+  it("reserves non-mac app-policy Ctrl digit chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "Digit2",
+      key: "2",
+      ctrlKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves non-encodable non-mac Ctrl punctuation chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const settings = terminalKeyDown({
+      code: "Comma",
+      key: ",",
+      ctrlKey: true,
+    });
+    const zoomOut = terminalKeyDown({
+      code: "Minus",
+      key: "-",
+      ctrlKey: true,
+    });
+
+    expect(settings.defaultPrevented).toBe(true);
+    expect(zoomOut.defaultPrevented).toBe(true);
+  });
+
+  it("reserves the palette secondary chord when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyP",
+      key: "p",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves explicit user-rebound Ctrl chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    const calls: Array<string> = [];
+    const unregister = registerDynamicActionHandler("app.zoom.in", () =>
+      calls.push("zoom-in"),
+    );
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.zoom.in": "mod+shift+p",
+      },
+    });
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyP",
+      key: "p",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    unregister();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(calls).toEqual(["zoom-in"]);
+  });
+
+  it("reserves macOS Command chords when a terminal is focused", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyK",
+      key: "k",
+      metaKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("clears pending timers and visible hints on window blur", () => {
@@ -728,6 +1055,162 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     });
 
     expect(onProfileChange).toHaveBeenCalledWith("codex", "b-uuid");
+  });
+
+  it("does not fall through to ordinary hints when a pending Cmd+Shift owner disappears", () => {
+    const router = createAppRouter("/epics/e1", null);
+    const view = render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A"), testProfile("b-uuid", "B")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+
+    view.rerender(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+    advance(LEADER_HINT_DELAY_MS);
+
+    expectTaskTabHintsVisible(false);
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+  });
+
+  // A pending shifted session must be spent at the moment its owner is lost.
+  // If profiles drop 2→1 and return to 2 before the original 300ms timer, the
+  // hold has already crossed an ownerless state and must not revive on the
+  // stale timer - only a fresh hold after releasing leaders may show again.
+  it("keeps a pending Cmd+Shift session spent across owner loss and restore before the delay", () => {
+    const router = createAppRouter("/epics/e1", null);
+    const twoProfiles = [
+      testProfile("a-uuid", "A"),
+      testProfile("b-uuid", "B"),
+    ];
+    const oneProfile = [testProfile("a-uuid", "A")];
+    const view = render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={twoProfiles}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    // Still pending - delay has not elapsed.
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+
+    view.rerender(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={oneProfile}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+    view.rerender(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={twoProfiles}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+    advance(LEADER_HINT_DELAY_MS);
+
+    expectTaskTabHintsVisible(false);
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+    expect(probe().getAttribute("data-mod-shift-held")).toBe("false");
+  });
+
+  it("hides ordinary hints when a visible Cmd+Shift owner disappears", () => {
+    const router = createAppRouter("/epics/e1", null);
+    const view = render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A"), testProfile("b-uuid", "B")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
+
+    view.rerender(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    expectTaskTabHintsVisible(false);
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+    expect(probe().getAttribute("data-mod-shift-held")).toBe("false");
   });
 
   it("shows no profile hint while ⌘⇧ is held under 2 profiles - progressive disclosure", () => {

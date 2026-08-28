@@ -1,25 +1,66 @@
 import { useCallback, useEffect } from "react";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import type {
+  NotificationFeedSource,
+  NotificationForegroundAppLocal,
+  NotificationForegroundDisplay,
+  NotificationShowOutcome,
+} from "@traycer-clients/shared/platform/runner-host";
+
+export interface NotificationShowRequest {
+  readonly title: string;
+  readonly body: string;
+  readonly payload: unknown;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
+}
 
 export type NotificationShow = (
-  title: string,
-  body: string,
-  payload: unknown,
-  replaceKey: string | null,
-) => Promise<void>;
+  request: NotificationShowRequest,
+) => Promise<NotificationShowOutcome>;
 
 /**
  * Returns a stable callback that forwards GUI-driven notification requests
- * to the runner-host notification surface.
+ * to the runner-host notification surface and reports the shell's delivery
+ * outcome back to the caller.
  */
 export function useNotificationShow(): NotificationShow {
   const runnerHost = useRunnerHost();
   return useCallback<NotificationShow>(
-    async (title, body, payload, replaceKey) => {
-      await runnerHost.notifications.show(title, body, payload, replaceKey);
-    },
+    ({
+      title,
+      body,
+      payload,
+      replaceKey,
+      deliveryKey,
+      feedSource,
+      foregroundAppLocal,
+    }) =>
+      runnerHost.notifications.show(
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+        feedSource,
+        foregroundAppLocal,
+      ),
     [runnerHost],
   );
+}
+
+export function useNotificationForegroundDisplay(
+  handler: (display: NotificationForegroundDisplay) => void,
+): void {
+  const runnerHost = useRunnerHost();
+  useEffect(() => {
+    const subscription = runnerHost.notifications.onForegroundDisplay(handler);
+    return () => {
+      subscription.dispose();
+    };
+  }, [runnerHost, handler]);
 }
 
 /**

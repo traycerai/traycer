@@ -50,6 +50,10 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
+import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 function noop(): void {}
 
@@ -72,6 +76,8 @@ interface ProviderReauthBannerProps {
    */
   readonly state: ProviderCliState | null;
   readonly reason: ProviderReauthReason;
+  /** The blocked managed profile id; null only for provider-wide auth. */
+  readonly profileId: string | null;
   /** The blocked profile's own label - only set for `profile_unauthenticated`. */
   readonly profileLabel: string | null;
   /**
@@ -80,6 +86,16 @@ interface ProviderReauthBannerProps {
    * ambient, so there is no fallback to offer). Never called automatically.
    */
   readonly onContinueOnAmbient: (() => void) | null;
+  /**
+   * Epic + view this banner is rendered in, needed only by terminal sign-in:
+   * the host creates the PTY under `epicId`, and the tile has to open in the
+   * view that CONTAINS this banner. In a split view each pane renders its own
+   * banner, so the app-wide active view would be wrong for at least one of
+   * them. `null` outside an epic view (the home composer), where terminal
+   * sign-in is simply not offered.
+   */
+  readonly epicId: string | null;
+  readonly viewTabId: string | null;
 }
 
 // A profile-specific block (missing/removed, or that profile's own auth is
@@ -91,7 +107,9 @@ interface ProviderReauthBannerProps {
 function ProfileUnavailableBanner({
   providerId,
   reason,
+  profileId,
   profileLabel,
+  hostId,
   onContinueOnAmbient,
 }: {
   readonly providerId: ProviderId;
@@ -99,15 +117,32 @@ function ProfileUnavailableBanner({
     ProviderReauthReason,
     "profile_missing" | "profile_unauthenticated"
   >;
+  readonly profileId: string | null;
   readonly profileLabel: string | null;
+  readonly hostId: string;
   readonly onContinueOnAmbient: () => void;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const message =
     reason === "profile_missing"
-      ? `This chat's ${providerLabel} profile is no longer available.`
+      ? `This agent's ${providerLabel} profile is no longer available.`
       : `"${profileLabel ?? providerLabel}" is signed out.`;
   const { openSettings } = useSystemTabModalActions();
+  const openProviderSettings = (): void => {
+    if (profileId !== null) {
+      useProvidersFocusStore.getState().setProfileFocus({
+        harnessId: providerIdToGuiHarnessId(providerId),
+        hostId,
+        profileId,
+        startSignIn: reason === "profile_unauthenticated",
+      });
+    } else {
+      useProvidersFocusStore
+        .getState()
+        .setFocusHarnessId(providerIdToGuiHarnessId(providerId));
+    }
+    openSettings({ section: "providers", resetToGeneral: false });
+  };
   return (
     <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
       <span className="text-foreground/90">{message}</span>
@@ -115,14 +150,10 @@ function ProfileUnavailableBanner({
         <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
           Continue on Terminal account
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            openSettings({ section: "providers", resetToGeneral: false })
-          }
-        >
-          Reconnect in Settings
+        <Button size="sm" variant="ghost" onClick={openProviderSettings}>
+          {reason === "profile_unauthenticated"
+            ? "Sign in"
+            : "Manage in Settings"}
         </Button>
       </div>
     </ReauthBannerShell>
@@ -200,6 +231,7 @@ function deriveLoginOptions(
 ): {
   readonly envVars: ReadonlyArray<string>;
   readonly canOauth: boolean;
+  readonly canTerminalLogin: boolean;
 } {
   const loginCapability: ProviderLoginCapability | null =
     state !== null ? state.loginCapability : null;
@@ -208,12 +240,24 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
+  // Terminal-login providers HAVE real `oauthArgs` - that is the command the
+  // terminal runs - so they pass the check below and must be excluded first,
+  // or the banner offers a headless button the host refuses. No `isLocalHost`
+  // requirement: unlike browser OAuth there is no loopback here, so a device
+  // flow works just as well against a remote host. The `oauthArgs` requirement
+  // lives INSIDE the helper, so this surface and the two gate helpers cannot
+  // answer differently for the same provider.
+  const canTerminalLogin = providerSupportsTerminalLogin(loginCapability);
   // A real login needs a non-empty subcommand. `null` = no OAuth; `[]` is also
   // inert because the host would spawn the bare binary under piped stdio, which
   // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
   // banner on "Waiting for browser sign-in…".
-  const canOauth = isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
-  return { envVars, canOauth };
+  const canOauth =
+    !canTerminalLogin &&
+    isLocalHost &&
+    oauthArgs !== null &&
+    oauthArgs.length > 0;
+  return { envVars, canOauth, canTerminalLogin };
 }
 
 /**
@@ -230,7 +274,10 @@ export function ProviderReauthBanner({
   providerId,
   state,
   reason,
+  profileId,
   profileLabel,
+  epicId,
+  viewTabId,
   onContinueOnAmbient,
 }: ProviderReauthBannerProps) {
   const tabHostId = useTabHostId();
@@ -248,12 +295,22 @@ export function ProviderReauthBanner({
   // button is only offered when the tab's host is local; remote hosts fall
   // through to the "reconnect from the CLI" stub.
   const isLocalHost = tabEntry?.kind === "local";
+  // TAB-bound, not scope-bound — which is why this cannot go through
+  // `useScopedHostBinding` (it takes a `HostScope`; there is none here). Listed
+  // as a governed exception on that hook.
+  //
+  // `hostId` is `tabHostId` because that is the host `tabClient` addresses, and
+  // the pair has to move as one value: the mutations below re-authenticate a
+  // provider ON the machine that ran the turn. The spread cannot be
+  // type-checked into supplying it — `...realBinding` satisfies the field with
+  // the app-wide `null` — so without it every `providers.*` login here would go
+  // to the ambient host while the banner named the tab's.
   const scopedBinding = useMemo(
     () =>
       tabClient !== null && realBinding !== null
-        ? { ...realBinding, hostClient: tabClient }
+        ? { ...realBinding, hostClient: tabClient, hostId: tabHostId }
         : null,
-    [tabClient, realBinding],
+    [tabClient, tabHostId, realBinding],
   );
 
   const message = providerSignedOutMessage(providerId);
@@ -272,7 +329,9 @@ export function ProviderReauthBanner({
       <ProfileUnavailableBanner
         providerId={providerId}
         reason={reason}
+        profileId={profileId}
         profileLabel={profileLabel}
+        hostId={tabHostId}
         onContinueOnAmbient={onContinueOnAmbient}
       />
     );
@@ -285,8 +344,8 @@ export function ProviderReauthBanner({
       <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
-          This chat&apos;s machine is unavailable. Reconnect once it&apos;s back
-          online.
+          This agent&apos;s machine is unavailable. Reconnect once it&apos;s
+          back online.
         </span>
       </ReauthBannerShell>
     );
@@ -299,6 +358,8 @@ export function ProviderReauthBanner({
         state={state}
         isLocalHost={isLocalHost}
         message={message}
+        epicId={epicId}
+        viewTabId={viewTabId}
       />
     </HostRuntimeContext.Provider>
   );
@@ -309,14 +370,26 @@ function ReauthBannerInner({
   state,
   isLocalHost,
   message,
+  epicId,
+  viewTabId,
 }: {
   readonly providerId: ProviderId;
   readonly state: ProviderCliState | null;
   readonly isLocalHost: boolean;
   readonly message: string;
+  readonly epicId: string | null;
+  readonly viewTabId: string | null;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
-  const { envVars, canOauth } = deriveLoginOptions(state, isLocalHost);
+  const { envVars, canOauth, canTerminalLogin } = deriveLoginOptions(
+    state,
+    isLocalHost,
+  );
+  // Terminal sign-in needs a canvas view to open the terminal into. Outside
+  // one (the home composer) fall through to the paste form / CLI stub rather
+  // than drawing a button that cannot deliver a terminal.
+  const showTerminalLogin =
+    canTerminalLogin && epicId !== null && viewTabId !== null;
   // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
   // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
   // override, matching how Settings > Providers stores it.
@@ -325,7 +398,12 @@ function ReauthBannerInner({
   // No reconnect method available from here: a provider with no web login, or an
   // OAuth-only provider on a remote host (loopback unreachable) with no paste
   // vars. Direct the user to the CLI.
-  if (!canOauth && envVars.length === 0 && !apiKeySupported) {
+  if (
+    !canOauth &&
+    !showTerminalLogin &&
+    envVars.length === 0 &&
+    !apiKeySupported
+  ) {
     return (
       <ReauthBannerShell
         icon={BANNER_HEADER_ICON}
@@ -352,15 +430,79 @@ function ReauthBannerInner({
           loginCapability={state?.loginCapability ?? null}
         />
       ) : null}
+      {showTerminalLogin ? (
+        <TerminalLoginRow
+          providerId={providerId}
+          providerLabel={providerLabel}
+          epicId={epicId}
+          viewTabId={viewTabId}
+        />
+      ) : null}
       {envVars.length > 0 || apiKeySupported ? (
         <TokenReauthForm
           providerId={providerId}
           envVars={envVars}
-          secondary={canOauth}
+          secondary={canOauth || showTerminalLogin}
           apiKeySupported={apiKeySupported}
         />
       ) : null}
     </ReauthBannerShell>
+  );
+}
+
+/**
+ * Terminal sign-in: ask the host to open a terminal running the provider's
+ * login command, and put it in front of the user.
+ *
+ * There is no waiting state, no completion detection, and deliberately so. The
+ * CLI prints a device code and a URL into that terminal, the user finishes in
+ * their browser, and the interactive shell stays alive afterwards - there is no
+ * honest completion edge to watch for, so this hands off to the terminal and
+ * points at the Refresh control already in this banner's corner. Inventing a
+ * "Waiting for sign-in…" state here would be guessing.
+ *
+ * The button is disabled while the RPC is in flight. That is the only guard
+ * against a double click, and it only needs to be: a second click that DOES
+ * land is handled host-side by joining the in-flight attempt, so both clicks
+ * end up on the same terminal.
+ */
+function TerminalLoginRow({
+  providerId,
+  providerLabel,
+  epicId,
+  viewTabId,
+}: {
+  readonly providerId: ProviderId;
+  readonly providerLabel: string;
+  readonly epicId: string;
+  readonly viewTabId: string;
+}) {
+  const terminalLogin = useProviderTerminalLogin({
+    providerId,
+    epicId,
+    viewTabId,
+    // The banner is not a tile; there is nothing to retire but the session the
+    // host itself reports as replaced.
+    launchedFromTile: null,
+  });
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={terminalLogin.isPending}
+          onClick={terminalLogin.start}
+        >
+          Sign in from a terminal
+          {terminalLogin.isPending ? <MutedAgentSpinner /> : null}
+        </Button>
+      </div>
+      <span className="text-ui-xs text-muted-foreground">
+        {providerLabel} prints a sign-in code that only exists in the terminal.
+        Complete the sign-in there, then use Refresh above.
+      </span>
+    </div>
   );
 }
 
@@ -632,7 +774,7 @@ function TokenReauthForm({
           hostQueryKeys.method<HostRpcRegistry, "providers.list">(
             tabHostId,
             "providers.list",
-            {},
+            { native: null },
           ),
         );
         const providerState = data?.providers.find(

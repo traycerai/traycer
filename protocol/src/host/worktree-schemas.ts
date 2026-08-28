@@ -10,6 +10,28 @@
  * folders.
  */
 import { z } from "zod";
+import {
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerRefSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
+export {
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
+export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+} from "@traycer/protocol/framework/worktree-busy-holders";
 
 // Inlined to avoid a circular import with `epic-schemas.ts` (which
 // references `worktreeIntentSchema`). Structurally compatible with
@@ -149,23 +171,58 @@ export type WorkspaceScripts = z.infer<typeof workspaceScriptsSchema>;
  * Both variants carry `name` as `min(1)`: a git branch name is never empty, so
  * an empty name is structurally impossible to express on either side.
  */
-export const worktreeBranchSelectionSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("new"),
-    name: z.string().min(1),
-    // A fork source is a branch name, never empty - `min(1)` rejects a malformed
-    // empty-source request at the schema boundary (consistent with `name`).
-    source: z.string().min(1),
-    carryUncommittedChanges: z.boolean(),
-  }),
-  z.object({
-    type: z.literal("existing"),
-    name: z.string().min(1),
-  }),
-]);
-export type WorktreeBranchSelection = z.infer<
-  typeof worktreeBranchSelectionSchema
+export const worktreeBranchCollisionSchema = z.enum(["fail", "random"]);
+export type WorktreeBranchCollision = z.infer<
+  typeof worktreeBranchCollisionSchema
 >;
+
+const worktreeNewBranchBaseShape = {
+  type: z.literal("new"),
+  name: z.string().min(1),
+  // A fork source is a branch name, never empty - `min(1)` rejects a malformed
+  // empty-source request at the schema boundary (consistent with `name`).
+  source: z.string().min(1),
+  carryUncommittedChanges: z.boolean(),
+} as const;
+
+export type WorktreeBranchSelection =
+  | {
+      readonly type: "new";
+      readonly name: string;
+      readonly source: string;
+      readonly carryUncommittedChanges: boolean;
+      readonly collision?: "fail";
+    }
+  | {
+      readonly type: "new";
+      readonly name: string;
+      readonly source: string;
+      readonly carryUncommittedChanges: boolean;
+      readonly collision: "random";
+      readonly retryIdentity: string;
+    }
+  | { readonly type: "existing"; readonly name: string };
+
+export const worktreeBranchSelectionSchema: z.ZodType<WorktreeBranchSelection> =
+  z.union([
+    z.object({
+      ...worktreeNewBranchBaseShape,
+      collision: z.literal("random"),
+      // Idempotency key for one generated-name create operation. The host hashes
+      // it into retry candidates and the managed directory, so a replay can
+      // recognize only its own completed checkout without adopting existing refs.
+      retryIdentity: z.string().min(1).max(128),
+    }),
+    // Keep the released variant structurally unchanged. Persisted pre-policy
+    // intents omit collision and execute as `fail`; an explicit `fail` is also
+    // safe input because Zod objects strip unknown keys by default. The random
+    // arm must come first so its identity fields survive parsing.
+    z.object(worktreeNewBranchBaseShape),
+    z.object({
+      type: z.literal("existing"),
+      name: z.string().min(1),
+    }),
+  ]);
 
 /**
  * Setup/teardown override carried on a `kind:"worktree"` folder intent. The
@@ -226,6 +283,41 @@ export const worktreeIntentSchema = z.object({
   entries: z.array(worktreeFolderIntentSchema),
 });
 export type WorktreeIntent = z.infer<typeof worktreeIntentSchema>;
+
+// Released chat.subscribe lines keep the pre-collision worktree intent shape.
+// The live intent above may grow, but frozen stream contracts must not observe
+// those additions through a shared schema reference.
+const worktreeBranchSelectionSchemaV10 = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("new"),
+    name: z.string().min(1),
+    source: z.string().min(1),
+    carryUncommittedChanges: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("existing"),
+    name: z.string().min(1),
+  }),
+]);
+
+const worktreeFolderIntentSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),
+  z.object({
+    kind: z.literal("import"),
+    ...worktreeFolderIntentBaseShape,
+    worktreePath: z.string(),
+  }),
+  z.object({
+    kind: z.literal("worktree"),
+    ...worktreeFolderIntentBaseShape,
+    branch: worktreeBranchSelectionSchemaV10,
+    scripts: worktreeEntryScriptsSchema.nullable(),
+  }),
+]);
+
+export const worktreeIntentSchemaV10 = z.object({
+  entries: z.array(worktreeFolderIntentSchemaV10),
+});
 
 export const diskWorktreeEntrySchema = z.object({
   worktreePath: z.string(),
@@ -333,6 +425,171 @@ export type WorktreeListByWorkspacePathsResponseV11 = z.infer<
   typeof worktreeListByWorkspacePathsResponseSchemaV11
 >;
 
+/**
+ * `worktree.listByWorkspacePaths` v1.2 request. Adds `forceRefresh`: the host
+ * now serves `listForWorkspace` summaries from a minutes-scale TTL cache
+ * (see the freshness-doctrine comment in `worktree-service.ts`), and this
+ * flag is the manual-refresh escape hatch that bypasses the cache, recomputes
+ * from disk, and repopulates it. An older peer that never sends the field
+ * upgrades to `forceRefresh: false` (cached-read behavior unchanged).
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV12 =
+  worktreeListByWorkspacePathsRequestSchemaV11.extend({
+    forceRefresh: z.boolean(),
+  });
+export type WorktreeListByWorkspacePathsRequestV12 = z.infer<
+  typeof worktreeListByWorkspacePathsRequestSchemaV12
+>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.2 response. Unchanged from v1.1; the
+ * minor bump is solely for the additive `forceRefresh` request field.
+ */
+export const worktreeListByWorkspacePathsResponseSchemaV12 =
+  worktreeListByWorkspacePathsResponseSchemaV11;
+export type WorktreeListByWorkspacePathsResponseV12 =
+  WorktreeListByWorkspacePathsResponseV11;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.3 request. Unchanged from v1.2; the
+ * minor bump adds the response freshness marker only.
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV13 =
+  worktreeListByWorkspacePathsRequestSchemaV12;
+export type WorktreeListByWorkspacePathsRequestV13 =
+  WorktreeListByWorkspacePathsRequestV12;
+
+/**
+ * The `resolvedAt` a version-bridge stamps for a row coming from a host that
+ * predates `resolvedAt` entirely (a v1.2 `listByWorkspacePaths` / v1.3
+ * `listAllForHost` peer). Such a host has already returned its authoritative
+ * answer and will NEVER emit a real timestamp to clear a `null`, so bridging
+ * these rows to `null` (the "not yet derived" sentinel) strands them as
+ * perpetually pending - non-selectable folders, no git eligibility, endless
+ * "checking". Stamping this resolved sentinel instead lets clients treat the
+ * legacy host's facts as authoritative.
+ *
+ * The value is a small POSITIVE number, deliberately, for two reasons:
+ *  - The only timestamp math over `resolvedAt` compares two rows FROM THE SAME
+ *    METHOD AND HOST (the settings staleness merge,
+ *    `enriched.resolvedAt >= base.resolvedAt`); a legacy host bridges every one
+ *    of its rows to this same constant, so the comparison degrades to a no-op
+ *    accept - exactly the pre-`resolvedAt` behavior. A real host's timestamps
+ *    (`Date.now()`, ~1e12) never collide with it, and no consumer computes an
+ *    age from `resolvedAt`.
+ *  - It is truthy, so it reads as "resolved" under a `!resolvedAt` check too,
+ *    not just the `=== null` checks consumers use today - `0` would regress the
+ *    moment any consumer switched to a falsy check.
+ */
+export const LEGACY_HOST_RESOLVED_AT = 1;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.3 summary. `null` means the host has not
+ * derived this row yet; clients must not treat schema-safe fallback facts as
+ * authoritative until a non-null timestamp arrives. A row bridged up from a
+ * pre-`resolvedAt` host instead carries {@link LEGACY_HOST_RESOLVED_AT} - that
+ * host's answer is authoritative, not pending.
+ */
+export const worktreeWorkspaceSummarySchemaV13 =
+  worktreeWorkspaceSummarySchema.extend({
+    resolvedAt: z.number().nonnegative().nullable(),
+  });
+export type WorktreeWorkspaceSummaryV13 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV13
+>;
+
+export const worktreeListByWorkspacePathsResponseSchemaV13 = z.object({
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV13),
+  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+});
+export type WorktreeListByWorkspacePathsResponseV13 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV13
+>;
+
+/**
+ * Resolved read of a repository's `.traycer/environment.json` worktree
+ * branch-prefix override. `"absent"` means the file/key doesn't exist (or the
+ * workspace isn't a git repo) - the client silently inherits the global
+ * default. `"present"` carries the raw stored string VERBATIM, including an
+ * intentional `""` - the host does not judge git-ref validity; that rule
+ * lives once, client-side, in `worktreeBranchPrefixError` (re-run here would
+ * fork the same rule across the wire boundary). `"malformed"` means the file
+ * exists but isn't a readable JSON object, or the `branchPrefix` key isn't a
+ * string - the client falls back to the global default and warns, the same
+ * way it treats a client-invalid `"present"` value.
+ */
+export const repoBranchPrefixStateSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("absent") }),
+  z.object({ status: z.literal("present"), value: z.string() }),
+  z.object({ status: z.literal("malformed") }),
+]);
+export type RepoBranchPrefixState = z.infer<typeof repoBranchPrefixStateSchema>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.4 summary. Adds `repoBranchPrefix`, the
+ * resolved repository-local branch-prefix override read from the same
+ * `.traycer/environment.json` `scripts` already reads. Request is unchanged
+ * from v1.3.
+ */
+export const worktreeWorkspaceSummarySchemaV14 =
+  worktreeWorkspaceSummarySchemaV13.extend({
+    repoBranchPrefix: repoBranchPrefixStateSchema,
+  });
+export type WorktreeWorkspaceSummaryV14 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV14
+>;
+
+/**
+ * Whether the selected host can see a workspace path as a directory. `absent`
+ * deliberately includes both a missing path and a path that is a regular file:
+ * neither can be used as a workspace directory. An unverifiable path remains
+ * `present` while its `resolvedAt` is `null`, so clients keep rendering its
+ * pending state instead of turning an inconclusive probe into an absence fact.
+ */
+export const workspacePresenceSchema = z.enum(["present", "absent"]);
+export type WorkspacePresence = z.infer<typeof workspacePresenceSchema>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.5 summary. Adds the host-local path
+ * presence fact while preserving `resolvedAt: null` as the signal that a
+ * failed or inconclusive probe remains pending.
+ */
+export const worktreeWorkspaceSummarySchemaV15 =
+  worktreeWorkspaceSummarySchemaV14.extend({
+    presence: workspacePresenceSchema,
+  });
+export type WorktreeWorkspaceSummaryV15 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV15
+>;
+
+export const worktreeListByWorkspacePathsRequestSchemaV14 =
+  worktreeListByWorkspacePathsRequestSchemaV13;
+export type WorktreeListByWorkspacePathsRequestV14 =
+  WorktreeListByWorkspacePathsRequestV13;
+
+// A V15 SUMMARY on a V14 RESPONSE is deliberate, not a mismatch. The two
+// consumers of this summary carry `presence` on DIFFERENT minors because their
+// released floors differ, not because either line is frozen:
+//
+//   worktree.listByWorkspacePaths - released through 1.3, so its 1.4 was still
+//     open and absorbed `presence` in place.
+//   worktree.listAllForHost       - released through 1.4, so `presence` could
+//     not widen that line and had to open a 1.5.
+//
+// Both presence-bearing lines are therefore UNRELEASED and still mutable; the
+// `V15` name records which minor the fact landed on for the OTHER method, not a
+// freeze. A further field belongs in these same two minors - widen the mutable
+// head rather than freezing 1.5 or opening a 1.6. Check the floors against
+// `__tests__/__fixtures__/released-baseline-surface.json` before assuming
+// otherwise; that fixture, not this comment, is the authority.
+export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
+  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+});
+export type WorktreeListByWorkspacePathsResponseV14 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV14
+>;
+
 export const worktreeBranchSchema = z.object({
   name: z.string(),
   isCurrent: z.boolean(),
@@ -369,13 +626,54 @@ const worktreeOwnerRequestFields = {
   ownerKind: worktreeBindingOwnerKindSchema,
 } as const;
 
+const worktreeBranchSelectionRequestSchemaV10 =
+  worktreeBranchSelectionSchemaV10;
+
+const worktreeBranchSelectionRequestSchemaV11 = z.union([
+  z.object({
+    ...worktreeNewBranchBaseShape,
+    collision: z.literal("fail"),
+  }),
+  z.object({
+    ...worktreeNewBranchBaseShape,
+    collision: z.literal("random"),
+    retryIdentity: z.string().min(1).max(128),
+  }),
+  z.object({
+    type: z.literal("existing"),
+    name: z.string().min(1),
+  }),
+]);
+
+const worktreeFolderIntentRequestSchemaV10 = worktreeFolderIntentSchemaV10;
+
+const worktreeFolderIntentRequestSchemaV11 = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),
+  z.object({
+    kind: z.literal("import"),
+    ...worktreeFolderIntentBaseShape,
+    worktreePath: z.string(),
+  }),
+  z.object({
+    kind: z.literal("worktree"),
+    ...worktreeFolderIntentBaseShape,
+    branch: worktreeBranchSelectionRequestSchemaV11,
+    scripts: worktreeEntryScriptsSchema.nullable(),
+  }),
+]);
+
 // `worktree.create` takes the canonical folder-intent union directly: the
 // orchestrator resolves each entry's `kind` (and, for `worktree`, its
 // `branch.type`) into a binding. The `perEntry` channel reports per-folder
 // success/failure unchanged.
+export const worktreeCreateRequestSchemaV10 = z.object({
+  ...worktreeOwnerRequestFields,
+  entries: z.array(worktreeFolderIntentRequestSchemaV10),
+});
+
 export const worktreeCreateRequestSchema = z.object({
   ...worktreeOwnerRequestFields,
-  entries: z.array(worktreeFolderIntentSchema),
+  entries: z.array(worktreeFolderIntentRequestSchemaV11),
 });
 export type WorktreeCreateRequest = z.infer<typeof worktreeCreateRequestSchema>;
 
@@ -419,12 +717,21 @@ export type WorktreeCreateResponse = z.infer<
  * (`worktreeFolderIntentSchema`), which keeps both because that flow is driven
  * by epic/cloud metadata that is authoritative and may differ from local git.
  */
+export const worktreeCreatePathsEntrySchemaV10 = z.object({
+  workspacePath: z.string(),
+  branch: worktreeBranchSelectionRequestSchemaV10,
+});
+
 export const worktreeCreatePathsEntrySchema = z.object({
+  workspacePath: z.string(),
+  branch: worktreeBranchSelectionRequestSchemaV11,
+});
+const worktreeCreatePathsEntrySharedSchema = z.object({
   workspacePath: z.string(),
   branch: worktreeBranchSelectionSchema,
 });
 export type WorktreeCreatePathsEntry = z.infer<
-  typeof worktreeCreatePathsEntrySchema
+  typeof worktreeCreatePathsEntrySharedSchema
 >;
 
 export const worktreeCreatedPathEntrySchema = z.object({
@@ -437,6 +744,10 @@ export const worktreeCreatedPathEntrySchema = z.object({
 export type WorktreeCreatedPathEntry = z.infer<
   typeof worktreeCreatedPathEntrySchema
 >;
+
+export const worktreeCreatePathsRequestSchemaV10 = z.object({
+  entries: z.array(worktreeCreatePathsEntrySchemaV10),
+});
 
 export const worktreeCreatePathsRequestSchema = z.object({
   entries: z.array(worktreeCreatePathsEntrySchema),
@@ -550,11 +861,58 @@ export const worktreeDeleteRequestSchema = z.object({
 });
 export type WorktreeDeleteRequest = z.infer<typeof worktreeDeleteRequestSchema>;
 
+/**
+ * `worktree.delete@1.1` request. `stopOwners` defaults to `false` so a 1.1
+ * parse of a 1.0-shaped request is refuse-on-busy — today's behavior.
+ * `true` asks the host to stop enumerated holders, then delete.
+ *
+ * Degrade: a 1.0 host's request schema strips `stopOwners`, so an old host
+ * always refuses on busy. A 1.0 client talking to a 1.1 host is upgraded
+ * with `stopOwners: false`.
+ */
+export const worktreeDeleteRequestSchemaV11 =
+  worktreeDeleteRequestSchema.extend({
+    stopOwners: z.boolean().default(false),
+  });
+export type WorktreeDeleteRequestV11 = z.infer<
+  typeof worktreeDeleteRequestSchemaV11
+>;
+
 export const worktreeDeleteResponseSchema = z.object({
   deleted: z.boolean(),
 });
 export type WorktreeDeleteResponse = z.infer<
   typeof worktreeDeleteResponseSchema
+>;
+
+/**
+ * `worktree.listHolders@1.0` — path-scoped holder inventory with an optional
+ * owner filter. Bridges the host's holder-inventory engine:
+ *
+ * - `owner` absent/null: holders of `worktreePath`
+ *   (`listHoldersForWorktreePath`).
+ * - `owner` present: that owner's holders (`listHoldersForOwner`). The path
+ *   is still required so the method stays path-scoped on the wire; it does
+ *   not filter the owner inventory (rebind disclosure needs dropped-path
+ *   holders too).
+ *
+ * Unknown path or owner → `{ holders: [] }`. Brand-new method, outside the
+ * released floor: an old host simply lacks it (`degrade: unsupported`) and
+ * an old client never calls it.
+ */
+export const worktreeListHoldersRequestSchema = z.object({
+  worktreePath: z.string(),
+  owner: worktreeBusyOwnerRefSchema.nullable().default(null),
+});
+export type WorktreeListHoldersRequest = z.infer<
+  typeof worktreeListHoldersRequestSchema
+>;
+
+export const worktreeListHoldersResponseSchema = z.object({
+  holders: worktreeBusyHoldersSchema,
+});
+export type WorktreeListHoldersResponse = z.infer<
+  typeof worktreeListHoldersResponseSchema
 >;
 
 /**
@@ -700,7 +1058,6 @@ export type WorktreeSubmoduleMergeFactV12 = z.infer<
   typeof worktreeSubmoduleMergeFactSchemaV12
 >;
 
-
 /**
  * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
  * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
@@ -758,7 +1115,9 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // `mergedIntoDefault` is the REQUIRED safety floor (HEAD contained in default
   // ⇒ deleting loses nothing); the reflog-no-`commit` guard only splits the
   // LABEL (an untouched worktree reads "At base commit" instead of "Merged").
-  // The pure client classifier greens "At base commit" on this boolean alone.
+  // The pure client normally labels this "At base commit"; it promotes the row
+  // to "Landed" when an owned submodule differs from its pinned gitlink and is
+  // proven merged. An unproven owned submodule still forces Review.
   // FAILS CLOSED: an unknown reflog (`null`) is NOT at-base. `false` whenever
   // unproven: dirty, HEAD not contained in default, an authored-commit reflog
   // entry, or `includeActivity` false (the probes are gated).
@@ -775,6 +1134,38 @@ export const worktreeHostEntrySchemaV12 = worktreeHostEntrySchemaV11.extend({
 });
 export type WorktreeHostEntryV12 = z.infer<typeof worktreeHostEntrySchemaV12>;
 
+/**
+ * `worktree.listAllForHost` v1.4 entry. `null` means the host has not derived
+ * this row yet; clients must not treat schema-safe fallback facts as
+ * authoritative until a non-null timestamp arrives.
+ */
+export const worktreeHostEntrySchemaV14 = worktreeHostEntrySchemaV12.extend({
+  resolvedAt: z.number().nonnegative().nullable(),
+});
+export type WorktreeHostEntryV14 = z.infer<typeof worktreeHostEntrySchemaV14>;
+
+/**
+ * `worktree.listAllForHost` v1.5 entry. Every row originates from the host's
+ * successful managed-worktree directory walk, so current hosts report it as
+ * present; the common enum keeps both worktree list methods on the same
+ * release surface.
+ */
+export const worktreeHostEntrySchemaV15 = worktreeHostEntrySchemaV14.extend({
+  presence: workspacePresenceSchema,
+});
+export type WorktreeHostEntryV15 = z.infer<typeof worktreeHostEntrySchemaV15>;
+
+/**
+ * `worktree.listAllForHost` v1.6 entry. `gitUnreadable` is `true` when the
+ * worktree's `.git` gitlink exists but git cannot resolve the repository it
+ * points at (main repo missing / moved / re-cloned, or admin entry pruned).
+ * The row IS resolved; its branch and dirty count are unknowable, so clients
+ * must not treat it as clean.
+ */
+export const worktreeHostEntrySchemaV16 = worktreeHostEntrySchemaV15.extend({
+  gitUnreadable: z.boolean(),
+});
+export type WorktreeHostEntryV16 = z.infer<typeof worktreeHostEntrySchemaV16>;
 
 /**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
@@ -855,9 +1246,7 @@ export type WorktreeListAllForHostRequestV11 = z.infer<
  */
 export const worktreeListAllForHostRequestSchemaV12 =
   worktreeListAllForHostRequestSchemaV11;
-export type WorktreeListAllForHostRequestV12 =
-  WorktreeListAllForHostRequestV11;
-
+export type WorktreeListAllForHostRequestV12 = WorktreeListAllForHostRequestV11;
 
 /**
  * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
@@ -884,6 +1273,78 @@ export type WorktreeListAllForHostResponseV12 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV12
 >;
 
+/**
+ * `worktree.listAllForHost` v1.3 request. Adds `forceRefresh`: the disk-truth
+ * walk this method backs is now served from a minutes-scale TTL cache (see
+ * the freshness-doctrine comment in `worktree-service.ts`), and this flag is
+ * the manual-refresh escape hatch that bypasses the cache, recomputes, and
+ * repopulates it. An older peer that never sends the field upgrades to
+ * `forceRefresh: false` (cached-read behavior unchanged).
+ */
+export const worktreeListAllForHostRequestSchemaV13 =
+  worktreeListAllForHostRequestSchemaV12.extend({
+    forceRefresh: z.boolean(),
+  });
+export type WorktreeListAllForHostRequestV13 = z.infer<
+  typeof worktreeListAllForHostRequestSchemaV13
+>;
+
+/**
+ * `worktree.listAllForHost` v1.3 response. Unchanged from v1.2; the minor
+ * bump is solely for the additive `forceRefresh` request field.
+ */
+export const worktreeListAllForHostResponseSchemaV13 =
+  worktreeListAllForHostResponseSchemaV12;
+export type WorktreeListAllForHostResponseV13 =
+  WorktreeListAllForHostResponseV12;
+
+/**
+ * `worktree.listAllForHost` v1.4 request. Unchanged from v1.3; the minor bump
+ * adds the response freshness marker only.
+ */
+export const worktreeListAllForHostRequestSchemaV14 =
+  worktreeListAllForHostRequestSchemaV13;
+export type WorktreeListAllForHostRequestV14 = WorktreeListAllForHostRequestV13;
+
+export const worktreeListAllForHostResponseSchemaV14 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV14),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV14 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV14
+>;
+
+/**
+ * `worktree.listAllForHost` v1.5 request. Unchanged from v1.4; this minor
+ * adds the response presence fact only.
+ */
+export const worktreeListAllForHostRequestSchemaV15 =
+  worktreeListAllForHostRequestSchemaV14;
+export type WorktreeListAllForHostRequestV15 = WorktreeListAllForHostRequestV14;
+
+export const worktreeListAllForHostResponseSchemaV15 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV15),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV15 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV15
+>;
+
+/**
+ * `worktree.listAllForHost` v1.6 request. Unchanged from v1.5; this minor
+ * adds the response `gitUnreadable` fact only.
+ */
+export const worktreeListAllForHostRequestSchemaV16 =
+  worktreeListAllForHostRequestSchemaV15;
+export type WorktreeListAllForHostRequestV16 = WorktreeListAllForHostRequestV15;
+
+export const worktreeListAllForHostResponseSchemaV16 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV16),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV16 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV16
+>;
 
 /**
  * Returns `null` when no row exists yet so a fresh terminal-agent
@@ -990,6 +1451,38 @@ export type WorktreeListBindingsForEpicResponseV11 = z.infer<
   typeof worktreeListBindingsForEpicResponseSchemaV11
 >;
 
+/**
+ * `worktree.listBindingsForEpic` v1.2 row. `isGitResolvePending` is the host's
+ * single authoritative signal that this row's git facts (`isGitRepo`, and the
+ * `missing_worktree_path` reason derived from it) are an unverified placeholder
+ * the host is still resolving - pickers render such rows as pending ("checking")
+ * instead of dead. The host computes it where it derives the reason, so the
+ * client reads one boolean instead of re-deriving which reasons are
+ * git-derived. `false` for every genuine (setup-state, resolved) row. Bridged
+ * up from a v1.1 host as `false` for every row: a pre-v1.2 host has no pending
+ * concept, so its answer is authoritative and must not read as perpetually
+ * pending (there is no non-null timestamp coming to clear it).
+ */
+export const worktreeBindingSelectorRowSchemaV12 =
+  worktreeBindingSelectorRowSchema.extend({
+    isGitResolvePending: z.boolean(),
+  });
+export type WorktreeBindingSelectorRowV12 = z.infer<
+  typeof worktreeBindingSelectorRowSchemaV12
+>;
+
+/**
+ * `worktree.listBindingsForEpic` v1.2 response. Unchanged from v1.1 except
+ * for the per-row `isGitResolvePending` marker.
+ */
+export const worktreeListBindingsForEpicResponseSchemaV12 =
+  worktreeListBindingsForEpicResponseSchemaV11.extend({
+    rows: z.array(worktreeBindingSelectorRowSchemaV12),
+  });
+export type WorktreeListBindingsForEpicResponseV12 = z.infer<
+  typeof worktreeListBindingsForEpicResponseSchemaV12
+>;
+
 export const worktreeSetRepoScriptsRequestSchema = z.object({
   epicId: z.string(),
   workspacePath: z.string(),
@@ -1005,4 +1498,29 @@ export const worktreeSetRepoScriptsResponseSchema = z.object({
 });
 export type WorktreeSetRepoScriptsResponse = z.infer<
   typeof worktreeSetRepoScriptsResponseSchema
+>;
+
+/**
+ * `worktree.setRepoBranchPrefix` request. `branchPrefix: null` clears the
+ * repository override (back to "absent", inheriting the global default);
+ * a string - including `""` - sets an explicit override (deliberately no
+ * prefix). Mirrors `worktreeSetRepoScriptsRequestSchema`'s `epicId`/
+ * `workspacePath` authn/target shape, but the target is always the exact
+ * source workspace path (never a new/checkout worktree's own file - see the
+ * host resolver doc comment).
+ */
+export const worktreeSetRepoBranchPrefixRequestSchema = z.object({
+  epicId: z.string(),
+  workspacePath: z.string(),
+  branchPrefix: z.string().nullable(),
+});
+export type WorktreeSetRepoBranchPrefixRequest = z.infer<
+  typeof worktreeSetRepoBranchPrefixRequestSchema
+>;
+
+export const worktreeSetRepoBranchPrefixResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type WorktreeSetRepoBranchPrefixResponse = z.infer<
+  typeof worktreeSetRepoBranchPrefixResponseSchema
 >;

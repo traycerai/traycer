@@ -10,6 +10,9 @@ import { Analytics } from "@/lib/analytics";
  */
 export type AuthStatus = "signed-out" | "signing-in" | "signed-in";
 
+/** Which sign-in flow started the attempt currently projected as running. */
+export type SignInAttemptKind = "device" | "link";
+
 /**
  * Subset of the AuthnV3 `/api/v3/user` response that the GUI surfaces in the
  * UserMenu. Identity fields are present because `AuthService.validateToken`
@@ -75,11 +78,21 @@ export interface AuthState {
   readonly shareableTeams: ReadonlyArray<EpicShareableTeam>;
   /**
    * Mirrors `userSubscription.subscriptionStatus` from the signed-in user.
-   * `null` while signed-out or signing-in. Surfaced for subscription display;
-   * refreshes only on full re-sign-in / revalidation, not reactively.
+   * `null` while signed-out or signing-in. AuthService projects it after each
+   * successful validation so entitlement-gated surfaces react to restores.
    */
   readonly subscriptionStatus: SubscriptionStatus | null;
-  setSigningIn(): void;
+  /**
+   * Which flow owns the in-flight attempt, or `null` when none is running.
+   *
+   * `status === "signing-in"` alone cannot answer that, and surfaces do need
+   * to know: the device flow's "Taking too long? Retry" is a correct escape
+   * hatch from a stalled browser round trip and a destructive one during a
+   * link claim, where `signIn()` would supersede a claim the user is being
+   * asked to approve on their desktop right now.
+   */
+  readonly signingInAttempt: SignInAttemptKind | null;
+  setSigningIn(attempt: SignInAttemptKind): void;
   setSignedIn(
     profile: AuthProfile,
     contextMetadata: AuthContextMetadata,
@@ -89,25 +102,59 @@ export interface AuthState {
   setSignedOut(): void;
 }
 
+/**
+ * Coalesce a profile's display name to a guaranteed string. `userName` and
+ * `email` are typed `string` on `AuthProfile`, but a persisted or
+ * cross-window-projected snapshot can violate that at runtime; declaring the
+ * params nullable makes the fallback a genuine guard (and preserves an
+ * explicitly empty `userName` rather than overwriting it with the email).
+ */
+function coalesceUserName(
+  userName: string | undefined,
+  email: string | undefined,
+): string {
+  return userName ?? email ?? "";
+}
+
 export const useAuthStore = create<AuthState>()((set) => ({
   status: "signed-out",
+  signingInAttempt: null,
   profile: null,
   contextMetadata: null,
   shareableTeams: [],
   subscriptionStatus: null,
-  setSigningIn: () => {
-    set({ status: "signing-in" });
+  setSigningIn: (attempt: SignInAttemptKind) => {
+    set({ status: "signing-in", signingInAttempt: attempt });
   },
   setSignedIn: (
     profile: AuthProfile,
     contextMetadata: AuthContextMetadata,
     shareableTeams: ReadonlyArray<EpicShareableTeam>,
   ) => {
-    set({ status: "signed-in", profile, contextMetadata, shareableTeams });
+    // Store chokepoint: every signed-in profile lands here, including the
+    // projected/persisted-snapshot override paths (AuthService.ingestProjected
+    // SessionSnapshot / applyExternalSession) that bypass `profileFromUser`.
+    // `AuthProfile.userName` is typed `string`, but a stale or partial snapshot
+    // can deliver it absent at runtime - the type is a serialization-boundary
+    // guarantee the wire can violate. Coerce here so it is never absent
+    // downstream; otherwise startup consumers throw on it:
+    // `readFirstName(userName).replace(...)` in HomeHero and
+    // `computeInitials(userName).trim()` in the header avatar.
+    const safeProfile = {
+      ...profile,
+      userName: coalesceUserName(profile.userName, profile.email),
+    };
+    set({
+      status: "signed-in",
+      signingInAttempt: null,
+      profile: safeProfile,
+      contextMetadata,
+      shareableTeams,
+    });
     // Email is the one person property sent (deliberate product decision so
     // PostHog dashboards can look users up); the final sanitizer drops
     // everything else the SDK stages on $identify.
-    Analytics.getInstance().identify(contextMetadata.userId, profile.email);
+    Analytics.getInstance().identify(contextMetadata.userId, safeProfile.email);
   },
   setSubscriptionStatus: (status: SubscriptionStatus | null) => {
     set({ subscriptionStatus: status });
@@ -115,6 +162,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   setSignedOut: () => {
     set({
       status: "signed-out",
+      signingInAttempt: null,
       profile: null,
       contextMetadata: null,
       shareableTeams: [],

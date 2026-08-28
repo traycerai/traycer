@@ -9,8 +9,9 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
 type ProvidersListRequest = RequestOfMethod<HostRpcRegistry, "providers.list">;
 type ProvidersListResponse = ResponseOfMethod<
@@ -35,22 +36,20 @@ export function useTabRefreshProviders(): () => Promise<void> {
     mapVariables: (variables: ProvidersListRequest) => variables,
     options: {
       mutationKey: providersMutationKeys.refresh(),
-      onSuccess: (data: ProvidersListResponse) => {
-        queryClient.setQueryData(
-          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            tabHostId,
-            "providers.list",
-            {},
-          ),
-          data,
-        );
-        for (const method of PROVIDER_INVALIDATIONS.filter(
-          (entry) => entry !== "providers.list",
-        )) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(tabHostId, method),
-          });
-        }
+      onSuccess: async (data: ProvidersListResponse) => {
+        // This is the TERMINAL-login completion edge in practice: a terminal
+        // sign-in has no client-observable completion event, so the user's
+        // "Check sign-in status" press (and the token-paste form's refresh) is
+        // what tells the client the account exists now. Under auto-enablement
+        // that can flip `available`, so the catalogs have to move with the
+        // list or the picker keeps serving its cached "No account detected"
+        // row - which the commit helper does, by invalidating every
+        // `PROVIDER_INVALIDATIONS` entry except the list it just wrote.
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: tabHostId,
+          update: () => data,
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh providers."),
@@ -60,6 +59,13 @@ export function useTabRefreshProviders(): () => Promise<void> {
   const { mutateAsync } = mutation;
   return useCallback(async () => {
     if (client === null) return;
-    await mutateAsync({ forceAuthRefresh: true });
-  }, [client, mutateAsync]);
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
+      hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        tabHostId,
+        "providers.list",
+        { native: null },
+      ),
+    );
+    await mutateAsync({ forceAuthRefresh: true, native: null });
+  }, [client, mutateAsync, queryClient, tabHostId]);
 }

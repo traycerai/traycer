@@ -3,11 +3,12 @@ import {
   type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ListTasksFacets,
   ListTasksResponse,
@@ -21,7 +22,7 @@ import {
   formatRepoIdentifier,
   listTasksRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
@@ -45,13 +46,29 @@ function taskCreationMode(
   return chat === null ? "terminal_agent" : "chat";
 }
 
-export function useEpicCreate(): UseMutationResult<
+/**
+ * `epic.create` on an explicit client (redesign P1.2).
+ *
+ * There is no app-wide variant on purpose. Epic creation is PLACEMENT - the
+ * epic and its folded chat live on the created-on host for life - so the
+ * caller must name the machine rather than inherit whichever one the window
+ * happens to be bound to. The landing composer resolves it from its surface
+ * pin (`pin ?? effective`), re-validated at submit.
+ *
+ * The folded chat seed carries its own `hostId`, and a mismatch between it and
+ * the client this hook would send on is refused here, in the same shape (and
+ * for the same reason) as `useEpicCreateChatForHostClient`'s pre-flight: a
+ * create that lands anyway puts the chat on a machine the caller never named.
+ * A `null` client is refused by `useHostMutation`'s own guard.
+ */
+export function useEpicCreateForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "epic.create">,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "epic.create">,
   CreateEpicMutationContext
 > {
-  const client = useHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -60,7 +77,23 @@ export function useEpicCreate(): UseMutationResult<
   >({
     client,
     method: "epic.create",
-    mapVariables: (variables) => variables,
+    mapVariables: (variables) => {
+      const clientHostId = client?.getActiveHostId() ?? null;
+      const chat = variables.chat ?? null;
+      if (chat !== null && chat.hostId !== clientHostId) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message:
+            clientHostId === null
+              ? "No device is available - cannot create an epic on it."
+              : "This host client no longer addresses the requested host - the epic would be created on a different device.",
+          requestId: "client-pre-flight",
+          method: "epic.create",
+          fatalDetails: null,
+        });
+      }
+      return variables;
+    },
     options: {
       onMutate: (variables) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreationStarted, {
@@ -69,8 +102,8 @@ export function useEpicCreate(): UseMutationResult<
           workspace_count: variables.workspaces.length,
         });
         return {
-          hostId: client.getActiveHostId(),
-          userId: client.getRequestContextUserId(),
+          hostId: client?.getActiveHostId() ?? null,
+          userId: client?.getRequestContextUserId() ?? null,
         };
       },
       onSuccess: (response, variables, ctx) => {
@@ -213,6 +246,15 @@ function taskProjectionMatchesRequest(
   if (!matchesRepoFilter(projection.repoLabels, filters)) {
     return false;
   }
+  // A host filter cannot be evaluated from a create projection: the response
+  // carries no `chatHostIds`, and the epic has no chats to own a host yet.
+  // Refuse the optimistic insert rather than guess - inserting would place an
+  // UNVERIFIED row into a host-filtered list, which is the one thing this
+  // filter's fail-closed design exists to prevent. The row appears on the next
+  // fetch, once the server can answer for it.
+  if (filters.chatHostIds !== undefined && filters.chatHostIds.length > 0) {
+    return false;
+  }
   return matchesWorkspaceFilter(projection.workspaces, filters);
 }
 
@@ -237,7 +279,14 @@ function mergeProjectionIntoFacets(
   ) {
     return facets;
   }
-  return { repos, workspaces, ownershipScopes };
+  // `chatHosts` is CARRIED, never rebuilt. Dropping it makes the history gate
+  // read the response as one from a server that cannot filter by host, which
+  // withholds every row behind "Can't filter by host here" - and these entries
+  // never refetch on their own (`staleTime`/`gcTime` at Infinity), so a single
+  // create would strand the list there. It is carried UNCHANGED because a
+  // brand-new epic has no published chats yet, so it contributes to no host's
+  // count; the next real fetch is what introduces one.
+  return { repos, workspaces, ownershipScopes, chatHosts: facets.chatHosts };
 }
 
 function incrementRepoFacets(

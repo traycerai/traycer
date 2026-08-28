@@ -17,14 +17,18 @@ import {
   goForward as goForwardAction,
 } from "@/lib/commands/actions";
 import { getHistoryController } from "@/lib/persistent-history";
+import { historyNavChromeAvailable } from "@/lib/history-navigation/use-history-nav-available";
 import { LANDING_ROUTE } from "@/lib/routes";
 import {
   existingEpicTabIntent,
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { navigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
-import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  navigateNestedFocus,
+  navigateNestedFocusToPrimaryEditor,
+} from "@/lib/epic-nested-focus-navigation";
+import { navigateToSettingsSection as navigateSettingsSection } from "@/lib/settings-navigation";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { routeIntentViaModalBridge } from "@/stores/tabs/system-overlay-registry";
 
@@ -59,6 +63,7 @@ export function routerAdapterFor(
       navigateToTabIntent(
         router.navigate,
         openOrFocusEpicIntent({ epicId, focus: undefined }),
+        undefined,
       );
     },
     navigateToEpicTab: (tab) => {
@@ -69,6 +74,7 @@ export function routerAdapterFor(
           tabId: tab.tabId,
           focus: undefined,
         }),
+        undefined,
       );
     },
     navigateToEpicList: () => {
@@ -76,29 +82,40 @@ export function routerAdapterFor(
       if (api === null) return;
       api.openHistory();
     },
-    navigateSettingsSection: (sectionId: SettingsSectionId) => {
-      const api = getSystemTabModalApi();
-      // When the modal is open, sub-leader / palette section picks
-      // update the in-modal section without leaving the underlying
-      // tab. Otherwise: focus or open the settings surface (modal or
-      // tab) on the requested section.
-      if (api !== null && api.isOverlayActive("settings")) {
-        api.setSection(sectionId);
-        return;
-      }
-      if (api !== null) {
-        api.openSettings({ section: sectionId, resetToGeneral: false });
-      }
-    },
+    // When the modal is open, sub-leader / palette section picks update the
+    // in-modal section without leaving the underlying tab. Otherwise: focus or
+    // open the settings surface (modal or tab) on the requested section. Shared
+    // with the in-panel call sites so the two cannot drift apart.
+    navigateSettingsSection,
     navigateToTabIntent: (intent) => {
       const api = getSystemTabModalApi();
-      if (api !== null && routeIntentViaModalBridge(intent, api)) {
+      if (
+        api !== null &&
+        intent.kind !== "open-epic" &&
+        intent.kind !== "open-phase-migration" &&
+        intent.kind !== "new-draft" &&
+        intent.kind !== "complete-epic-migration" &&
+        routeIntentViaModalBridge(intent, api)
+      ) {
         return;
       }
-      navigateToTabIntent(router.navigate, intent);
+      navigateToTabIntent(router.navigate, intent, undefined);
     },
     navigateNestedFocus: (epicId, tabId, prepare) =>
       navigateNestedFocus(
+        {
+          history: router.history,
+          navigate: router.navigate,
+          getLocation: () => ({
+            pathname: router.state.location.pathname,
+            search: router.state.location.search ?? {},
+          }),
+        },
+        { epicId, tabId },
+        prepare,
+      ),
+    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare) =>
+      navigateNestedFocusToPrimaryEditor(
         {
           history: router.history,
           navigate: router.navigate,
@@ -117,7 +134,7 @@ export function routerAdapterFor(
     // History-navigation availability + boundary state off the live router's
     // controller brand. The palette source reads these through `ctx.router`
     // (it mounts above `<RouterProvider>`, where TanStack router context is null).
-    isHistoryNavAvailable: () => getHistoryController(router.history) !== null,
+    isHistoryNavAvailable: () => historyNavChromeAvailable(router.history),
     canGoBack: () => {
       const controller = getHistoryController(router.history);
       return controller !== null && controller.canGoBack();

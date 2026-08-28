@@ -1,18 +1,19 @@
 // Regression test for: back button dead after promoting a system overlay to
 // a tab. Replays: real back history -> open settings overlay -> click-out
 // close -> forward -> promote to tab -> back click, against a `GateLike`
-// component that mirrors `LocalHostGate`'s PRE-FIX structural swap
+// component doing the structural swap that caused the original bug
 // (`<>{children}</>` on bypass vs `<Wrapper>{children}</Wrapper>` when
 // ready), so React remounts the gated subtree on every `/settings` boundary
-// crossing exactly like the real pre-fix bug.
+// crossing exactly like the real pre-fix bug. The ancestor that once did this
+// for real was the local-host gate, deleted in P3.4; `GateLike` is a
+// self-contained stand-in and never depended on it.
 //
 // `GateLike` is kept REMOUNTING on purpose - it is not the thing layers 2+3
-// fix (that's layer 1, in `local-host-gate.tsx`). It stands in for ANY
+// fix. It stands in for ANY
 // future ancestor that remounts this subtree, and this test proves the
 // module-scoped cold-load latch (layer 2) plus `replace` semantics on the
 // focus-tab-first redirect (layer 3) defeat the back-button trap even under
 // such a remount, independent of layer 1.
-import "../../../../__tests__/test-browser-apis";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
@@ -39,6 +40,7 @@ import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 const modalProbe: { current: SystemTabModalApi | null } = { current: null };
 const hostMountLog: string[] = [];
@@ -62,9 +64,9 @@ function CompatGateLike(props: { readonly children: ReactNode }) {
   return <>{props.children}</>;
 }
 
-// Mirrors `LocalHostGate` PRE-FIX: bypass -> bare children; ready -> children
-// under a wrapper component. Different root element types => React remounts
-// the subtree when `bypass` flips at the /settings boundary.
+// The pre-fix shape: bypass -> bare children; ready -> children under a
+// wrapper component. Different root element types => React remounts the
+// subtree when `bypass` flips at the /settings boundary.
 function GateLike(props: { readonly children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const bypass = pathname.startsWith("/settings");
@@ -88,10 +90,10 @@ function buildRouter(windowId: string) {
     validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
     component: GuardedRoot,
   });
-  const epicRoute = createRoute({
+  const draftRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/epics/$epicId/$tabId",
-    component: () => <div data-testid="epic-route" />,
+    path: "/draft/$draftId",
+    component: () => <div data-testid="draft-route" />,
   });
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -100,7 +102,7 @@ function buildRouter(windowId: string) {
   });
   const history = createPersistentMemoryHistory(null, windowId);
   return createRouter({
-    routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
+    routeTree: rootRoute.addChildren([draftRoute, settingsRoute]),
     history,
   });
 }
@@ -135,6 +137,7 @@ function snapshot(router: SnapshotRouter) {
 
 describe("back stays functional after promoting a system overlay to a tab", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     modalProbe.current = null;
     hostMountLog.length = 0;
@@ -144,16 +147,17 @@ describe("back stays functional after promoting a system overlay to a tab", () =
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
   });
 
   it("back click #1 after promotion escapes the overlay entry instead of re-pushing the tab route", async () => {
     const windowId = "promote-back-nav";
-    seedPersisted(windowId, ["/epics/e/t0", "/epics/e/t1"], 1);
+    seedPersisted(windowId, ["/draft/d0", "/draft/d1"], 1);
     const router = buildRouter(windowId);
     render(<RouterProvider router={router} />);
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe("/epics/e/t1"),
+      expect(router.state.location.pathname).toBe("/draft/d1"),
     );
     await waitFor(() => expect(modalProbe.current).not.toBeNull());
 
@@ -190,11 +194,13 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     act(() => {
       modalProbe.current?.promoteToTab();
     });
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe("/settings/general"),
-    );
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait for the full promotion transition: route path + history cursor.
+    // Fixed scheduling margins previously papered over the same settle.
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+      const promoted = snapshot(router);
+      expect(promoted.rendered).toBe("/settings/general");
+      expect(promoted.canGoBack).toBe(true);
     });
 
     const before = snapshot(router);
@@ -203,8 +209,13 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     act(() => {
       goBack(router);
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    // Causal wait on the history/router landing the first Back produces.
+    // Negative checks below only run after this transition completes — so a
+    // cold-load re-push of /settings/general would fail the wait, not race a
+    // fixed delay window.
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/draft/d1");
+      expect(snapshot(router).rendered).not.toBe(before.rendered);
     });
 
     const afterFirstBack = snapshot(router);
@@ -216,7 +227,7 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     // survives - back click #1 lands on the real underlying page, not a
     // re-push of /settings/general onto a byte-identical stack.
     expect(afterFirstBack.rendered).not.toBe(before.rendered);
-    expect(router.state.location.pathname).toBe("/epics/e/t1");
+    expect(router.state.location.pathname).toBe("/draft/d1");
     expect(afterFirstBack.canGoBack).toBe(true);
 
     // Note: `GateLike` here still remounts the guard on every /settings
@@ -224,21 +235,28 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     // `lastPathnameRef` is reborn already-equal to the post-navigation
     // pathname on this exact click and can't detect the change; the stray
     // `settingsOverlay` search flag on this entry survives one extra click
-    // as a result. That collapse-in-one-click only happens once layer 1
-    // stops the remounts (proven separately in `local-host-gate.test.tsx`).
+    // as a result. That collapse-in-one-click only happens once an ancestor
+    // stops the remounts. There is no longer a test proving that half: it was
+    // the local-host gate's structural-stability suite, and both the gate and
+    // its suite were deleted in P3.4 (no production ancestor swaps element
+    // types across the bypass boundary any more). Stated rather than re-aimed
+    // at this file's own stand-in, which cannot prove it.
     // What matters here is what layers 2+3 alone guarantee: back never
     // bounces to /settings/general again, and repeated presses make
     // monotonic progress back to the original entry instead of looping.
     for (let clicksRemaining = 2; clicksRemaining > 0; clicksRemaining--) {
+      const indexBefore = snapshot(router).index;
       act(() => {
         goBack(router);
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitFor(() => {
+        expect(snapshot(router).index).toBeLessThan(indexBefore);
+        expect(router.state.location.pathname).not.toBe("/settings/general");
       });
-      expect(router.state.location.pathname).not.toBe("/settings/general");
     }
 
-    expect(router.state.location.pathname).toBe("/epics/e/t0");
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/draft/d0"),
+    );
   });
 });

@@ -1,23 +1,53 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
   ClaudePendingWake,
+  InterviewDeliveryProjection,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BackgroundItem,
+  ChatActiveTurn,
+  ChatErrorNotice,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueueState,
   ChatRunSettings,
+  ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
-import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  hostStreamRpcRegistry,
+  type HostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import {
+  ChatStreamClient,
+  type ChatStreamCallbacks,
+} from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type {
+  IStreamSession,
+  ServerFrameHandler,
+  StatusChangeHandler,
+  StreamCloseReason,
+  StreamFrameEnvelope,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import {
+  WsStreamClient,
+  type ParamsOf,
+} from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { resolveSubmitDeliveryPolicy } from "@/lib/chats/resolve-steer-submit";
 import {
   ACCEPTED_CHAT_ACTION_RETENTION_MS,
   MAX_ACCEPTED_CHAT_ACTION_RECORDS,
+  MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
@@ -33,8 +63,20 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { interviewDraftKey } from "@/lib/persist";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import {
+  readInterviewDraftSnapshot,
+  useInterviewDraftStore,
+} from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -43,6 +85,100 @@ const OWNER_ID = "owner-1";
 const CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "Hello" }] }],
+};
+
+const SECOND_CONTENT: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph", content: [{ type: "text", text: "World" }] }],
+};
+
+const MENTION_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "mention",
+          attrs: {
+            contextType: "file",
+            path: "src/app.ts",
+            relPath: "src/app.ts",
+            absolutePath: "/repo/src/app.ts",
+            workspacePath: "/repo",
+            label: "app.ts",
+          },
+        },
+        { type: "text", text: " needs a second look" },
+      ],
+    },
+  ],
+};
+
+const SOURCED_QUOTE_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "sourcedQuote",
+      attrs: {
+        sourceType: "ticket",
+        sourceId: "ticket-7",
+        sourceEpicId: "epic-9",
+      },
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "the acceptance criteria" }],
+        },
+      ],
+    },
+    { type: "paragraph", content: [{ type: "text", text: "does this hold?" }] },
+  ],
+};
+
+const LIST_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "foo" }] },
+          ],
+        },
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "bar" }] },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+const DIAGRAM_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "mermaidBlock", attrs: { code: "graph TD;\n  Start-->Done;" } },
+  ],
+};
+
+const UNKNOWN_NODE_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "look at this" }] },
+    { type: "someFutureEmbed", attrs: { widgetId: "w-1" } },
+  ],
+};
+
+const THIRD_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "Third draft" }] },
+  ],
 };
 
 const IMAGE_CONTENT: JsonContent = {
@@ -109,10 +245,111 @@ interface Harness {
   callbacks(): ChatStreamCallbacks;
 }
 
+interface ProtocolChainHarness {
+  readonly handle: ChatSessionStoreHandle;
+  readonly chatStreamClient: ChatStreamClient;
+  readonly session: ProtocolMockStreamSession;
+}
+
+class ProtocolMockStreamSession implements IStreamSession {
+  private statusChangeHandler: StatusChangeHandler | null = null;
+
+  onServerFrame(_handler: ServerFrameHandler): void {
+    // Protocol-chain tests only need connection status + schema version.
+  }
+
+  onStatusChange(handler: StatusChangeHandler): void {
+    this.statusChangeHandler = handler;
+  }
+
+  sendClientFrame(
+    _envelope: StreamFrameEnvelope,
+    _binaryPayload: Uint8Array | null,
+  ): void {
+    // Protocol-chain tests only need status + schema version, not outbound frames.
+  }
+
+  /**
+   * The version THIS session negotiated - what `ChatStreamClient` reads to gate
+   * steering. Set by the owning mock client; every chat tab is its own session,
+   * so the gate must not be answerable from a client-wide value.
+   */
+  negotiatedSchemaVersion: SchemaVersion | null = null;
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.negotiatedSchemaVersion;
+  }
+
+  requestReconnect(): void {
+    // No-op: reconnect is owned by the real StreamSession.
+  }
+
+  close(): void {
+    this.statusChangeHandler?.("closed", { kind: "caller" });
+  }
+
+  emitStatus(
+    status: "connecting" | "open" | "reconnecting" | "closed",
+    reason: StreamCloseReason | null,
+  ): void {
+    if (this.statusChangeHandler !== null) {
+      this.statusChangeHandler(status, reason);
+    }
+  }
+}
+
+class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
+  readonly session = new ProtocolMockStreamSession();
+  private readonly negotiatedVersion: SchemaVersion;
+
+  constructor(negotiatedVersion: SchemaVersion) {
+    super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => null,
+      bearer: () => null,
+      auth: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: {
+        create: () => {
+          throw new Error(
+            "ProtocolMockWsStreamClient should not open a websocket",
+          );
+        },
+      },
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    this.negotiatedVersion = negotiatedVersion;
+    this.session.negotiatedSchemaVersion = negotiatedVersion;
+  }
+
+  override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
+    _method: Method,
+    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    return this.session;
+  }
+
+  override getMethodSchemaVersion<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(method: Method): SchemaVersion | null {
+    if (method === "chat.subscribe") return this.negotiatedVersion;
+    return null;
+  }
+}
+
 function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -125,6 +362,7 @@ function createHarness(): Harness {
         sendAction: (frame) => {
           sent.push(frame);
         },
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
     },
@@ -136,6 +374,51 @@ function createHarness(): Harness {
       if (callbacks === null) throw new Error("Expected callbacks");
       return callbacks;
     },
+  };
+}
+
+function createProtocolChainHarness(
+  negotiatedVersion: SchemaVersion,
+): ProtocolChainHarness {
+  const mockWs = new ProtocolMockWsStreamClient(negotiatedVersion);
+  const created: { client: ChatStreamClient | null } = { client: null };
+  const handle = createChatSessionStore({
+    hostId: "host-a",
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    userId: OWNER_ID,
+    onAuthError: null,
+    onProviderAuthError: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: (epicId, chatId, nextCallbacks) => {
+      const client = new ChatStreamClient({
+        wsStreamClient: mockWs,
+        epicId,
+        chatId,
+        callbacks: nextCallbacks,
+      });
+      created.client = client;
+      return {
+        sendAction: (frame) => {
+          client.sendAction(frame);
+        },
+        sameTurnSteeringProtocolSupported: () =>
+          client.sameTurnSteeringProtocolSupported(),
+        interviewSettlementActionsProtocolSupported: () =>
+          client.interviewSettlementActionsProtocolSupported(),
+        close: () => {
+          client.close();
+        },
+      };
+    },
+  });
+  if (created.client === null) {
+    throw new Error("Expected protocol chain factory to run");
+  }
+  return {
+    handle,
+    chatStreamClient: created.client,
+    session: mockWs.session,
   };
 }
 
@@ -153,6 +436,103 @@ function acceptLastAction(harness: Harness): string {
     action: frame.kind,
     status: "accepted",
     reason: null,
+    code: null,
+    backgroundStopTaskIds: [],
+  });
+  return frame.clientActionId;
+}
+
+function worktreeIntentFor(branchName: string): WorktreeIntent {
+  return {
+    entries: [
+      {
+        kind: "worktree",
+        scripts: null,
+        workspacePath: "/repo",
+        repoIdentifier: null,
+        isPrimary: true,
+        branch: {
+          type: "new",
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Drive a send that loses the restoration race while carrying `intent`, and
+ * return the statement it earned.
+ */
+function statedNoticeWithIntent(intent: WorktreeIntent): ChatErrorNotice {
+  const harness = createHarness();
+  const callbacks = harness.callbacks();
+  emitSnapshot(callbacks, "owner");
+  harness.handle.store
+    .getState()
+    .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+  useWorktreeIntentStagingStore.getState().setIntent(
+    {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    },
+    intent,
+  );
+  harness.handle.store
+    .getState()
+    .sendMessage(
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      SETTINGS,
+      "auto",
+    );
+  const second = harness.sent[1];
+  if (second.kind !== "send") throw new Error("Expected a send frame");
+  callbacks.onConnectionStatus("reconnecting", null);
+  emitSnapshot(callbacks, "owner");
+  return noticeFor(harness, second.clientActionId);
+}
+
+function sendTwo(
+  harness: Harness,
+  first: JsonContent,
+  second: JsonContent,
+): void {
+  harness.handle.store
+    .getState()
+    .sendMessage(first, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+  harness.handle.store
+    .getState()
+    .sendMessage(second, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+}
+
+function noticeFor(harness: Harness, clientActionId: string): ChatErrorNotice {
+  const notice = harness.handle.store
+    .getState()
+    .errorNotices.find((entry) => entry.clientActionId === clientActionId);
+  if (notice === undefined) throw new Error("Expected a statement");
+  return notice;
+}
+
+function rejectLastAction(harness: Harness, reason: string): string {
+  const frame = harness.sent.at(-1);
+  if (frame === undefined || frame.kind === "ping") {
+    throw new Error("Expected owner action frame");
+  }
+  harness.callbacks().onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    clientActionId: frame.clientActionId,
+    action: frame.kind,
+    status: "rejected",
+    reason,
     code: null,
     backgroundStopTaskIds: [],
   });
@@ -181,7 +561,66 @@ interface SnapshotFrameInput {
   readonly settings?: ChatRunSettings | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
+  readonly managedCommands?: ReadonlyArray<ManagedCommand>;
+  readonly heldUpdates?: ReadonlyArray<HeldManagedCommandUpdate>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
+  // Default to the idle/no-turn snapshot every existing caller relies on;
+  // the session-stop reconnect tests need a snapshot that reports a live
+  // turn instead.
+  readonly runStatus?: ChatRunStatus;
+  readonly activeTurn?: ChatActiveTurn | null;
+  readonly turnInProgress?: boolean;
+}
+
+/**
+ * Put a live turn on the wire, so the next send is QUEUED rather than rendered
+ * as an optimistic `pendingUserMessage` - the shape `-LJlY` lives in.
+ */
+function startTurn(callbacks: ChatStreamCallbacks): void {
+  callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    // `isChatSessionSettled` is false as soon as the run is not idle, which
+    // is all this needs - no activeTurn literal to keep in sync.
+    runStatus: "running",
+    activeTurn: null,
+  });
+}
+
+/** A reconnect snapshot that still shows the send parked in the host queue. */
+function emitSnapshotWithQueuedSend(
+  callbacks: ChatStreamCallbacks,
+  messageId: string,
+): void {
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [],
+    pendingFileEditApprovals: [],
+    queue: {
+      status: "running",
+      items: [
+        {
+          kind: "prompt",
+          queueItemId: `queue-${messageId}`,
+          messageId,
+          message: { kind: "user", content: CONTENT },
+          sender: { type: "user", userId: OWNER_ID },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          delivery: "next_turn",
+          status: "pending",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    },
+  });
 }
 
 function emitSnapshotFrame(input: SnapshotFrameInput): void {
@@ -206,6 +645,9 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
         events: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: {
         role: input.access,
@@ -213,17 +655,22 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         canAct: input.access === "owner",
       },
       queue: input.queue,
-      runStatus: "idle",
-      activeTurn: null,
+      runStatus: input.runStatus ?? "idle",
+      activeTurn: input.activeTurn ?? null,
       pendingApprovals: [],
       pendingInterviews: [...(input.pendingInterviews ?? [])],
       worktreeBinding: null,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [...input.pendingFileEditApprovals],
       accumulatedFileChanges: [],
+      managedCommands: [...(input.managedCommands ?? [])],
+      heldUpdates: [...(input.heldUpdates ?? [])],
       ...(input.backgroundItems === undefined
         ? {}
         : { backgroundItems: [...input.backgroundItems] }),
+      ...(input.turnInProgress === undefined
+        ? {}
+        : { turnInProgress: input.turnInProgress }),
     },
   });
 }
@@ -254,6 +701,9 @@ function emitSnapshotWithWorktree(
         claudePendingWakes: [],
         messages: [],
         events: [...events],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -263,6 +713,8 @@ function emitSnapshotWithWorktree(
       pendingInterviews: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
+      heldUpdates: [],
       worktreeBinding,
       missingWorktreePaths: [],
     },
@@ -355,6 +807,7 @@ function assistantSteerMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -374,7 +827,85 @@ function persistedUserMessage(
   };
 }
 
+function persistedInterviewMessage(
+  delivery: InterviewDeliveryProjection,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId: "assistant-interview",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-1",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "interview",
+        blockId: "interview-delivery-retry",
+        status: "completed",
+        timestamp: 4,
+        parentBlockId: null,
+        toolName: "AskUserQuestion",
+        title: null,
+        description: null,
+        questions: [
+          {
+            questionId: "q1",
+            question: "Which scope?",
+            header: null,
+            options: [],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Which scope?",
+            values: ["Alpha"],
+            notes: null,
+            selection: null,
+          },
+        ],
+        error: null,
+        metadata: null,
+        outcome: "answered",
+        draftAnswers: [],
+        settlement: { settlementId: "settlement-1", source: "gui" },
+        diagnostics: [],
+        delivery,
+        settlementExtensions: {},
+      },
+    ],
+    startedAt: 4,
+    blocksVersion: 1,
+    timestamp: 4,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
 describe("createChatSessionStore", () => {
+  // The worktree intent staging store is a module-global Zustand store; a test
+  // that leaves a staged (or restored-on-reject) intent behind would make later
+  // tests order-dependent. Reset it after every test so each starts clean.
+  // Interview drafts share the same module-global risk across lifecycle tests.
+  afterEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    // In-memory zustand state, so `localStorage.clear()` below does not touch
+    // it - a TEAM context set by a billing-drift test would otherwise leak
+    // into every case after it.
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    __resetAppLocalNotificationsStoreForTests();
+    window.localStorage.clear();
+  });
+
   it("clears a running chat when the stream closes", () => {
     const harness = createHarness();
 
@@ -410,11 +941,107 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().snapshotLoaded).toBe(false);
   });
 
+  it("emits each actual fatal close once and resurfaces a later close", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity(OWNER_ID);
+    const harness = createHarness();
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "CONNECTION_LOST",
+        reason: "Connection lost",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
+
+    harness.callbacks().onConnectionStatus("closed", reason);
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead(notificationId, Date.now());
+    harness.callbacks().onConnectionStatus("closed", reason);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).not.toBeNull();
+
+    harness.handle.store.getState().retry();
+    harness.callbacks().onConnectionStatus("closed", reason);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+  });
+
+  it("acknowledges an earlier stream failure only on a live completed turn", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity(OWNER_ID);
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
+    const fatalClose = {
+      kind: "fatalError" as const,
+      details: {
+        code: "CONNECTION_LOST",
+        reason: "Connection lost",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+
+    callbacks.onConnectionStatus("closed", fatalClose);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+
+    harness.handle.store.getState().retry();
+    const recoveredCallbacks = harness.callbacks();
+    startRunningTurn(recoveredCallbacks);
+    recoveredCallbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "turn.completed",
+        blockId: "turn-0",
+        timestamp: 4,
+        turnId: "turn-0",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+
+    recoveredCallbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "turn.completed",
+        blockId: "turn-1",
+        timestamp: 4,
+        turnId: "turn-1",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).not.toBeNull();
+
+    recoveredCallbacks.onConnectionStatus("closed", fatalClose);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+  });
+
   it("retry re-subscribes and clears the fatal close", () => {
     let factoryCalls = 0;
     let lastCallbacks: ChatStreamCallbacks | null = null;
     let closeCalls = 0;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -426,6 +1053,7 @@ describe("createChatSessionStore", () => {
         lastCallbacks = nextCallbacks;
         return {
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => {
             closeCalls += 1;
           },
@@ -465,6 +1093,7 @@ describe("createChatSessionStore", () => {
   it("retry ignores callbacks from the stale stream client", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -475,6 +1104,7 @@ describe("createChatSessionStore", () => {
         lastCallbacks = nextCallbacks;
         return {
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => undefined,
         };
       },
@@ -484,8 +1114,11 @@ describe("createChatSessionStore", () => {
       return lastCallbacks;
     };
     const staleCallbacks = callbacks();
+    staleCallbacks.onConnectionStatus("open", null);
+    expect(handle.store.getState().steerProtocolSupported).toBe(true);
 
     handle.store.getState().retry();
+    expect(handle.store.getState().steerProtocolSupported).toBe(false);
 
     staleCallbacks.onConnectionStatus("open", null);
     expect(handle.store.getState().connectionStatus).toBe("connecting");
@@ -527,6 +1160,778 @@ describe("createChatSessionStore", () => {
     );
   });
 
+  it("threads deliveryPolicy onto the send frame (Cmd+Enter after_safe_point)", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    const clientActionId = harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "after_safe_point",
+      );
+
+    expect(clientActionId).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    expect(frame.deliveryPolicy).toBe("after_safe_point");
+    expect(frame.settings).toEqual(SETTINGS);
+  });
+
+  it("threads steerProtocolSupported through real ChatStreamClient from negotiated chat.subscribe 1.4 (F1 protocol chain)", () => {
+    // Transport → store → resolver: getMethodSchemaVersion(chat.subscribe)=1.4
+    // → ChatStreamClient.sameTurnSteeringProtocolSupported()=false → store
+    // onConnectionStatus("open") sets steerProtocolSupported=false →
+    // resolveSubmitDeliveryPolicy returns "auto" (never after_safe_point).
+    const harness = createProtocolChainHarness({ major: 1, minor: 4 });
+    expect(harness.chatStreamClient.sameTurnSteeringProtocolSupported()).toBe(
+      false,
+    );
+
+    harness.session.emitStatus("open", null);
+    expect(harness.handle.store.getState().steerProtocolSupported).toBe(false);
+    expect(
+      resolveSubmitDeliveryPolicy({
+        source: "mod-enter",
+        activeTurnStatus: "running",
+        steerEnabled: true,
+        steerProtocolSupported:
+          harness.handle.store.getState().steerProtocolSupported,
+      }),
+    ).toBe("auto");
+
+    harness.handle.dispose();
+  });
+
+  it("threads steerProtocolSupported true through real ChatStreamClient from negotiated chat.subscribe 1.5 (F1 protocol chain mirror)", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 5 });
+    expect(harness.chatStreamClient.sameTurnSteeringProtocolSupported()).toBe(
+      true,
+    );
+
+    harness.session.emitStatus("open", null);
+    expect(harness.handle.store.getState().steerProtocolSupported).toBe(true);
+    expect(
+      resolveSubmitDeliveryPolicy({
+        source: "mod-enter",
+        activeTurnStatus: "running",
+        steerEnabled: true,
+        steerProtocolSupported:
+          harness.handle.store.getState().steerProtocolSupported,
+      }),
+    ).toBe("after_safe_point");
+
+    harness.handle.dispose();
+  });
+
+  it("dedupes an exact interview delivery retry and reconciles newer generations", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const failedDelivery = {
+      deliveryId: "delivery-1",
+      status: "failed" as const,
+      retryable: true,
+      generation: 0,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedInterviewMessage(failedDelivery)],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+
+    const identity = {
+      blockId: "interview-delivery-retry",
+      settlementId: "settlement-1",
+      deliveryId: "delivery-1",
+      generation: 0,
+    };
+    const first = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    expect(first).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.sent[0]?.kind).toBe("interviewDeliveryRetry");
+    expect(harness.sent[0]).toMatchObject({ generation: 0 });
+    expect(
+      harness.handle.store.getState().pendingActions[first ?? ""]
+        .interviewBlockId,
+    ).toBeNull();
+
+    // The same exact outbox identity is a single action while pending, and
+    // remains one action after its ACK moves it to acceptedActions.
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry(identity),
+    ).toBe(first);
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry(identity),
+    ).toBe(first);
+    expect(harness.sent).toHaveLength(1);
+
+    // Any authoritative status transition retires the accepted retry. A later
+    // failed generation is a fresh exact identity and can be retried once.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          ...failedDelivery,
+          status: "delivering",
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    expect(harness.handle.store.getState().acceptedActions).toEqual({});
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          ...failedDelivery,
+          generation: 1,
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const newer = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry({ ...identity, generation: 1 });
+    expect(newer).not.toBeNull();
+    expect(newer).not.toBe(first);
+    expect(harness.sent).toHaveLength(2);
+  });
+
+  it("retires an accepted retry when a reconnect snapshot leaves the failed tuple unchanged", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const delivery = {
+      deliveryId: "delivery-1",
+      status: "failed" as const,
+      retryable: true,
+      generation: 0,
+    };
+    const snapshot = (): void =>
+      emitSnapshotFrame({
+        callbacks,
+        access: "owner",
+        messages: [persistedInterviewMessage(delivery)],
+        queue: { status: "idle", items: [] },
+        pendingFileEditApprovals: [],
+      });
+    snapshot();
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const identity = {
+      blockId: "interview-delivery-retry",
+      settlementId: "settlement-1",
+      deliveryId: "delivery-1",
+      generation: 0,
+    };
+    const first = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    snapshot();
+    expect(harness.handle.store.getState().acceptedActions).toEqual({});
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const retried = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    expect(retried).not.toBeNull();
+    expect(retried).not.toBe(first);
+    expect(harness.sent).toHaveLength(2);
+  });
+
+  it("applies correlated lifecycle delivery updates without waiting for a snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          deliveryId: "delivery-1",
+          status: "pending",
+          retryable: true,
+          generation: 0,
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-1",
+        status: "failed",
+        retryable: true,
+        generation: 1,
+      },
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      settlement: { settlementId: "settlement-1", source: "gui" },
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      delivery: {
+        deliveryId: "delivery-1",
+        status: "failed",
+        generation: 1,
+      },
+    });
+  });
+
+  it("installs lifecycle authority on a streaming block and ignores a stale settlement", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-old",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...existing,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-new",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-new",
+        status: "failed",
+        retryable: true,
+        generation: 0,
+      },
+    });
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Stale failure",
+      resolvedAt: 6,
+      settlementId: "settlement-stale",
+      settlementSource: "runtime",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      status: "completed",
+      answers: [{ values: ["Beta"] }],
+      error: null,
+      outcome: "answered",
+      settlement: { settlementId: "settlement-new", source: "gui" },
+      delivery: { deliveryId: "delivery-new", status: "failed" },
+    });
+  });
+
+  it("applies a lifecycle frame only to the newest unresolved owner when block ids repeat", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const historical = persistedInterviewMessage({
+      deliveryId: "delivery-old",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const current = persistedInterviewMessage({
+      deliveryId: "delivery-placeholder",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const currentBlock = current.blocks[0];
+    if (currentBlock.type !== "interview") {
+      throw new Error("Expected interview");
+    }
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        { ...historical, messageId: "assistant-historical" },
+        {
+          ...current,
+          messageId: "assistant-current",
+          blocks: [
+            {
+              ...currentBlock,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // An unchanged update for the older exact settlement must still count as
+    // routed; it must not fall through and install old authority on the newer
+    // unresolved row that happens to reuse the block id.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 4,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-old",
+        status: "pending",
+        retryable: true,
+        generation: 0,
+      },
+    });
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-current",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 6,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-old",
+        status: "failed",
+        retryable: true,
+        generation: 1,
+      },
+    });
+
+    const messages = harness.handle.store.getState().messages;
+    const oldBlock =
+      messages[0]?.role === "assistant" ? messages[0].blocks[0] : null;
+    const newBlock =
+      messages[1]?.role === "assistant" ? messages[1].blocks[0] : null;
+    expect(oldBlock).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      settlement: { settlementId: "settlement-1" },
+      delivery: { deliveryId: "delivery-old", generation: 1 },
+    });
+    expect(newBlock).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Beta"] }],
+      settlement: { settlementId: "settlement-current" },
+    });
+  });
+
+  it("preserves the current pending owner when historical lifecycle frames reuse its block id", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "interview-delivery-retry";
+    const historicalAnswered = persistedInterviewMessage({
+      deliveryId: "delivery-historical-answered",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const historicalErrored = persistedInterviewMessage({
+      deliveryId: "delivery-historical-errored",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const current = persistedInterviewMessage({
+      deliveryId: "delivery-current-placeholder",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const answeredBlock = historicalAnswered.blocks[0];
+    const erroredBlock = historicalErrored.blocks[0];
+    const currentBlock = current.blocks[0];
+    if (
+      answeredBlock.type !== "interview" ||
+      erroredBlock.type !== "interview" ||
+      currentBlock.type !== "interview"
+    ) {
+      throw new Error("Expected interview blocks");
+    }
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...historicalAnswered,
+          messageId: "assistant-historical-answered",
+          blocks: [
+            {
+              ...answeredBlock,
+              settlement: {
+                settlementId: "settlement-historical-answered",
+                source: "gui",
+              },
+            },
+          ],
+        },
+        {
+          ...historicalErrored,
+          messageId: "assistant-historical-errored",
+          blocks: [
+            {
+              ...erroredBlock,
+              settlement: {
+                settlementId: "settlement-historical-errored",
+                source: "gui",
+              },
+            },
+          ],
+        },
+        {
+          ...current,
+          messageId: "assistant-current-pending",
+          blocks: [
+            {
+              ...currentBlock,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Beta"], otherText: "", otherSelected: false }],
+    };
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+    const actionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (actionId === null) throw new Error("Expected interview answer action");
+
+    const expectCurrentOwnerStatePreserved = (): void => {
+      expect(harness.handle.store.getState().pendingInterviews).toEqual([
+        { blockId, requestedAt: 2 },
+      ]);
+      expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+    };
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+      settlementId: "settlement-historical-answered",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expectCurrentOwnerStatePreserved();
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: actionId,
+      action: "interviewAnswer",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Historical failure",
+      resolvedAt: 5,
+      settlementId: "settlement-historical-errored",
+      settlementSource: "gui",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+    expectCurrentOwnerStatePreserved();
+    expect(
+      harness.handle.store.getState().acceptedActions[actionId],
+    ).toBeDefined();
+  });
+
+  it("does not let an ambiguous legacy cleanup overwrite a terminal outcome", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-legacy",
+      status: "delivered",
+      retryable: false,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [{ ...existing, settlement: null, delivery: null }],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Late ambiguous cleanup",
+      resolvedAt: 6,
+      settlementId: null,
+      settlementSource: null,
+      outcome: null,
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block = message.role === "assistant" ? message.blocks[0] : null;
+    expect(block).toMatchObject({
+      status: "completed",
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      error: null,
+    });
+  });
+
+  it("keeps a null lifecycle outcome ambiguous even when provenance is present", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-unknown",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...existing,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Older host did not classify this result",
+      resolvedAt: 5,
+      settlementId: "settlement-unknown",
+      settlementSource: "runtime",
+      outcome: null,
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      status: "errored",
+      error: "Older host did not classify this result",
+      outcome: null,
+      settlement: null,
+    });
+  });
+
+  it("does not emit an interview delivery retry on a pre-1.7 chat session", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 6 });
+    harness.session.emitStatus("open", null);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry({
+        blockId: "interview-delivery-retry",
+        settlementId: "settlement-1",
+        deliveryId: "delivery-1",
+        generation: 0,
+      }),
+    ).toBeNull();
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
+    ).toBe(false);
+    harness.handle.dispose();
+  });
+
+  it("enables interview delivery retry from a negotiated 1.7 session", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 7 });
+    harness.session.emitStatus("open", null);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
+    ).toBe(true);
+    harness.handle.dispose();
+  });
+
   it("tracks send actions until actionAck and accepts host messages", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -534,7 +1939,12 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
 
     expect(clientActionId).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
@@ -592,6 +2002,7 @@ describe("createChatSessionStore", () => {
     emitSnapshot(harness.callbacks(), "owner");
     const key: WorktreeStagingKey = {
       surface: "owner",
+      hostId: "host-a",
       epicId: EPIC_ID,
       ownerKind: "chat",
       ownerId: CHAT_ID,
@@ -618,7 +2029,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
 
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
@@ -636,7 +2052,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
     // Remembered per-epic so reopening the epic restores the same picks.
     expect(
-      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, "host-a"),
     ).not.toBeNull();
     expect(harness.handle.store.getState().missingWorktreePaths).toEqual([]);
     // A worktree-creating send IS echoed optimistically (like every other
@@ -650,13 +2066,2443 @@ describe("createChatSessionStore", () => {
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
   });
 
+  it("restores a staged worktree intent when the send is rejected", () => {
+    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected send frame");
+    }
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "Stop the active chat run before rebinding its worktree.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("restores a staged worktree intent when an edit-and-resend is rejected", () => {
+    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    // Seed the message the edit targets so `editUserMessage` has something to
+    // rewrite. A stopped first message is the real-world trigger for this path.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+    expect(frame.worktreeIntent).toEqual(intent);
+    // The dispatch consumes the slot up front (mirrors send).
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "feat already exists; choose a new branch name.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    // The rejected edit puts the selection back, so the chip reflects the
+    // worktree the user chose rather than silently reverting to the binding.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("restores a staged worktree intent when a pending edit is swept after reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+    // Dispatch consumed the slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    // Connection drops before the ack (epoch bumps), then a fresh snapshot
+    // arrives with the edit still un-acked: the stale pending is swept, and the
+    // sweep restores its staged intent instead of leaving the slot cleared for
+    // the next resend to run against the prior binding.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  // R14 `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
+  // action, so it inherits the rejection path's ownership rule - a swept
+  // action hands its pick back only when the outstanding consumption is ITS
+  // OWN. Here it is not: a later send consumed the slot and was ACCEPTED, so
+  // the mark names the send. Staging the swept edit's pick on top of that
+  // overwrites a binding an accepted send already ran against, and the next
+  // resend looks right while running somewhere else.
+  it("refuses a swept edit's hand-back when an accepted send owns the slot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const editIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "from-edit",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    const sendIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    };
+
+    // The edit consumes the slot and never gets its ack.
+    useWorktreeIntentStagingStore.getState().stageIntent(key, editIntent);
+    expect(
+      harness.handle.store.getState().editUserMessage({
+        targetMessageId: "msg-original",
+        content: CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+
+    // A later send stages its own pick, consumes, and IS accepted - so the
+    // outstanding mark is the send's, and the slot state is the send's.
+    useWorktreeIntentStagingStore.getState().stageIntent(key, sendIntent);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const sendFrame = harness.sent.find((frame) => frame.kind === "send");
+    if (sendFrame === undefined) throw new Error("Expected the send frame");
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: sendFrame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+
+    // The reconnect sweeps the still-pending edit. The accepted send IS in the
+    // transcript, so it is not restored - this is the sweep's own fallback
+    // deciding alone, with no prompt hand-back to defer to.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedUserMessage("msg-original"),
+        persistedUserMessage(sendFrame.messageId),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The edit does not own the consumption, so its pick stays gone. The
+    // accepted send decided this slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // `consumeForDispatch` is UNCONDITIONAL - a dispatch is the slot's current
+  // state whether or not it took a pick - so its rollback has to be too. A
+  // send refused locally (intent-free, racing a disconnection) never reached
+  // the wire, so the slot must come back exactly as it was found.
+  //
+  // Left marked, the mark names an action that never became pending: no ack,
+  // sweep or restoration can ever resolve it, so it stands until some
+  // unrelated user mutation clears it, and every owner-matched hand-back in
+  // the meantime is refused against a phantom owner.
+  it("leaves no consumption mark when a refused intent-free send found none", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // Nothing staged, and the connection is gone: the send is refused before
+    // it reaches the wire.
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    // The slot was empty and unmarked before the attempt; it is empty and
+    // unmarked after it.
+    expect(
+      useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // The other half of "exactly as it was found": when the slot was empty
+  // because an EARLIER dispatch took it, the rollback restores THAT mark.
+  //
+  // A send that never left the client supersedes nothing, so clearing the slot
+  // clean would be the opposite lie from the phantom - it reports "empty by
+  // user choice" and strands the earlier dispatch's pick just as surely.
+  it("hands a superseded dispatch its slot back when the next send is refused locally", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const editIntent = worktreeIntentFor("edit-branch");
+
+    // The edit consumes the slot and never gets its ack.
+    useWorktreeIntentStagingStore.getState().stageIntent(key, editIntent);
+    expect(
+      harness.handle.store.getState().editUserMessage({
+        targetMessageId: "msg-original",
+        content: CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+
+    // A send then finds the slot empty (the edit took the pick) and is refused
+    // locally. It never reached the host, so the edit is still the last
+    // dispatch that actually took this slot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    // The reconnect sweeps the still-pending edit. No prompt is handed back,
+    // so the sweep's own fallback decides - and it may, because the edit still
+    // owns the consumption.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(editIntent);
+  });
+
+  // The suspended paths are displaced by the consume too, and losing them
+  // fails the dispatch gate OPEN rather than merely losing a pick.
+  //
+  // `stagedWorktreeIntentIsSuspended` only refuses when the suspended set
+  // INTERSECTS the staged intent, so a slot routinely carries suspended paths
+  // the gate ignores - the workspace selector records every folder whose
+  // metadata has not resolved, staged or not. Here `/other-repo` is suspended
+  // while the pick names `/repo`: the send is allowed through, and if the
+  // refusal takes the suspended set with it, the retry of the very draft still
+  // sitting in the composer meets a gate with nothing left to test.
+  it("restores suspended workspace paths a refused send displaced", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent = worktreeIntentFor("feat");
+
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+    // Suspended, but for a folder the pick does not name - so the gate lets
+    // this send through rather than refusing it.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/other-repo"]);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    expect(
+      useWorktreeIntentStagingStore.getState().suspendedWorkspacePathsByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(["/other-repo"]);
+  });
+
+  // The restore path deliberately does NOT match on owner - a prompt and the
+  // worktree it was written for travel together, whichever dispatch consumed
+  // last. So the rollback must leave the slot still reporting what it truly
+  // is: empty BECAUSE a dispatch took it. Clearing it clean would report
+  // "empty by user choice" and send the prompt back unbound, which is the
+  // silent-local-run this whole path exists to prevent.
+  it("still returns a restored prompt's binding after a refused intent-free send", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent = worktreeIntentFor("send-branch");
+
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // A second send finds the slot empty and is refused locally.
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          SECOND_CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    // The reconnect snapshot omits the first send, so its prompt comes back -
+    // and its binding has to come with it.
+    emitSnapshot(callbacks, "owner");
+
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  // `-H9e2`: the two slots have to move TOGETHER.
+  //
+  // Two sends in flight, A then B, B's pick consumed last so the mark is B's.
+  // A's rejection lands first: it wins the prompt slot, but its worktree
+  // hand-back is refused because the mark is not its own - correct on its own
+  // terms. B's rejection lands second: it DOES own the mark, so it staged B's
+  // pick, while B's prompt was displaced into a statement. Net effect, from
+  // two individually-correct decisions: the composer holds A's prompt paired
+  // with B's worktree, and resending runs A's text in B's checkout.
+  it("never pairs one rejection's prompt with another's worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intentA = worktreeIntentFor("feat/a");
+    const intentB = worktreeIntentFor("feat/b");
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, intentA);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // B stages its own pick and consumes it, so the outstanding mark is B's.
+    useWorktreeIntentStagingStore.getState().setIntent(key, intentB);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const [first, second] = harness.sent;
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+
+    const reject = (clientActionId: string, reason: string): void => {
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId,
+        action: "send",
+        status: "rejected",
+        reason,
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    };
+
+    // A first: wins the prompt slot, does not own the mark.
+    reject(first.clientActionId, "Host refused A.");
+    // B second: owns the mark, but its prompt is displaced.
+    reject(second.clientActionId, "Host refused B.");
+
+    const state = harness.handle.store.getState();
+    // A's prompt is what came back...
+    expect(state.failedSendRestoration?.content).toEqual(CONTENT);
+    // ...so B's worktree must NOT be sitting under it.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    // B loses nothing by the refusal: its displaced statement carries its text
+    // AND names the worktree it was staged for, so it can be re-picked.
+    const statement = noticeFor(harness, second.clientActionId);
+    expect(statement.message).toContain("World");
+    expect(statement.message).toContain("feat/b");
+    // And A does not come back silently unbound: the slot is empty because a
+    // LATER dispatch took it, which is the one refusal the user cannot see.
+    expect(state.failedSendRestoration?.reason).toContain(
+      "taken by a later message",
+    );
+  });
+
+  // `-IfOZ`, at the seam that matters. A `WorktreeIntent` is one binding PER
+  // WORKSPACE FOLDER, and those are independent - so a sweep that takes one
+  // folder's worktree must not forfeit the others. The all-or-nothing refusal
+  // handed the prompt back with NO binding at all and said "its staged
+  // worktree no longer exists", and the surviving folders then resent against
+  // whatever the chat is bound to now.
+  it("restores the folders a partial sweep left alone", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const doomed: WorktreeIntent["entries"][number] = {
+      kind: "worktree",
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      scripts: null,
+      branch: {
+        type: "new",
+        name: "feat/doomed",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+    };
+    const survivor: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/other-repo",
+      repoIdentifier: null,
+      isPrimary: false,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [doomed, survivor] });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // Only the first folder's worktree is swept while the send is in flight.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    rejectLastAction(harness, "Host refused the send.");
+
+    // The survivor comes back; the swept folder does not.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [survivor] });
+    // And the sentence matches what actually happened. "It was not restored"
+    // would now be false in front of a folder that WAS - which is exactly the
+    // kind of confidently-wrong statement this family exists to avoid.
+    const sent = harness.sent[0];
+    if (sent.kind !== "send") throw new Error("Expected a send frame");
+    const notice = noticeFor(harness, sent.clientActionId);
+    // The partial sentence NAMES the folder that went and says the rest came
+    // back. An unnamed "its staged worktree no longer exists" could not tell
+    // the user which of two bindings they still have - which is the whole of
+    // `-Jy8x`.
+    expect(notice.message).toContain("feat/doomed");
+    expect(notice.message).toContain("the rest of its staging came back");
+    expect(notice.message).not.toContain("so it was not restored");
+  });
+
+  // `-LJlY`: a send dispatched while a turn is running renders as a QUEUED
+  // item, not a `pendingUserMessage`, so its recovery fields live only on the
+  // pending action - and the accepted ack moves that record to
+  // `acceptedActions`, which nothing walked. A connection dying between the
+  // ack and the host's durable confirmation took the only copy of the draft
+  // with it: a dead send with no account at all.
+  it("restores a queued send whose accepted ack died with the connection", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    // A turn is running, so the send is queued rather than optimistic.
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    acceptLastAction(harness);
+    // It has left `pendingActions` - this record is now the only copy.
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ action: "send", messageId: frame.messageId });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toMatchObject({
+      clientActionId: frame.clientActionId,
+      content: CONTENT,
+    });
+    expect(state.failedSendRestoration?.reason ?? "").toContain(
+      "A queued message was not confirmed after reconnect.",
+    );
+    // The record is gone, and so is the optimistic row standing in for it.
+    expect(state.acceptedActions[frame.clientActionId]).toBeUndefined();
+    expect(
+      state.queue.items.some(
+        (item) => item.kind === "prompt" && item.messageId === frame.messageId,
+      ),
+    ).toBe(false);
+  });
+
+  // `-MPLN`, the durability half. When the composer is busy the prompt cannot
+  // go there, so it becomes a LAST-COPY notice: never evicted, survives an
+  // unfocused pane, text inlined. Anything less and the displaced prompt is
+  // simply destroyed by the newer draft, which is the loss this whole surface
+  // exists to prevent - just arriving from the composer's side.
+  it("states a displaced restoration as a last-copy notice", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    // BY CODE: the rejection already left an `ACTION_REJECTED` notice under
+    // this same action id, and `noticeFor` would hand back whichever came
+    // first. One action, two speakers - the same fact the tracker key learned.
+    const stated = state.errorNotices.find(
+      (notice) =>
+        notice.clientActionId === rejected &&
+        notice.code === "SEND_NOT_RECORDED",
+    );
+    expect(stated).toBeDefined();
+    if (stated === undefined) throw new Error("Expected a last-copy statement");
+    // The account it was carrying survives...
+    expect(stated.message).toContain("Host refused the send.");
+    expect(stated.message).toContain("model");
+    // ...it says why the composer did not take it...
+    expect(stated.message).toContain("started another message");
+    // ...and the text itself is inlined, which is what makes it a last copy.
+    expect(stated.message).toContain("Hello");
+  });
+
+  // `-NRic`: the two passes divide one send between them - the accepted pass
+  // skips a send that still has an optimistic row because the settled pass
+  // owns the row - but nothing retired the RECORD. The next snapshot then
+  // found it never-confirmed, absent and from an earlier epoch, and recovered
+  // the same send a second time.
+  it("recovers a stranded send once, not again on the next snapshot", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // Not queued: it keeps its optimistic row, so the SETTLED pass owns it.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // Snapshot A settles the stranded row: recovery happens exactly here.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    // ...and the record went with the row.
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toBeUndefined();
+
+    // The composer takes it, freeing the slot.
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    // Snapshot B on a later epoch must find nothing left to recover.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.code === "SEND_NOT_RECORDED",
+      ),
+    ).toEqual([]);
+  });
+
+  // `P42f`: the same divide, at the LIVE site. `-NRic` fixed the record
+  // retirement where the settled pass runs inside a snapshot; the settled
+  // pass also runs on a live `turnStateChanged` frame, and THAT caller
+  // applied every field of the patch except the retirement. So a send
+  // settled live - prompt restored, row dropped - left its unconfirmed
+  // record behind, and the next snapshot found it absent, from an earlier
+  // epoch, never confirmed, and recovered the same send a second time. The
+  // reconciler's own docblock promises "no later pass can find the same send
+  // unaccounted for"; this held it at one of the two call sites.
+  it("recovers a live-settled stranded send once, not again on the next snapshot", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // Not queued: it keeps its optimistic row, so the SETTLED pass owns it.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // A LIVE settled frame - not a snapshot - settles the stranded row:
+    // recovery happens exactly here.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    // ...and the record went with the row, from this caller too.
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toBeUndefined();
+
+    // The composer takes it, freeing the slot.
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    // A snapshot on a later epoch must find nothing left to recover.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.code === "SEND_NOT_RECORDED",
+      ),
+    ).toEqual([]);
+  });
+
+  // `-N1x4`: the displaced path used to leave the older send's re-staged
+  // binding attached to the NEWER draft, so submitting that draft ran in a
+  // checkout the user never picked for it. "Visible in the picker" does not
+  // survive that - it is a silent wrong-checkout submit.
+  it("releases the binding when the prompt is displaced to a notice", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const staged: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [staged] });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    // The hand-back put the binding back with the prompt.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [staged] });
+
+    // The composer is busy, so the prompt is stated rather than restored -
+    // and its binding must not stay attached to somebody else's draft.
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // Per SITE, because the capture ordering is per site: the rejection version
+  // above passes on an ordering the two reconcile paths did not share. This is
+  // the SNAPSHOT path.
+  it("releases the binding when a snapshot-restored prompt is displaced", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+
+    // The snapshot pass restores it and hands the binding back.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
+
+    harness.handle.store
+      .getState()
+      .stateFailedSendRestoration(frame.clientActionId);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // ...and the TURN-SETTLED path, whose capture site is different again.
+  it("releases the binding when a turn-settled restored prompt is displaced", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+    // Accepted, so only a live turn settling can strand it.
+    acceptLastAction(harness);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
+
+    harness.handle.store
+      .getState()
+      .stateFailedSendRestoration(frame.clientActionId);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // ...and the notice then has to ASK for the re-pick, because nothing else
+  // will. With `handedBack: true` the clauses report a binding that came back,
+  // which is now false.
+  it("asks for a re-pick in a displaced notice", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          scripts: null,
+          branch: { type: "existing", name: "feat/kept" },
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (notice) =>
+          notice.clientActionId === rejected &&
+          notice.code === "SEND_NOT_RECORDED",
+      );
+    expect(stated?.message ?? "").toContain("feat/kept");
+    expect(stated?.message ?? "").toContain("re-pick");
+  });
+
+  // The refusal branch. `restoreStagedWorktreeIntent` has three doors that
+  // refuse BEFORE its write, and a refusal bumps no revision - so a capture
+  // taken unconditionally still matches at displacement and the release
+  // deletes whatever is standing at the key. Here that is the user's own
+  // unconsumed pick: nothing was handed back, so nothing may be taken back.
+  it("leaves a standing pick alone when the hand-back was refused", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // The send CONSUMES a staged pick, so its pending action carries a
+    // worktree intent - which is what gets a capture taken for it.
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+
+    // The user then stages a NEW pick. That write clears the dispatch mark, so
+    // the slot is no longer awaiting any dispatch's outcome and the hand-back
+    // below is REFUSED - their pick wins, correctly.
+    const standingPick: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/users-own-pick",
+      repoIdentifier: null,
+      isPrimary: true,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [standingPick] });
+
+    // A reconnect restoration arrives carrying a worktree intent...
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    // ...and the hand-back was refused: the user's pick still stands.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [standingPick] });
+
+    // The composer is busy, so the prompt is displaced. Nothing was staged by
+    // that hand-back, so the release must take nothing.
+    harness.handle.store
+      .getState()
+      .stateFailedSendRestoration(frame.clientActionId);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [standingPick] });
+  });
+
+  // The blind-clear concern that motivated the old call, as a TEST: the unwind
+  // is scoped by the staging revision the hand-back left, so anything that has
+  // touched the slot since - a user pick, a newer dispatch - makes it a no-op.
+  it("leaves a pick made after the hand-back alone", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    // The user picks something else AFTER the hand-back.
+    const ownPick: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/other-repo",
+      repoIdentifier: null,
+      isPrimary: true,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [ownPick] });
+
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    // Their pick stands: the revision moved, so the unwind declined to act.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [ownPick] });
+  });
+
+  // `-NRii`: this notice is the LAST accounting - the optimistic row is gone -
+  // so it owes the same content clauses the displaced statement gives. An
+  // attachment-only prompt produced a notice with no body AND no hint that
+  // anything had existed.
+  it("names attachment losses in a displaced restoration", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (notice) =>
+          notice.clientActionId === rejected &&
+          notice.code === "SEND_NOT_RECORDED",
+      );
+    expect(stated?.message ?? "").toContain("image attachment");
+    // The account is said ONCE: `reason` already carries it, so the shared
+    // builder must not render it a second time.
+    const occurrences =
+      (stated?.message ?? "").split("Host refused the send.").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  // Door 4: the ACK-FIRST ordering. Whether the accepted ack or the
+  // `queueChanged` broadcast wins is a race between an RPC settling and a
+  // broadcast landing. When the queue frame wins, the send is still pending
+  // and the queue pass transitions it - confirmed on the way through. When the
+  // ACK wins, the record has already left `pendingActions`, that pass is a
+  // no-op, and nothing ever marked it confirmed. Cancel-safety rests entirely
+  // on confirmation, so an unstamped record here is a canceled prompt waiting
+  // for the next reconnect to resurrect it.
+  it("stays quiet when the ack beat the queue frame and the user canceled", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // ACK FIRST: the record leaves `pendingActions` before the queue frame.
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toBeUndefined();
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: false });
+
+    // ...then the live queue frame reports it parked. Nothing is pending, so
+    // only the accepted-record stamping pass can see this.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: {
+        status: "running",
+        items: [
+          {
+            kind: "prompt",
+            queueItemId: `queue-${frame.messageId}`,
+            messageId: frame.messageId,
+            message: { kind: "user", content: CONTENT },
+            sender: { type: "user", userId: OWNER_ID },
+            settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
+            delivery: "next_turn",
+            status: "pending",
+            targetTurnId: null,
+            steerRequest: null,
+            fallbackReason: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // The user cancels; the queue empties and the reconnect snapshot lacks it.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "running", items: [] },
+    });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // Door 5: `messageAccepted`, and the one that closes the set. Every other
+  // door reads the queue or a snapshot, so an IMMEDIATE send - one that
+  // materializes straight into the transcript instead of parking - reaches
+  // none of them when its ack wins the race: the record leaves
+  // `pendingActions` at the ack, the two queue passes never see it, and this
+  // frame is the only thing that ever confirms it. Note the absence of
+  // `startTurn` below; that is the whole point of the shape.
+  //
+  // It matters because an accepted message can legitimately go away again.
+  // `editUserMessage` rewrites history from the edited message onward, so a
+  // message this frame appended is gone from every later snapshot - and an
+  // unstamped record reads that absence as death and pushes a deliberately
+  // removed prompt back at the user, the `-MPLI` resurrection through a fifth
+  // door.
+  it("stays quiet when messageAccepted confirmed the send and an edit then removed it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // ACK FIRST: the record leaves `pendingActions` still unconfirmed, and
+    // nothing queues an immediate send, so no queue pass can ever stamp it.
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: false });
+
+    // The host reports it in the transcript. That IS confirmation.
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+    expect(
+      harness.handle.store
+        .getState()
+        .messages.some((message) => message.messageId === frame.messageId),
+    ).toBe(true);
+
+    // ...then an edit rewrites history and the message is gone for good.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // The MIRROR order of door 5's race, which the stamp alone cannot reach.
+  // `messageAccepted` legitimately arrives before the ack - the
+  // `takeSetupFailedRestoration` docblock names this order as its slot 2 - and
+  // in that order door 5 fires while the send is still PENDING: no accepted
+  // record exists, the stamp finds nothing, and that is correct. The ack then
+  // births the record, and a hardcoded `false` at that birth threw away the
+  // sighting: the message sat host-authoritative in `state.messages` while its
+  // record said unconfirmed, so an `editUserMessage` removing it plus a
+  // reconnect resurrected it through the other arm of the same race. Birth
+  // must carry what the transcript already holds.
+  it("stays quiet when messageAccepted outran the ack and an edit then removed it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // TRANSCRIPT FIRST: the host reports the message while the send is still
+    // pending. Door 5 has no record to stamp, and correctly stamps nothing.
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toBeDefined();
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toBeUndefined();
+
+    // ...then the ack lands and the record is BORN. The transcript already
+    // holds the message, and the birth must say so.
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // An edit rewrites history; the message is gone from every later snapshot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // The negative at the same birth: the ack itself still confirms NOTHING.
+  // With no transcript sighting the record must be born unconfirmed, or every
+  // acked-then-dropped send would die silently - the dangerous direction.
+  // Stated as its own test so the claim survives independently of the door
+  // tests that assert it mid-flight.
+  it("births the ack record unconfirmed when the transcript lacks the message", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: false });
+  });
+
+  // The other half of door 5, and the half a stamp door fails at quietly: it
+  // must confirm the record the frame NAMES, not merely some unconfirmed send.
+  // A door that stamps the first record it finds silences a send the host
+  // never confirmed - the exact failure the stamp exists to prevent, inverted
+  // onto a different prompt. So the frame here names the SECOND send while the
+  // first is still unconfirmed, which is the only ordering that can tell the
+  // two apart.
+  it("confirms only the send messageAccepted names, and reports the other", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const [first, second] = harness.sent;
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: first.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    acceptLastAction(harness);
+
+    // The host dispatches the SECOND one out of the queue and reports it.
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: second.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: SECOND_CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // Named: confirmed, and so silent about its later absence.
+    expect(state.acceptedActions[second.clientActionId]).toMatchObject({
+      confirmedByHost: true,
+    });
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === second.clientActionId,
+      ),
+    ).toEqual([]);
+    // Not named: nothing ever confirmed it, it is gone, and it keeps its
+    // account. Asserted on the CONTENT, because a door that stamped the wrong
+    // record would still leave a restoration here - just the wrong prompt in
+    // it.
+    expect(state.failedSendRestoration?.clientActionId).toBe(
+      first.clientActionId,
+    );
+    expect(state.failedSendRestoration?.content).toEqual(CONTENT);
+  });
+
+  // `-MPLI` through the COMMON door. Confirmation arrives three ways and only
+  // one is a snapshot: a live `queueChanged` fires promptly on the dispatching
+  // connection and is how most queued sends are confirmed. That transition
+  // happens BECAUSE the host's queue reports the message, so it confirms - and
+  // a record left unstamped there resurrects a canceled prompt on the next
+  // reconnect exactly as an unstamped snapshot would.
+  it("stays quiet about a send confirmed by queueChanged and then canceled", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // Door 1: the host reports it queued. No snapshot involved.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: {
+        status: "running",
+        items: [
+          {
+            kind: "prompt",
+            queueItemId: `queue-${frame.messageId}`,
+            messageId: frame.messageId,
+            message: { kind: "user", content: CONTENT },
+            sender: { type: "user", userId: OWNER_ID },
+            settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
+            delivery: "next_turn",
+            status: "pending",
+            targetTurnId: null,
+            steerRequest: null,
+            fallbackReason: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // The user cancels it, so the queue - and every later snapshot - lacks it.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "running", items: [] },
+    });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // Door 2: a send still PENDING when a snapshot shows it queued transitions
+  // to accepted BECAUSE of that sighting, so it is confirmed on the way
+  // through. Same rule, third door - and the one an unstamped `false` would
+  // hide behind the other two passing.
+  it("stays quiet about a send a snapshot confirmed while still pending", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    // No ack: it is still pending when the snapshot arrives showing it queued.
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toBeDefined();
+
+    emitSnapshotWithQueuedSend(callbacks, frame.messageId);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // `-MPLI`: absence stops being evidence once presence has been SEEN. A
+  // queued send the user then cancels is absent from every later snapshot, and
+  // reading that as death pushed the deliberately-discarded prompt back at
+  // them - on top of the copy the cancel UX already put in the composer. The
+  // host queue is durable across restarts, so for an observed send a later
+  // absence can only be a cancel or a consumption; neither is ours to narrate.
+  it("stays quiet about a queued send it once saw and the user then canceled", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // A snapshot CONFIRMS it parked in the host queue...
+    emitSnapshotWithQueuedSend(callbacks, frame.messageId);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // ...the user cancels it, so every later snapshot lacks it.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // Same evidence bar as the pending pass, and for the same reason: a refresh
+  // snapshot on the LIVE connection has simply outrun the send.
+  it("keeps a just-accepted queued send when a same-connection snapshot omits it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // No connection transition: same epoch.
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(state.acceptedActions[frame.clientActionId]).toMatchObject({
+      action: "send",
+    });
+  });
+
+  // PRESENCE is authoritative whatever dispatched it: the host has the send
+  // parked in its queue, so nothing is owed and the record ages out normally.
+  it("settles a queued send the reconnect snapshot still shows queued", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotWithQueuedSend(callbacks, frame.messageId);
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // `-Jy83`: a `SEND_RESTORED` notice is replayable ON PURPOSE - it can arrive
+  // while the pane is unfocused, and the ring is its ONLY replay source. The
+  // ordinary 32-record cap deleted it before the pane ever came back, so the
+  // qualifications vanished while the restored prompt sat in the composer
+  // ready to resend. It is NOT last-copy (the draft is safe, so no permanent
+  // pin); the axis is different - survive EVICTION until DELIVERED.
+  it("keeps a restored-send notice through the cap until the pane sees it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    const restoredNotice = () =>
+      harness.handle.store
+        .getState()
+        .errorNotices.find((notice) => notice.code === "SEND_RESTORED");
+    expect(restoredNotice()).toBeDefined();
+
+    const flood = (from: number) => {
+      for (let index = from; index < from + MAX_ERROR_NOTICE_RECORDS * 2;) {
+        callbacks.onErrorNotice({
+          kind: "errorNotice",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          notice: {
+            code: "APPROVAL_NOT_PENDING",
+            message: `No longer pending (${index}).`,
+            severity: "warning",
+            clientActionId: `approval-${index}`,
+          },
+        });
+        index += 1;
+      }
+    };
+
+    // Undelivered: it outlives far more than the cap's worth of history.
+    flood(0);
+    expect(restoredNotice()).toBeDefined();
+
+    // Once the pane has actually shown it, it is ordinary history again and
+    // ages out like anything else - the exemption is a delivery guarantee,
+    // not a permanent pin.
+    harness.handle.store.getState().markNoticeDelivered(frame.clientActionId);
+    flood(1000);
+    expect(restoredNotice()).toBeUndefined();
+  });
+
+  // `-IfOo`: the qualifications were written to `failedSendRestoration.reason`
+  // and read by NOBODY. `nextHandoffTransition` is that field's only consumer
+  // and both branches are dead ends - `markFailedByAction` routes it to
+  // `InitialChatHandoff.failureReason`, which no component renders, and
+  // `restoreAndAckFailed` drops it. The ack is where the draft lands in the
+  // composer, and the one moment both branches share, so it speaks there.
+  it("states why a restored prompt came back when the composer takes it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+
+    // The chat's model moves while the send is in flight, so the restored
+    // prompt would resend under something else.
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const reason =
+      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
+    expect(reason).toContain("model");
+
+    // Nothing has been said yet - the draft is still in the slot.
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter((notice) => notice.code === "SEND_RESTORED"),
+    ).toEqual([]);
+
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.filter((notice) => notice.code === "SEND_RESTORED");
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toBe(reason);
+    expect(stated[0].severity).toBe("warning");
+  });
+
+  // Spoken exactly ONCE - when the rejection's own notice actually REACHED the
+  // user. `-LV77`: deferring to a notice that was merely appended left the
+  // prompt in the composer with silently changed semantics whenever the pane
+  // was unfocused, so the ack now asks the delivery axis rather than assuming.
+  it("does not repeat a rejection's account the user has already seen", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    // The rejection said it on its own surface, qualifications included.
+    const spoken = noticeFor(harness, rejected);
+    expect(spoken.message).toContain("Host refused the send.");
+    expect(spoken.message).toContain("model");
+
+    // The pane was active, so the toast layer showed it and said so.
+    harness.handle.store.getState().markNoticeDelivered(rejected);
+    harness.handle.store.getState().ackFailedSendRestoration(rejected);
+
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter((notice) => notice.code === "SEND_RESTORED"),
+    ).toEqual([]);
+  });
+
+  // ...and the other half of `-LV77`: the pane was NOT active, so nothing
+  // showed the rejection notice. Its qualifications must still reach the user,
+  // because the prompt is sitting in the composer ready to resend under a
+  // different model / account / delivery than it was written for.
+  it("says a rejection's account the user never saw when the draft returns", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    // No `markNoticeDelivered`: the pane was elsewhere, so the ring holds a
+    // notice nobody has seen.
+    harness.handle.store.getState().ackFailedSendRestoration(rejected);
+
+    const spoken = harness.handle.store
+      .getState()
+      .errorNotices.filter((notice) => notice.code === "SEND_RESTORED");
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].message).toContain("model");
+  });
+
+  // The flood case: the rejection notice can be EVICTED before the pane comes
+  // back, so it is not merely unseen but gone. The ack is the backstop either
+  // way, because it asks about delivery rather than about the ring.
+  it("says the account when the rejection notice was evicted before refocus", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `No longer pending (${index}).`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.some((notice) => notice.clientActionId === rejected),
+    ).toBe(false);
+
+    harness.handle.store.getState().ackFailedSendRestoration(rejected);
+
+    const spoken = harness.handle.store
+      .getState()
+      .errorNotices.filter((notice) => notice.code === "SEND_RESTORED");
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].message).toContain("model");
+  });
+
+  // The silence rule's premise is "the user can see why". It holds when their
+  // own pick stands in the slot, so a statement would narrate their own action
+  // back at them - and this is the case that must NOT start speaking.
+  it("says nothing about a worktree the user re-picked themselves", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/sent"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // The user picks again while the send is in flight, so their choice is
+    // standing in the slot when the rejection lands.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/repicked"));
+    rejectLastAction(harness, "Host refused the send.");
+
+    const reason =
+      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
+    expect(reason).toContain("Host refused the send.");
+    expect(reason).not.toContain("taken by a later message");
+    expect(reason).not.toContain("no longer exists");
+  });
+
+  // The other silent arm: no mark at all. The user cleared the slot, so
+  // sending without a worktree was their decision.
+  it("says nothing about a worktree the user cleared", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/sent"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    useWorktreeIntentStagingStore.getState().clear(key);
+    rejectLastAction(harness, "Host refused the send.");
+
+    const reason =
+      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
+    expect(reason).not.toContain("taken by a later message");
+  });
+
+  // The same pairing rule, reached through the OTHER door. The sweep's
+  // fallback defers to a prompt handed back by its own pass - but a prompt
+  // handed back by an EARLIER pass is still sitting in the slot, and staging a
+  // swept action's binding under it is the identical mismatch.
+  it("never pairs an earlier restored prompt with a swept action's worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // A rejected send claims the restoration slot; the composer has not
+    // consumed it yet.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the send.");
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+
+    // An edit then stages and consumes its own pick, and never gets its ack.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    expect(
+      harness.handle.store.getState().editUserMessage({
+        targetMessageId: "msg-original",
+        content: SECOND_CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+
+    // The reconnect sweeps the edit. No prompt is handed back by THIS pass, so
+    // the sweep's fallback would otherwise stage the edit's pick - underneath
+    // the send's prompt that is still waiting in the slot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  it("does not restore a rejected worktree intent after a newer explicit clear", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected send frame");
+    }
+
+    // The send consumed this slot. Clearing the now-empty slot is a deliberate
+    // newer choice to send without a workspace selection on retry.
+    useWorktreeIntentStagingStore.getState().clear(key);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "Stop the active chat run before rebinding its worktree.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  it("refuses chat send while staged worktree metadata is unresolved", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/repo"]);
+
+    const result = harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    expect(result).toBeNull();
+    expect(harness.sent).toEqual([]);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
+  });
+
   it("sends worktreeIntent null when nothing is staged", () => {
     useWorktreeIntentStagingStore.setState({ intentByKey: {} });
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent.at(-1);
     if (frame === undefined || frame.kind !== "send") {
       throw new Error("Expected send frame");
@@ -671,7 +4517,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -712,7 +4563,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -725,7 +4581,2093 @@ describe("createChatSessionStore", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
+      displacedReason: "Message was not confirmed after reconnect.",
+      stated: false,
     });
+  });
+
+  // The restoration slot is a single slot, first-writer-wins. A send that
+  // loses it is DEAD - its ack died with the connection and this snapshot is
+  // authoritative - so it is settled here and now rather than left pending.
+  // Leaving it eligible is what made the same statement re-fire on every later
+  // snapshot, and what let its stale text walk back into the composer after
+  // the user had already resent it.
+  it("settles and states a displaced send once, without re-presenting it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const first = harness.sent[0];
+    const second = harness.sent[1];
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const noticesFor = (clientActionId: string) =>
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.clientActionId === clientActionId,
+        );
+
+    // First writer keeps the slot: it has waited longest, so last-wins would
+    // bury it instead.
+    expect(harness.handle.store.getState().failedSendRestoration).toEqual({
+      clientActionId: first.clientActionId,
+      content: CONTENT,
+      reason: "Message was not confirmed after reconnect.",
+      displacedReason: "Message was not confirmed after reconnect.",
+      stated: false,
+    });
+    // The displaced send is stated, and the statement carries its text - the
+    // row is gone, so nothing else holds it.
+    expect(noticesFor(second.clientActionId)).toHaveLength(1);
+    expect(noticesFor(second.clientActionId)[0]).toMatchObject({
+      code: "SEND_NOT_RECORDED",
+      severity: "warning",
+    });
+    expect(noticesFor(second.clientActionId)[0].message).toContain("World");
+    // Settled, not parked: no pending action, no row that will never confirm.
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+
+    // THREAD 1: a second snapshot must not restate it. The action is gone, so
+    // there is nothing left to re-present - the ring keeps one statement
+    // rather than one per snapshot until it evicts unrelated notices.
+    emitSnapshot(callbacks, "owner");
+    emitSnapshot(callbacks, "owner");
+
+    expect(noticesFor(second.clientActionId)).toHaveLength(1);
+  });
+
+  // Once the row is dropped the notice IS the data, so it inherits the row's
+  // durability. The ring is a capped FIFO built for notice HISTORY, where
+  // eviction lost a pointer and the text survived on screen. Now eviction
+  // would destroy the draft outright - so a last-copy statement is not
+  // evictable history, it is the last copy.
+  it("keeps a last-copy statement when the notice ring overflows", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.clientActionId === second.clientActionId,
+        ),
+    ).toHaveLength(1);
+
+    // A busy chat buries it - a pane left inactive while ordinary notices
+    // arrive is exactly how this happens, and the mount replay never runs.
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `The approval request is no longer pending (${index}).`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+
+    const state = harness.handle.store.getState();
+    const survivor = state.errorNotices.filter(
+      (notice) => notice.clientActionId === second.clientActionId,
+    );
+    expect(survivor).toHaveLength(1);
+    expect(survivor[0].message).toContain("World");
+    // Ordinary history still rotates - the exemption is for last-copy
+    // records, not a licence for the ring to grow without bound.
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.code === "APPROVAL_NOT_PENDING",
+      ).length,
+    ).toBeLessThanOrEqual(MAX_ERROR_NOTICE_RECORDS);
+  });
+
+  // The exemption above is only safe because a last-copy record cannot pile
+  // up: one per settled send. Dedupe on insert is what guarantees that, and
+  // it is also the answer to a re-emitting path appending the same statement
+  // forever - the hazard the ring's append-only shape used to carry.
+  it("keeps one last-copy record per send however often it is appended", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // A FRESH object each time, so the dedupe cannot pass on reference
+    // equality - the store has to key on the client action id.
+    for (let index = 0; index < 5; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message:
+            "A message was not recorded.\n\nCopy the message below to resend it:\ndraft",
+          severity: "warning",
+          clientActionId: "send-1",
+        },
+      });
+    }
+
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
+    ).toHaveLength(1);
+  });
+
+  // R11 `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
+  // with no workspace association, so a multi-repo staging could not actually
+  // be re-picked. A SINGLE-workspace intent stays unqualified - the workspace
+  // is unambiguous there and naming it would be noise.
+  it("associates each staged branch with its workspace when several are staged", () => {
+    const notice = statedNoticeWithIntent({
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo/frontend",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat/fe",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo/backend",
+          repoIdentifier: null,
+          isPrimary: false,
+          branch: { type: "existing", name: "feat/be" },
+        },
+      ],
+    });
+
+    expect(notice.message).toContain("/repo/frontend");
+    expect(notice.message).toContain("/repo/backend");
+  });
+
+  it("leaves a single staged workspace unqualified", () => {
+    const notice = statedNoticeWithIntent(worktreeIntentFor("feat/only"));
+
+    expect(notice.message).toContain("feat/only");
+    expect(notice.message).not.toContain(" in /repo");
+  });
+
+  // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
+  // dispatched with no worktree still decides the slot - it just decides it is
+  // empty. Skipping a null claim let a stale edit's binding attach itself to a
+  // prompt that was sent without one: the same wrong-binding hazard as round
+  // 10, reached through the gap in the precedence rule.
+  it("leaves the slot empty when the winning prompt carried no worktree", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    // A send deliberately dispatched with NO worktree staged.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The send's prompt won restoration and was sent without a worktree - so
+    // the composer must be exactly that: prompt back, slot empty.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(SECOND_CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
+  // WHICH one. With a dead edit and a dead send both wanting their intent
+  // back, the sweep runs first and the older EDIT claimed the mark - so the
+  // send's recovered prompt landed in the composer bound to the edit's
+  // worktree. Wrong binding is worse than none: the resend looks right.
+  it("re-stages the intent belonging to the prompt it handed back", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const editIntent = worktreeIntentFor("feat/edit");
+    const sendIntent = worktreeIntentFor("feat/send");
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, editIntent);
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    // A newer pick, consumed by a SEND. The slot's last consumer is the send.
+    useWorktreeIntentStagingStore.getState().setIntent(key, sendIntent);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // Both die. The sweep restores the edit first, then the reconcile hands
+    // the send's prompt back.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The prompt in the composer is the SEND's...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(SECOND_CONTENT);
+    // ...so the worktree staged with it must be the SEND's, and never the
+    // edit's - an unrelated action's restoration must not bind this prompt.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(sendIntent);
+  });
+
+  // R13 `-BtWD`: the consume-site mirror of round 12's terminal-claim rule. An
+  // intent-FREE send skipped `consumeForDispatch` entirely, so the mark stayed
+  // owned by an earlier edit - and that edit's rejection handed E back even
+  // though a later send had superseded it. A dispatch's state is authoritative
+  // whether or not it took a pick.
+  it("supersedes an outstanding mark even when the send took no pick", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    const editFrame = harness.sent.at(-1);
+    if (editFrame === undefined || editFrame.kind !== "editUserMessage") {
+      throw new Error("Expected an edit frame");
+    }
+    // A later send with NOTHING staged - it takes no pick, but it is still a
+    // dispatch and still the current state of this slot.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: editFrame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "Host refused the edit.",
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a
+  // restoration hands back its OWN action's intent. Send 1 took A; the user
+  // then staged B and send 2 took that, so the mark describes B. A sweep that
+  // removes A leaves the mark untouched - and send 1's prompt comes back with
+  // a worktree that no longer exists.
+  it("refuses a hand-back whose own worktree was swept, not the last one's", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: { type: "existing", name: "feat/gone" },
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // A newer pick, consumed by a second send: the mark now describes THIS
+    // one, and the RESTORATION path is deliberately ownerless - so it stages
+    // send 1's own intent while the mark's entries belong to send 2.
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          // A DIFFERENT source, so the sweep below cannot touch this one.
+          branch: {
+            type: "new",
+            name: "feat/kept",
+            source: "develop",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // The sweep removes the FIRST send's branch. The mark's own entries
+    // survive it, so nothing about the mark changes.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "feat/gone" }],
+      });
+
+    // Both die; send 1's prompt wins the restoration slot, so its binding is
+    // what the arbiter tries to stage - and that worktree is gone.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit
+  // consumed E; the user then staged S and a send consumed THAT, so the slot's
+  // mark now belongs to the send's dispatch. If the edit's rejection lands
+  // first and hands E back, it takes a slot the send still needs AND
+  // overrides a newer pick the user actually made.
+  it("refuses a rejected action's pick when a later dispatch owns the slot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    const editFrame = harness.sent.at(-1);
+    if (editFrame === undefined || editFrame.kind !== "editUserMessage") {
+      throw new Error("Expected an edit frame");
+    }
+
+    // A NEWER pick, consumed by a send. The mark now represents that dispatch.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/send"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // The EDIT's rejection arrives.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: editFrame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "Host refused the edit.",
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+
+    // It must not take the slot: that mark is the send's outcome to claim,
+    // and E was superseded by the pick the user made after it.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect
+  // paths do, but states things through its own errorNotice rather than
+  // `failedSendRestoration.reason` - so the refusal was silent here while
+  // being spoken everywhere else.
+  it("says the worktree is gone on the rejection path too", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // The worktree the send is staged for is swept while it is in flight.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    const notice = noticeFor(harness, rejected);
+    expect(notice.message).toContain("Host refused the send.");
+    expect(notice.message).toContain(
+      "staged worktree a new branch feat/doomed from main no longer exists",
+    );
+  });
+
+  // `-CbBM`: the FOURTH surface. The send is accepted, its worktree is swept,
+  // and a LIVE `turnStateChanged` settles the turn before `messageAccepted`.
+  // The re-stage refuses correctly, but this path reached the refusal through
+  // `restoreStagedWorktreeIntent` directly - never computing the flag - so the
+  // prompt came back unbound with a reason that said only that it was not
+  // recorded. Same rule, fourth surface.
+  it("says the worktree is gone when a live turn settles the send", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // Accepted, so the action leaves `pendingActions` while its optimistic row
+    // waits for a `messageAccepted` that never arrives.
+    acceptLastAction(harness);
+    // The worktree it was staged for is swept while it waits.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    // The prompt came back...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    // ...and the slot stayed empty, because the re-stage refused.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    // So the reason has to say why.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.reason,
+    ).toContain(
+      "staged worktree a new branch feat/doomed from main no longer exists",
+    );
+  });
+
+  // `-HVoV`: the displaced-rejection branch. Another rejected send already
+  // holds the restoration slot, so this one is STATED rather than restored -
+  // and the early return into the shared statement builder bypassed the only
+  // branch that reported `worktreeGone`. The statement then told the user to
+  // re-pick a worktree that had been deleted underneath them.
+  it("does not tell a displaced rejection to re-pick a deleted worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // The first send is rejected and claims the restoration slot.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the first send.");
+
+    // The second carries a staged worktree that is swept while it is in
+    // flight, and is rejected into an occupied slot - so it is displaced.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+    const displaced = rejectLastAction(harness, "Host refused the second.");
+
+    const notice = noticeFor(harness, displaced);
+    // It still carries the only copy of the text.
+    expect(notice.message).toContain("World");
+    // But it must not send the user after a worktree that is gone.
+    expect(notice.message).toContain("no longer exists");
+    expect(notice.message).not.toContain("re-pick that before resending");
+  });
+
+  // R13 `-B5UX`: the founding invariant's last uncovered surface. Two sends
+  // rejected together - the first claims the restoration slot, the second's
+  // optimistic row is dropped, and the rejection path appended only the host's
+  // REASON. A dead send neither restored nor stated, on the one path that
+  // never learned the obligation the settle passes learned in rounds 1-4.
+  it("states a rejection-displaced send's text, not just the host's reason", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const first = harness.sent[0];
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+
+    const reject = (clientActionId: string) => {
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "Host refused the send.",
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    };
+    reject(first.clientActionId);
+    reject(second.clientActionId);
+
+    // First writer keeps the slot.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    // The second is DISPLACED, so its text has to be in its statement - the
+    // host's reason alone hands nothing back.
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.code).toBe("SEND_NOT_RECORDED");
+    expect(notice.message).toContain("World");
+    expect(notice.message).toContain("Host refused the send");
+  });
+
+  // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
+  // on its pendings while the frame carried the real context - so a
+  // Team-billed first message that stranded would report it was going to bill
+  // personal. A drift statement lying about the very thing it warns about.
+  it("keeps a seeded send's real billing context", () => {
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-7" },
+    });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    // Occupy the restoration slot so the seeded send is STATED, not restored.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store.getState().sendSeededUserMessage({
+      messageId: "seeded-1",
+      clientActionId: "seeded-action-1",
+      content: SECOND_CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+    });
+
+    // Billing moves; the seeded send's own context must be what is reported.
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const notice = noticeFor(harness, "seeded-action-1");
+    expect(notice.message).toContain("billing team team-7");
+  });
+
+  // R13 `-BmQJ`: delivery is dispatched per send and dies with the action, so
+  // a resend takes whatever the submit gesture implies then - a message queued
+  // to land after a safe point can come back and interrupt instead.
+  it("states a non-default delivery the send was queued with", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "after_safe_point",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("reached a safe point");
+  });
+
+  it("says nothing about a default delivery", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    // Naming `auto` every time would bury the case that matters.
+    expect(noticeFor(harness, second.clientActionId).message).not.toContain(
+      "queued to be delivered",
+    );
+  });
+
+  // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
+  // action, so a resend bills whatever the picker holds now. Unlike a model
+  // change it leaves no trace in the conversation.
+  it("states that a resend would bill a different account", () => {
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    // Settings must be seeded: the drift clause needs BOTH tuples, and a
+    // snapshot with `settings: null` short-circuits it before billing is
+    // ever compared.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-9" },
+    });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    // Billing sits in the same drift table as the run settings now, so it
+    // reads with them rather than as a separate sentence.
+    expect(notice.message).toContain("billing your personal account");
+    expect(notice.message).toContain("different settings now");
+  });
+
+  // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
+  // the user changes settings and a `turnStateChanged` settles the send before
+  // another snapshot lands, the live composer already holds the new tuple - so
+  // the clause was omitted exactly when the change most worth warning about
+  // had just been made.
+  it("compares drift against the live composer, not the last snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent.at(-1);
+    if (second === undefined || second.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // The user switches model. No snapshot follows - just the settle.
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings(UPDATED_SETTINGS);
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("gpt-5-codex");
+  });
+
+  // R9 `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
+  // dispatched under default effort and settled after the user picked an
+  // explicit one drifts, and dropping the field because its sent value was
+  // null hid exactly that.
+  it("states drift from a default to an explicit value", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const defaulted = { ...SETTINGS, serviceTier: null };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: defaulted,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: { ...defaulted, serviceTier: "priority" },
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("service tier default");
+  });
+
+  // R9 `-AQUo`: the exemption's cost must not be paid by ordinary history. The
+  // cap counted TOTAL length, so retained records crowded the ordinary window
+  // down to nothing and an ordinary notice was evicted before it was ever seen.
+  it("keeps the ordinary notice window intact alongside retained records", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message: `draft ${index}`,
+          severity: "warning",
+          clientActionId: `send-${index}`,
+        },
+      });
+    }
+    for (let index = 0; index < 4; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `pending ${index}`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+
+    const state = harness.handle.store.getState();
+    // Every draft survives...
+    expect(
+      state.errorNotices.filter((n) => n.code === "SEND_NOT_RECORDED"),
+    ).toHaveLength(MAX_ERROR_NOTICE_RECORDS);
+    // ...and ordinary history still gets its own window rather than one slot.
+    expect(
+      state.errorNotices.filter((n) => n.code === "APPROVAL_NOT_PENDING"),
+    ).toHaveLength(4);
+  });
+
+  // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up
+  // whatever the chat uses NOW. A different model changes what the agent does,
+  // silently - same statement-obligation class as the worktree.
+  it("names run settings that moved between dispatch and settle", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    // The chat's settings change while both sends are in flight.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: UPDATED_SETTINGS,
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("gpt-5-codex");
+    expect(notice.message).toContain("model");
+  });
+
+  it("says nothing about settings that did not move", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    // Stating the full tuple every time would bury the one field that moved.
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).not.toContain("different settings now");
+  });
+
+  // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
+  // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
+  // with no statement at all today, so the resend runs against the previous
+  // binding - the same silent-wrong-worktree class, two entry kinds over.
+  it("names a local workspace a stated send was staged to switch to", () => {
+    const notice = statedNoticeWithIntent({
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo/service-a",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    expect(notice.message).toContain("/repo/service-a");
+  });
+
+  it("names an imported worktree a stated send was staged to adopt", () => {
+    const notice = statedNoticeWithIntent({
+      entries: [
+        {
+          kind: "import",
+          workspacePath: "/repo",
+          worktreePath: "/repo/../wt-hotfix",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    expect(notice.message).toContain("/repo/../wt-hotfix");
+  });
+
+  // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
+  // implemented as "a newer REVISION wins". A second send consuming its own
+  // staged pick advances the revision and then leaves the slot EMPTY - so
+  // nothing live is at risk, yet the winner's binding was suppressed.
+  it("re-stages the winner's intent when later picks were consumed too", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const first = worktreeIntentFor("feat/first");
+    const second = worktreeIntentFor("feat/second");
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, first);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    acceptLastAction(harness);
+    // A second staged pick, consumed by its own send. The slot ends EMPTY.
+    useWorktreeIntentStagingStore.getState().setIntent(key, second);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    acceptLastAction(harness);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    // The first send won the restoration slot, so its prompt came back - and
+    // its binding has to come with it. Nothing live was there to protect.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(first);
+  });
+
+  // R6 `-cbH`: a diagram-only send used to be told it had "no recoverable
+  // content" while its source was deleted. The block is an ATOM - the source
+  // is in `attrs.code`, not in children - so the projection saw nothing, and
+  // classifying it text-complete on top of that was the defect.
+  it("hands back the source of a diagram-only send", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, DIAGRAM_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("graph TD;");
+    expect(notice.message).toContain("Start-->Done;");
+    expect(notice.message).not.toContain("no recoverable content");
+  });
+
+  // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding
+  // back; a send that loses the race is STATED, and its intent dies with the
+  // row. The staging slot is single and the winner holds it, so this cannot be
+  // a restore - it is a statement obligation, and the branch name is the part
+  // worth naming so the user can re-pick it deliberately.
+  it("names the worktree a stated send was going to run in", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    // First send takes the slot on reconnect; the second is stated.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat/rescue",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("World");
+    expect(notice.message).toContain("feat/rescue");
+  });
+
+  // R5 `-LSS`: the quoted draft must be the user's text, not a mangling of it.
+  // `plainTextFromNode` joins a list's children with "", so `foo`/`bar` come
+  // back as `foobar` - the statement tells them to copy something they never
+  // wrote, which is worse than saying nothing.
+  it("keeps list-item boundaries in the text it tells the user to copy", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, LIST_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).not.toContain("foobar");
+    // `-Jy8u`: with markers, the boundary is the marker rather than the bare
+    // newline - and this IS what the serializer sent, so the copy matches it.
+    expect(notice.message).toContain("- foo\n- bar");
+  });
+
+  // R5 `-KNQ`: the settled patch is spread into the state object, so its
+  // non-state keys land in the store. They are reconcile plumbing, not state,
+  // and every `useShallow` subscriber compares them forever after.
+  it("keeps reconcile-only patch keys out of the store state", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const stateKeys = Object.keys(harness.handle.store.getState());
+    expect(stateKeys).not.toContain("appendedErrorNotices");
+    expect(stateKeys).not.toContain("restoredWorktreeIntent");
+  });
+
+  // R4-2: a terminal/artifact quote projects through the blockquote branch to
+  // plain quoted text, dropping sourceType/sourceId/sourceEpicId - the
+  // provenance `serializeSourcedQuote` sends to the agent. Second member of
+  // the mention class: projection-loses-invisible-structure.
+  it("qualifies a statement whose quoted source loses its provenance", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, SOURCED_QUOTE_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("the acceptance criteria");
+    expect(notice.message).toContain("quote");
+  });
+
+  // The classification must be TOTAL. A node kind nobody has classified is
+  // exactly the third member of this class, and it has to fail CLOSED - a
+  // generic qualification - rather than pass silently as text-complete.
+  it("fails closed on an unrecognized node kind", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, UNKNOWN_NODE_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("look at this");
+    expect(notice.message).toContain("will not survive");
+  });
+
+  // Ordinary prose must NOT be qualified, or the warning becomes noise that
+  // hides the cases that matter.
+  it("does not qualify a plain-text statement", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("World");
+    expect(notice.message).not.toContain("will not survive");
+    expect(notice.message).not.toContain("re-add");
+    expect(notice.message).not.toContain("re-pick");
+  });
+
+  // R4-1: a staged worktree/branch choice rides the send, and dispatch clears
+  // the slot. The ACCEPTED ack drops the pending action - `acceptedActions`
+  // does not retain `restoreWorktreeIntent` - so a stop before
+  // `messageAccepted` leaves this pass restoring the prompt with no binding.
+  // Resubmitting would then run against the chat's PREVIOUS worktree: the
+  // silent-local-run `restoreStagedWorktreeIntentForPending` exists to stop,
+  // reached by a third caller that skipped it.
+  it("re-stages the worktree intent when a stranded send is restored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, intent);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    expect(frame.worktreeIntent).toEqual(intent);
+    // Dispatch consumed the slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    // Accepted - so the pending action is gone and only the optimistic row
+    // remains - then the turn is stopped before the message is appended.
+    acceptLastAction(harness);
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    // The prompt came back to the composer...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    // ...and so did the worktree it was going to run in.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("does not clobber a newer staged selection when restoring a stranded send", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const original: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    const newer: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: { type: "existing", name: "release/v1.2.0" },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, original);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    acceptLastAction(harness);
+    // The user picks a DIFFERENT worktree while the send is in flight. The
+    // revision guard's existing contract is that the newer pick wins.
+    useWorktreeIntentStagingStore.getState().setIntent(key, newer);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(newer);
+  });
+
+  // R3-1: absence from a snapshot is only evidence for a send dispatched on an
+  // EARLIER connection, where the ack is definitively dead. A send dispatched
+  // after this connection reached `open` can be missing simply because the
+  // snapshot was generated before it arrived - settling on that would tell the
+  // user to resend a message whose accepted ack is still on its way.
+  it("keeps a live-epoch send pending when the snapshot predates it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // Occupy the restoration slot, so the live send would take the
+    // displacement branch.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the send.");
+
+    // The connection drops and comes back; the composer gate reopens on
+    // `open`, so the user can send again before the snapshot lands.
+    callbacks.onConnectionStatus("reconnecting", null);
+    callbacks.onConnectionStatus("open", null);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const live = harness.sent.at(-1);
+    if (live === undefined || live.kind !== "send") {
+      throw new Error("Expected the live send frame");
+    }
+
+    // This connection's snapshot arrives without it - a race, not evidence.
+    emitSnapshot(callbacks, "owner");
+
+    const noticesForLive = () =>
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.clientActionId === live.clientActionId,
+        );
+
+    expect(
+      Object.keys(harness.handle.store.getState().pendingActions),
+    ).toContain(live.clientActionId);
+    expect(noticesForLive()).toEqual([]);
+
+    // The ack was always coming. It lands and reconciles normally - the
+    // message materializes and nothing ever told the user to resend it.
+    acceptLastAction(harness);
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: live.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: SECOND_CONTENT },
+        timestamp: 4,
+        sessionAnchor: null,
+      },
+    });
+
+    expect(
+      harness.handle.store
+        .getState()
+        .messages.some((message) => message.messageId === live.messageId),
+    ).toBe(true);
+    expect(noticesForLive()).toEqual([]);
+  });
+
+  // R3-2: a mention chip projects to plain `@path`, so the quoted text LOOKS
+  // complete - but the workspace, host and entity binding behind the chip do
+  // not survive, and pasting the text back does not rebuild it. A partial loss
+  // presented as a whole recovery is the same silence one content class over.
+  it("qualifies a statement whose mention chips lose their binding", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        MENTION_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (entry) => entry.clientActionId === second.clientActionId,
+      );
+    if (notice === undefined) throw new Error("Expected a statement");
+    // The text - including the @path - is carried...
+    expect(notice.message).toContain("@src/app.ts");
+    expect(notice.message).toContain("needs a second look");
+    // ...but the statement says the chip itself has to be re-picked, rather
+    // than implying the pasted text restores it.
+    expect(notice.message).toContain("mention");
+  });
+
+  // Attachment loss was detected by text-EMPTINESS, which is a proxy for
+  // "had attachments" and fails on the mixed case: text plus an image quotes
+  // the text and says nothing, so following the advice resends an incomplete
+  // request. Detection has to be structural.
+  it("warns about attachments a mixed-content statement cannot carry", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (entry) => entry.clientActionId === second.clientActionId,
+      );
+    if (notice === undefined) throw new Error("Expected a statement");
+    // The text is carried...
+    expect(notice.message).toContain("Review this screenshot");
+    // ...and the image it cannot carry is called out rather than dropped in
+    // silence behind a quote that looks complete.
+    expect(notice.message).toContain("attachment");
+  });
+
+  // THREAD 3: the statement tells the user to resend. If the displaced action
+  // were still restoration-eligible, freeing the slot would push its stale
+  // text back into the composer AFTER the resend - the notice's own advice
+  // manufacturing a duplicate send.
+  it("does not push a stated send back into the composer once the slot frees", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const first = harness.sent[0];
+    if (first.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    // The composer consumes the winning restoration, freeing the slot - what
+    // the handoff driver does once the user has the text back.
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(first.clientActionId);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+
+    // The user resends the displaced text under a new message id, then a
+    // later snapshot lands.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const resent = harness.sent.at(-1);
+    if (resent === undefined || resent.kind !== "send") {
+      throw new Error("Expected the resend frame");
+    }
+    acceptLastAction(harness);
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: resent.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: SECOND_CONTENT },
+        timestamp: 3,
+        sessionAnchor: null,
+      },
+    });
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "user",
+          messageId: resent.messageId,
+          sender: { type: "user", userId: OWNER_ID },
+          message: { kind: "user", content: SECOND_CONTENT },
+          timestamp: 3,
+          sessionAnchor: null,
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The slot stays empty: the displaced send was settled when it was
+    // stated, so there is nothing left to restore on top of the resend.
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+  });
+
+  // The settled-turn pass shares the single-slot rule - and unlike the
+  // snapshot path it DROPS the stranded rows, deliberately: an entry that
+  // survives keeps edit/delete gated off and renders a user message the host
+  // never recorded, which is the bug that pass exists to fix. So the row
+  // cannot hold the text here, and the statement has to carry it instead, or
+  // a stranded send that loses the slot is gone with nothing left to recover.
+  it("carries the text of every stranded send that loses the slot when the turn settles", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const send = (content: JsonContent): void => {
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          content,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        );
+    };
+
+    // Occupy the slot first, so BOTH stranded sends below lose it.
+    send(CONTENT);
+    const occupant = rejectLastAction(harness, "Host refused the send.");
+    // Two sends whose accepted ack landed - so they leave `pendingActions`
+    // and only the optimistic row remains - but whose message the host never
+    // appended. Nothing else holds this text.
+    send(SECOND_CONTENT);
+    const strandedA = acceptLastAction(harness);
+    send(THIRD_CONTENT);
+    const strandedB = acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // First writer keeps the slot.
+    expect(state.failedSendRestoration?.clientActionId).toBe(occupant);
+    // The rows are still dropped - that is what the settled pass is for.
+    expect(state.pendingUserMessages).toEqual([]);
+    // EVERY stranded send that lost the slot is stated, and each statement
+    // carries its own text, since nothing else holds it any more.
+    const noticeFor = (clientActionId: string) =>
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === clientActionId,
+      );
+    expect(noticeFor(strandedA)).toHaveLength(1);
+    expect(noticeFor(strandedA)[0]).toMatchObject({
+      code: "SEND_NOT_RECORDED",
+      severity: "warning",
+      clientActionId: strandedA,
+    });
+    expect(noticeFor(strandedA)[0].message).toContain("World");
+    expect(noticeFor(strandedB)).toHaveLength(1);
+    expect(noticeFor(strandedB)[0]).toMatchObject({
+      code: "SEND_NOT_RECORDED",
+      severity: "warning",
+      clientActionId: strandedB,
+    });
+    expect(noticeFor(strandedB)[0].message).toContain("Third draft");
+  });
+
+  // The settled pass has TWO callers - the reconnect snapshot above and the
+  // live `turnStateChanged` frame here - and the live one applies the patch by
+  // SPREADING it. A delta field cannot reach the `errorNotices` state key that
+  // way, so that caller needs its own append and its own coverage.
+  it("carries the stranded send's text when a live turnStateChanged settles the turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const occupant = rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const stranded = acceptLastAction(harness);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration?.clientActionId).toBe(occupant);
+    expect(state.pendingUserMessages).toEqual([]);
+    const stated = state.errorNotices.filter(
+      (notice) => notice.clientActionId === stranded,
+    );
+    expect(stated).toHaveLength(1);
+    expect(stated[0].code).toBe("SEND_NOT_RECORDED");
+    expect(stated[0].message).toContain("World");
+    // The rejection notice for the slot occupant is still in the ring - the
+    // delta was APPENDED, not written over it.
+    expect(
+      state.errorNotices.some((notice) => notice.clientActionId === occupant),
+    ).toBe(true);
+  });
+
+  it("states nothing extra when the only stranded send wins the free slot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const stranded = acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // It claimed the slot, so its text is in the composer - the notice would
+    // be noise, and the composer restoration is the statement.
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: stranded,
+      content: CONTENT,
+      reason: "The message was not recorded before the turn stopped.",
+      displacedReason: "The message was not recorded before the turn stopped.",
+      stated: false,
+    });
+    expect(state.errorNotices).toEqual([]);
+  });
+
+  it("keeps an in-flight send pending when a same-connection refresh snapshot omits it", () => {
+    // The host broadcasts snapshots on a live connection for unrelated
+    // reasons (a turn finishing, a pump-backlog backfill). One built before
+    // the host processed this send naturally lacks the message - that is not
+    // evidence the send was lost, and restoring it would re-fill the composer
+    // with a prompt that then lands in the transcript anyway.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+
+    // No connection-status transition: this snapshot rides the same epoch
+    // the send was dispatched on.
+    emitSnapshot(callbacks, "owner");
+
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({ action: "send", messageId: frame.messageId });
+    expect(
+      harness.handle.store
+        .getState()
+        .pendingUserMessages.map((message) => message.messageId),
+    ).toEqual([frame.messageId]);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+
+    // The ack and the durable message then settle it normally.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+    expect(
+      harness.handle.store
+        .getState()
+        .messages.some((message) => message.messageId === frame.messageId),
+    ).toBe(true);
   });
 
   it("clears a pending send when reconnect snapshot contains the accepted message", () => {
@@ -735,7 +6677,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -837,7 +6784,12 @@ describe("createChatSessionStore", () => {
 
     const sent = harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     if (sent === null) throw new Error("Expected send action");
     acceptLastAction(harness);
 
@@ -873,7 +6825,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -885,6 +6842,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: frame.messageId,
             message: {
@@ -920,7 +6878,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -998,24 +6961,17 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
       .getState()
-      .sendMessage(IMAGE_CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -1026,6 +6982,7 @@ describe("createChatSessionStore", () => {
     expect(state.queue.items).toHaveLength(1);
     const item = state.queue.items[0];
     expect(isOptimisticQueuedItem(item)).toBe(true);
+    if (item.kind !== "prompt") throw new Error("expected prompt item");
     expect(item.messageId).toBe(frame.messageId);
     expect(item.message.content).toEqual(IMAGE_CONTENT);
     expect(item.sender).toEqual({ type: "user", userId: OWNER_ID });
@@ -1040,7 +6997,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(IMAGE_CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -1085,24 +7047,17 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -1115,6 +7070,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "reminted-message",
             message: {
@@ -1153,24 +7109,17 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -1192,6 +7141,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: frame.messageId,
             message: {
@@ -1241,24 +7191,17 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -1271,6 +7214,7 @@ describe("createChatSessionStore", () => {
         status: "running",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "reminted-message",
             message: {
@@ -1303,7 +7247,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
@@ -1315,7 +7264,7 @@ describe("createChatSessionStore", () => {
       clientActionId: frame.clientActionId,
       action: "send",
       status: "rejected",
-      reason: "Only the chat owner can perform this action.",
+      reason: "Only the agent owner can perform this action.",
       code: "NOT_OWNER",
       backgroundStopTaskIds: [],
     });
@@ -1324,10 +7273,59 @@ describe("createChatSessionStore", () => {
       {
         clientActionId: frame.clientActionId,
         content: CONTENT,
-        reason: "Only the chat owner can perform this action.",
+        reason: "Only the agent owner can perform this action.",
       },
     );
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+  });
+
+  it("keeps the first restoration when a second send is rejected before the composer consumes it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    const rejectSend = (index: number, reason: string): string => {
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          index === 0 ? CONTENT : IMAGE_CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        );
+      const frame = harness.sent[index];
+      if (frame.kind !== "send") throw new Error("Expected send frame");
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason,
+        code: "ACTION_REJECTED",
+        backgroundStopTaskIds: [],
+      });
+      return frame.clientActionId;
+    };
+
+    const firstActionId = rejectSend(0, "First rejection.");
+    rejectSend(1, "Second rejection.");
+
+    // The slot is single-consumer: the second rejection must not clobber
+    // content the composer has not restored yet.
+    expect(harness.handle.store.getState().failedSendRestoration).toMatchObject(
+      {
+        clientActionId: firstActionId,
+        content: CONTENT,
+        reason: "First rejection.",
+      },
+    );
+
+    // Once acked, the slot is free again for the next failure.
+    harness.handle.store.getState().ackFailedSendRestoration(firstActionId);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
   });
 
   it("does not send owner actions for read-only viewers", () => {
@@ -1336,7 +7334,12 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
 
     expect(clientActionId).toBeNull();
     expect(harness.sent).toEqual([]);
@@ -1403,6 +7406,196 @@ describe("createChatSessionStore", () => {
     });
   });
 
+  it("attaches a staged worktree intent when editing and resending a stopped message", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-first-message",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+    expect(frame).toMatchObject({ worktreeIntent: intent });
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    expect(
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, "host-a"),
+    ).toEqual(intent);
+  });
+
+  it("does not restore a rejected edit intent over a newer selection", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const staleIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-stale",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, staleIntent);
+
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+
+    // While the edit is in flight the user re-picks. The rejection of the
+    // OLD edit must not clobber this newer choice.
+    const newerIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, newerIntent);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "feat already exists; choose a new branch name.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(newerIntent);
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("refuses edit and resend while staged worktree metadata is unresolved", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/repo"]);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+
+    expect(result).toBeNull();
+    expect(harness.sent).toEqual([]);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+    expect(
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, "host-a"),
+    ).toBeNull();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
   it("sends queue settings update owner actions", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
@@ -1456,6 +7649,7 @@ describe("createChatSessionStore", () => {
       settings: ChatRunSettings,
       status: "pending" | "steering",
     ) => ({
+      kind: "prompt" as const,
       queueItemId,
       messageId: `m-${queueItemId}`,
       message: {
@@ -1635,6 +7829,9 @@ describe("createChatSessionStore", () => {
       blockId: "question-snapshot",
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
@@ -1649,6 +7846,11 @@ describe("createChatSessionStore", () => {
       blockId: "question-live",
       reason: "Skipped",
       resolvedAt: 5,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
@@ -1675,7 +7877,7 @@ describe("createChatSessionStore", () => {
       .interviewAnswer("question-answer", []);
     const skipActionId = harness.handle.store
       .getState()
-      .interviewError("question-skip", "Skipped by user");
+      .interviewSkip("question-skip", "Skipped by user", []);
 
     expect(answerActionId).not.toBeNull();
     expect(skipActionId).not.toBeNull();
@@ -1683,6 +7885,12 @@ describe("createChatSessionStore", () => {
       "interviewAnswer",
       "interviewError",
     ]);
+    expect(harness.sent[1]).toMatchObject({
+      kind: "interviewError",
+      blockId: "question-skip",
+      reason: "Skipped by user",
+      settlement: { outcome: "skipped", draftAnswers: [] },
+    });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
       { blockId: "question-skip", requestedAt: 3 },
@@ -1738,10 +7946,441 @@ describe("createChatSessionStore", () => {
       blockId: "question-skip",
       reason: "Skipped by user",
       resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
     ]);
+  });
+
+  it("clears the interview draft on host interviewAnswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-answered";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: ["Alpha"], otherText: "", otherSelected: false }],
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toBeDefined();
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
+    });
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+  });
+
+  it("clears the interview draft on host interviewErrored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-errored";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 1,
+      answers: [
+        { selected: [], otherText: "skip me later", otherSelected: true },
+      ],
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toBeDefined();
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Skipped by user",
+      resolvedAt: 5,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+  });
+
+  it("does not clear the interview draft when an interview action is rejected", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-rejected";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Retry"], otherText: "", otherSelected: false }],
+    };
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+
+    const answerActionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (answerActionId === null) {
+      throw new Error("expected sent interviewAnswer action");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: answerActionId,
+      action: "interviewAnswer",
+      status: "rejected",
+      reason: "Interview answer rejected.",
+      code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([
+      { blockId, requestedAt: 2 },
+    ]);
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toEqual(draft);
+  });
+
+  it("refuses a second interviewAnswer while the first is still in flight", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-double-dispatch";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    const firstId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    const secondId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+
+    expect(firstId).not.toBeNull();
+    expect(secondId).toBe(firstId);
+    expect(
+      harness.sent.filter((frame) => frame.kind === "interviewAnswer"),
+    ).toHaveLength(1);
+    const pendingInterviewActions = Object.values(
+      harness.handle.store.getState().pendingActions,
+    ).filter((action) => action.interviewBlockId === blockId);
+    expect(pendingInterviewActions).toHaveLength(1);
+    expect(pendingInterviewActions[0]?.clientActionId).toBe(firstId);
+  });
+
+  it("allows a new interviewAnswer after a rejected ack and retains the draft", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-reject-retry";
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Retry"], otherText: "", otherSelected: false }],
+    };
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+
+    const firstId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (firstId === null) {
+      throw new Error("expected first interviewAnswer action");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: firstId,
+      action: "interviewAnswer",
+      status: "rejected",
+      reason: "Interview answer rejected.",
+      code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingActions[firstId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().pendingActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([
+      { blockId, requestedAt: 2 },
+    ]);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+
+    const retryId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    expect(retryId).not.toBeNull();
+    expect(retryId).not.toBe(firstId);
+    expect(
+      harness.sent.filter((frame) => frame.kind === "interviewAnswer"),
+    ).toHaveLength(2);
+    expect(
+      harness.handle.store.getState().pendingActions[retryId ?? ""],
+    ).toMatchObject({
+      action: "interviewAnswer",
+      interviewBlockId: blockId,
+    });
+  });
+
+  it("drops pending and accepted interview actions on interviewAnswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-resolve-actions";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: ["Done"], otherText: "", otherSelected: false }],
+    });
+
+    const actionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (actionId === null) {
+      throw new Error("expected interviewAnswer action");
+    }
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().pendingActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(
+      Object.values(harness.handle.store.getState().acceptedActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
+  });
+
+  it("drops pending and accepted interview actions on interviewErrored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-error-actions";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: [], otherText: "skip", otherSelected: true }],
+    });
+
+    const actionId = harness.handle.store
+      .getState()
+      .interviewSkip(blockId, "Skipped by user", []);
+    if (actionId === null) {
+      throw new Error("expected interview Skip action");
+    }
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Skipped by user",
+      resolvedAt: 5,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().acceptedActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
+  });
+
+  it("prunes orphan interview drafts on the first snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const keepBlock = "question-keep";
+    const dropBlock = "question-drop";
+    const keepDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+    };
+    const dropDraft = {
+      pageIndex: 1,
+      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
+    };
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
+    });
+
+    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, keepBlock)),
+    ).not.toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
+    ).toBeNull();
+  });
+
+  it("prunes orphan interview drafts on a later reconnect snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const keepBlock = "question-keep-later";
+    const dropBlock = "question-drop-later";
+    const keepDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+    };
+    const dropDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
+    };
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [
+        { blockId: keepBlock, requestedAt: 2 },
+        { blockId: dropBlock, requestedAt: 3 },
+      ],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
+
+    // Reconnect snapshot: only keepBlock is still pending.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
+    });
+
+    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
+    ).toBeNull();
   });
 
   it("tracks checkpoint restore action and lifecycle frames", () => {
@@ -1842,6 +8481,7 @@ describe("createChatSessionStore", () => {
         status: "paused",
         items: [
           {
+            kind: "prompt" as const,
             queueItemId: "queue-1",
             messageId: "message-queue-1",
             message: {
@@ -1884,19 +8524,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
     callbacks.onBlockDelta({
       kind: "blockDelta",
@@ -1930,6 +8558,7 @@ describe("createChatSessionStore", () => {
       blockId: "tool-1",
       parentTaskId: null,
       scheduledFor: null,
+      individualStopUnavailable: null,
     };
     emitSnapshotFrame({
       callbacks,
@@ -1987,6 +8616,7 @@ describe("createChatSessionStore", () => {
       blockId: "tool-2",
       parentTaskId: null,
       scheduledFor: null,
+      individualStopUnavailable: null,
     };
     callbacks.onTurnStateChanged({
       kind: "turnStateChanged",
@@ -2011,6 +8641,751 @@ describe("createChatSessionStore", () => {
       backgroundItems: [],
     });
     expect(harness.handle.store.getState().pendingBackgroundStops).toEqual({});
+  });
+
+  it("sends the session-scoped background stop immediately when no turn is running", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.sent[0].kind).toBe("stopBackgroundSession");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false, turnId: null });
+  });
+
+  it("stops the turn first when one is active, then sends the session stop once turnStateChanged reports it settled", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: runningActiveTurn(),
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.sent[0].kind).toBe("stop");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // The turn settles but the gated command is still running - the
+    // session-stop frame dispatches now instead of waiting forever.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(harness.sent).toHaveLength(2);
+    const sessionFrame = harness.sent.at(-1);
+    if (sessionFrame === undefined || sessionFrame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
+    expect(sessionFrame.kind).toBe("stopBackgroundSession");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+      turnId: null,
+    });
+  });
+
+  it("clears the pending session stop and records an error notice when the host rejects it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: frame.kind,
+      status: "rejected",
+      reason: "Session already stopped.",
+      code: "NO_ACTIVE_SESSION",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.handle.store.getState().errorNotices.at(-1)).toMatchObject({
+      clientActionId: frame.clientActionId,
+      message: "Session already stopped.",
+    });
+  });
+
+  it("no-ops when no command in the chat needs the session-scoped escalation", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const ungatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "sleep 5",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [ungatedCommand],
+    });
+
+    expect(harness.handle.store.getState().stopBackgroundSession()).toBeNull();
+    expect(harness.sent).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+  });
+
+  it("clears a session stop whose phase-two frame died with the connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false, turnId: null });
+
+    // The frame died with the connection before any ack arrived.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    // Stop all re-enables: re-issuing the escalation works.
+    expect(
+      harness.handle.store.getState().stopBackgroundSession(),
+    ).not.toBeNull();
+  });
+
+  it("clears a session stop whose phase-one turn-stop frame died with the connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("stop");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // The turn-stop frame died with the connection before any ack arrived;
+    // the reconnect snapshot still reports the turn as active.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    // No session-stop frame was dispatched off the still-active-turn snapshot.
+    expect(harness.sent).toHaveLength(1);
+  });
+
+  it("advances a deferred session stop from the reconnect snapshot when the settled turnStateChanged was missed", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const stopFrame = harness.sent.at(-1);
+    if (stopFrame === undefined || stopFrame.kind === "ping") {
+      throw new Error("Expected stop frame");
+    }
+
+    // The turn-stop ack lands and is accepted - the slot survives, still
+    // awaiting the settled frame, and its clientActionId is no longer a
+    // pending action (so a later reconnect sweep can't clear it that way).
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: stopFrame.clientActionId,
+      action: stopFrame.kind,
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // The connection drops before `turnStateChanged` reports the turn
+    // settled; the reconnect snapshot is the only signal that arrives, and
+    // it must advance the deferred stop on its own.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+    });
+
+    expect(harness.sent).toHaveLength(2);
+    const sessionFrame = harness.sent.at(-1);
+    if (sessionFrame === undefined || sessionFrame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
+    expect(sessionFrame.kind).toBe("stopBackgroundSession");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+      turnId: null,
+    });
+  });
+
+  it("releases the escalation when the turn stop is rejected while the turn still runs", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const stopFrame = harness.sent.at(-1);
+    if (stopFrame === undefined || stopFrame.kind === "ping") {
+      throw new Error("Expected stop frame");
+    }
+
+    // The host rejects the turn stop while the turn is genuinely still
+    // running (no NO_ACTIVE_TURN race) - the escalation is dead.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: stopFrame.clientActionId,
+      action: stopFrame.kind,
+      status: "rejected",
+      reason: "Turn is still running.",
+      code: "TURN_ACTIVE",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.sent).toHaveLength(1);
+  });
+
+  it("still advances when the turn stop's rejection loses the race with the turn's natural end", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const stopFrame = harness.sent.at(-1);
+    if (stopFrame === undefined || stopFrame.kind === "ping") {
+      throw new Error("Expected stop frame");
+    }
+
+    // The turn ends naturally before the turn-stop's rejected ack arrives -
+    // `onTurnStateChanged`'s state-based dispatch already advances to phase
+    // two here, ahead of the ack.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(harness.sent).toHaveLength(2);
+    const sessionFrame = harness.sent.at(-1);
+    if (sessionFrame === undefined || sessionFrame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
+    expect(sessionFrame.kind).toBe("stopBackgroundSession");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+      turnId: null,
+    });
+
+    // The turn-stop's late rejection targets a clientActionId the slot has
+    // already moved past (phase two now), so it changes nothing.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: stopFrame.clientActionId,
+      action: stopFrame.kind,
+      status: "rejected",
+      reason: "No active turn.",
+      code: "NO_ACTIVE_TURN",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+      turnId: null,
+    });
+  });
+
+  it("falls back to graceful per-item stops when the gated command settles on its own during wind-down", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-gated",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    };
+    const ungatedCommand: BackgroundItem = {
+      taskId: "task-ungated",
+      kind: "command",
+      title: "sleep 5",
+      blockId: "tool-2",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    };
+    const wakeup: BackgroundItem = {
+      taskId: "wake-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+      scheduledFor: 123456,
+    };
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand, ungatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("stop");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // The gated command finished on its own during wind-down - the ungated
+    // command and a scheduled wakeup remain when the turn settles.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [ungatedCommand, wakeup],
+    });
+
+    // No process-kill frame - the reason for one is gone. The confirmed
+    // "stop my background work" is honored via per-item stops that leave
+    // the wakeup scheduled, matching the confirmation's count.
+    expect(
+      harness.sent.some((frame) => frame.kind === "stopBackgroundSession"),
+    ).toBe(false);
+    expect(
+      harness.sent.some((frame) => frame.kind === "stopAllBackgroundItems"),
+    ).toBe(false);
+    const itemStops = harness.sent.filter(
+      (frame) => frame.kind === "stopBackgroundItem",
+    );
+    expect(itemStops.map((frame) => frame.taskId)).toEqual(["task-ungated"]);
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundStops,
+    ).toHaveProperty("task-ungated");
+  });
+
+  it("clears the escalation without firing when a different turn is seen active", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    const turnOne: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn: turnOne,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // A different turn is now running - a queued send started while the
+    // escalation was in flight. Firing at ITS end would stop work the user
+    // never confirmed stopping.
+    const turnTwo: ChatActiveTurn = {
+      ...turnOne,
+      turnId: "turn-2",
+      userMessageId: "message-2",
+    };
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: turnTwo,
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.sent).toHaveLength(1);
+
+    // Turn two settles - the released escalation must not resurrect itself.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(harness.sent).toHaveLength(1);
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+  });
+
+  it("latches the first turn id observed when the escalation was confirmed before the turn had one", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    // The request-to-turn activation window: the host reports a turn in
+    // progress before the turn record (and its id) exists.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: null,
+    });
+
+    // The original turn materializes with its id - the slot latches it.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: runningActiveTurn(),
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // A queued turn replaces it - the latched id makes it read as different,
+    // so the escalation releases instead of firing at turn-2's end.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: { ...runningActiveTurn(), turnId: "turn-2" },
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.sent).toHaveLength(1);
   });
 
   it("does not apply an ownerless detached background tool terminal to the active turn", () => {
@@ -2042,6 +9417,150 @@ describe("createChatSessionStore", () => {
         toolName: "Bash",
         agentMessageSend: null,
         backgroundTask: true,
+        imageResults: [],
+      },
+    });
+
+    const blocks = harness.handle.store.getState().liveAssistantMessage?.blocks;
+    expect(blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  // The codex analogue of the detached tool_call terminal above: codex
+  // backgrounds a plain `command` block, and its terminal lands as
+  // `command.completed` minutes after the row settled (live-repro: the card
+  // ticked forever and only "cleared" when the next send re-derived state).
+  it("routes a detached background command's terminal to the settled row that owns it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "assistant",
+          messageId: "assistant-settled",
+          sender: {
+            type: "agent",
+            harnessId: "codex",
+            agentId: "codex",
+            displayName: "Codex",
+            reply: { expectsReply: false },
+            inReplyTo: null,
+          },
+          blocks: [
+            {
+              type: "command",
+              blockId: "bg-command",
+              status: "streaming",
+              timestamp: 2,
+              command: "sleep 20 && echo done",
+              cwd: "/tmp",
+              exitCode: null,
+              backgroundTask: true,
+              stopped: false,
+            },
+          ],
+          startedAt: 2,
+          timestamp: 2,
+          turnId: "turn-settled",
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+          imageResolutions: [],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    // A NEXT turn is live (raised directly - `startRunningTurn` would emit its
+    // own snapshot and wipe the settled row above).
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: runningActiveTurn(),
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "command.completed",
+        blockId: "bg-command",
+        timestamp: 30,
+        command: "sleep 20 && echo done",
+        exitCode: 0,
+        backgroundTask: true,
+      },
+    });
+
+    const state = harness.handle.store.getState();
+    const settled = state.messages.find(
+      (message) => message.messageId === "assistant-settled",
+    );
+    if (settled?.role !== "assistant") {
+      throw new Error("Expected the settled assistant row");
+    }
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({
+        type: "command",
+        blockId: "bg-command",
+        status: "completed",
+        exitCode: 0,
+      }),
+    ]);
+    expect(state.liveAssistantMessage?.blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  it("does not apply an ownerless detached background command terminal to the active turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "command.completed",
+        blockId: "detached-command",
+        timestamp: 5,
+        command: "sleep 20 && echo done",
+        exitCode: 0,
+        backgroundTask: true,
       },
     });
 
@@ -2063,11 +9582,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "codex",
         model: "gpt-5.4",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -2134,11 +9654,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
         turnId: "turn-2",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-2",
         startedAt: 6,
@@ -2171,11 +9692,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
         turnId: "turn-local",
         status: "starting",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -2221,9 +9743,13 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
           ],
           events: [],
+          archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
         },
         access: {
           role: "owner",
@@ -2233,11 +9759,12 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-local",
           status: "starting",
           harnessId: "claude",
           model: "claude-sonnet",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 3,
@@ -2251,6 +9778,8 @@ describe("createChatSessionStore", () => {
         missingWorktreePaths: [],
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
       },
     });
     callbacks.onTurnStateChanged({
@@ -2260,11 +9789,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
         turnId: "turn-provider",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -2357,6 +9887,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
             {
@@ -2382,9 +9913,13 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
           ],
           events: [],
+          archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
         },
         access: {
           role: "owner",
@@ -2394,11 +9929,12 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-split",
           status: "running",
           harnessId: "claude",
           model: "claude-sonnet",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-split-run",
           startedAt: 3,
@@ -2412,6 +9948,8 @@ describe("createChatSessionStore", () => {
         missingWorktreePaths: [],
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
       },
     });
 
@@ -2537,11 +10075,12 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
         turnId: "turn-1",
         status: "running",
         harnessId: "claude",
         model: "claude-sonnet-4",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 1,
@@ -2792,7 +10331,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -2828,7 +10372,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -2909,7 +10458,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -3207,7 +10761,12 @@ describe("createChatSessionStore", () => {
 
     harness.handle.store
       .getState()
-      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
     const sent = harness.sent.at(-1);
     if (sent === undefined || sent.kind !== "send") {
       throw new Error("expected send frame");
@@ -3334,6 +10893,7 @@ function createCoalesceHarness(): CoalesceHarness {
   const manual = createManualCoordinator();
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -3342,7 +10902,11 @@ function createCoalesceHarness(): CoalesceHarness {
     streamFlushCoordinator: manual.coordinator,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
-      return { sendAction: () => undefined, close: () => undefined };
+      return {
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        close: () => undefined,
+      };
     },
   });
   return {
@@ -3355,6 +10919,38 @@ function createCoalesceHarness(): CoalesceHarness {
   };
 }
 
+function gatedCommandItem(): BackgroundItem {
+  return {
+    taskId: "task-1",
+    kind: "command",
+    title: "codex exec",
+    blockId: "tool-1",
+    parentTaskId: null,
+    scheduledFor: null,
+    individualStopUnavailable: {
+      providerLabel: "Codex",
+      minVersion: "0.146.0",
+    },
+  };
+}
+
+function runningActiveTurn(): ChatActiveTurn {
+  return {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
+    turnId: "turn-1",
+    status: "running",
+    harnessId: "codex",
+    model: "gpt-5-codex",
+    profileId: null,
+    userMessageId: "message-1",
+    startedAt: 3,
+    updatedAt: 3,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
 function startRunningTurn(callbacks: ChatStreamCallbacks): void {
   emitSnapshot(callbacks, "owner");
   callbacks.onTurnStateChanged({
@@ -3364,11 +10960,12 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
     chatId: CHAT_ID,
     runStatus: "running",
     activeTurn: {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
       model: "gpt-5-codex",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "message-1",
       startedAt: 3,
@@ -3427,6 +11024,84 @@ describe("blockDelta coalescing", () => {
     expect(harness.manual.pendingCount()).toBe(0);
 
     unsubscribe();
+  });
+
+  it("applies image resolution events to an ordinary live turn", () => {
+    const harness = createCoalesceHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    const emitResolution = (attachmentHash: string, timestamp: number): void =>
+      callbacks.onBlockDelta(
+        createImageResolutionUpdatedFrame({
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event: {
+            type: "image_resolution.updated",
+            blockId: "assistant-live-1",
+            messageId: "assistant-live-1",
+            timestamp,
+            turnId: "turn-1",
+            entry: {
+              source: "C:%5Cwork%5Cchart.png",
+              canonicalSource: "C:\\work\\chart.png",
+              state: "resolved",
+              attachmentHash,
+              mediaType: "image/png",
+              width: null,
+              height: null,
+            },
+          },
+        }),
+      );
+
+    emitResolution("hash-1", 11);
+    harness.manual.runAll();
+    let live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.messageId).toBe("assistant-live-1");
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
+
+    callbacks.onBlockDelta(
+      createImageResolutionUpdatedFrame({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "image_resolution.updated",
+          blockId: "assistant-old-1",
+          messageId: "assistant-old-1",
+          timestamp: 12,
+          turnId: "turn-old",
+          entry: {
+            source: "C:%5Cwork%5Cold.png",
+            canonicalSource: "C:\\work\\old.png",
+            state: "resolved",
+            attachmentHash: "stale-hash",
+            mediaType: "image/png",
+            width: null,
+            height: null,
+          },
+        },
+      }),
+    );
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
+
+    emitTextDelta(callbacks, "![chart](C:%5Cwork%5Cchart.png)", 12);
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.blocks).toHaveLength(1);
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
+    expect(live?.imageResolutionsVersion).toBe(1);
+
+    emitResolution("hash-2", 13);
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-2");
+    expect(live?.imageResolutionsVersion).toBe(2);
   });
 
   it("flushes buffered deltas before a consuming frame materializes the turn", () => {
@@ -3488,6 +11163,60 @@ describe("blockDelta coalescing", () => {
     harness.manual.runAll();
     expect(liveText(harness.handle)).toBe("");
   });
+
+  it("publishes a pending interview only once its streaming block is observable", () => {
+    // The host emits the interview's `blockDelta` before the
+    // `interviewRequested` frame, but the delta sits in the coalescing buffer
+    // until the next tick. If the pending id lands first, a host-pending
+    // interview is briefly visible with no `streaming` segment - which
+    // `findUnanswerableInterviews` reads as permanently stuck and offers to
+    // dismiss, cancelling a live question mid-Q&A.
+    const harness = createCoalesceHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "interview.requested",
+        blockId: "interview-1",
+        timestamp: 10,
+        toolName: "AskUserQuestion",
+        questions: [],
+      },
+    });
+    // Still buffered: nothing has reached the store yet.
+    expect(harness.manual.pendingCount()).toBe(1);
+
+    callbacks.onInterviewRequested({
+      kind: "interviewRequested",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-1",
+      requestedAt: 10,
+    });
+
+    // Read BEFORE any coordinator tick - this is the window the renderer would
+    // have rendered the escape hatch in.
+    const state = harness.handle.store.getState();
+    expect(state.pendingInterviews).toEqual([
+      { blockId: "interview-1", requestedAt: 10 },
+    ]);
+    const streamingInterviewIds = (
+      state.liveAssistantMessage?.blocks ?? []
+    ).flatMap((block) =>
+      block.type === "interview" && block.status === "streaming"
+        ? [block.blockId]
+        : [],
+    );
+    expect(streamingInterviewIds).toEqual(["interview-1"]);
+    // The consuming frame drained the buffer, so the tick has nothing left.
+    expect(harness.manual.pendingCount()).toBe(0);
+  });
 });
 
 describe("surface visibility rollup", () => {
@@ -3503,6 +11232,7 @@ describe("surface visibility rollup", () => {
       }),
     };
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -3511,6 +11241,7 @@ describe("surface visibility rollup", () => {
       streamFlushCoordinator: coordinator,
       streamClientFactory: () => ({
         sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       }),
     });
@@ -3548,11 +11279,12 @@ describe("in-flight block finalization on stop / steer", () => {
       chatId: CHAT_ID,
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
         turnId,
         status: "running",
         harnessId: "codex",
         model: "gpt-5-codex",
-        agentMode: "regular",
         profileId: null,
         userMessageId: "message-1",
         startedAt: 3,
@@ -3828,6 +11560,7 @@ describe("non-message pendings across a missed-ack reconnect", () => {
         blockId: "tool-1",
         parentTaskId: null,
         scheduledFor: null,
+        individualStopUnavailable: null,
       },
       {
         taskId: "task-accepted",
@@ -3836,6 +11569,7 @@ describe("non-message pendings across a missed-ack reconnect", () => {
         blockId: "tool-2",
         parentTaskId: null,
         scheduledFor: null,
+        individualStopUnavailable: null,
       },
     ];
     emitSnapshotFrame({
@@ -3898,5 +11632,695 @@ describe("non-message pendings across a missed-ack reconnect", () => {
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshot(callbacks, "owner");
     expect(harness.handle.store.getState().restore).toBeNull();
+  });
+});
+
+describe("createChatSessionStore - persisted auth-error provider nudge", () => {
+  function authErroredAssistantMessage(
+    messageId: string,
+    code: string | null,
+  ): Extract<Message, { role: "assistant" }> {
+    return {
+      role: "assistant",
+      messageId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks:
+        code === null
+          ? []
+          : [
+              {
+                type: "error",
+                blockId: `error-${messageId}`,
+                status: "completed",
+                timestamp: 4,
+                parentBlockId: null,
+                message: "Codex is signed out on this machine.",
+                recoverable: true,
+                code,
+              },
+            ],
+      startedAt: 4,
+      timestamp: 4,
+      turnId: `turn-${messageId}`,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+  }
+
+  interface NudgeHarness {
+    readonly handle: ChatSessionStoreHandle;
+    callbacks(): ChatStreamCallbacks;
+    nudgeCount(): number;
+  }
+
+  function createNudgeHarness(): NudgeHarness {
+    let nudges = 0;
+    let callbacks: ChatStreamCallbacks | null = null;
+    const handle = createChatSessionStore({
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      userId: OWNER_ID,
+      onAuthError: null,
+      onProviderAuthError: () => {
+        nudges += 1;
+      },
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+        callbacks = nextCallbacks;
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          close: () => undefined,
+        };
+      },
+    });
+    return {
+      handle,
+      callbacks: () => {
+        if (callbacks === null) throw new Error("Expected callbacks");
+        return callbacks;
+      },
+      nudgeCount: () => nudges,
+    };
+  }
+
+  function emitMessagesSnapshot(
+    callbacks: ChatStreamCallbacks,
+    messages: ReadonlyArray<Message>,
+  ): void {
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages,
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+  }
+
+  it("nudges once per persisted auth-error row, even across reconnect re-delivery", () => {
+    const harness = createNudgeHarness();
+    const authRow = authErroredAssistantMessage("assistant-auth-1", "auth");
+    emitMessagesSnapshot(harness.callbacks(), [authRow]);
+    expect(harness.nudgeCount()).toBe(1);
+
+    // Reconnect re-delivers the SAME row: no duplicate nudge.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    emitMessagesSnapshot(harness.callbacks(), [authRow]);
+    expect(harness.nudgeCount()).toBe(1);
+  });
+
+  it("nudges again for a NEW auth failure after the first one recovered", () => {
+    const harness = createNudgeHarness();
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+
+    // Recovered: latest assistant row carries no auth error.
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+      authErroredAssistantMessage("assistant-ok", null),
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+
+    // A second headless failure lands during a disconnect; the reconnect
+    // snapshot is its only signal, so the store must nudge again - a
+    // store-lifetime latch would leave the provider gate stale here.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+      authErroredAssistantMessage("assistant-ok", null),
+      authErroredAssistantMessage("assistant-auth-2", "auth"),
+    ]);
+    expect(harness.nudgeCount()).toBe(2);
+  });
+
+  it("finds the latest assistant row behind a trailing user row", () => {
+    const harness = createNudgeHarness();
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+      persistedUserMessage("user-after-failure"),
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+  });
+
+  it("does not nudge for a non-auth error on the latest assistant row", () => {
+    const harness = createNudgeHarness();
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-runtime-err", "RUNTIME_THROWN"),
+    ]);
+    expect(harness.nudgeCount()).toBe(0);
+  });
+
+  it("does not double-nudge when a live auth event's turn is later re-delivered by a snapshot", () => {
+    const harness = createNudgeHarness();
+    const callbacks = harness.callbacks();
+
+    // The live turn fails on auth mid-session: onBlockDelta fires the nudge
+    // directly (no persisted row exists yet to read from).
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-live-auth-1",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: "message-live-1",
+        startedAt: 3,
+        updatedAt: 3,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "error",
+        blockId: "auth-live-1",
+        timestamp: 4,
+        message: "Codex is signed out on this machine.",
+        recoverable: true,
+        code: "auth",
+      },
+    });
+    expect(harness.nudgeCount()).toBe(1);
+
+    // The turn's own persisted row (same turnId) then arrives via snapshot -
+    // a reconnect, or the same connection catching up. It must NOT re-nudge:
+    // it is the SAME failure the live path already reported.
+    emitMessagesSnapshot(callbacks, [
+      {
+        role: "assistant",
+        messageId: "assistant-live-auth-1",
+        sender: {
+          type: "agent",
+          harnessId: "codex",
+          agentId: "codex",
+          displayName: "Codex",
+          reply: { expectsReply: false },
+          inReplyTo: null,
+        },
+        blocks: [
+          {
+            type: "error",
+            blockId: "auth-live-1",
+            status: "completed",
+            timestamp: 4,
+            parentBlockId: null,
+            message: "Codex is signed out on this machine.",
+            recoverable: true,
+            code: "auth",
+          },
+        ],
+        startedAt: 3,
+        timestamp: 4,
+        turnId: "turn-live-auth-1",
+        usage: null,
+        reasoningEffort: null,
+        serviceTier: null,
+        imageResolutions: [],
+      },
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+  });
+});
+
+describe("turn-settled stranded-send reconciliation", () => {
+  it("drops the optimistic user message and restores its content when a stop lands before messageAccepted", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
+
+    // The pre-turn activation window: the host accepts the send and reports
+    // the run as in progress before the message is appended.
+    acceptLastAction(harness);
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: true,
+    });
+    // The accepted ack deliberately keeps the optimistic entry alive - the
+    // durable messageAccepted frame is what normally clears it.
+    expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
+
+    // A stop aborts activation: the turn settles without the host ever
+    // appending the message - no messageAccepted or rejected ack will arrive.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: frame.clientActionId,
+      content: CONTENT,
+      reason: "The message was not recorded before the turn stopped.",
+      displacedReason: "The message was not recorded before the turn stopped.",
+      stated: false,
+    });
+  });
+
+  it("keeps an optimistic entry whose ack is still in flight when an unrelated settle frame arrives", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    expect(harness.handle.store.getState().pendingUserMessages).toHaveLength(1);
+
+    // e.g. a background task settling broadcasts a turn-settled frame while
+    // the fresh send's ack is still on the wire - the entry must survive.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toHaveLength(1);
+    expect(state.failedSendRestoration).toBeNull();
+  });
+
+  it("heals on an older host via runStatus idle when the frame omits turnInProgress", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    acceptLastAction(harness);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration?.clientActionId).toBe(
+      frame.clientActionId,
+    );
+  });
+
+  it("reconciles an accepted-but-unrecorded send from a settled reconnect snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    // The accepted ack removes the pending action but keeps the optimistic
+    // entry; the connection then dies before any settling frame arrives.
+    acceptLastAction(harness);
+    callbacks.onConnectionStatus("reconnecting", null);
+
+    // The reconnect snapshot is the only authoritative settled state: no
+    // turn in progress, and the message never reached the transcript.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: frame.clientActionId,
+      content: CONTENT,
+      reason: "The message was not recorded before the turn stopped.",
+      displacedReason: "The message was not recorded before the turn stopped.",
+      stated: false,
+    });
+  });
+
+  it("clears stale optimistic bookkeeping without restoration when the reconnect snapshot carries the message", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+    acceptLastAction(harness);
+    callbacks.onConnectionStatus("reconnecting", null);
+
+    // The send did land host-side; the lost frame was `messageAccepted`, not
+    // the message itself. The persisted row is authoritative - no composer
+    // restoration.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage(frame.messageId)],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration).toBeNull();
+  });
+});
+
+describe("the chat's managed commands", () => {
+  function monitor(over: Partial<ManagedCommand>): ManagedCommand {
+    return {
+      id: "cmd-1",
+      monitoring: true,
+      description: "deploy watcher",
+      command: "tail -f deploy.log",
+      cwd: "/work/repo",
+      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+      status: { state: "running", pid: 4410, startedAtMs: 10 },
+      chatId: CHAT_ID,
+      createdAtMs: 10,
+      updatedAtMs: 10,
+      ...over,
+    };
+  }
+
+  function seededHarness(commands: ReadonlyArray<ManagedCommand>): Harness {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      managedCommands: commands,
+    });
+    return harness;
+  }
+
+  it("reads as an empty set before the host has said anything", () => {
+    const harness = createHarness();
+
+    // Not `undefined`: a host with no managed-command subsystem owns no
+    // commands, so there is no "unknown" for a consumer to branch on.
+    expect(harness.handle.store.getState().managedCommands).toEqual([]);
+    harness.handle.dispose();
+  });
+
+  it("takes the set from the snapshot", () => {
+    const harness = seededHarness([monitor({ id: "cmd-1" })]);
+
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  it("replaces the whole set on a managedCommandsChanged frame", () => {
+    const harness = seededHarness([
+      monitor({ id: "cmd-1" }),
+      monitor({ id: "cmd-2" }),
+    ]);
+
+    harness.callbacks().onManagedCommandsChanged({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      managedCommands: [monitor({ id: "cmd-3" })],
+    });
+
+    // The frame is the set, not a delta: `cmd-1` and `cmd-2` are gone because
+    // the host stopped naming them, with no removal frame anywhere.
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-3"]);
+    harness.handle.dispose();
+  });
+
+  it("fills in from a frame after a snapshot that arrived empty", () => {
+    // The host's boot window: the subsystem has not enumerated yet, so the
+    // snapshot honestly carries nothing and the frame follows. Both are plain
+    // assignments - neither needs to know about the other.
+    const harness = seededHarness([]);
+    expect(harness.handle.store.getState().managedCommands).toEqual([]);
+
+    harness.callbacks().onManagedCommandsChanged({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      managedCommands: [monitor({ id: "cmd-late" })],
+    });
+
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-late"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another chat", () => {
+    const harness = seededHarness([monitor({ id: "cmd-1" })]);
+
+    harness.callbacks().onManagedCommandsChanged({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: "some-other-chat",
+      managedCommands: [],
+    });
+
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+});
+
+describe("the chat's held updates", () => {
+  function held(
+    over: Partial<HeldManagedCommandUpdate>,
+  ): HeldManagedCommandUpdate {
+    return {
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      heldAtMs: 10,
+      ...over,
+    };
+  }
+
+  function seededHarness(
+    heldUpdates: ReadonlyArray<HeldManagedCommandUpdate>,
+  ): Harness {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      heldUpdates,
+    });
+    return harness;
+  }
+
+  it("reads as an empty set before the host has said anything", () => {
+    const harness = createHarness();
+
+    expect(harness.handle.store.getState().heldUpdates).toEqual([]);
+    harness.handle.dispose();
+  });
+
+  it("takes the set from the snapshot", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  it("replaces the whole set on a heldUpdatesChanged frame - a shrink drops the stale row", () => {
+    const harness = seededHarness([
+      held({ commandId: "cmd-1" }),
+      held({ commandId: "cmd-2" }),
+    ]);
+
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-2" })],
+    });
+
+    // The frame is the set, not a delta: `cmd-1` is gone, and it is gone
+    // because the host stopped naming it - no stale row can survive a shrink.
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-2"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another chat", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: "some-other-chat",
+      heldUpdates: [],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another epic", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: "some-other-epic",
+      chatId: CHAT_ID,
+      heldUpdates: [],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  // The chat and epic guards above both pass for a frame from the RIGHT chat
+  // on a stream this store has already replaced, which is the one a retry
+  // produces: the old client is torn down but its in-flight frames still land.
+  // A hold is durable state a human acts on, so a stale set installing rows
+  // here would offer a Deliver for holds the new stream never named - or, on a
+  // stale empty frame, quietly take a live one off screen.
+  it("ignores a held-updates frame from a superseded stream", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+    const staleCallbacks = harness.callbacks();
+
+    harness.handle.store.getState().retry();
+
+    // The empty frame is the sharp one: a retry cancels nothing, so the hold
+    // is still standing, and honouring a stale "nothing is held" would take
+    // the Deliver affordance off screen while the hold outlived the socket.
+    staleCallbacks.onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [],
+    });
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+
+    staleCallbacks.onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-stale" })],
+    });
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+
+    // ...and the live stream is still heard, so this is a generation guard
+    // rather than a store that stopped listening.
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-live" })],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-live"]);
+    harness.handle.dispose();
   });
 });

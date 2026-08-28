@@ -4,139 +4,148 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
   CliInstallManifestSnapshot,
+  ConvergeReadyOk,
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
+  HostControllerStatus,
   HostDoctorReport,
-  HostEnsureResult,
-  HostInstallResult,
+  HostGetInstallationInfoResponse,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
-  HostOperationStatus,
-  HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
+  HostRestartRequestResult,
   HostTrayCommand,
   HostUninstallResult,
+  HostUpdateCheckResponseV11,
+  InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
+  MutationOutcome,
+  ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
 } from "../ipc-contracts/host-management-types";
 
 /**
- * Browser-safe surface for Settings → Host and the Doctor failure card.
- * Each method either resolves once with the CLI's final NDJSON `result`
- * data payload (query commands), or - for long-running operations - accepts
- * a synchronous `onProgress` callback that fires for every NDJSON
- * `progress` event the CLI emits along the way.
+ * Browser-safe surface for the host gate, update banner, Settings → Host,
+ * and the Doctor failure card. Query commands resolve once with the CLI's
+ * final NDJSON `result` data payload; mutation intents resolve a
+ * `MutationOutcome` (the mutation lane never rejects - "wait-never-reject",
+ * Host Update Layer Redesign Tech Plan). Live status (both lanes) is
+ * consumed via `getHostControllerStatus` + the desktop-only
+ * `hostControllerStatus` push bridge (see `desktop-runner-host.ts`).
  *
  * The renderer never spawns the CLI directly; this bridge is the only seam.
  */
 export interface HostManagementBridgeSurface {
-  installHost(input: {
-    readonly version: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<HostInstallResult>;
-  updateHost(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<HostInstallResult>;
+  getHostControllerStatus(): Promise<HostControllerStatus>;
+  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>>;
+  activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
   uninstallTraycer(): Promise<TraycerUninstallResult>;
   getRemovalState(): Promise<HostRemovalState>;
   clearRemoval(): Promise<void>;
-  restartHost(): Promise<void>;
+  restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
   installedRecord(): Promise<HostInstalledRecord | null>;
-  registerService(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<void>;
-  ensureHost(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-    readonly force: boolean;
-  }): Promise<HostEnsureResult>;
+  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<void>;
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
-  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
-    dispose: () => void;
-  };
-  getOperationStatus(): Promise<HostOperationStatus | null>;
-  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
-    dispose: () => void;
-  };
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  // Maintenance-RPC projections for the GUI's local fallback — protocol
+  // response shapes, classified in main (see `host-management-ipc.ts`).
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ): Promise<HostUpdateCheckResponseV11>;
+  maintenanceDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
+  runDoctorRepairIfIdle(input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }): Promise<DoctorRepairDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
   }): Promise<HostNameSettings>;
 }
 
-function withOperationListener<T>(
-  channel: string,
-  payload: Record<string, unknown> | null,
-  onProgress: ((event: HostProgressEvent) => void) | null,
-): Promise<T> {
-  const operationId =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const args = { ...(payload ?? {}), operationId };
-  const listener =
-    onProgress === null
-      ? null
-      : (_event: IpcRendererEvent, rawPayload: unknown): void => {
-          if (rawPayload === null || typeof rawPayload !== "object") return;
-          const event = rawPayload as HostProgressEvent;
-          if (event.operationId !== operationId) return;
-          onProgress(event);
-        };
-  if (listener !== null) {
-    ipcRenderer.on(RunnerHostEvent.cliOperationProgress, listener);
-  }
-  const settle = (): void => {
-    if (listener !== null) {
-      ipcRenderer.removeListener(
-        RunnerHostEvent.cliOperationProgress,
-        listener,
-      );
-    }
-  };
-  return (ipcRenderer.invoke(channel, args) as Promise<T>).then(
-    (value) => {
-      settle();
-      return value;
-    },
-    (err) => {
-      settle();
-      throw err;
-    },
-  );
-}
-
 export function buildHostManagementBridge(): HostManagementBridgeSurface {
   return {
-    installHost: ({ version, onProgress }) =>
-      withOperationListener<HostInstallResult>(
-        RunnerHostInvoke.traycerHostInstall,
-        { version },
-        onProgress,
-      ),
-    updateHost: ({ onProgress }) =>
-      withOperationListener<HostInstallResult>(
-        RunnerHostInvoke.traycerHostUpdate,
-        null,
-        onProgress,
-      ),
+    getHostControllerStatus: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostControllerStatusGet,
+      ) as Promise<HostControllerStatus>,
+    convergeReady: (force) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostConvergeReady, {
+        force,
+      }) as Promise<MutationOutcome<ConvergeReadyOk>>,
+    applyStaged: (trigger, force) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostApplyStaged, {
+        trigger,
+        force,
+      }) as Promise<MutationOutcome<ApplyStagedOk>>,
+    activateInstalled: (force) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostActivateInstalled, {
+        force,
+      }) as Promise<MutationOutcome<ActivateInstalledOk>>,
+    installVersion: (pin, force) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostInstallVersion, {
+        pin,
+        force,
+      }) as Promise<MutationOutcome<InstallVersionOk>>,
     uninstallHost: ({ all }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostUninstall, {
         all,
@@ -154,14 +163,18 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         RunnerHostInvoke.traycerHostRemovalClear,
       ) as Promise<void>,
     restartHost: () =>
-      ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestart) as Promise<void>,
-    getHostLogs: ({ tailLines }) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostRestart,
+      ) as Promise<HostRestartRequestResult>,
+    getHostLogs: ({ tailLines, expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostLogs, {
         tailLines,
+        expectedHostId,
       }) as Promise<HostLogsTailResult>,
-    runDoctor: () =>
+    runDoctor: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostDoctor,
+        input,
       ) as Promise<HostDoctorReport>,
     availableVersions: ({ includePreReleases }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostAvailable, {
@@ -171,18 +184,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostInstalled,
       ) as Promise<HostInstalledRecord | null>,
-    registerService: ({ onProgress }) =>
-      withOperationListener<void>(
-        RunnerHostInvoke.traycerServiceRegister,
-        null,
-        onProgress,
-      ),
-    ensureHost: ({ onProgress, force }) =>
-      withOperationListener<HostEnsureResult>(
-        RunnerHostInvoke.traycerHostEnsure,
-        { force },
-        onProgress,
-      ),
+    registerService: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerServiceRegister) as Promise<
+        MutationOutcome<ServiceRegistrationOk>
+      >,
     deregisterService: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerServiceDeregister,
@@ -191,47 +196,53 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerRegistryCheck, {
         force,
       }) as Promise<HostRegistryUpdateState>,
-    onRegistryUpdateState(handler) {
-      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
-        if (!isHostRegistryUpdateState(payload)) return;
-        handler(payload);
-      };
-      ipcRenderer.on(RunnerHostEvent.hostRegistryUpdateStateChange, listener);
-      return {
-        dispose: () =>
-          ipcRenderer.removeListener(
-            RunnerHostEvent.hostRegistryUpdateStateChange,
-            listener,
-          ),
-      };
-    },
-    getOperationStatus: () =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.traycerHostOperationStatusGet,
-      ) as Promise<HostOperationStatus | null>,
-    onOperationStatus(handler) {
-      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
-        if (!isHostOperationStatusOrNull(payload)) return;
-        handler(payload);
-      };
-      ipcRenderer.on(RunnerHostEvent.hostOperationStatusChange, listener);
-      return {
-        dispose: () =>
-          ipcRenderer.removeListener(
-            RunnerHostEvent.hostOperationStatusChange,
-            listener,
-          ),
-      };
-    },
     freePortAndRestart: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerFreePortAndRestart,
         input,
       ) as Promise<FreePortAndRestartInput>,
+    freePortAndRestartIfIdle: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+        input,
+      ) as Promise<DoctorRepairDispatch>,
     cliManifest: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerCliManifestRead,
       ) as Promise<CliInstallManifestSnapshot | null>,
+    maintenanceUpdateCheck: ({ includePreReleases, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceUpdateCheck, {
+        includePreReleases,
+        expectedHostId,
+      }) as Promise<HostUpdateCheckResponseV11>,
+    maintenanceDoctor: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceDoctor, {
+        expectedHostId,
+      }) as Promise<MaintenanceDoctorProjection>,
+    maintenanceInstallationInfo: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceInstallationInfo, {
+        expectedHostId,
+      }) as Promise<HostGetInstallationInfoResponse>,
+    maintenanceInstallVersion: ({ version, force, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceInstallVersion, {
+        version,
+        force,
+        expectedHostId,
+      }) as Promise<MaintenanceInstallDispatch>,
+    restartHostIfIdle: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestartIfIdle, {
+        expectedHostId,
+      }) as Promise<HostRestartRequestResult>,
+    runDoctorRepairQueued: ({ repair, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairQueued, {
+        repair,
+        expectedHostId,
+      }) as Promise<QueuedDoctorRepairResult>,
+    runDoctorRepairIfIdle: ({ repair, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairIfIdle, {
+        repair,
+        expectedHostId,
+      }) as Promise<DoctorRepairDispatch>,
     getHostName: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostNameGet,
@@ -243,48 +254,48 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
   };
 }
 
-function isHostRegistryUpdateState(
-  value: unknown,
-): value is HostRegistryUpdateState {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  const checkedAt = candidate.checkedAt;
-  const latestVersion = candidate.latestVersion;
-  const installedVersion = candidate.installedVersion;
-  const errorMessage = candidate.errorMessage;
-  return (
-    (typeof checkedAt === "string" || checkedAt === null) &&
-    (typeof latestVersion === "string" || latestVersion === null) &&
-    (typeof installedVersion === "string" || installedVersion === null) &&
-    typeof candidate.updateAvailable === "boolean" &&
-    typeof candidate.reachable === "boolean" &&
-    (typeof errorMessage === "string" || errorMessage === null)
-  );
+/**
+ * Push subscription for the two-lane `HostControllerStatus`. Desktop-only
+ * (mirrors the `hostRegistryUpdates`/`hostOperationStatus` duck-typed
+ * bridges it replaces) - not part of the cross-shell `IHostManagement`.
+ */
+export interface HostControllerStatusBridgeSurface {
+  onChange(handler: (status: HostControllerStatus) => void): {
+    dispose: () => void;
+  };
 }
 
-function isHostOperationStatusOrNull(
-  value: unknown,
-): value is HostOperationStatus | null {
-  if (value === null) return true;
-  if (typeof value !== "object") return false;
+export function buildHostControllerStatusSubscriber(): HostControllerStatusBridgeSurface {
+  return {
+    onChange(handler) {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostControllerStatus(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostControllerStatusChange, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(
+            RunnerHostEvent.hostControllerStatusChange,
+            listener,
+          ),
+      };
+    },
+  };
+}
+
+function isHostControllerStatus(value: unknown): value is HostControllerStatus {
+  if (value === null || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
-  const stage = candidate.stage;
-  const percent = candidate.percent;
-  const bytes = candidate.bytes;
-  const totalBytes = candidate.totalBytes;
-  const message = candidate.message;
   return (
-    typeof candidate.operationId === "string" &&
-    (candidate.kind === "install" ||
-      candidate.kind === "update" ||
-      candidate.kind === "register-service" ||
-      candidate.kind === "ensure") &&
-    (typeof stage === "string" || stage === null) &&
-    (typeof percent === "number" || percent === null) &&
-    (typeof bytes === "number" || bytes === null) &&
-    (typeof totalBytes === "number" || totalBytes === null) &&
-    (typeof message === "string" || message === null) &&
-    typeof candidate.startedAt === "string"
+    typeof candidate.updateReady === "boolean" &&
+    typeof candidate.reachable === "boolean" &&
+    typeof candidate.removedByUser === "boolean" &&
+    typeof candidate.checkedAt === "string" &&
+    (candidate.activation === "activated" ||
+      candidate.activation === "pendingActivation" ||
+      candidate.activation === "activationUnknown" ||
+      candidate.activation === "unavailable")
   );
 }
 

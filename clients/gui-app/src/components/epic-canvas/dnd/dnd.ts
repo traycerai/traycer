@@ -1,17 +1,23 @@
+import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
 import type {
   DropPosition,
   EpicTerminalRef,
   GitDiffTileRef,
+  ManagedCommandOutputTileRef,
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import {
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { tuiHarnessIdSchema } from "@traycer/protocol/host/index";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import { resolveSplitDropPosition } from "@/components/epic-canvas/dnd/pane-drop-geometry";
+import { resolvePaneCorridorPosition } from "@/components/epic-canvas/dnd/pane-corridor-geometry";
 import {
   LEFT_PANEL_IDS,
   ROOT_CREATE_PANEL_IDS,
@@ -38,8 +44,13 @@ export const SIDEBAR_NODE_DND_TYPE = "sidebar-node";
 export const TERMINAL_TILE_DND_TYPE = "terminal-tile";
 export const GIT_DIFF_TILE_DND_TYPE = "git-diff-tile";
 export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
+export const WORKSPACE_FOLDER_DND_TYPE = "workspace-folder";
 export const CHAT_ARTIFACT_DND_TYPE = "chat-artifact";
+export const ACTIVE_AGENT_DND_TYPE = "active-agent";
+export const MANAGED_COMMAND_OUTPUT_DND_TYPE = "managed-command-output";
 export const LEFT_PANEL_RAIL_ITEM_DND_TYPE = "left-panel-rail-item";
+export const COMPOSER_ATTACHMENT_DROP_TARGET_TYPE =
+  "composer-attachment-drop-target";
 export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
@@ -47,6 +58,8 @@ export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   GIT_DIFF_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
+  ACTIVE_AGENT_DND_TYPE,
+  MANAGED_COMMAND_OUTPUT_DND_TYPE,
 ];
 
 export interface RectLike {
@@ -91,6 +104,7 @@ export interface EpicCanvasSidebarNodeDragData {
   readonly kind: typeof SIDEBAR_NODE_DND_TYPE;
   readonly epicId: string;
   readonly viewTabId: string;
+  readonly hostId: string;
   readonly nodeId: string;
 }
 
@@ -108,6 +122,20 @@ export interface EpicCanvasGitDiffTileDragData {
   readonly tile: GitDiffTileRef;
 }
 
+/**
+ * A shell's Background-panel row or transcript-card door, dragged out to give
+ * that shell's output window a place on the canvas. The tile ref is minted at the source (like a
+ * terminal row), and one-window-per-command survives it: the ref's content id
+ * IS the command id, so the drop resolves to a MOVE of the existing window
+ * whenever one is already open.
+ */
+export interface EpicCanvasManagedCommandOutputDragData {
+  readonly kind: typeof MANAGED_COMMAND_OUTPUT_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly tile: ManagedCommandOutputTileRef;
+}
+
 export interface EpicCanvasWorkspaceFileDragData {
   readonly kind: typeof WORKSPACE_FILE_DND_TYPE;
   readonly epicId: string;
@@ -115,8 +143,25 @@ export interface EpicCanvasWorkspaceFileDragData {
   readonly ref: WorkspaceFileRef;
 }
 
+/**
+ * A workspace directory row is mentionable but not canvas-openable, so it has
+ * its own source shape instead of pretending to be a `WorkspaceFileRef`.
+ * `folderPath` is the host-canonical, workspace-relative token (including its
+ * trailing slash) used by the existing @-mention contract.
+ */
+export interface EpicCanvasWorkspaceFolderDragData {
+  readonly kind: typeof WORKSPACE_FOLDER_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly workspacePath: string;
+  readonly folderPath: string;
+  readonly name: string;
+}
+
 export interface EpicCanvasLeftPanelRailDragData {
   readonly kind: typeof LEFT_PANEL_RAIL_ITEM_DND_TYPE;
+  readonly viewTabId: string;
   readonly panelId: LeftPanelId;
   readonly origin: "rail" | "panel-section";
 }
@@ -140,14 +185,48 @@ export interface EpicCanvasChatArtifactDragData {
   };
 }
 
+/**
+ * An agent row rendered outside the sidebar tree. Unlike `sidebar-node`, this
+ * source carries its bound host explicitly: chat projections do not own host
+ * identity, and resolving against the app's active host would violate the
+ * tab-for-life host binding when another device is selected.
+ */
+export interface EpicCanvasActiveAgentDragData {
+  readonly kind: typeof ACTIVE_AGENT_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly agent: {
+    readonly id: string;
+    readonly type: "chat" | "terminal-agent";
+    readonly name: string;
+    readonly hostId: string;
+    readonly harnessId: TuiHarnessId | null;
+  };
+}
+
 export type EpicCanvasDragSourceData =
   | EpicCanvasArtifactTabDragData
   | EpicCanvasSidebarNodeDragData
   | EpicCanvasTerminalTileDragData
   | EpicCanvasGitDiffTileDragData
   | EpicCanvasWorkspaceFileDragData
+  | EpicCanvasWorkspaceFolderDragData
   | EpicCanvasChatArtifactDragData
+  | EpicCanvasActiveAgentDragData
+  | EpicCanvasManagedCommandOutputDragData
   | EpicCanvasLeftPanelRailDragData;
+
+/**
+ * Ephemeral composer target data. The callbacks deliberately live in dnd-kit
+ * `data`: the root DndContext is outside every composer/editor provider, while
+ * the target owns the exact editor instance that must receive the attachment.
+ */
+export interface ComposerAttachmentDropTargetData {
+  readonly kind: typeof COMPOSER_ATTACHMENT_DROP_TARGET_TYPE;
+  readonly viewTabId: string;
+  readonly accepts: (source: EpicCanvasDragSourceData) => boolean;
+  readonly attach: (source: EpicCanvasDragSourceData) => void;
+}
 
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 
@@ -183,13 +262,16 @@ export type EpicCanvasDropTargetData =
     }
   | {
       readonly kind: "left-panel-rail-item";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
     }
   | {
       readonly kind: "left-panel-rail-list";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-group";
+      readonly viewTabId?: string;
       readonly panelIds: ReadonlyArray<LeftPanelId>;
     }
   | {
@@ -216,13 +298,16 @@ export type EpicCanvasDropTargetData =
 type EpicCanvasLeftPanelDropTargetData =
   | {
       readonly kind: "left-panel-rail-item";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
     }
   | {
       readonly kind: "left-panel-rail-list";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-group";
+      readonly viewTabId?: string;
       readonly panelIds: ReadonlyArray<LeftPanelId>;
     };
 
@@ -239,17 +324,21 @@ export type EpicCanvasDropPreview =
     }
   | {
       readonly kind: "empty-shell";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-rail";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
       readonly position: LeftPanelRailDropPosition;
     }
   | {
       readonly kind: "left-panel-rail-list";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-section";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
       readonly position: Exclude<LeftPanelRailDropPosition, "combine">;
     }
@@ -279,12 +368,29 @@ export function getSidebarNodeDragId(nodeId: string): string {
   return `sidebar-node:${nodeId}`;
 }
 
-export function getTerminalTileDragId(sessionId: string): string {
-  return `terminal-tile:${sessionId}`;
+/**
+ * Active-agent rows are a second rendering of nodes already registered by the
+ * sidebar. Key them by occurrence rather than node id so dnd-kit's registry
+ * never collides with the sidebar row (or another open tile showing the same
+ * active-agent list).
+ */
+export function getActiveAgentDragId(occurrenceKey: string): string {
+  return `active-agent:${occurrenceKey}`;
+}
+
+export function getTerminalTileDragId(
+  sessionId: string,
+  hostId: string,
+): string {
+  return `terminal-tile:${plainTerminalFleetIdentityKey({ hostId, terminalId: sessionId })}`;
 }
 
 export function getGitDiffTileDragId(tileId: string): string {
   return `git-diff-tile:${tileId}`;
+}
+
+export function getManagedCommandOutputDragId(commandId: string): string {
+  return `managed-command-output:${commandId}`;
 }
 
 export function getWorkspaceFileDragId(fileId: string): string {
@@ -299,6 +405,11 @@ export function getWorkspaceFileDragId(fileId: string): string {
  */
 export function getChatArtifactDragId(occurrenceKey: string): string {
   return `chat-artifact:${occurrenceKey}`;
+}
+
+/** Prevent one root dnd-kit registry from colliding across retained Epic panes. */
+export function getPaneScopedDndId(viewTabId: string, id: string): string {
+  return `${id}:pane:${viewTabId}`;
 }
 
 export function getLeftPanelRailDragId(panelId: string): string {
@@ -407,10 +518,19 @@ function readSidebarNodeSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
   const scope = readCanvasSourceScope(value);
-  if (scope === null || !isNonEmptyString(value.nodeId)) {
+  if (
+    scope === null ||
+    !isNonEmptyString(value.hostId) ||
+    !isNonEmptyString(value.nodeId)
+  ) {
     return null;
   }
-  return { kind: SIDEBAR_NODE_DND_TYPE, ...scope, nodeId: value.nodeId };
+  return {
+    kind: SIDEBAR_NODE_DND_TYPE,
+    ...scope,
+    hostId: value.hostId,
+    nodeId: value.nodeId,
+  };
 }
 
 function readGitDiffTileSource(
@@ -431,6 +551,17 @@ function readTerminalTileSource(
   return { kind: TERMINAL_TILE_DND_TYPE, ...scope, tile: ref };
 }
 
+function readManagedCommandOutputSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  const ref = parseTileRef(value.tile);
+  if (scope === null || ref === null || !isManagedCommandOutputTileRef(ref)) {
+    return null;
+  }
+  return { kind: MANAGED_COMMAND_OUTPUT_DND_TYPE, ...scope, tile: ref };
+}
+
 function readWorkspaceFileSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
@@ -438,6 +569,30 @@ function readWorkspaceFileSource(
   const ref = parseTileRef(value.ref);
   if (scope === null || ref === null || !isWorkspaceFileRef(ref)) return null;
   return { kind: WORKSPACE_FILE_DND_TYPE, ...scope, ref };
+}
+
+function readWorkspaceFolderSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  if (
+    scope === null ||
+    !isNonEmptyString(value.hostId) ||
+    !isNonEmptyString(value.workspacePath) ||
+    !isNonEmptyString(value.folderPath) ||
+    !value.folderPath.endsWith("/") ||
+    !isNonEmptyString(value.name)
+  ) {
+    return null;
+  }
+  return {
+    kind: WORKSPACE_FOLDER_DND_TYPE,
+    ...scope,
+    hostId: value.hostId,
+    workspacePath: value.workspacePath,
+    folderPath: value.folderPath,
+    name: value.name,
+  };
 }
 
 function readChatArtifactSource(
@@ -467,13 +622,58 @@ function readChatArtifactSource(
   };
 }
 
+function readActiveAgentSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  if (scope === null || !isRecord(value.agent)) return null;
+  const agent = value.agent;
+  if (
+    !isNonEmptyString(agent.id) ||
+    !isNonEmptyString(agent.name) ||
+    !isNonEmptyString(agent.hostId) ||
+    (agent.type !== "chat" && agent.type !== "terminal-agent")
+  ) {
+    return null;
+  }
+  if (agent.type === "terminal-agent") {
+    const harnessId = tuiHarnessIdSchema.safeParse(agent.harnessId);
+    if (!harnessId.success) return null;
+    return {
+      kind: ACTIVE_AGENT_DND_TYPE,
+      ...scope,
+      agent: {
+        id: agent.id,
+        type: agent.type,
+        name: agent.name,
+        hostId: agent.hostId,
+        harnessId: harnessId.data,
+      },
+    };
+  }
+  if (agent.harnessId !== null) return null;
+  return {
+    kind: ACTIVE_AGENT_DND_TYPE,
+    ...scope,
+    agent: {
+      id: agent.id,
+      type: agent.type,
+      name: agent.name,
+      hostId: agent.hostId,
+      harnessId: null,
+    },
+  };
+}
+
 function readLeftPanelRailItemSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
+  if (!isNonEmptyString(value.viewTabId)) return null;
   if (!isLeftPanelId(value.panelId)) return null;
   if (!isLeftPanelRailDragOrigin(value.origin)) return null;
   return {
     kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+    viewTabId: value.viewTabId,
     panelId: value.panelId,
     origin: value.origin,
   };
@@ -491,11 +691,34 @@ export function readEpicCanvasDragSourceData(
     return readGitDiffTileSource(value);
   if (value.kind === WORKSPACE_FILE_DND_TYPE)
     return readWorkspaceFileSource(value);
+  if (value.kind === WORKSPACE_FOLDER_DND_TYPE)
+    return readWorkspaceFolderSource(value);
   if (value.kind === CHAT_ARTIFACT_DND_TYPE)
     return readChatArtifactSource(value);
+  if (value.kind === ACTIVE_AGENT_DND_TYPE) return readActiveAgentSource(value);
+  if (value.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE)
+    return readManagedCommandOutputSource(value);
   if (value.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE)
     return readLeftPanelRailItemSource(value);
   return null;
+}
+
+function isComposerAttachmentDropTargetData(
+  value: unknown,
+): value is ComposerAttachmentDropTargetData {
+  if (!isRecord(value)) return false;
+  return (
+    value.kind === COMPOSER_ATTACHMENT_DROP_TARGET_TYPE &&
+    isNonEmptyString(value.viewTabId) &&
+    typeof value.accepts === "function" &&
+    typeof value.attach === "function"
+  );
+}
+
+export function readComposerAttachmentDropTargetData(
+  value: unknown,
+): ComposerAttachmentDropTargetData | null {
+  return isComposerAttachmentDropTargetData(value) ? value : null;
 }
 
 export function readEpicCanvasDropTargetData(
@@ -599,22 +822,29 @@ function readLeftPanelDropTargetData(
   value: Record<string, unknown>,
 ): EpicCanvasLeftPanelDropTargetData | null {
   if (value.kind === "left-panel-rail-item") {
-    if (!isLeftPanelId(value.panelId)) return null;
+    if (!isNonEmptyString(value.viewTabId) || !isLeftPanelId(value.panelId)) {
+      return null;
+    }
     return {
       kind: "left-panel-rail-item",
+      viewTabId: value.viewTabId,
       panelId: value.panelId,
     };
   }
   if (value.kind === "left-panel-rail-list") {
+    if (!isNonEmptyString(value.viewTabId)) return null;
     return {
       kind: "left-panel-rail-list",
+      viewTabId: value.viewTabId,
     };
   }
   if (value.kind === "left-panel-group") {
+    if (!isNonEmptyString(value.viewTabId)) return null;
     const panelIds = readLeftPanelIds(value.panelIds);
     if (panelIds === null) return null;
     return {
       kind: "left-panel-group",
+      viewTabId: value.viewTabId,
       panelIds,
     };
   }
@@ -630,6 +860,28 @@ export type { EdgeDropPosition } from "@/stores/epics/canvas/types";
  * returns `null` - every point inside the group's body resolves to one of
  * the five zones.
  */
+/**
+ * Corridor-aware pane-body resolution for TILE sources.
+ *
+ * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the
+ * neutral corridor is inert, so a tile crossing a pane arms and commits
+ * nothing there. Scoped to tile sources deliberately - a sidebar or rail drag
+ * has no transit requirement across a pane and keeps its immediate positional
+ * preview.
+ */
+export function getPaneCorridorPositionFromPoint(
+  point: PointLike,
+  rect: RectLike,
+): DropPosition | null {
+  const resolved = resolvePaneCorridorPosition({
+    width: rect.width,
+    height: rect.height,
+    x: point.x - rect.left,
+    y: point.y - rect.top,
+  });
+  return resolved === "corridor" ? null : resolved;
+}
+
 export function getEdgeDropPositionFromPoint(
   point: PointLike,
   rect: RectLike,
@@ -730,6 +982,7 @@ export function getLeftPanelGroupDropPreview(
   );
   return {
     kind: "left-panel-section",
+    viewTabId: target.viewTabId,
     panelId: nearestBoundary.panelId,
     position: nearestBoundary.position,
   };
@@ -739,23 +992,51 @@ export function getEpicCanvasDropPreview(
   target: EpicCanvasDropTargetData,
   rect: RectLike | null,
   point: PointLike,
+  /**
+   * Tile sources resolve a pane body through the neutral corridor, which can
+   * answer "no target". Everything else keeps the five-position fallback.
+   *
+   * Required rather than defaulted: repo convention bans default parameters
+   * (`fn(x = 1)`), and a silent `false` here is the difference between the
+   * corridor being inert and ~84% of a pane committing a split.
+   */
+  useNeutralCorridor: boolean,
 ): EpicCanvasDropPreview {
   if (target.kind === "empty-shell") {
     return {
       kind: "empty-shell",
+      viewTabId: target.viewTabId,
     };
   }
   if (target.kind === "artifact-tab-group-body") {
+    if (rect === null) {
+      return {
+        kind: "artifact-tab-group-body",
+        groupId: target.groupId,
+        position: "center",
+      };
+    }
+    if (useNeutralCorridor) {
+      const position = getPaneCorridorPositionFromPoint(point, rect);
+      // Inert corridor: no preview at all, so nothing can be committed that
+      // was never shown.
+      if (position === null) return null;
+      return {
+        kind: "artifact-tab-group-body",
+        groupId: target.groupId,
+        position,
+      };
+    }
     return {
       kind: "artifact-tab-group-body",
       groupId: target.groupId,
-      position:
-        rect === null ? "center" : getEdgeDropPositionFromPoint(point, rect),
+      position: getEdgeDropPositionFromPoint(point, rect),
     };
   }
   if (target.kind === "left-panel-rail-item") {
     return {
       kind: "left-panel-rail",
+      viewTabId: target.viewTabId,
       panelId: target.panelId,
       position: getLeftPanelRailDropPositionFromPoint(point, rect),
     };
@@ -763,6 +1044,7 @@ export function getEpicCanvasDropPreview(
   if (target.kind === "left-panel-rail-list") {
     return {
       kind: "left-panel-rail-list",
+      viewTabId: target.viewTabId,
     };
   }
   if (target.kind === "left-panel-group") return null;

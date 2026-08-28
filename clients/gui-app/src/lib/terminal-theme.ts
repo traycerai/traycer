@@ -27,26 +27,43 @@ function shiftLightness(value: string, delta: number): string {
   return formatted.length > 0 ? formatted : value;
 }
 
-function selectionBackgroundFromPrimary(primary: string): string {
-  const parsed = parse(primary);
-  if (parsed === undefined) return "rgba(120, 120, 120, 0.3)";
-  const formatted = formatRgb({ ...parsed, alpha: 0.3 });
-  return formatted.length > 0 ? formatted : "rgba(120, 120, 120, 0.3)";
+/**
+ * Restate an already-resolved color at `alpha`. Mirrors what the stylesheets
+ * express as `color-mix(in oklch, <token> N%, transparent)`, for the consumers
+ * that paint outside the CSS cascade.
+ */
+function withAlpha(color: string, alpha: number): string {
+  const parsed = parse(color);
+  if (parsed === undefined) return color;
+  const formatted = formatRgb({ ...parsed, alpha });
+  return formatted.length > 0 ? formatted : color;
 }
-function buildTerminalTheme(
-  resolvedTheme: "light" | "dark",
-  doc: Document,
-): ITheme {
+function buildTerminalTheme(doc: Document): ITheme {
   const foreground = resolveCssColor(doc, "--canvas-foreground", "#000000");
   const background = resolveCssColor(doc, "--canvas", "#ffffff");
   const primary = resolveCssColor(doc, "--primary", "#3b82f6");
+  // xterm 6 draws its own scrollbar (a VS Code-derived slider div), so it never
+  // sees the app-wide `::-webkit-scrollbar` theme in index.css and would keep
+  // its default `foreground @ 20%` slider. Feed it the same `--muted-foreground`
+  // steps that theme uses so a terminal tile and a chat pane sitting side by
+  // side read as one scrollbar.
+  const scrollbarSlider = resolveCssColor(
+    doc,
+    "--muted-foreground",
+    foreground,
+  );
 
   const normals = {} as Record<AnsiName, string>;
   for (const name of ANSI_NAMES) {
     normals[name] = resolveCssColor(doc, `--term-ansi-${name}`, foreground);
   }
 
-  const brightDelta = resolvedTheme === "dark" ? 0.08 : -0.08;
+  // Brights always synthesize *lighter*, in light mode too. "Bright" is an
+  // absolute lightness promise, not an emphasis direction: a dark-assuming TUI
+  // paints bright-white on ANSI black, and a darker-shifted bright-white in a
+  // light palette lands on black itself (see the light-palette invariant in
+  // terminal-themes.css).
+  const brightDelta = 0.08;
   const brights = {} as Record<AnsiName, string>;
   for (const name of ANSI_NAMES) {
     const raw = readCssVar(doc, `--term-ansi-bright-${name}`);
@@ -59,7 +76,15 @@ function buildTerminalTheme(
     background,
     cursor: foreground,
     cursorAccent: background,
-    selectionBackground: selectionBackgroundFromPrimary(primary),
+    selectionBackground: withAlpha(primary, 0.3),
+    scrollbarSliderBackground: withAlpha(scrollbarSlider, 0.35),
+    scrollbarSliderHoverBackground: withAlpha(scrollbarSlider, 0.6),
+    scrollbarSliderActiveBackground: withAlpha(scrollbarSlider, 0.75),
+    // Setting `scrollbar.width` is what enables xterm's overview ruler, and the
+    // ruler unconditionally strokes a full-height 1px outline down its own left
+    // edge. We want the ruler (find-match marks) but not a hairline rule
+    // dividing every terminal from its scrollbar, so paint that outline away.
+    overviewRulerBorder: "transparent",
     black: normals.black,
     red: normals.red,
     green: normals.green,
@@ -89,12 +114,13 @@ function buildTerminalTheme(
 export function useTerminalTheme(): ITheme {
   const { resolvedTheme, themePreset } = useResolvedTheme();
   return useMemo(() => {
-    // `themePreset` is part of the memo's cache identity but its values
-    // flow in through the CSS cascade (`[data-theme="X"]` selectors that
-    // `getComputedStyle` resolves below) rather than appearing in the
-    // closure body. Reference it here so `react-hooks/exhaustive-deps`
-    // can verify the deps array is complete.
+    // `resolvedTheme` and `themePreset` are part of the memo's cache identity
+    // but their values flow in through the CSS cascade (the `.dark` and
+    // `[data-theme="X"]` selectors that `getComputedStyle` resolves below)
+    // rather than appearing in the closure body. Reference them here so
+    // `react-hooks/exhaustive-deps` can verify the deps array is complete.
+    resolvedTheme;
     themePreset;
-    return buildTerminalTheme(resolvedTheme, document);
+    return buildTerminalTheme(document);
   }, [resolvedTheme, themePreset]);
 }

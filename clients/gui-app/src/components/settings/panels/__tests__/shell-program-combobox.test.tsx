@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
+import { bridgeShellProbeSource } from "@/components/settings/panels/shell/use-bridge-shell-config-controller";
 
 afterEach(cleanup);
 
@@ -44,10 +44,13 @@ const FISH_MISSING: TraycerDetectedShell = {
   missing: true,
 };
 
-function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
+function makeHost(configure: (cli: MockTraycerCli) => void): {
+  readonly host: IRunnerHost;
+  readonly cli: MockTraycerCli;
+} {
   const cli = new MockTraycerCli();
   configure(cli);
-  return new MockRunnerHost({
+  const host = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
     localHost: null,
@@ -56,6 +59,7 @@ function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
     hasLocalHost: undefined,
     traycerCli: cli,
   });
+  return { host, cli };
 }
 
 function renderCombobox(props: {
@@ -66,9 +70,10 @@ function renderCombobox(props: {
   readonly onAdd?: (path: string) => void;
   readonly onRemove?: (path: string) => void;
   readonly onUseSystemDefault?: () => void;
+  readonly onRefresh?: () => void;
   readonly configure?: (cli: MockTraycerCli) => void;
 }) {
-  const host = makeHost(props.configure ?? (() => undefined));
+  const { host, cli } = makeHost(props.configure ?? (() => undefined));
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -79,11 +84,14 @@ function renderCombobox(props: {
           value={props.value}
           synthesised={props.synthesised}
           shells={props.shells}
+          probeSource={bridgeShellProbeSource(cli)}
           disabled={false}
           onSelect={props.onSelect ?? (() => undefined)}
           onAdd={props.onAdd ?? (() => undefined)}
           onRemove={props.onRemove ?? (() => undefined)}
           onUseSystemDefault={props.onUseSystemDefault ?? (() => undefined)}
+          onRefresh={props.onRefresh ?? (() => undefined)}
+          refreshing={false}
         />
       </RunnerHostProvider>
     </QueryClientProvider>,
@@ -244,6 +252,79 @@ describe("<ShellProgramCombobox />", () => {
     // ...and still selectable.
     fireEvent.click(row);
     expect(onSelect).toHaveBeenCalledWith("/usr/bin/fish");
+  });
+
+  it("refuses to select a broken-WSL row and names why", async () => {
+    const onSelect = vi.fn();
+    const WSL_STUB: TraycerDetectedShell = {
+      name: "WSL",
+      path: "C:\\Windows\\System32\\wsl.exe",
+      isDefault: false,
+      source: "detected",
+      missing: false,
+      // The Windows 11 installer stub: the file exists and is executable, but
+      // spawning it prints usage text and exits - never a working terminal.
+      wslHealth: "not-installed",
+    };
+    renderCombobox({
+      value: "/bin/zsh",
+      synthesised: false,
+      shells: [ZSH, WSL_STUB],
+      onSelect,
+    });
+    openPopover();
+    await screen.findByTestId("settings-shell-reset");
+
+    expect(screen.getByText("WSL not installed")).toBeTruthy();
+    const row = concreteRow("wsl.exe");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    // Unlike a missing added row, a dead-on-spawn shell commits nothing.
+    fireEvent.click(row);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("refuses the System default row when the OS default is a broken WSL", async () => {
+    const onUseSystemDefault = vi.fn();
+    // %COMSPEC% can point at wsl.exe, which makes the OS default itself a
+    // shell that cannot start a terminal - resetting to it would reintroduce
+    // exactly the failure the concrete row already refuses.
+    const WSL_DEFAULT: TraycerDetectedShell = {
+      name: "WSL",
+      path: "C:\\Windows\\System32\\wsl.exe",
+      isDefault: true,
+      source: "detected",
+      missing: false,
+      wslHealth: "no-distro",
+    };
+    renderCombobox({
+      value: "C:\\Windows\\System32\\wsl.exe",
+      synthesised: true,
+      shells: [WSL_DEFAULT],
+      onUseSystemDefault,
+    });
+    openPopover();
+
+    const systemDefault = await screen.findByTestId("settings-shell-reset");
+    expect(systemDefault.getAttribute("aria-disabled")).toBe("true");
+    expect(systemDefault.textContent).toContain("no Linux distribution");
+    fireEvent.click(systemDefault);
+    expect(onUseSystemDefault).not.toHaveBeenCalled();
+  });
+
+  it("re-detects shells via the explicit refresh control", async () => {
+    const onRefresh = vi.fn();
+    renderCombobox({
+      value: "/bin/zsh",
+      synthesised: false,
+      shells: [ZSH],
+      onRefresh,
+    });
+    openPopover();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Re-detect shells/ }),
+    );
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("removes an added shell via ✕ without invoking select", async () => {

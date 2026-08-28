@@ -1,7 +1,15 @@
 import type {
-  HostOperationStatus,
-  HostRegistryUpdateState,
-} from "@traycer-clients/shared/platform/runner-host";
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+
+export type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -23,12 +31,30 @@ export interface DesktopOwnershipEntry {
 }
 
 export type DesktopOwnershipClaimResult =
-  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly currentOwner: string };
 
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;
   readonly name: string;
+  readonly surfaceMode?:
+    | { readonly kind: "epic" }
+    | { readonly kind: "phase-migration"; readonly phaseId: string };
+}
+
+export type DesktopPerWindowStateFeature =
+  | "tab-strip-layout-v2"
+  | "active-route-v1";
+
+export interface DesktopPerWindowStateCapabilities {
+  readonly schemaVersion: number;
+  readonly features: readonly DesktopPerWindowStateFeature[];
+}
+
+export interface DesktopPerWindowStateUpdateAcknowledgement {
+  readonly capabilities: DesktopPerWindowStateCapabilities;
+  readonly revision: number;
 }
 
 export interface DesktopPerWindowLandingDraft {
@@ -48,11 +74,14 @@ export interface DesktopPerWindowLandingDraft {
 }
 
 export interface DesktopPerWindowSnapshot {
+  readonly revision?: number;
   readonly epicTabs: readonly DesktopPerWindowEpicViewTab[];
   readonly activeTabId: string | null;
   readonly canvasByTabId: Readonly<Record<string, DesktopJsonValue>>;
   readonly landingDrafts: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId: string | null;
+  readonly tabStripLayout?: DesktopJsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export interface DesktopPerWindowStatePatch {
@@ -61,10 +90,14 @@ export interface DesktopPerWindowStatePatch {
   readonly canvasByTabId?: Readonly<Record<string, DesktopJsonValue>>;
   readonly landingDrafts?: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId?: string | null;
+  readonly tabStripLayout?: DesktopJsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export type DesktopAuthSessionStatus =
-  "signed-out" | "signing-in" | "signed-in";
+  | "signed-out"
+  | "signing-in"
+  | "signed-in";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -108,6 +141,13 @@ export interface DesktopMenuCommandPayload {
   readonly windowId: string;
 }
 
+export type DesktopTopLevelMenuId =
+  | "file"
+  | "edit"
+  | "view"
+  | "window"
+  | "help";
+
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
   get(): Promise<number>;
@@ -121,7 +161,11 @@ export interface DesktopZoomBridge {
 export type DesktopSupportLogTarget = "desktop" | "host";
 
 export type DesktopSupportLinkId =
-  "website" | "documentation" | "release-notes" | "discord" | "support";
+  | "website"
+  | "documentation"
+  | "release-notes"
+  | "discord"
+  | "support";
 
 export interface DesktopSupportLinkDescriptor {
   readonly id: DesktopSupportLinkId;
@@ -159,6 +203,7 @@ export interface DesktopSupportSnapshot {
   readonly logs: readonly DesktopSupportLogDescriptor[];
   readonly links: readonly DesktopSupportLinkDescriptor[];
   readonly supportEmail: string;
+  readonly privateDeliveryAvailable: boolean;
 }
 
 export interface DesktopSupportRevealLogResult {
@@ -173,10 +218,166 @@ export interface DesktopSupportLogTailResult {
   readonly truncated: boolean;
 }
 
+export interface DesktopSupportFreezeEvidenceInput {
+  readonly draftId: number;
+  /**
+   * Client-side defect fingerprint when known at report-open. Non-null
+   * records an install-local sighting for "Nth time on this install".
+   */
+  readonly fingerprint: string | null;
+}
+
+export interface DesktopSupportFreezeEvidenceResult {
+  readonly reportId: string;
+}
+
+/**
+ * Install-local occurrence of a fingerprint. Copy must say "on this install".
+ */
+export interface DesktopFingerprintOccurrence {
+  readonly firstSeen: number;
+  readonly lastSeen: number;
+  readonly count: number;
+}
+
+export interface DesktopSupportReadFrozenLogTailInput {
+  readonly draftId: number;
+  readonly target: DesktopSupportLogTarget;
+}
+
+export interface DesktopSupportSaveDiagnosticBundleResult {
+  readonly path: string;
+}
+
+/**
+ * Field-for-field match with ticket 09's `SupportBugReportDraftFields`
+ * (`ipc-contracts/window-types.ts`). Keys match the GitHub issue form's field
+ * ids verbatim so `buildGitHubIssueUrl` (`@traycer-clients/shared/support/
+ * issue-reporter`) can assemble `URLSearchParams` straight from this object.
+ */
+export interface DesktopSupportBugReportDraftFields {
+  readonly "what-happened": string;
+  readonly version: string;
+  readonly os: string;
+  readonly component: string;
+  readonly repro: string;
+}
+
+/** Field-for-field match with ticket 07's `SupportFeatureRequestDraftFields`. */
+export interface DesktopSupportFeatureRequestDraftFields {
+  readonly problem: string;
+  readonly proposal: string;
+  readonly alternatives: string;
+  readonly component: string;
+}
+
+/** Field-for-field match with ticket 07's `SupportGeneralDraftFields`. */
+export interface DesktopSupportGeneralDraftFields {
+  readonly details: string;
+}
+
+/**
+ * Result of `support.buildPublicDraft`: the single main-process producer of
+ * all public text, always behind the deep scrubber. Field-for-field match
+ * with ticket 09/07's `SupportBuildPublicDraftResult` - a discriminated union
+ * since bug/idea/other route to GitHub issue forms with different field ids.
+ */
+export type DesktopSupportBuildPublicDraftResult =
+  | {
+      readonly template: "bug_report.yml";
+      readonly title: string;
+      readonly fields: DesktopSupportBugReportDraftFields;
+      readonly truncated: boolean;
+    }
+  | {
+      readonly template: "feature_request.yml";
+      readonly title: string;
+      readonly fields: DesktopSupportFeatureRequestDraftFields;
+      readonly truncated: boolean;
+    }
+  | {
+      readonly template: "general.yml";
+      readonly title: string;
+      readonly fields: DesktopSupportGeneralDraftFields;
+      readonly truncated: boolean;
+    };
+
+/**
+ * Field-for-field match with ticket 05's `PrivateErrorCause`
+ * (`@/lib/report-issue-draft-context`).
+ */
+export interface DesktopPrivateDiagnosticsCause {
+  readonly type: string;
+  readonly message: string;
+  readonly stack: string | null;
+  readonly componentStack: string | null;
+  readonly errorCode: string | null;
+  readonly sourceAction: string | null;
+  readonly timestamp: number;
+}
+
+/**
+ * Mirrors ticket 05's `CapturedField<T>` (`@/lib/support-context-registry`):
+ * `known` is fresh, `stale` is a prior value no longer confirmed live,
+ * `unavailable` means never observed this session.
+ */
+export type DesktopCapturedField<T> =
+  | { readonly status: "known"; readonly value: T }
+  | { readonly status: "stale"; readonly value: T }
+  | { readonly status: "unavailable" };
+
+/**
+ * Field-for-field match with ticket 05's `SupportContextSnapshot`
+ * (`@/lib/support-context-registry`). `hostId` here is the tab-bound host,
+ * not necessarily the "local host" Electron main attaches logs from.
+ */
+export interface DesktopContextRegistrySnapshot {
+  readonly routeTemplate: DesktopCapturedField<string>;
+  readonly hostId: DesktopCapturedField<string>;
+  readonly epicId: DesktopCapturedField<string>;
+  readonly tabId: DesktopCapturedField<string>;
+  readonly artifactId: DesktopCapturedField<string>;
+  readonly chatId: DesktopCapturedField<string>;
+  readonly agentId: DesktopCapturedField<string>;
+  readonly harnessId: DesktopCapturedField<string>;
+  readonly model: DesktopCapturedField<string>;
+  readonly profileId: DesktopCapturedField<string | null>;
+  readonly providerSelectionClass: DesktopCapturedField<
+    "bundled" | "path" | "custom"
+  >;
+  readonly providerVersion: DesktopCapturedField<string | null>;
+}
+
+/**
+ * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
+ * (`serializeReportIssuePrivateDiagnostics` in
+ * `@/lib/report-issue-draft-context`) - same five keys, always all present:
+ * `registry` is never itself absent, `correlationId` is always a fresh id.
+ */
+export interface DesktopPrivateDiagnostics {
+  readonly cause: DesktopPrivateDiagnosticsCause | null;
+  readonly registry: DesktopContextRegistrySnapshot;
+  readonly fingerprint: string | null;
+  /**
+   * Normalized stack frame family, for maintainer-side sub-clustering ONLY -
+   * deliberately NOT part of `fingerprint`'s identity.
+   */
+  readonly stackFamily: string | null;
+  readonly correlationId: string;
+}
+
 export interface DesktopMenuBridge {
   onCommand(handler: (payload: DesktopMenuCommandPayload) => void): {
     dispose(): void;
   };
+}
+
+export interface DesktopMenuPopupBridge {
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
 }
 
 export type DesktopAppUpdateStatus =
@@ -209,7 +410,28 @@ export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
   readonly currentVersion: string;
+  readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
+  /**
+   * The client-compatibility EPOCH the resolved candidate declares, stamped
+   * into the updater feed alongside its version. Same lifecycle as
+   * {@link latestVersion}: set when a candidate is found, carried through
+   * downloading and ready, cleared when there is no candidate.
+   *
+   * `null` means "this candidate declares no epoch we could read", and that is
+   * NOT the same as "epoch 1". A feed published before stamping existed, a
+   * feed that failed to parse, a candidate resolved by electron-updater's
+   * deep-validation fallback rather than the one the release gate proved - all
+   * arrive here as `null`, and all of them are cases where offering the update
+   * as a remedy for a compatibility rejection would restart the app straight
+   * back into the same rejection.
+   *
+   * So every consumer must treat `null` as INSUFFICIENT. The mapping of "no
+   * declared epoch" to the legacy generation is honest only for a client the
+   * host observed on the wire; here it would be a guess about a build nobody
+   * has run.
+   */
+  readonly latestCompatibilityEpoch: number | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
   readonly downloadProgress: number | null;
@@ -223,9 +445,78 @@ export interface DesktopAppUpdateSnapshot {
   // dialog with the steps instead of disabling it - the update can still be
   // applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  // True from the moment the main process hands off to `quitAndInstall` until
+  // the install either ends the process or fails back to "error". The quit is
+  // not instant, so this is what every restart affordance reads to go pending -
+  // it's broadcast, so a second window can't fire a duplicate install either.
+  readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
+}
+
+/**
+ * Outcome of a channel-preference mutation.
+ *
+ *   - `changed`   - persisted durably; the new channel is live.
+ *   - `unchanged` - the requested channel was already selected.
+ *   - `refused-update-pending` - a download is in flight, or a staged artifact
+ *     could not be discarded on this platform. On macOS this is a STANDING
+ *     outcome, not a transient one: a natively staged update cannot be
+ *     withdrawn, so RC opt-in stays refused until it has applied and the app has
+ *     relaunched. The recovery surface must sequence that rather than retry.
+ *
+ * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
+ */
+export type DesktopAppUpdateChannelChangeOutcome =
+  | "changed"
+  | "unchanged"
+  | "refused-update-pending";
+
+export interface DesktopAppUpdateChannelChange {
+  readonly outcome: DesktopAppUpdateChannelChangeOutcome;
+  readonly snapshot: DesktopAppUpdateSnapshot;
+}
+
+/**
+ * Where a compatibility-rejected app should send the user, decided in the main
+ * process because the platform, the staged-artifact state, and the RC feed all
+ * live there.
+ *
+ *   - `update-available`        the selected feed already holds a build that
+ *                               clears the floor; the ordinary affordances
+ *                               apply and no channel change is offered.
+ *   - `enable-rc`               stable cannot help, the rejecting host is on the
+ *                               RC line, and a bounded read-only probe found a
+ *                               sufficient RC build.
+ *   - `restart-to-clear-staged` macOS with an insufficient update natively
+ *                               staged. It applies at the next quit whatever the
+ *                               user does; recovery re-evaluates after that hop.
+ *   - `manual`                  everything else, including the corner where the
+ *                               only sufficient build is a stable release the
+ *                               updater cannot resolve.
+ *
+ * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
+ */
+export type DesktopCompatRecoveryRoute =
+  | "update-available"
+  | "enable-rc"
+  | "restart-to-clear-staged"
+  | "manual";
+
+export interface DesktopCompatRecoveryPlan {
+  readonly route: DesktopCompatRecoveryRoute;
+  /** The RC build the probe found, on the `enable-rc` route only. */
+  readonly rcCandidateVersion: string | null;
+  /**
+   * The insufficient artifact still staged for install, on the
+   * `restart-to-clear-staged` route only - the build that WILL apply at the
+   * next quit whatever the user does.
+   */
+  readonly stagedVersion: string | null;
+  // No snapshot: the discard a plan may perform is published through the
+  // ordinary change event the renderer already subscribes to. Mirrored from
+  // `desktop/src/ipc-contracts/app-update-types.ts`.
 }
 
 export interface DesktopAppUpdatesBridge {
@@ -233,36 +524,128 @@ export interface DesktopAppUpdatesBridge {
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
   ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
+  ): Promise<DesktopAppUpdateChannelChange>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
+  /**
+   * Asks main where recovery from an epoch rejection should send this user.
+   *
+   * `hostAllowsRcRecovery` is the CALLER's interpretation of the rejection's
+   * `hostReleaseChannel`, via `hostReleaseChannelAllowsRcRecovery` in the
+   * protocol package - main is told the verdict, never the channel string, so
+   * there is exactly one place that decides whether an unknown future line
+   * authorizes an RC hop.
+   */
+  resolveCompatRecovery(request: {
+    readonly minimumEpoch: number;
+    readonly hostAllowsRcRecovery: boolean;
+  }): Promise<DesktopCompatRecoveryPlan>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose(): void;
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
+/**
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by
+ * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
+ * a newer one in the renderer's store, the same monotonic pattern
+ * `DesktopAppUpdateSnapshot` uses.
+ */
+export interface DesktopGlobalShortcutsSnapshot {
+  readonly sequence: number;
+  readonly statuses: Readonly<Record<GlobalShortcutId, GlobalShortcutStatus>>;
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<DesktopGlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: DesktopGlobalShortcutsSnapshot) => void): {
     dispose(): void;
   };
 }
 
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose(): void;
   };
 }
+
+// Ticket 07 (T4): "bug" routes to bug_report.yml, "idea" to
+// feature_request.yml, "other" to general.yml.
+export type DesktopReportType = "bug" | "idea" | "other";
+
+export type DesktopReportFrequency =
+  | "once"
+  | "sometimes"
+  | "every_time"
+  | "not_sure";
+
+/**
+ * Field-for-field match with ticket 08's `SupportImageAttachmentInput`
+ * (`ipc-contracts/window-types.ts`). Bytes cross IPC as a raw `ArrayBuffer`,
+ * never base64.
+ */
+export interface DesktopImageAttachmentInput {
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly bytes: ArrayBuffer;
+}
+
+// What (if anything) actually reached the private channel for this draft, as
+// known by the renderer at the moment it asks main to build a public draft.
+// "none" covers both "never attempted" (no-DSN) and a definite `failed`
+// result - neither left anything on the Sentry side to reference.
+export type DesktopPrivateOutcome = "delivered" | "unconfirmed" | "none";
 
 export interface DesktopReportIssueForm {
-  readonly title: string;
-  readonly whatHappened: string;
-  readonly stepsToReproduce: string;
-  readonly expectedBehavior: string;
-  readonly actualBehavior: string;
+  readonly draftId: number;
+  readonly type: DesktopReportType;
+  // The single required question ("What were you trying to do?").
+  readonly intent: string;
+  // D9: null when left unselected (default) or hidden because the ledger
+  // already knows the repeat count.
+  readonly frequency: DesktopReportFrequency | null;
+  // D7: only non-null when the user actively changed the pre-filled
+  // "Where did this happen?" selector away from its default.
+  readonly location: string | null;
+  // G1: identity is attached to the private report only when this is true.
+  readonly allowContact: boolean;
+  // Consent panel's two log toggles (default on): withholds the tail from
+  // the private submission / diagnostic bundle when false.
+  readonly includeDesktopLog: boolean;
+  readonly includeHostLog: boolean;
+  // Consent panel's diagnostics toggle: gates layer-0/process-metrics/
+  // version-platform-host tags+contexts on both the Sentry event and the
+  // bundle's environment block. Never gates the report's own identity
+  // (reportId/fingerprint/correlationId).
+  readonly includeDiagnostics: boolean;
+  // Up to 3 screenshots (ticket 08 / T5) - always present, empty when none
+  // attached.
+  readonly images: readonly DesktopImageAttachmentInput[];
+  // `buildPublicDraft`-only (ignored by submit/bundle). The user's as-typed
+  // preview-title edit, re-scrubbed and re-fit through the same budget
+  // pipeline as a derived title on every "Open GitHub draft" re-invocation;
+  // null on the initial preview fetch.
+  readonly overrideTitle: string | null;
+  // `buildPublicDraft`-only (ignored by submit/bundle).
+  readonly privateOutcome: DesktopPrivateOutcome;
+  readonly privateDiagnostics?: DesktopPrivateDiagnostics;
 }
 
-export interface DesktopSubmitReportResult {
-  readonly reportId: string;
-}
+// Four states, not a nullable id: "no DSN" and "flush timed out" used to
+// collapse onto the same `reportId: null`, which claimed failure for reports
+// that may have arrived. `failed` is reserved for definite non-delivery;
+// `unconfirmed` never claims failure and never claims delivery.
+export type DesktopSubmitReportResult =
+  | { readonly status: "delivered"; readonly reportId: string }
+  | { readonly status: "unconfirmed"; readonly reportId: string }
+  | { readonly status: "unavailable" }
+  | { readonly status: "failed"; readonly reason: "error" };
 
 export interface DesktopSupportBridge {
   getSnapshot(): Promise<DesktopSupportSnapshot>;
@@ -276,6 +659,22 @@ export interface DesktopSupportBridge {
     readonly target: DesktopSupportLogTarget;
     readonly tailLines: number;
   }): Promise<DesktopSupportLogTailResult>;
+  freezeEvidence(
+    input: DesktopSupportFreezeEvidenceInput,
+  ): Promise<DesktopSupportFreezeEvidenceResult>;
+  discardFrozenEvidence(draftId: number): Promise<void>;
+  readFrozenLogTail(
+    input: DesktopSupportReadFrozenLogTailInput,
+  ): Promise<DesktopSupportLogTailResult>;
+  saveDiagnosticBundle(
+    form: DesktopReportIssueForm,
+  ): Promise<DesktopSupportSaveDiagnosticBundleResult>;
+  getFingerprintOccurrence(
+    fingerprint: string,
+  ): Promise<DesktopFingerprintOccurrence | null>;
+  buildPublicDraft(
+    form: DesktopReportIssueForm,
+  ): Promise<DesktopSupportBuildPublicDraftResult>;
 }
 
 export interface DesktopPowerBridge {
@@ -306,7 +705,10 @@ export interface DesktopWindowsBridge {
   };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;
-    update(patch: DesktopPerWindowStatePatch): Promise<void>;
+    capabilities?(): Promise<DesktopPerWindowStateCapabilities>;
+    update(
+      patch: DesktopPerWindowStatePatch,
+    ): Promise<DesktopPerWindowStateUpdateAcknowledgement | void>;
     // Optional + capability-probed: a desktop shell built before the per-window
     // `clear` RPC was added has no `clear`. Keeping it optional lets the wipe
     // site probe `typeof clear === "function"` and degrade gracefully without

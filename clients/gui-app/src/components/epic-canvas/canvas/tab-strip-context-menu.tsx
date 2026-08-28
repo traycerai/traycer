@@ -9,7 +9,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Eye,
+  LineChart,
   Pencil,
 } from "lucide-react";
 
@@ -30,6 +32,8 @@ export interface TabStripContextMenuProps {
     leading: boolean,
   ) => void;
   readonly onRevealInSidebar: (tabId: string) => void;
+  /** Copies the absolute path for workspace-file tabs; absent for other kinds. */
+  readonly onCopyFilePath: (() => void) | null;
   /**
    * Commit handler for inline title editing. Consumed by the tab item when
    * the rename is committed (Enter / blur), not by the menu itself - the menu
@@ -40,6 +44,13 @@ export interface TabStripContextMenuProps {
   readonly canRename: boolean;
   /** Switches the tab title into the inline editable input. */
   readonly onEditTitle: () => void;
+  /**
+   * Ticket 12's chat cost line - opens the chat's usage/drill-down dialog.
+   * `null` for every non-chat tab and for a chat whose host has not
+   * negotiated `host.usage.summary` (the overflow item itself is the
+   * "unsupported chats show nothing" case - see `ChatUsageDialog`).
+   */
+  readonly onOpenUsage: (() => void) | null;
 }
 
 /**
@@ -60,8 +71,10 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
     onCloseAll,
     onSplit,
     onRevealInSidebar,
+    onCopyFilePath,
     canRename,
     onEditTitle,
+    onOpenUsage,
   } = props;
 
   return (
@@ -119,10 +132,25 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
         Split Right
       </ContextMenuItem>
       <ContextMenuSeparator />
+      {onCopyFilePath === null ? null : (
+        <ContextMenuItem onSelect={onCopyFilePath}>
+          <Copy className="size-4" />
+          Copy File Path
+        </ContextMenuItem>
+      )}
       <ContextMenuItem onSelect={() => onRevealInSidebar(tabId)}>
         <Eye className="size-4" />
         Reveal in Sidebar
       </ContextMenuItem>
+      {onOpenUsage === null ? null : (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={onOpenUsage}>
+            <LineChart className="size-4" />
+            Usage
+          </ContextMenuItem>
+        </>
+      )}
     </ContextMenuContent>
   );
 }

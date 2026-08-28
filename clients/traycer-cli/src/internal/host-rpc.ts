@@ -1,11 +1,12 @@
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
-import { createBearerRevalidator } from "../../../shared/auth/bearer-revalidator";
 import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aware-messenger";
 import {
   createRetryingMessenger,
@@ -18,9 +19,13 @@ import {
   HostRpcError,
   type RequestOfMethod,
   type ResponseOfMethod,
+  HostRequestAuthority,
+  HostTransportEndpoint,
 } from "../../../shared/host-transport/host-messenger";
-import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
-import { WsRpcClient } from "../../../shared/host-transport/ws-rpc-client";
+import {
+  HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+  WsRpcClient,
+} from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -29,12 +34,18 @@ import {
   readHostPidMetadata,
 } from "../host/pid-metadata";
 import { isProcessAlive } from "../store/cli-lock";
-import { cliBearerStore, resolveHostAuth, type HostAuth } from "./host-auth";
+import {
+  createCliCredentialsStore,
+  createStoreBackedRevalidator,
+} from "../store/credentials-store";
+import { resolveHostAuth, type HostAuth } from "./host-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
+  clientCompatibilityRecoveryHint,
   compatRecoveryHint,
   effectiveUpgradeGuidance,
 } from "../host/compat-recovery";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 const FRAME_TIMEOUT_MS = 15_000;
 
@@ -45,9 +56,10 @@ const FRAME_TIMEOUT_MS = 15_000;
  * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
  * also uses - the CLI no longer hand-rolls it. The bearer comes from the stored
  * credentials (`resolveHostAuth`), seeded by `traycer login`; on a host
- * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer (rotating
- * the lease + persisting via `cliBearerStore`) and retries once before the error
- * surfaces.
+ * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer via the
+ * store-backed revalidator - the refresh spend runs inside the shared credentials
+ * file lock (`store.rotate`, §7) - rotates the lease, and retries once before the
+ * error surfaces.
  */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,
@@ -95,6 +107,10 @@ export async function callHostRpc<
  * callers (IDE hook commands such as title/activity reporting) where blocking
  * the agent for a multi-attempt retry of a non-responsive host is worse than a
  * quick miss.
+ *
+ * Because it never redials, it also waives the host attestation window (see
+ * `attestationWindowForPolicy`): a post-send miss surfaces at the 15s response
+ * deadline instead of waiting out an attestation this caller could not act on.
  */
 export async function callHostRpcFastFail<
   Method extends keyof HostRpcRegistry & string,
@@ -188,33 +204,46 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  const revalidator = createBearerRevalidator({
-    authnBaseUrl: auth.authnBaseUrl,
+  // On a host UNAUTHORIZED the auth-aware messenger drives the refresh through
+  // the locked `rotate` (§7): a short-lived store for this one call, disposed
+  // once the request settles so a `commit-failed` continuation timer never
+  // outlives the command.
+  const store = createCliCredentialsStore();
+  // `signal: null`: this revalidator lives for exactly one unary call, whose
+  // own transport timeout already bounds it.
+  const revalidator = createStoreBackedRevalidator({
+    store,
     lease,
-    store: cliBearerStore,
-    clearOnReject: false,
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    signal: null,
   });
 
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
       new WsRpcClient<HostRpcRegistry>({
         registry: hostRpcRegistry,
-        endpoint: () => endpoint,
-        bearer: () => lease,
         requestId: () => randomUUID(),
         webSocketFactory: createWhatwgWebSocketFactory(),
         dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
         frameTimeoutMs: FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
+        // The CLI has no selection authority to feed: there is no window, no
+        // kernel, and nothing that could act on a failover verdict.
+        evidence: NO_TRANSPORT_EVIDENCE,
+        clientIdentity: CLI_CLIENT_IDENTITY,
       }),
       revalidator,
-      { retry: { bearer: () => lease } },
     ),
     retryPolicy,
   );
 
+  const callLifetime = new AbortController();
+  const authority: HostRequestAuthority = {
+    endpoint,
+    bearer: lease,
+    abortSignal: callLifetime.signal,
+  };
   try {
-    const response = await messenger.request(method, params);
+    const response = await messenger.request(method, params, authority);
     logger.debug("Host RPC completed", {
       environment: config.environment,
       method,
@@ -232,6 +261,9 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       errorName: error.name,
     });
     throw err;
+  } finally {
+    callLifetime.abort("cli-call-settled");
+    store.dispose();
   }
 }
 
@@ -400,6 +432,84 @@ export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
   });
 }
 
+/**
+ * Validate a host response against the CANONICAL (latest installed) response
+ * schema for `method`, resolved from the same `hostRpcRegistry` the transport
+ * negotiates against. Prefer this over {@link parseHostResponse} everywhere the
+ * payload is just "the response to the call we made".
+ *
+ * Why this exists rather than each call site naming a schema: the transport
+ * hands back a payload already at the client's canonical version - either the
+ * host spoke it directly (returned unvalidated, so this parse IS the validation
+ * boundary) or `upgradeResponseAlongChain` bridged an older host's reply up to
+ * it. A call site that names an older `...SchemaVNN` therefore validates the
+ * wrong contract AND, because Zod strips unknown keys, silently discards every
+ * field added since - turning a host fact the CLI was told into one it never
+ * saw. That skew is invisible to the type checker, because `parseHostResponse`
+ * takes `value: unknown` and returns whatever the schema it was handed infers.
+ *
+ * Naming the METHOD alongside the schema is what closes that hole. The schema
+ * parameter is typed as the method's canonical `ResponseOfMethod` - the same
+ * type `callHostRpc` already promises for the value being parsed - so handing
+ * it a stale `...SchemaVNN` is a compile error at the call site instead of a
+ * silent field drop at runtime. When a protocol minor lands, every CLI call
+ * site on that method stops compiling until someone decides what the new field
+ * means here, which is the loud, reviewable moment the old signature never had.
+ * `assertCanonicalResponseSchema` covers the residue the types cannot see.
+ *
+ * {@link parseHostResponse} stays for the callers that genuinely mean a
+ * specific historical version - the streaming frame bridge in `monitor.ts`
+ * decodes v1.0/v1.1/v1.2 envelopes on purpose.
+ */
+export function parseCanonicalHostResponse<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  schema: ZodType<ResponseOfMethod<HostRpcRegistry, Method>>,
+  value: unknown,
+): ResponseOfMethod<HostRpcRegistry, Method> {
+  assertCanonicalResponseSchema(method, schema);
+  return parseHostResponse(schema, value);
+}
+
+/**
+ * The canonical (latest installed) response schema the registry declares for
+ * `method` - the contract the transport negotiates and therefore the only one a
+ * plain response parse may use. Exported so a test can assert the pairing for
+ * every method without re-deriving the traversal.
+ */
+export function canonicalResponseSchemaFor(
+  method: keyof HostRpcRegistry & string,
+): ZodType<unknown> {
+  return getLatestContract(hostRpcRegistry[method], undefined).responseSchema;
+}
+
+/**
+ * Backstop for the drift the signature alone cannot catch. The
+ * `ZodType<ResponseOfMethod<...>>` parameter rejects a stale schema whenever the
+ * versions differ by a REQUIRED field - which is what an additive protocol minor
+ * normally adds, since its upgrade path has to supply a value for older hosts.
+ * It does not reject a schema that merely differs by an optional field, and it
+ * cannot see a base-name alias that tracks the latest line today but is free to
+ * stop doing so (`agentGetProviderProfileRateLimitsResponseSchema` is exactly
+ * that shape).
+ *
+ * So compare identity against the registry as well. This is an O(1) property
+ * walk against a call that just crossed a WebSocket, and it fails as a plain
+ * `Error`, not a `CliError`: reaching it means the CLI was built with a
+ * mismatched pairing, which is a bug in this repo rather than anything the user
+ * or the host did.
+ */
+function assertCanonicalResponseSchema(
+  method: keyof HostRpcRegistry & string,
+  schema: ZodType<unknown>,
+): void {
+  if (canonicalResponseSchemaFor(method) === schema) return;
+  throw new Error(
+    `traycer: internal error - '${method}' is parsed with a non-canonical response schema. Parse the latest contract in the versioned-RPC registry; an older '...SchemaVNN' silently strips every field added since.`,
+  );
+}
+
 function hostRpcToCliError(err: unknown): unknown {
   if (!(err instanceof HostRpcError)) return err;
   createCliLogger(config.environment).warn(
@@ -440,7 +550,39 @@ function mapHostRpcError(err: HostRpcError): CliError {
     return cliError({
       code: CLI_ERROR_CODES.FORBIDDEN,
       message:
-        "traycer: access denied for this epic - check --epic-id and that you're signed in to the account that owns it.",
+        "traycer: access denied for this epic - check TRAYCER_EPIC_ID and that you're signed in to the account that owns it.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_AGENT_NOT_FOUND") {
+    return cliError({
+      code: CLI_ERROR_CODES.AGENT_NOT_FOUND,
+      message: `traycer: ${err.message} Check --agent-id (or $TRAYCER_AGENT_ID).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_AGENT_NOT_LOCAL") {
+    return cliError({
+      code: CLI_ERROR_CODES.AGENT_NOT_LOCAL,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_ROLE_FORBIDDEN") {
+    return cliError({
+      code: CLI_ERROR_CODES.ROLE_FORBIDDEN,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_INVALID_ARGUMENT" || err.code === "MESSAGE_TOO_LARGE") {
+    return cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: ${err.message}`,
       details: null,
       exitCode: 1,
     });
@@ -467,9 +609,18 @@ function mapHostRpcError(err: HostRpcError): CliError {
     // (client-newer, `fatalDetails: null`) maps to "update the host" - the
     // SAME verdict `traycer host doctor` derives - instead of falling through
     // null guidance to an ineffective "restart" hint.
+    //
+    // An EPOCH rejection wins over both: the host named the generation it
+    // needs and the build that provides it, which is strictly more than the
+    // two guidance booleans can express. `exitCode: 1` and no retry are
+    // unchanged and are the point - the same binary against the same host
+    // reaches the same verdict, so a reconnect is a loop.
+    const epochHint = clientCompatibilityRecoveryHint(
+      err.fatalDetails?.clientCompatibilityRequirement ?? null,
+    );
     return cliError({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
-      message: `traycer: ${err.message} - ${compatRecoveryHint(effectiveUpgradeGuidance(err.code, err.fatalDetails?.upgradeGuidance ?? null))}.`,
+      message: `traycer: ${err.message} - ${epochHint ?? compatRecoveryHint(effectiveUpgradeGuidance(err.code, err.fatalDetails?.upgradeGuidance ?? null))}.`,
       details: null,
       exitCode: 1,
     });
@@ -503,4 +654,27 @@ function retryPolicyLabel(
   policy: TransportRetryPolicy,
 ): "default" | "fast-fail" {
   return policy === NO_RETRY_TRANSPORT_POLICY ? "fast-fail" : "default";
+}
+
+/**
+ * The attestation window a call gets is a function of what it could do with an
+ * attestation.
+ *
+ * A retrying call gets the production window: the CLI's 15s response deadline
+ * is half the host's 30s post-`openAck` deadline - and a stalled host fires that
+ * timer later still - so without the window every stalled host would surface an
+ * ambiguous, non-retryable timeout long before it could attest that it never
+ * dispatched the request, and the retry wrapper would never get its one safe
+ * reason to redial a non-idempotent method.
+ *
+ * A `maxRetries: 0` policy has no such reason to wait. Its retry wrapper goes
+ * straight to the final attempt and propagates even a valid
+ * `RetryableTransportError` without redialing, so holding the socket open for an
+ * attestation would only delay a failure that is already decided - exactly what
+ * `callHostRpcFastFail`'s latency-bound IDE-hook callers must not pay. Keyed off
+ * `maxRetries` rather than policy identity so any future no-retry policy
+ * inherits the same wiring.
+ */
+function attestationWindowForPolicy(policy: TransportRetryPolicy): number {
+  return policy.maxRetries === 0 ? 0 : HOST_POST_OPEN_ATTESTATION_WINDOW_MS;
 }

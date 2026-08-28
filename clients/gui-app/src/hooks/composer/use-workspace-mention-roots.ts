@@ -1,20 +1,35 @@
 import { useMemo } from "react";
 import type {
   WorktreeBinding,
+  WorktreeBindingEntry,
+  WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
+/**
+ * `hostId` scopes the "globally registered folders" fallback: folder paths
+ * are host-local, so the fallback must be the composer's target host's
+ * bucket (a tab's bound host, the modal's pinned host, the landing page's
+ * active host) - never another machine's paths.
+ */
 export function useWorkspaceMentionRoots(
   preferredRoots: ReadonlyArray<string> | null,
   fallbackToGlobalWhenEmpty: boolean,
+  hostId: string | null,
 ): ReadonlyArray<string> {
-  const workspaceFolders = useWorkspaceFoldersStore((state) => state.folders);
+  const workspaceFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
+  );
   return useMemo(() => {
     const preferred =
       preferredRoots === null ? [] : dedupeMentionRoots(preferredRoots);
@@ -41,9 +56,16 @@ export function useLandingComposerMentionRoots(
       null
     );
   });
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
+  // The landing composer's placement is its surface pin (pin ?? effective),
+  // so the global folder fallback reads the bucket of the host it will
+  // actually create on.
+  const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const globalFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
+  );
   const stagingKeyId = worktreeStagingKeyString({
     surface: "landing",
+    hostId: activeHostId,
     draftId,
   });
   const stagedIntent = useWorktreeIntentStagingStore(
@@ -59,7 +81,7 @@ export function useLandingComposerMentionRoots(
   // would re-resolve the same source intent-stripped. Disable it - the only way
   // `preferredRoots` is empty here is when there are no folders at all, where
   // the fallback would yield `[]` anyway.
-  return useWorkspaceMentionRoots(preferredRoots, false);
+  return useWorkspaceMentionRoots(preferredRoots, false, activeHostId);
 }
 
 /**
@@ -73,18 +95,60 @@ export function mentionRootsFromWorktreeBinding(
 ): ReadonlyArray<string> {
   if (binding === null) return [];
   if (binding.workspaceMode === "folderless") return [];
-  // Mirror the host's `entryRunDirectory`: an empty-string worktreePath falls
-  // back to the workspacePath (where the turn actually runs), so a malformed
-  // worktree row doesn't drop the folder's mention root the host still uses.
-  return dedupeMentionRoots(
-    binding.entries.map((entry) =>
-      entry.mode === "worktree" &&
-      entry.worktreePath !== null &&
-      entry.worktreePath.length > 0
-        ? entry.worktreePath
-        : entry.workspacePath,
-    ),
+  return dedupeMentionRoots(binding.entries.map(bindingEntryRoot));
+}
+
+// Mirror the host's `entryRunDirectory`: an empty-string worktreePath falls
+// back to the workspacePath (where the turn actually runs), so a malformed
+// worktree row doesn't drop the folder's mention root the host still uses.
+function bindingEntryRoot(entry: WorktreeBindingEntry): string {
+  return entry.mode === "worktree" &&
+    entry.worktreePath !== null &&
+    entry.worktreePath.length > 0
+    ? entry.worktreePath
+    : entry.workspacePath;
+}
+
+/**
+ * Composer-scoped roots for a chat: the staged (not-yet-materialized) worktree
+ * intent layers over the committed binding per folder - `stagedEntry ??
+ * bindingEntry`, the same precedence the workspace selector renders and the
+ * send path materializes. This keeps next-message surfaces (mention search,
+ * slash-command discovery) from probing a path the staged selection has
+ * superseded, e.g. a deleted worktree the user just replaced from the
+ * composer.
+ *
+ * A staged `worktree` (create) entry resolves to its source `workspacePath` -
+ * the materialized checkout that stands in until the host creates the worktree
+ * at send - and a staged `import` to its existing on-disk worktree. Staged
+ * entries for folders absent from the binding contribute their roots too.
+ */
+export function mentionRootsFromWorktreeBindingAndIntent(
+  binding: WorktreeBinding | null,
+  intent: WorktreeIntent | null,
+): ReadonlyArray<string> {
+  if (binding !== null && binding.workspaceMode === "folderless") return [];
+  if (intent === null || intent.entries.length === 0) {
+    return mentionRootsFromWorktreeBinding(binding);
+  }
+  const stagedByWorkspacePath = new Map(
+    intent.entries.map((entry) => [entry.workspacePath, entry]),
   );
+  const bindingEntries = binding === null ? [] : binding.entries;
+  const bindingRoots = bindingEntries.map((entry) => {
+    const staged = stagedByWorkspacePath.get(entry.workspacePath);
+    if (staged === undefined) return bindingEntryRoot(entry);
+    stagedByWorkspacePath.delete(entry.workspacePath);
+    return folderIntentRoot(staged);
+  });
+  const stagedOnlyRoots = Array.from(stagedByWorkspacePath.values()).map(
+    folderIntentRoot,
+  );
+  return dedupeMentionRoots([...bindingRoots, ...stagedOnlyRoots]);
+}
+
+function folderIntentRoot(entry: WorktreeFolderIntent): string {
+  return entry.kind === "import" ? entry.worktreePath : entry.workspacePath;
 }
 
 export function worktreeBindingIsFolderless(
@@ -103,10 +167,7 @@ export function mentionRootsFromWorktreeIntent(
         intent?.entries.find(
           (intentEntry) => intentEntry.workspacePath === workspacePath,
         ) ?? null;
-      if (entry !== null && entry.kind === "import") {
-        return entry.worktreePath;
-      }
-      return workspacePath;
+      return entry === null ? workspacePath : folderIntentRoot(entry);
     }),
   );
 }

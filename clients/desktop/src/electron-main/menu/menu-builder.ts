@@ -3,7 +3,10 @@ import {
   type BaseWindow,
   type MenuItemConstructorOptions,
 } from "electron";
-import type { MenuCommandId } from "../../ipc-contracts/window-types";
+import {
+  desktopTopLevelMenuItemId,
+  type MenuCommandId,
+} from "../../ipc-contracts/window-types";
 import {
   TRAYCER_DOCUMENTATION_URL,
   TRAYCER_RELEASE_NOTES_URL,
@@ -24,7 +27,7 @@ export function buildApplicationMenu(
     [
       ...buildAppMenu(state, actions),
       buildFileMenu(state, actions),
-      buildEditMenu(actions),
+      buildEditMenu(state, actions),
       buildViewMenu(state, actions),
       buildWindowMenu(state, actions),
       buildHelpMenu(state, actions),
@@ -49,9 +52,10 @@ function buildAppMenu(
             actions.command("app.aboutDetails", browserWindow ?? null),
         },
         { type: "separator" },
-        settingsItem(actions),
+        settingsItem(state.platform, actions),
         authItem(state, actions),
         { type: "separator" },
+        ...hostUpdateItems(state, actions),
         restartHostItem(actions),
         checkForUpdatesItem(state, actions),
         { type: "separator" },
@@ -75,11 +79,12 @@ function buildFileMenu(
     state.platform === "darwin"
       ? []
       : [
-          settingsItem(actions),
+          settingsItem(state.platform, actions),
           authItem(state, actions),
           { type: "separator" } satisfies MenuItemConstructorOptions,
         ];
   return {
+    id: desktopTopLevelMenuItemId("file"),
     label: "File",
     submenu: [
       {
@@ -98,6 +103,9 @@ function buildFileMenu(
       {
         label: "Close Tab",
         accelerator: "CmdOrCtrl+W",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         enabled: state.canCloseTab,
         click: (_item, browserWindow) =>
           actions.command("epic.closeTab", browserWindow ?? null),
@@ -105,32 +113,42 @@ function buildFileMenu(
       ...nonMacAccountItems,
       ...(state.platform === "darwin"
         ? []
-        : [{ role: "quit" } satisfies MenuItemConstructorOptions]),
+        : [terminalConflictingRole("quit", state.platform)]),
     ],
   };
 }
 
-function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
+function buildEditMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
   return {
+    id: desktopTopLevelMenuItemId("edit"),
     label: "Edit",
     submenu: [
-      { role: "undo" },
-      { role: "redo" },
+      rendererOwnedHistoryRole("undo", state.platform),
+      rendererOwnedHistoryRole("redo", state.platform),
       { type: "separator" },
       { role: "cut" },
       { role: "copy" },
       { role: "paste" },
-      { role: "selectAll" },
+      terminalConflictingRole("selectAll", state.platform),
       { type: "separator" },
       {
         label: "Find",
         accelerator: "CommandOrControl+F",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         click: (_menuItem, browserWindow) =>
           actions.command("view.findInPage", browserWindow ?? null),
       },
       {
         label: "Find Next",
         accelerator: "CommandOrControl+G",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         click: (_menuItem, browserWindow) =>
           actions.command("view.findNext", browserWindow ?? null),
       },
@@ -142,6 +160,26 @@ function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
       },
     ],
   };
+}
+
+/**
+ * Electron's native undo/redo roles consume their accelerators and call
+ * `webContents.undo()` / `webContents.redo()`. That bypasses editors with a
+ * JavaScript-owned history, including @pierre/diffs. Keep the roles for menu
+ * clicks, but leave the keyboard event with the renderer so the focused editor
+ * can run its own unmodified Cmd/Ctrl-Z and Shift-Cmd/Ctrl-Z commands.
+ *
+ * `registerAccelerator` releases the chord on Windows/Linux. Electron ignores
+ * that flag on macOS, so an explicit empty accelerator is required there to
+ * override the role's built-in keyboard equivalent.
+ */
+function rendererOwnedHistoryRole(
+  role: "undo" | "redo",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return platform === "darwin"
+    ? { role, accelerator: "" }
+    : { role, registerAccelerator: false };
 }
 
 function buildViewMenu(
@@ -156,7 +194,7 @@ function buildViewMenu(
           { role: "togglefullscreen" } satisfies MenuItemConstructorOptions,
         ];
   const submenu: MenuItemConstructorOptions[] = [
-    { role: "reload" },
+    terminalConflictingRole("reload", state.platform),
     { role: "forceReload" },
     { type: "separator" },
     {
@@ -179,6 +217,7 @@ function buildViewMenu(
     ...fullscreenSection,
   ];
   return {
+    id: desktopTopLevelMenuItemId("view"),
     label: "View",
     submenu,
   };
@@ -195,11 +234,15 @@ function buildWindowMenu(
     click: () => actions.focusWindow(entry.windowId),
   }));
   return {
+    id: desktopTopLevelMenuItemId("window"),
     label: "Window",
     submenu: [
       {
         label: "Minimize",
         accelerator: "CmdOrCtrl+M",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         enabled: state.windows.length > 0,
         click: (_item, browserWindow) =>
           actions.command("window.minimizeWindow", browserWindow ?? null),
@@ -224,7 +267,7 @@ function buildWindowMenu(
             click: (_item, browserWindow) =>
               actions.command("window.closeWindow", browserWindow ?? null),
           }
-        : { role: "close" },
+        : terminalConflictingRole("close", state.platform),
     ],
   };
 }
@@ -234,6 +277,7 @@ function buildHelpMenu(
   actions: MenuBuildActions,
 ): MenuItemConstructorOptions {
   return {
+    id: desktopTopLevelMenuItemId("help"),
     label: "Help",
     role: "help",
     submenu: [
@@ -276,12 +320,38 @@ function buildHelpMenu(
   };
 }
 
-function settingsItem(actions: MenuBuildActions): MenuItemConstructorOptions {
+function settingsItem(
+  platform: NodeJS.Platform,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
   return {
     label: "Settings...",
     accelerator: "CmdOrCtrl+,",
+    registerAccelerator: registerTerminalConflictingAccelerator(platform),
     click: (_item, browserWindow) =>
       actions.command("app.openSettings", browserWindow ?? null),
+  };
+}
+
+function registerTerminalConflictingAccelerator(
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === "darwin";
+}
+
+/**
+ * Electron's role defaults register these Ctrl accelerators before the
+ * renderer can apply its focused-terminal policy. Keep the native menu action,
+ * but release its accelerator on Windows/Linux so the renderer or xterm owns
+ * the key event. macOS keeps its native menu key equivalents.
+ */
+function terminalConflictingRole(
+  role: "close" | "quit" | "reload" | "selectAll",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return {
+    role,
+    registerAccelerator: registerTerminalConflictingAccelerator(platform),
   };
 }
 
@@ -312,6 +382,20 @@ function restartHostItem(
     click: (_item, browserWindow) =>
       actions.command("host.restart", browserWindow ?? null),
   };
+}
+
+function hostUpdateItems(
+  state: MenuState,
+  actions: MenuBuildActions,
+): readonly MenuItemConstructorOptions[] {
+  if (state.hostUpdateAvailableVersion === null) return [];
+  return [
+    {
+      label: `Update to ${state.hostUpdateAvailableVersion}`,
+      click: (_item, browserWindow) =>
+        actions.command("host.installUpdate", browserWindow ?? null),
+    },
+  ];
 }
 
 function checkForUpdatesItem(

@@ -8,6 +8,8 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { PopoverContent } from "@/components/ui/popover";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { cn } from "@/lib/utils";
 import {
   PickerActionButton,
@@ -16,6 +18,7 @@ import {
 } from "@/components/home/worktree/worktree-branch-picker-options";
 import {
   pickerElementId,
+  pickerEmptyStateLabel,
   pickerEntryId,
   type PickerEntry,
   type WorktreeBranchPickerContentProps,
@@ -54,15 +57,23 @@ export function WorktreeBranchPickerContent(
     side,
   } = props;
 
+  // Typing to narrow a long branch list is a hardware-keyboard convenience.
+  // On a touch pointer the same focus raises a software keyboard over the very
+  // list the popover exists to show, so the search stands down and the popover
+  // opens on its rows.
+  const coarsePointer = useCoarsePointer();
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
+
   useEffect(() => {
-    if (!open) return;
+    if (!open || coarsePointer) return;
     const timer = window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [inputRef, open]);
+  }, [coarsePointer, inputRef, open]);
 
   const computeResultRowKey = useCallback(
     (index: number, row: WorktreeBranchPickerRow | undefined) =>
@@ -111,6 +122,11 @@ export function WorktreeBranchPickerContent(
         "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0 data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
         contentClassName,
       )}
+      ref={contentRef}
+      // The search field is the first tabbable descendant, so Radix's own
+      // open-autofocus takes it whether or not the effect above runs. Both
+      // halves have to move together or the gate is a no-op.
+      onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={handleContentKeyDown}
       onEscapeKeyDown={(event) => {
         if (!hasQuery) return;
@@ -239,9 +255,7 @@ function WorktreeBranchPickerListbox(props: WorktreeBranchPickerListboxProps) {
       )}
       <div className="min-h-0 flex-1 overflow-hidden p-1">
         {filteredRows.length === 0 ? (
-          <PickerStateRow
-            label={hasQuery ? "No matching branches" : emptyLabel}
-          />
+          <PickerStateRow label={pickerEmptyStateLabel(hasQuery, emptyLabel)} />
         ) : (
           <Virtuoso<WorktreeBranchPickerRow>
             key={listKey}

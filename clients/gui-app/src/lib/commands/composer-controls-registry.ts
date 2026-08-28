@@ -13,12 +13,14 @@
  * for the React entry point that enforces these semantics correctly
  * under mount / unmount / focus-change sequences.
  */
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   PermissionMode,
   ProviderId,
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import type { HostRpcRegistry } from "@/lib/host";
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
 export interface ComposerControls {
@@ -42,6 +44,16 @@ export interface ComposerControls {
 export interface FocusedComposerEntry {
   readonly kind: FocusedComposerKind;
   readonly controls: ComposerControls;
+  /**
+   * The focused composer's target host - the client its own toolbar store
+   * reads the harness/model catalog through. The palette's "Pick provider" /
+   * "Pick model" subpages list THIS host's catalog, so what they offer is
+   * what `switchHarness` / `selectModel` can actually commit against; listing
+   * the app-wide default host's would offer a chat tab bound to another host
+   * providers it does not have. `null` while that host's client is still
+   * resolving (the subpages then list nothing rather than another host's).
+   */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
 }
 
 let registered: FocusedComposerEntry | null = null;
@@ -50,8 +62,9 @@ const listeners = new Set<() => void>();
 export function registerFocusedComposerControls(
   kind: FocusedComposerKind,
   controls: ComposerControls,
+  hostClient: HostClient<HostRpcRegistry> | null,
 ): () => void {
-  const entry: FocusedComposerEntry = { kind, controls };
+  const entry: FocusedComposerEntry = { kind, controls, hostClient };
   registered = entry;
   notify();
   return () => {

@@ -1,6 +1,8 @@
 import { useMemo } from "react";
+import type { Query } from "@tanstack/react-query";
 import {
   formatRepoIdentifier,
+  taskRepoIdentifierSchema,
   type TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -8,6 +10,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import {
+  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
@@ -17,11 +20,43 @@ export interface ResolvedWorkspaceFoldersQueryResult {
   readonly folders: ReadonlyArray<ResolvedFolder>;
   readonly isLoading: boolean;
   readonly isFetching: boolean;
+  readonly isError: boolean;
 }
 
 export interface WorkspaceFoldersSource {
   readonly folders: ReadonlyArray<string>;
   readonly folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>;
+}
+
+export function workspaceMappingQueryPredicate(
+  paramsIndex: number,
+  changedRepoIdentifiers: readonly TaskRepoIdentifier[],
+): (query: Query) => boolean {
+  const changedRepos = new Set(
+    changedRepoIdentifiers.map(repoIdentifierLookupToken),
+  );
+  return (query) => {
+    const params = query.queryKey[paramsIndex];
+    if (
+      typeof params !== "object" ||
+      params === null ||
+      !("repoIdentifiers" in params) ||
+      !Array.isArray(params.repoIdentifiers)
+    ) {
+      return false;
+    }
+    return params.repoIdentifiers.some((candidate) => {
+      const parsed = taskRepoIdentifierSchema.safeParse(candidate);
+      return (
+        parsed.success &&
+        changedRepos.has(repoIdentifierLookupToken(parsed.data))
+      );
+    });
+  };
+}
+
+function repoIdentifierLookupToken(repo: TaskRepoIdentifier): string {
+  return formatRepoIdentifier(repo).toLowerCase();
 }
 
 /**
@@ -44,10 +79,16 @@ export interface WorkspaceFoldersSource {
 export function useResolvedWorkspaceFolders(
   source: WorkspaceFoldersSource | null,
   client: HostClient<HostRpcRegistry> | null,
+  // Scopes the `source === null` global fallback to the same host `client`
+  // resolves against - folder paths are host-local, so the fallback bucket
+  // and the resolution host must agree.
+  hostId: string | null,
 ): ResolvedWorkspaceFoldersQueryResult {
-  const globalFolders = useWorkspaceFoldersStore((s) => s.folders);
+  const globalFolders = useWorkspaceFoldersStore(
+    (s) => selectWorkspaceFoldersBucket(s, hostId).folders,
+  );
   const globalFolderInfoByPath = useWorkspaceFoldersStore(
-    (s) => s.folderInfoByPath,
+    (s) => selectWorkspaceFoldersBucket(s, hostId).folderInfoByPath,
   );
   const folders = source === null ? globalFolders : source.folders;
   const folderInfoByPath =
@@ -80,6 +121,11 @@ export function useResolvedWorkspaceFolders(
     params: queryParams,
     options: {
       enabled: repoIdentifiers.length > 0,
+      // Resolution gates submit. A transient failure must have a recovery
+      // trigger short of reloading the app, even though app-wide queries opt
+      // out of focus/reconnect refetches by default.
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: "always",
     },
   });
 
@@ -103,28 +149,63 @@ export function useResolvedWorkspaceFolders(
     return map;
   }, [query.data]);
 
+  const boundHostId = client?.getActiveHostId() ?? null;
+
   const resolved = useMemo<ReadonlyArray<ResolvedFolder>>(
-    () => folderInfos.map((info) => projectFolder(info, resolvedByKey)),
-    [folderInfos, resolvedByKey],
+    () =>
+      folderInfos.map((info) =>
+        projectFolder(info, resolvedByKey, boundHostId),
+      ),
+    [folderInfos, resolvedByKey, boundHostId],
   );
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const isError = query.isError;
+    return {
       folders: resolved,
-      isLoading: query.isLoading,
+      // A readiness-disabled query with repo-backed folders has not checked
+      // the host yet. Treat it as checking, not as a confirmed missing row.
+      isLoading:
+        repoIdentifiers.length > 0 && query.data === undefined && !isError,
       isFetching: query.isFetching,
-    }),
-    [resolved, query.isLoading, query.isFetching],
-  );
+      isError,
+    };
+  }, [
+    resolved,
+    repoIdentifiers.length,
+    query.data,
+    query.isError,
+    query.isFetching,
+  ]);
 }
 
-function projectFolder(
+/**
+ * Project one persisted folder against a bound host. Exported for B6 tests:
+ * non-git (`local-only`) rows must not cross hosts.
+ */
+export function projectWorkspaceFolderForHost(
   info: WorkspaceFolderInfo,
   resolvedByKey: ReadonlyMap<string, ReadonlySet<string>>,
+  boundHostId: string | null,
 ): ResolvedFolder {
   const repoIdentifier = info.repoIdentifier;
   if (repoIdentifier === null) {
-    return { kind: "local-only", path: info.path, name: info.name };
+    // Non-git folders are host-local: only the host that prepared them may
+    // claim them. Legacy rows without hostId stay unresolved under multi-host
+    // so they never cross machines (B6).
+    if (
+      boundHostId !== null &&
+      info.hostId !== null &&
+      info.hostId === boundHostId
+    ) {
+      return { kind: "local-only", path: info.path, name: info.name };
+    }
+    return {
+      kind: "unresolved",
+      path: info.path,
+      name: info.name,
+      repoIdentifier: null,
+    };
   }
   const hostPaths = resolvedByKey.get(formatRepoIdentifier(repoIdentifier));
   if (hostPaths !== undefined && hostPaths.has(info.path)) {
@@ -141,4 +222,12 @@ function projectFolder(
     name: info.name,
     repoIdentifier,
   };
+}
+
+function projectFolder(
+  info: WorkspaceFolderInfo,
+  resolvedByKey: ReadonlyMap<string, ReadonlySet<string>>,
+  boundHostId: string | null,
+): ResolvedFolder {
+  return projectWorkspaceFolderForHost(info, resolvedByKey, boundHostId);
 }

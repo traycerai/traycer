@@ -1,5 +1,4 @@
-import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -7,17 +6,35 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
+  CursorRateLimitView,
+  GrokRateLimitView,
+  HuggingFaceRateLimitView,
   KiloCodeRateLimitView,
+  OpenCodeRateLimitView,
   OpenRouterRateLimitView,
   ProviderRateLimitBody,
   ProviderRateLimitDetail,
 } from "../provider-rate-limit-views";
+
+const openExternalLinkMock = vi.hoisted(() => ({
+  isPending: false,
+  mutate: vi.fn(),
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: openExternalLinkMock.mutate,
+    isPending: openExternalLinkMock.isPending,
+  }),
+}));
 
 type CodexRateLimits = Extract<ProviderRateLimits, { provider: "codex" }>;
 type ClaudeRateLimits = Extract<
@@ -29,11 +46,31 @@ type OpenRouterRateLimits = Extract<
   { provider: "openrouter" }
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
+type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
+type HuggingFaceRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "huggingface" }
+>;
+type OpenCodeRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "opencode"; available: true }
+>;
 
 const NOW = Date.now();
 
+/** Same calendar formatting Grok's billing-period range uses (local TZ). */
+function formatGrokPeriodDate(epochMs: number): string {
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 afterEach(() => {
   cleanup();
+  openExternalLinkMock.isPending = false;
 });
 
 describe("CodexRateLimitView (extended fields)", () => {
@@ -609,6 +646,97 @@ describe("OpenRouterRateLimitView", () => {
   });
 });
 
+describe("HuggingFaceRateLimitView", () => {
+  const huggingFace: HuggingFaceRateLimits = {
+    provider: "huggingface",
+    available: true,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  // A pay-as-you-go account: no included allowance, so no denominator exists.
+  const spendOnly: HuggingFaceRateLimits = {
+    ...huggingFace,
+    includedUsd: null,
+    remainingIncludedUsd: null,
+    limitUsd: null,
+    remainingLimitUsd: null,
+  };
+
+  it("renders a credits bar from the included allowance", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getAllByText("Included credits").length).toBeGreaterThan(0);
+    expect(screen.getByText("$0.50 / $2.00")).toBeTruthy();
+  });
+
+  it("leads with remaining included credits", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.getByText("$1.50")).toBeTruthy();
+  });
+
+  it("renders the spend-limit and request detail rows", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Spend limit")).toBeTruthy();
+    expect(screen.getByText("$10.00")).toBeTruthy();
+    expect(screen.getByText("Requests")).toBeTruthy();
+  });
+
+  it("falls back to spend-only wording with no bar when there is no included allowance", () => {
+    render(<HuggingFaceRateLimitView data={spendOnly} variant="settings" />);
+    // No denominator, so no bar and no invented "0 of unknown" row.
+    expect(screen.queryByText("$0.50 / $2.00")).toBeNull();
+    expect(screen.queryByText("Included credits left")).toBeNull();
+    expect(screen.getByText("Spent this period")).toBeTruthy();
+    expect(screen.getByText("$0.50")).toBeTruthy();
+  });
+
+  it("clamps the bar when spend has run past the included allowance", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, usedUsd: 5, remainingIncludedUsd: 0 }}
+        variant="settings"
+      />,
+    );
+    // Clamped to the allowance rather than overflowing the meter.
+    expect(screen.getByText("$2.00 / $2.00")).toBeTruthy();
+  });
+
+  it("renders the billing period the figures cover", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("drops the billing period rather than rendering Invalid Date", () => {
+    // The endpoint is schema-less, so an unparseable bound degrades to no row.
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, periodEnd: "not-a-date" }}
+        variant="settings"
+      />,
+    );
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  it("condenses the Overview to the bar and the headline figure", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={huggingFace}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.queryByText("Spend limit")).toBeNull();
+    expect(screen.queryByText("Requests")).toBeNull();
+  });
+});
+
 describe("KiloCodeRateLimitView", () => {
   const kilo: KiloCodeRateLimits = {
     provider: "kilocode",
@@ -636,7 +764,267 @@ describe("KiloCodeRateLimitView", () => {
   });
 });
 
+describe("GrokRateLimitView", () => {
+  // UTC midnights - local toLocaleDateString may shift the calendar day, so
+  // expected range strings are built with the same formatter as production.
+  const periodStart = Date.UTC(2026, 6, 22);
+  const periodEnd = Date.UTC(2026, 6, 29);
+  const expectedBillingPeriod = `${formatGrokPeriodDate(periodStart)} - ${formatGrokPeriodDate(periodEnd)}`;
+
+  const grokWithPeriod: GrokRateLimits = {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart,
+    periodEnd,
+    period: {
+      usedPercent: 12,
+      resetsAt: periodEnd,
+      durationMinutes: 10_080,
+    },
+    monthlyLimit: 100,
+    onDemandCap: 50,
+    onDemandUsed: 5.5,
+    prepaidBalance: 25,
+  };
+
+  const grokPeriodLess: GrokRateLimits = {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart,
+    periodEnd,
+    period: null,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+
+  it("renders a Weekly usage bar when period is present", () => {
+    const { container } = render(
+      <GrokRateLimitView data={grokWithPeriod} variant="settings" />,
+    );
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    // Real bar fill (MeterRow track + severity color), not a plain text row.
+    expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(1);
+    expect(container.querySelectorAll(".bg-blue-500").length).toBe(1);
+    // Fallback plan/date rows stay off when a real period window exists.
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  it("renders Plan + Billing period fallback when period is null (no bar)", () => {
+    const { container } = render(
+      <GrokRateLimitView data={grokPeriodLess} variant="settings" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    // Branded tier is shown verbatim, not title-cased ("Supergrok").
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+    expect(screen.queryByText("Weekly")).toBeNull();
+    expect(screen.queryByText("% used", { exact: false })).toBeNull();
+    expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(0);
+  });
+
+  it("suppresses the fallback Plan row on popover-detail (the header owns the tier chip), keeping the billing period", () => {
+    // In the single-provider popover tab the header already renders the tier as
+    // a chip (resolveProviderPlanLabel), so the body's Plan row would duplicate
+    // it - same reason Codex/Claude keep the tier out of their card bodies. The
+    // billing-period row, which the chip doesn't carry, still shows.
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-detail" />,
+    );
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("SuperGrok")).toBeNull();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+  });
+
+  it("keeps the fallback Plan row on the Overview tab, which renders no tier chip", () => {
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-overview" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("renders credit rows only when non-null", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          prepaidBalance: 25,
+          monthlyLimit: 100,
+          onDemandUsed: 5.5,
+          onDemandCap: null,
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$25.00")).toBeTruthy();
+    expect(screen.getByText("Monthly limit")).toBeTruthy();
+    expect(screen.getByText("$100.00")).toBeTruthy();
+    expect(screen.getByText("On-demand used")).toBeTruthy();
+    expect(screen.getByText("$5.50")).toBeTruthy();
+    // Null onDemandCap drops the On-demand limit row entirely.
+    expect(screen.queryByText("On-demand limit")).toBeNull();
+  });
+
+  it("condenses the Overview to period + Prepaid balance (drops monthly/on-demand)", () => {
+    render(
+      <GrokRateLimitView data={grokWithPeriod} variant="popover-overview" />,
+    );
+    // Kept: period bar + prepaid.
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$25.00")).toBeTruthy();
+    // Dropped: monthly + on-demand (detail/settings only).
+    expect(screen.queryByText("Monthly limit")).toBeNull();
+    expect(screen.queryByText("On-demand used")).toBeNull();
+    expect(screen.queryByText("On-demand limit")).toBeNull();
+  });
+});
+
+describe("OpenCodeRateLimitView", () => {
+  const openCode: OpenCodeRateLimits = {
+    provider: "opencode",
+    available: true,
+    credentialGeneration: "gen-1",
+    fiveHour: {
+      status: "ok",
+      usedPercent: 12,
+      resetsAt: NOW + 60 * 60 * 1000,
+      durationMinutes: 300,
+    },
+    weekly: {
+      status: "ok",
+      usedPercent: 20,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 10_080,
+    },
+    monthly: {
+      status: "ok",
+      usedPercent: 30,
+      resetsAt: NOW + 20 * 24 * 60 * 60 * 1000,
+      durationMinutes: null,
+    },
+  };
+
+  it("renders the 5-hour, Weekly, and Monthly rows", () => {
+    render(<OpenCodeRateLimitView data={openCode} />);
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("20% used")).toBeTruthy();
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.getByText("30% used")).toBeTruthy();
+    expect(screen.queryByText("Go limit reached")).toBeNull();
+  });
+
+  it("lets rate-limited status win over a low percentage", () => {
+    const { container } = render(
+      <OpenCodeRateLimitView
+        data={{
+          ...openCode,
+          fiveHour: { ...openCode.fiveHour, status: "rate-limited" },
+        }}
+      />,
+    );
+    expect(screen.getByText("Go limit reached")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Go quota is exhausted. Free models or Zen balance may still work.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
+  });
+
+  it("does not retain a rate-limited badge or red bar after that window expires", () => {
+    const { container } = render(
+      <OpenCodeRateLimitView
+        data={{
+          ...openCode,
+          fiveHour: {
+            ...openCode.fiveHour,
+            status: "rate-limited",
+            resetsAt: NOW - 1,
+          },
+        }}
+      />,
+    );
+    expect(screen.queryByText("Go limit reached")).toBeNull();
+    expect(container.querySelector(".bg-red-500")).toBeNull();
+  });
+
+  it("renders Manage Go pointing at the OpenCode auth page", () => {
+    render(<OpenCodeRateLimitView data={openCode} />);
+    const link = screen.getByRole("link", { name: "Manage Go" });
+    expect(link.getAttribute("href")).toBe("https://opencode.ai/auth");
+  });
+
+  it("renders Manage Go as a disabled native button while the runner open is pending", () => {
+    // Regression: with a bound runner the pending state used to stay an
+    // `aria-disabled` href. It must be a real disabled button so the
+    // accessible name stays "Manage Go" and the click target is not an
+    // active anchor.
+    openExternalLinkMock.isPending = true;
+    render(
+      <RunnerHostContext.Provider
+        value={
+          new MockRunnerHost({
+            signInUrl: "https://auth.traycer.test/sign-in",
+            authnBaseUrl: "https://auth.traycer.test",
+            localHost: null,
+            hosts: [],
+            workspaceFolderPickerPaths: undefined,
+            hasLocalHost: undefined,
+            traycerCli: undefined,
+          })
+        }
+      >
+        <OpenCodeRateLimitView data={openCode} />
+      </RunnerHostContext.Provider>,
+    );
+
+    const action = screen.getByRole("button", { name: "Manage Go" });
+    expect(action.tagName).toBe("BUTTON");
+    expect(action instanceof HTMLButtonElement && action.disabled).toBe(true);
+    expect(screen.queryByRole("link", { name: "Manage Go" })).toBeNull();
+  });
+});
+
 describe("ProviderRateLimitDetail dispatch", () => {
+  it("dispatches to the Hugging Face view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "huggingface",
+          available: true,
+          includedUsd: 2,
+          usedUsd: 0.5,
+          remainingIncludedUsd: 1.5,
+          limitUsd: null,
+          remainingLimitUsd: null,
+          numRequests: null,
+          periodStart: null,
+          periodEnd: null,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+  });
+
   it("dispatches to the OpenRouter view", () => {
     render(
       <ProviderRateLimitDetail
@@ -676,6 +1064,66 @@ describe("ProviderRateLimitDetail dispatch", () => {
     expect(screen.getByText("Credit balance")).toBeTruthy();
     expect(screen.getByText("$7.00")).toBeTruthy();
   });
+
+  it("dispatches to the Grok view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "grok",
+          available: true,
+          subscriptionTier: "SuperGrok",
+          periodType: null,
+          periodStart: null,
+          periodEnd: null,
+          period: null,
+          monthlyLimit: null,
+          onDemandCap: null,
+          onDemandUsed: null,
+          prepaidBalance: 8,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$8.00")).toBeTruthy();
+  });
+
+  it("dispatches to the OpenCode view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "opencode",
+          available: true,
+          credentialGeneration: "gen-1",
+          fiveHour: {
+            status: "ok",
+            usedPercent: 12,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+          },
+          weekly: {
+            status: "ok",
+            usedPercent: 20,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+          },
+          monthly: {
+            status: "ok",
+            usedPercent: 30,
+            resetsAt: NOW + 20 * 24 * 60 * 60 * 1000,
+            durationMinutes: null,
+          },
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Manage Go" })).toBeTruthy();
+  });
 });
 
 describe("ProviderRateLimitBody (unavailable state)", () => {
@@ -696,6 +1144,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastFailureAt: NOW,
         }}
         codexResetAction={null}
+        openModelProvidersAction={null}
       />,
     );
     expect(
@@ -703,6 +1152,57 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
         "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
+  });
+
+  it("offers Open Model Providers for an OpenCode 401 and hides it for a missing-key 403", () => {
+    const openModelProviders = vi.fn();
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "opencode",
+            available: false,
+            reason: "insufficient_permissions",
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: NOW,
+        }}
+        codexResetAction={null}
+        openModelProvidersAction={openModelProviders}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Model Providers" }),
+    );
+    expect(openModelProviders).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "opencode",
+            available: false,
+            reason: "rate_limits_not_available",
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: NOW,
+        }}
+        codexResetAction={null}
+        openModelProvidersAction={openModelProviders}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Open Model Providers" }),
+    ).toBeNull();
   });
 });
 
@@ -733,10 +1233,115 @@ describe("ProviderRateLimitBody (Codex reset action)", () => {
           lastFailureAt: null,
         }}
         codexResetAction={() => <button type="button">Use reset</button>}
+        openModelProvidersAction={null}
       />,
     );
 
     expect(screen.getByText("3 available")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use reset" })).toBeTruthy();
+  });
+});
+
+describe("CursorRateLimitView", () => {
+  const CYCLE_END = NOW + 29 * 24 * 60 * 60 * 1000;
+  const cursor: CursorRateLimits = {
+    provider: "cursor",
+    available: true,
+    cycleStart: NOW - 2 * 24 * 60 * 60 * 1000,
+    cycleEnd: CYCLE_END,
+    cursorModels: {
+      usedPercent: 6,
+      resetsAt: CYCLE_END,
+      durationMinutes: 31 * 24 * 60,
+    },
+    otherModels: {
+      usedPercent: 40,
+      resetsAt: CYCLE_END,
+      durationMinutes: 31 * 24 * 60,
+    },
+    includedLimitUsd: 400,
+    usedUsd: 325.37,
+    remainingUsd: 74.63,
+    bonusUsedUsd: null,
+    onDemandLimitType: "user",
+    onDemandLimitUsd: 1,
+    onDemandUsedUsd: 0.25,
+    onDemandRemainingUsd: 0.75,
+    displayMessage: "You've used 81% of your included usage",
+  };
+
+  it("pairs the Overview's dollars with their own included-usage meter", () => {
+    // Live-account regression, second round: the bucket bars are each
+    // measured against their own unpublished (bonus-inflated) limit, while
+    // the dollars describe Cursor's BLENDED $400 purchased pool (~81%
+    // consumed on the same payload). A bare "$74.63 left of $400" under bars
+    // reading 6% / 40% presented as a broken calculation even though
+    // `remaining` is Cursor's own server-computed field - and dropping the
+    // rows was the wrong fix (the money is the actionable number). The
+    // dollars stay, carried by a credit meter whose fill shares their
+    // denominator, so the row explains itself.
+    render(<CursorRateLimitView data={cursor} variant="popover-overview" />);
+    expect(screen.getByText("Cursor Models")).toBeTruthy();
+    expect(screen.getByText("6% used")).toBeTruthy();
+    expect(screen.getByText("Other Models")).toBeTruthy();
+    expect(screen.getByText("40% used")).toBeTruthy();
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("$325.37 / $400.00")).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$74.63")).toBeTruthy();
+  });
+
+  it("anchors the detail's money to Cursor's own sentence about the blended pool", () => {
+    render(<CursorRateLimitView data={cursor} variant="settings" />);
+    // The sentence names the pool the meter measures, in Cursor's own words.
+    expect(
+      screen.getByText("You've used 81% of your included usage"),
+    ).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$74.63")).toBeTruthy();
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("$325.37 / $400.00")).toBeTruthy();
+    // On-demand in real dollars: a $1 limit renders as $1.00, never $100.
+    expect(screen.getByText("On-demand limit")).toBeTruthy();
+    expect(screen.getByText("$1.00")).toBeTruthy();
+    expect(screen.queryByText("$100.00")).toBeNull();
+  });
+
+  it("shows overflow honestly once spend runs past the purchased allowance", () => {
+    // Past $400 the account is on Cursor's bonus grant - nothing is limited
+    // and nothing is billed, so the meter must NOT dress this up as a limit
+    // event: fill pins at 100% in the amber running-low tone (red stays
+    // reserved for the bucket bars, the actual gates), the detail keeps the
+    // REAL spend, "left" clamps at $0.00 instead of going negative, and the
+    // bonus spend gets its own row.
+    const { container } = render(
+      <CursorRateLimitView
+        data={{
+          ...cursor,
+          usedUsd: 412.1,
+          remainingUsd: -12.1,
+          bonusUsedUsd: 12.1,
+        }}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("$412.10 / $400.00")).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$0.00")).toBeTruthy();
+    expect(screen.queryByText("-$12.10")).toBeNull();
+    expect(screen.getByText("Bonus usage")).toBeTruthy();
+    expect(screen.getByText("$12.10")).toBeTruthy();
+    expect(container.querySelector(".bg-amber-500")).toBeTruthy();
+    expect(container.querySelector(".bg-red-500")).toBeNull();
+  });
+
+  it("falls back to the billing-cycle range when no bucket was reported", () => {
+    render(
+      <CursorRateLimitView
+        data={{ ...cursor, cursorModels: null, otherModels: null }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Billing cycle")).toBeTruthy();
   });
 });

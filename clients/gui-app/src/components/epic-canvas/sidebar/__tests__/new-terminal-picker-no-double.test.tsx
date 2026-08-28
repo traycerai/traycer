@@ -33,10 +33,34 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
     isPending: false,
     isError: false,
   }),
+  useWorktreeListBindingsForEpicForClient: () => ({
+    data: { rows: [ROW], folderlessCwd: "/Users/tgill" },
+    isPending: false,
+    isError: false,
+  }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({
+    status: "reachable",
+    hostLabel: "host-1",
+    unavailability: null,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [{ hostId: "host-1" }],
+    fetchStatus: "idle",
+  }),
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 // Strip the host section - its hooks are irrelevant to the double-pick guard.
@@ -110,7 +134,14 @@ describe("<NewTerminalPicker /> double-launch guard", () => {
 
   it("opens a single terminal when Launch fires twice after row selection", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
-    render(<NewTerminalPicker epicId="epic-1" tabId={tabId} />);
+    render(
+      <NewTerminalPicker
+        epicId="epic-1"
+        tabId={tabId}
+        onBeforeOpen={undefined}
+        onLaunched={null}
+      />,
+    );
     fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
 
     fireEvent.click(screen.getByTestId("double-pick-row"));

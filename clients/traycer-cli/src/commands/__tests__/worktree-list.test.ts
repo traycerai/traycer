@@ -1,14 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host";
 import type { WorktreeTier } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   buildWorktreeListCommand,
   formatWorktreeListTable,
+  parseWorktreeListLimit,
   type WorktreeListRow,
 } from "../worktree-list";
+import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { callHostRpc } from "../../internal/host-rpc";
 import type { CommandContext } from "../../runner/runner";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+}));
 
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
@@ -31,7 +47,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function entry(overrides: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
+function entry(overrides: Partial<WorktreeHostEntryV16>): WorktreeHostEntryV16 {
   return {
     worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
     repoLabel: "acme/web",
@@ -51,12 +67,15 @@ function entry(overrides: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
     mergedHeadShaMatches: false,
     submodules: [],
     atBaseCommit: false,
+    resolvedAt: 1,
+    presence: "present",
+    gitUnreadable: false,
     ...overrides,
   };
 }
 
 function row(
-  overrides: Partial<WorktreeHostEntryV12>,
+  overrides: Partial<WorktreeHostEntryV16>,
   tier: WorktreeTier | null,
 ): WorktreeListRow {
   return { ...entry(overrides), tier };
@@ -71,6 +90,21 @@ const defaultOpts = {
   cursor: null,
   limit: null,
 } as const;
+
+describe("parseWorktreeListLimit", () => {
+  it.each(["1e3", "0x10", " 7", "7 ", "7.5", "-7", "0", ""])(
+    "rejects non-decimal or non-positive lexical form %j",
+    (value) => {
+      expect(() => parseWorktreeListLimit(value)).toThrow(
+        "--limit must be a positive integer",
+      );
+    },
+  );
+
+  it("accepts a clean positive decimal run", () => {
+    expect(parseWorktreeListLimit("7")).toBe(7);
+  });
+});
 
 describe("formatWorktreeListTable", () => {
   it("returns an explicit empty-state line when there are no worktrees", () => {
@@ -202,6 +236,7 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: null,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [{ ...entry({}), tier: "review" }],
@@ -235,6 +270,49 @@ describe("buildWorktreeListCommand", () => {
     });
   });
 
+  it("classifies a gitUnreadable row as review, not orphaned - the v1.4 regression this canonical parse fixes", async () => {
+    // The real host pairs `gitUnreadable: true` with `gitRemovable: false`
+    // (git can neither read the pointed-at repo nor prove it removable). A
+    // stale v1.4 parse strips `gitUnreadable`, so `classifyWorktreeTier` falls
+    // through to rung 2 (`!gitRemovable`) and mislabels the row "orphaned" -
+    // a forced-cleanup reading this shape must never get, since its branch
+    // and dirty count are unknowable, not proven empty.
+    rpcMock.mockResolvedValue({
+      worktrees: [entry({ gitUnreadable: true, gitRemovable: false })],
+      nextCursor: null,
+    });
+
+    const result = await buildWorktreeListCommand(defaultOpts)(ctx);
+
+    expect(result.data).toEqual({
+      worktrees: [
+        {
+          ...entry({ gitUnreadable: true, gitRemovable: false }),
+          tier: "review",
+        },
+      ],
+      nextCursor: null,
+    });
+    const listedWorktrees = (result.data as { worktrees: WorktreeListRow[] })
+      .worktrees;
+    expect(listedWorktrees[0]?.tier).toBe("review");
+    expect(listedWorktrees[0]?.tier).not.toBe("orphaned");
+    // `--json` callers read these two fields straight off the row; a stale
+    // schema silently drops both.
+    expect(listedWorktrees[0]?.gitUnreadable).toBe(true);
+    expect(listedWorktrees[0]?.presence).toBe("present");
+  });
+
+  it("round-trips gitUnreadable and presence through the canonical v1.6 response parse", () => {
+    const wireEntry = entry({ gitUnreadable: true, presence: "absent" });
+    const parsed = worktreeListAllForHostResponseSchemaV16.parse({
+      worktrees: [wireEntry],
+      nextCursor: null,
+    });
+    expect(parsed.worktrees[0]?.gitUnreadable).toBe(true);
+    expect(parsed.worktrees[0]?.presence).toBe("absent");
+  });
+
   it("emits tier null without --include-activity (unprobed entries are never classified)", async () => {
     rpcMock.mockResolvedValue({
       worktrees: [entry({ prState: "merged", mergedHeadShaMatches: true })],
@@ -252,6 +330,7 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: null,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [
@@ -290,12 +369,14 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: null,
       limit: 32,
+      forceRefresh: true,
     });
     expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
       includeActivity: true,
       activityPaths: null,
       cursor: first.worktreePath,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [
@@ -325,6 +406,7 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
       limit: 7,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [{ ...entry({}), tier: "review" }],
@@ -364,12 +446,14 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: startCursor,
       limit: 32,
+      forceRefresh: true,
     });
     expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
       includeActivity: true,
       activityPaths: null,
       cursor: first.worktreePath,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [

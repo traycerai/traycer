@@ -1,12 +1,33 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   InterviewAnswer,
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
+  focusActiveComposer,
+  registerComposerFocus,
+} from "@/lib/composer/composer-focus-registry";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
+import {
+  readInterviewDraftSnapshot,
+  selectInterviewDraft,
+  useInterviewDraftStore,
+} from "@/stores/composer/interview-draft-store";
+import {
+  draftsFromStoredAnswers,
   draftHasContent,
+  draftHasState,
   draftToAnswerValues,
+  draftToStoredAnswer,
   emptyDraft,
   replaceDraftAt,
   type DraftAnswer,
@@ -20,17 +41,6 @@ export const QUESTION_TRANSITION = {
   duration: ADVANCE_DELAY_MS / 1000,
   ease: "easeOut",
 } as const;
-
-// True when the key event originated inside a text field, so digit shortcuts
-// must defer to normal typing.
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return (
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "INPUT" ||
-    target.isContentEditable
-  );
-}
 
 // Only a multi-line textarea needs Enter for newlines; the single-line Other
 // input lets Enter proceed/submit.
@@ -54,6 +64,7 @@ function digitFromEventKey(key: string): number | null {
 }
 
 interface UseInterviewCardArgs {
+  chatId: string;
   blockId: string;
   questions: ReadonlyArray<InterviewQuestion>;
   // Whether this card's chat tab is the active one in its pane. Gates focus so
@@ -61,13 +72,25 @@ interface UseInterviewCardArgs {
   // refocuses when its tab/pane becomes active - the same contract the Tiptap
   // composer follows.
   isActive: boolean;
+  // True while a Submit/Skip this card sent is still in flight or accepted but
+  // not yet resolved by the host (derived from the chat session's pending /
+  // accepted actions, scoped to this block). Gates every affordance so the same
+  // action cannot be double-sent; it clears on a rejected/failed ack, leaving
+  // the retained draft for retry.
+  isBusy: boolean;
   onSubmit:
     | ((
         blockId: string,
         answers: ReadonlyArray<InterviewAnswer>,
       ) => string | null)
     | null;
-  onSkip: ((blockId: string, reason: string) => string | null) | null;
+  onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
 }
 
 // Owns every behavior of the pending interview card - draft state, paging,
@@ -75,42 +98,121 @@ interface UseInterviewCardArgs {
 // shortcuts - so the components stay purely presentational. Attach
 // `containerRef` to the focusable card element.
 export function useInterviewCard(args: UseInterviewCardArgs) {
-  const { blockId, questions, isActive, onSubmit, onSkip } = args;
+  const { chatId, blockId, questions, isActive, isBusy, onSubmit, onSkip } =
+    args;
+  const composerSurfaceId = useId();
+  const total = questions.length;
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
-  // Where the pager is and which way it last moved - the question transition
-  // animates along `step`, so the two always change together.
-  const [page, setPage] = useState<{ index: number; step: 1 | -1 }>({
-    index: 0,
-    step: 1,
-  });
-  const [drafts, setDrafts] = useState<ReadonlyArray<DraftAnswer>>(() =>
-    questions.map(() => emptyDraft()),
+  // The persisted row for THIS (chat, block) is the canonical draft state.
+  // Subscribing (rather than reading it once) keeps duplicate live views of the
+  // same chat in lockstep and means a write always merges against the latest
+  // answers, so one view can never overwrite another's progress with a stale
+  // full snapshot. The row is a stable reference between unrelated store writes,
+  // so this selector never churns renders. `selectInterviewDraft` reads through
+  // own-property checks so a `"__proto__"` id resolves to null, not the
+  // prototype.
+  const storedDraft = useInterviewDraftStore((state) =>
+    selectInterviewDraft(state.draftsByChat, chatId, blockId),
   );
-  // Once the user submits or skips we lock the affordances. The parent
-  // remounts this card via `key={blockId}` when the next interview arrives,
-  // so this flag never needs to clear on its own.
-  const [dispatched, setDispatched] = useState<boolean>(false);
+  const saveStoredDraft = useInterviewDraftStore((state) => state.saveDraft);
+  const clearStoredDraft = useInterviewDraftStore((state) => state.clearDraft);
+
+  // The pager INDEX is canonical (persisted with the row); `step` is per-view
+  // ephemeral animation direction and never persists.
+  const [step, setStep] = useState<1 | -1>(1);
   // The just-picked single-select option, highlighted until auto-advance.
-  const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  // Keep its interaction-time index because labels can repeat.
+  const [pendingOptionIndex, setPendingOptionIndex] = useState<number | null>(
+    null,
+  );
 
   const containerRef = useRef<HTMLElement | null>(null);
   const advanceTimerRef = useRef<number | null>(null);
+  // The single-select advance timer (~110ms) closes over `submitDrafts`/
+  // `navigate` from the render that scheduled it, which in turn closed over
+  // that render's `isBusy`. If another live view sends an action before the
+  // timer fires, this render's `isBusy` guard inside those functions is
+  // already stale. Track the latest value in a ref so the timer can re-check
+  // it at fire time instead of trusting its own scheduling-time snapshot.
+  const latestIsBusyRef = useRef(isBusy);
+  useEffect(() => {
+    latestIsBusyRef.current = isBusy;
+  }, [isBusy]);
 
-  const total = questions.length;
-  const safeIndex = Math.min(Math.max(page.index, 0), Math.max(total - 1, 0));
+  const drafts = useMemo(
+    () => draftsFromStoredAnswers(storedDraft?.answers, questions),
+    [questions, storedDraft],
+  );
+
+  const safeIndex = Math.min(
+    Math.max(storedDraft?.pageIndex ?? 0, 0),
+    Math.max(total - 1, 0),
+  );
   const question = total > 0 ? questions[safeIndex] : null;
   const draft = drafts[safeIndex] ?? emptyDraft();
   const freeTextQuestion = question !== null && question.options.length === 0;
 
   const isLast = safeIndex >= total - 1;
   const answeredCount = drafts.filter(draftHasContent).length;
-  const canAdvance = total > 0 && safeIndex < total - 1 && !dispatched;
-  const canSubmit = total > 0 && onSubmit !== null && !dispatched;
-  const canSkip = onSkip !== null && !dispatched;
+  // `isBusy` is the ack-aware gate: an interview action this card sent is in
+  // flight or accepted-but-unresolved. It blocks re-sends, edits, paging,
+  // keyboard actions, and forks. It clears on a rejected/failed ack (the
+  // interview stays pending), so the retained draft is retryable then - but not
+  // an immediate double-submit while the first send is still live.
+  const canAdvance = total > 0 && safeIndex < total - 1 && !isBusy;
+  const canSubmit = total > 0 && onSubmit !== null && !isBusy;
+  const canSkip = onSkip !== null && !isBusy;
+
+  // Read the LATEST canonical row at call time rather than trusting a
+  // render-time closure. A delayed single-select callback (see `toggleOption`)
+  // fires ~110ms later, by which point a duplicate view may have edited the
+  // answers or navigated to another page; replaying a captured snapshot would
+  // clobber it. The page index is clamped exactly like `safeIndex` so the two
+  // are comparable.
+  const readCanonicalState = () => {
+    const latest = readInterviewDraftSnapshot(chatId, blockId);
+    return {
+      pageIndex: Math.min(
+        Math.max(latest?.pageIndex ?? 0, 0),
+        Math.max(total - 1, 0),
+      ),
+      drafts: draftsFromStoredAnswers(latest?.answers, questions),
+    };
+  };
+
+  // Write with the originating action so a tab switch cannot unmount the card
+  // before an effect flushes. Untouched interviews never create stored rows.
+  const persistDraft = (
+    nextPageIndex: number,
+    nextDrafts: ReadonlyArray<DraftAnswer>,
+  ) => {
+    if (nextPageIndex === 0 && !nextDrafts.some(draftHasState)) {
+      clearStoredDraft(chatId, blockId);
+      return;
+    }
+    saveStoredDraft(chatId, blockId, {
+      pageIndex: nextPageIndex,
+      answers: nextDrafts.map((draft, index) => {
+        const question = questions.at(index);
+        if (question === undefined) {
+          return {
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: draft.otherText,
+            otherSelected: draft.otherSelected,
+          };
+        }
+        return draftToStoredAnswer(draft, question);
+      }),
+    });
+  };
 
   const updateDraft = (next: DraftAnswer): ReadonlyArray<DraftAnswer> => {
     const nextDrafts = replaceDraftAt(drafts, safeIndex, next);
-    setDrafts(nextDrafts);
+    // Persisting is the only write: the store subscription re-derives `drafts`
+    // and re-renders, so there is no separate local copy to drift out of sync.
+    persistDraft(safeIndex, nextDrafts);
     return nextDrafts;
   };
 
@@ -121,33 +223,68 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     }
   };
 
-  const navigate = (step: 1 | -1) => {
+  const navigate = (
+    direction: 1 | -1,
+    answerDrafts: ReadonlyArray<DraftAnswer>,
+  ) => {
+    if (isBusy) return;
     clearAdvanceTimer();
-    setPendingLabel(null);
-    setPage(({ index }) => ({
-      index: Math.min(Math.max(index + step, 0), Math.max(total - 1, 0)),
-      step,
-    }));
+    setPendingOptionIndex(null);
+    const nextIndex = Math.min(
+      Math.max(safeIndex + direction, 0),
+      Math.max(total - 1, 0),
+    );
+    setStep(direction);
+    // The index is canonical: persist it so the subscription moves this view
+    // (and any duplicate view) to the new page.
+    persistDraft(nextIndex, answerDrafts);
   };
 
-  const goNext = () => navigate(1);
-  const goPrevious = () => navigate(-1);
+  const goNext = () => navigate(1, drafts);
+  const goPrevious = () => navigate(-1, drafts);
+
+  const answersFromDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) =>
+    questions.map((q, i) => {
+      const source = answerDrafts[i] ?? emptyDraft();
+      const optionIndices = [...source.selected].filter(
+        (index) => index >= 0 && index < q.options.length,
+      );
+      const optionLabels = optionIndices.flatMap((index) => {
+        const option = q.options.at(index);
+        return option === undefined ? [] : [option.label];
+      });
+      return {
+        questionId: q.questionId,
+        question: q.question,
+        values: [...draftToAnswerValues(source, q)],
+        notes: null,
+        selection:
+          !source.selectionEvidenceExact ||
+          (optionIndices.length === 0 && !source.otherSelected)
+            ? null
+            : {
+                questionIndex: i,
+                optionIndices,
+                optionLabels,
+                customText: source.otherSelected
+                  ? source.otherText.trim() || null
+                  : null,
+              },
+      };
+    });
 
   const submitDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) => {
-    if (onSubmit === null || dispatched) return;
+    if (onSubmit === null || isBusy) return;
     clearAdvanceTimer();
     // Submit is unconditional: unanswered questions go through with empty
     // values (draftToAnswerValues returns [] for an empty draft).
-    const answers: InterviewAnswer[] = questions.map((q, i) => ({
-      questionId: q.questionId,
-      question: q.question,
-      values: [...draftToAnswerValues(answerDrafts[i] ?? emptyDraft())],
-      notes: null,
-    }));
-    setPendingLabel(null);
-    const clientActionId = onSubmit(blockId, answers);
-    if (clientActionId === null) return;
-    setDispatched(true);
+    const answers: InterviewAnswer[] = answersFromDrafts(answerDrafts);
+    setPendingOptionIndex(null);
+    // Fire and keep the draft: a returned client action id only proves the
+    // renderer sent the action, not that the host accepted it. The draft is
+    // cleared authoritatively when the interviewAnswered lifecycle frame lands
+    // (chat-session-store); a rejection keeps it for retry.
+    onSubmit(blockId, answers);
   };
 
   const submit = () => {
@@ -155,7 +292,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   };
 
   const proceed = () => {
-    if (dispatched) return;
+    if (isBusy) return;
     if (isLast) submit();
     else goNext();
   };
@@ -163,60 +300,123 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const skip = () => {
     if (!canSkip) return;
     clearAdvanceTimer();
-    setPendingLabel(null);
-    const clientActionId = onSkip(blockId, "Skipped by user");
-    if (clientActionId === null) return;
-    setDispatched(true);
+    setPendingOptionIndex(null);
+    // Same lifecycle contract as submit: keep the draft until the authoritative
+    // interviewErrored frame clears it, so a rejected skip stays retryable.
+    // Skip saves only completed/non-empty pages. Unvisited empty pages are not
+    // drafts and must not inflate the durable saved-draft count.
+    const savedDrafts = answersFromDrafts(drafts).filter(
+      (answer) => answer.values.length > 0,
+    );
+    onSkip(
+      blockId,
+      "Skipped by user",
+      // An explicit 1.7 Skip always carries its settlement envelope, even
+      // when no page was completed. `undefined` is reserved for legacy/error
+      // paths that cannot assert a user-chosen Skip outcome.
+      savedDrafts,
+    );
   };
 
-  const toggleOption = (label: string) => {
-    if (question === null || dispatched) return;
+  const toggleOption = (optionIndex: number) => {
+    if (question === null || isBusy) return;
     if (question.multiSelect) {
       const next = new Set(draft.selected);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      updateDraft({ ...draft, selected: next });
+      if (next.has(optionIndex)) next.delete(optionIndex);
+      else next.add(optionIndex);
+      updateDraft({
+        ...draft,
+        selected: next,
+        selectionEvidenceExact: true,
+      });
       return;
     }
     // Single-select: commit the choice, hold a brief highlight, then advance.
     // Re-picking during the highlight window replaces the choice and restarts
     // the timer, so a quick correction is never swallowed.
-    const nextDrafts = updateDraft({
+    updateDraft({
       ...draft,
-      selected: new Set([label]),
+      selected: new Set([optionIndex]),
+      selectionEvidenceExact: true,
       otherSelected: false,
     });
-    setPendingLabel(label);
+    setPendingOptionIndex(optionIndex);
     clearAdvanceTimer();
     advanceTimerRef.current = window.setTimeout(() => {
       advanceTimerRef.current = null;
-      if (isLast) submitDrafts(nextDrafts);
-      else goNext();
+      // Re-check busy state at fire time: another live view may have sent an
+      // action during the highlight window, making this scheduling-time
+      // snapshot stale. Submitting or advancing now would mutate state (or
+      // double-dispatch) while busy.
+      if (latestIsBusyRef.current) {
+        setPendingOptionIndex(null);
+        return;
+      }
+      // Re-derive from the LATEST canonical row at fire time. A duplicate view
+      // may have changed this answer or the page during the highlight window.
+      const latest = readCanonicalState();
+      // No-op when the canonical page moved off the question this timer was
+      // armed on: a duplicate view explicitly navigated (Previous/Next), and
+      // submitting or advancing from here would override that navigation -
+      // e.g. stale-submitting the last question the other view just left, or
+      // rewinding a view that advanced further ahead.
+      if (latest.pageIndex !== safeIndex) {
+        setPendingOptionIndex(null);
+        return;
+      }
+      const currentAnswer = latest.drafts[safeIndex] ?? emptyDraft();
+      // No-op when this single-select choice was superseded (another view
+      // picked Other, a different option, or cleared it): that view drives its
+      // own advance, and replaying our stale choice would clobber it.
+      const stillOurChoice =
+        !currentAnswer.otherSelected &&
+        currentAnswer.selected.size === 1 &&
+        currentAnswer.selected.has(optionIndex);
+      if (!stillOurChoice) {
+        setPendingOptionIndex(null);
+        return;
+      }
+      // Submit / page-advance against the LATEST canonical answers, never the
+      // captured snapshot.
+      if (isLast) submitDrafts(latest.drafts);
+      else navigate(1, latest.drafts);
     }, ADVANCE_DELAY_MS);
   };
 
   const toggleOther = () => {
-    if (question === null || dispatched) return;
+    if (question === null || isBusy) return;
     // Diverting to a custom answer cancels any pending single-select advance.
     clearAdvanceTimer();
-    setPendingLabel(null);
+    setPendingOptionIndex(null);
     if (question.multiSelect) {
-      updateDraft({ ...draft, otherSelected: !draft.otherSelected });
+      updateDraft({
+        ...draft,
+        selectionEvidenceExact: true,
+        otherSelected: !draft.otherSelected,
+      });
       return;
     }
     updateDraft({
       ...draft,
-      selected: new Set(),
+      selected: new Set<number>(),
+      selectionEvidenceExact: true,
       otherSelected: !draft.otherSelected,
     });
   };
 
   const setOtherText = (text: string) => {
-    updateDraft({ ...draft, otherText: text });
+    if (isBusy) return;
+    updateDraft({ ...draft, selectionEvidenceExact: true, otherText: text });
   };
 
   const setFreeText = (text: string) => {
-    updateDraft({ ...draft, otherText: text, otherSelected: true });
+    if (isBusy) return;
+    updateDraft({
+      ...draft,
+      selectionEvidenceExact: true,
+      otherText: text,
+      otherSelected: true,
+    });
   };
 
   // Pick the option/Other bound to a bare digit; returns false when the key is
@@ -228,7 +428,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     const optionCount = question.options.length;
     if (optionCount === 0) return false;
     if (digit >= 1 && digit <= optionCount) {
-      toggleOption(question.options[digit - 1].label);
+      toggleOption(digit - 1);
       return true;
     }
     if (digit === optionCount + 1) {
@@ -275,8 +475,8 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // jsx-a11y/no-noninteractive-element-interactions correctly rejects JSX key
   // handlers on non-widget elements; useEffectEvent keeps it on fresh state.
   const handleKey = useEffectEvent((event: KeyboardEvent) => {
-    if (dispatched) return;
-    const editable = isEditableTarget(event.target);
+    if (isBusy) return;
+    const editable = isEditableEventTarget(event.target);
     let handled = false;
     if (event.key === "Enter") handled = handleEnter(event);
     else if (event.key === "Escape") handled = handleEscape(editable);
@@ -318,33 +518,34 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // interview in a background pane never steals focus; refocuses when the tab
   // becomes active (isActive is a dependency). Free-text and Other inputs focus
   // themselves via their callback ref, so the card yields to them.
-  //
-  // The focus is deferred one frame because activating a pane fires on the
-  // pane's pointerdown (TabGroupView's onPointerDownCapture). React flushes this
-  // effect right before the trailing mousedown, whose native focus would
-  // otherwise land on the clicked transcript/pane element and steal focus away
-  // from the card. rAF runs after that native focus, so the card keeps it.
-  // Keyboard activation (⌘L) has no trailing pointer focus and is unaffected.
   const wantsFieldFocus = freeTextQuestion || draft.otherSelected;
   useEffect(() => {
     if (!isActive || wantsFieldFocus) return;
-    const frame = window.requestAnimationFrame(() => {
-      containerRef.current?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [safeIndex, isActive, wantsFieldFocus]);
+    if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+    focusActiveComposer();
+  }, [safeIndex, isActive, paneActivationFocusIntent, wantsFieldFocus]);
 
   // Join the composer focus registry so the active-pane focus flow and the
   // "focus editor" shortcut reach this card - it stands in for the Tiptap
   // composer it replaced. Prefer the open text field, else the card itself.
-  useEffect(() => {
-    return registerComposerFocus(() => {
-      const node = containerRef.current;
-      if (node === null) return;
-      const field = node.querySelector<HTMLElement>("textarea, input");
-      (field ?? node).focus({ preventScroll: true });
-    }, isActive);
-  }, [isActive]);
+  useLayoutEffect(() => {
+    return registerComposerFocus(
+      composerSurfaceId,
+      {
+        focus: () => {
+          const node = containerRef.current;
+          if (node === null) return;
+          const field = node.querySelector<HTMLElement>("textarea, input");
+          (field ?? node).focus({ preventScroll: true });
+        },
+        containsActiveElement: (activeElement) =>
+          activeElement !== null &&
+          containerRef.current?.contains(activeElement) === true,
+        isEligible: () => containerRef.current?.isConnected === true,
+      },
+      isActive,
+    );
+  }, [composerSurfaceId, isActive]);
 
   return {
     containerRef,
@@ -352,9 +553,8 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     safeIndex,
     question,
     draft,
-    direction: page.step,
-    pendingLabel,
-    dispatched,
+    direction: step,
+    pendingOptionIndex,
     isLast,
     answeredCount,
     canAdvance,

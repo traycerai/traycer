@@ -8,6 +8,8 @@ import {
   shift,
 } from "@floating-ui/dom";
 import { TextQuote } from "lucide-react";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import { chatBottomOverlayClampedRect } from "@/components/chat/chat-scroll-region-geometry";
 import { cn } from "@/lib/utils";
 import {
   appendQuoteToDraft,
@@ -23,6 +25,11 @@ interface QuoteSelectionPopoverProps {
   /** The scrollable transcript container: the popover is clipped to its bounds
    *  and rides the visible portion of a selection that scrolls past its start. */
   readonly boundaryRef: RefObject<HTMLElement | null>;
+  /** Composer/queue dock height overlaying the bottom of `boundaryRef`'s
+   *  region (decision #3, #13, M3) - passed as a value, not read from the
+   *  DOM, so the clamp recomputes when the dock resizes while the popover is
+   *  already open even though that doesn't resize the boundary element itself. */
+  readonly bottomOverlayInsetPx: number;
 }
 
 /**
@@ -38,10 +45,13 @@ interface QuoteSelectionPopoverProps {
  * focus mutation in the feature.
  */
 export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
-  const { taskId, snapshot, onDismiss, boundaryRef } = props;
+  const { taskId, snapshot, onDismiss, boundaryRef, bottomOverlayInsetPx } =
+    props;
   const floatingRef = useRef<HTMLDivElement | null>(null);
+  const paneFocused = usePaneFocused();
 
   useLayoutEffect(() => {
+    if (!paneFocused) return;
     const floating = floatingRef.current;
     if (floating === null) return;
     const { range } = snapshot;
@@ -68,10 +78,17 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
         return;
       }
       const container = boundaryRef.current;
-      const anchor =
+      // Clamped, not the raw element: the composer/queue dock overlays the
+      // bottom of this region without shrinking its box (decision #3, #13,
+      // M3) - the raw rect's bottom edge extends behind the opaque dock.
+      const clampedContainerRect =
         container === null
+          ? null
+          : chatBottomOverlayClampedRect(container, bottomOverlayInsetPx);
+      const anchor =
+        clampedContainerRect === null
           ? firstLineRect(range)
-          : firstVisibleLineRect(range, container.getBoundingClientRect());
+          : firstVisibleLineRect(range, clampedContainerRect);
       if (anchor === null) {
         // Selection fully scrolled out of the transcript viewport: hide the
         // button but KEEP the snapshot so it returns when a line scrolls back.
@@ -80,7 +97,15 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
       }
       currentAnchor = anchor;
       floating.style.visibility = "visible";
-      const boundary = container ?? undefined;
+      const boundary =
+        clampedContainerRect === null
+          ? undefined
+          : {
+              x: clampedContainerRect.x,
+              y: clampedContainerRect.y,
+              width: clampedContainerRect.width,
+              height: clampedContainerRect.height,
+            };
       void computePosition(virtualReference, floating, {
         placement: "top-start",
         middleware: [
@@ -97,7 +122,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     };
     reposition();
     return autoUpdate(virtualReference, floating, reposition);
-  }, [snapshot, onDismiss, boundaryRef]);
+  }, [snapshot, onDismiss, boundaryRef, paneFocused, bottomOverlayInsetPx]);
 
   const handleQuote = (): void => {
     // Consume the mouseup snapshot; NEVER read the live Selection here.
@@ -112,7 +137,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     onDismiss();
   };
 
-  if (typeof document === "undefined") return null;
+  if (!paneFocused || typeof document === "undefined") return null;
 
   return createPortal(
     <div

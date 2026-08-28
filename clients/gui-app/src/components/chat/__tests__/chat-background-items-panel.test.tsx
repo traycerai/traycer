@@ -1,7 +1,25 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+
+// The one faked boundary: the host RPCs behind the managed-command rows. This
+// suite is about how background items nest and read; the managed-command
+// surfaces have their own suite.
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
+    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeld: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeldIsPending: () => false,
+  }),
+);
+
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 describe("<BackgroundItemsPanel />", () => {
   afterEach(() => {
@@ -27,6 +45,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
     const grandchild = backgroundItem({
       taskId: "grandchild-monitor",
@@ -49,7 +68,7 @@ describe("<BackgroundItemsPanel />", () => {
     );
 
     const parentButton = screen.getByRole("button", {
-      name: /Parent agent.*Agent/,
+      name: /Parent agent.*Sub-agent/,
     });
     const childButton = screen.getByRole("button", {
       name: /Child command.*Command/,
@@ -91,6 +110,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "first-child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
     const secondChild = backgroundItem({
       taskId: "second-child-command",
@@ -99,6 +119,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "second-child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
     const firstGrandchild = backgroundItem({
       taskId: "first-grandchild-monitor",
@@ -188,6 +209,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
 
     const { rerender } = renderPanel({
@@ -220,7 +242,7 @@ describe("<BackgroundItemsPanel />", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: /Remembered parent.*Agent/ }),
+      screen.queryByRole("button", { name: /Remembered parent.*Sub-agent/ }),
     ).toBeNull();
     expect(screen.getByRole("button", { name: "Stop Command" })).toBeTruthy();
   });
@@ -233,6 +255,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
 
     renderPanel({
@@ -273,6 +296,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
     const laterChild = backgroundItem({
       taskId: "later-child-command",
@@ -281,6 +305,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "later-child-command-tool",
       parentTaskId: "parent-agent",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
 
     const { rerender } = renderPanel({
@@ -518,6 +543,7 @@ describe("<BackgroundItemsPanel />", () => {
       blockId: "fleet-command-tool",
       parentTaskId: "workflow-4",
       scheduledFor: null,
+      individualStopUnavailable: null,
     });
 
     renderPanel({
@@ -543,36 +569,290 @@ describe("<BackgroundItemsPanel />", () => {
     ).toBeTruthy();
     expect(screen.getAllByRole("group")).toHaveLength(1);
   });
+
+  it("disables a gated command's own stop button while a sibling row's stop stays enabled", () => {
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+    const subagent = backgroundItem({
+      taskId: "sub-agent",
+      kind: "subagent",
+      title: "Sub agent",
+      blockId: "sub-agent",
+      parentTaskId: null,
+      scheduledFor: null,
+    });
+
+    renderPanel({
+      items: [gatedCommand, subagent],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Background.*2 running/ }),
+    );
+
+    const gatedStopButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Stopping this command needs Codex 0.146.0 or newer. Use Stop all to stop the Codex session.",
+    });
+    expect(gatedStopButton.disabled).toBe(true);
+
+    const subagentStopButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Stop Sub-agent",
+    });
+    expect(subagentStopButton.disabled).toBe(false);
+  });
+
+  it("escalates Stop all to a confirm dialog when a gated command is present, firing the session stop only on confirm", () => {
+    const onStopAll = vi.fn(() => null);
+    const onStopSession = vi.fn(() => "action-1");
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+
+    renderPanel({
+      items: [gatedCommand],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll,
+      onStopSession,
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
+    expect(onStopAll).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    expect(onStopSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(onStopSession).toHaveBeenCalledTimes(1);
+    expect(onStopAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps Stop all's plain behavior when no command needs the session escalation", () => {
+    const onStopAll = vi.fn(() => null);
+    const onStopSession = vi.fn(() => null);
+    const command = backgroundItem({
+      taskId: "plain-command",
+      kind: "command",
+      title: "Plain command",
+      blockId: "plain-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    });
+
+    renderPanel({
+      items: [command],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll,
+      onStopSession,
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+
+    expect(onStopAll).toHaveBeenCalledTimes(1);
+    expect(onStopSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+
+  it("mentions the active turn in the confirm dialog only when a turn is active", () => {
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+
+    const { rerender } = renderPanel({
+      items: [gatedCommand],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+      turnActive: false,
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).not.toContain("The active turn will also be stopped.");
+
+    rerender(
+      panelElement({
+        items: [gatedCommand],
+        onItemClick: () => undefined,
+        onStopItem: () => null,
+        onStopAll: () => null,
+        turnActive: true,
+      }),
+    );
+
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toContain("The active turn will also be stopped.");
+  });
+
+  it("counts every affected row, not just root groups, in the session-stop confirm dialog", () => {
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+    const firstChild = backgroundItem({
+      taskId: "child-one",
+      kind: "subagent",
+      title: "Child one",
+      blockId: "child-one",
+      parentTaskId: "gated-command",
+      scheduledFor: null,
+    });
+    const secondChild = backgroundItem({
+      taskId: "child-two",
+      kind: "subagent",
+      title: "Child two",
+      blockId: "child-two",
+      parentTaskId: "gated-command",
+      scheduledFor: null,
+    });
+
+    renderPanel({
+      items: [gatedCommand, firstChild, secondChild],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => "action-1",
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toContain("Stopping the session ends all 3 background items.");
+  });
+
+  it("excludes wakeups from the session-stop confirm dialog's count - a session stop can't end a host-owned wake", () => {
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+    const child = backgroundItem({
+      taskId: "child-command",
+      kind: "command",
+      title: "Child command",
+      blockId: "child-command-tool",
+      parentTaskId: "gated-command",
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    });
+    const wakeup = backgroundItem({
+      taskId: "wake-task",
+      kind: "wakeup",
+      title: "Review status",
+      blockId: "wake-tool",
+      parentTaskId: null,
+      scheduledFor: 1_769_000_000_000,
+    });
+
+    renderPanel({
+      items: [gatedCommand, child, wakeup],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => "action-1",
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toContain("Stopping the session ends all 2 background items.");
+  });
 });
 
-function renderPanel(input: {
+interface PanelInput {
   readonly items: ReadonlyArray<BackgroundItem>;
   readonly onItemClick: (item: BackgroundItem) => void;
   readonly onStopItem: (taskId: string) => string | null;
   readonly onStopAll: () => string | null;
-}) {
+  readonly sessionStopPending?: boolean;
+  readonly turnActive?: boolean;
+  readonly onStopSession?: () => string | null;
+}
+
+function renderPanel(input: PanelInput) {
   return render(panelElement(input));
 }
 
-function panelElement(input: {
-  readonly items: ReadonlyArray<BackgroundItem>;
-  readonly onItemClick: (item: BackgroundItem) => void;
-  readonly onStopItem: (taskId: string) => string | null;
-  readonly onStopAll: () => string | null;
-}) {
+function panelElement(input: PanelInput) {
+  // The panel only ever mounts inside a chat tile, and its managed-command
+  // rows act on that tile's host - so the provider is part of its contract,
+  // not test scaffolding.
   return (
-    <BackgroundItemsPanel
-      items={input.items}
-      canAct
-      readOnly={false}
-      pendingStopTaskIds={new Set()}
-      stopAllPending={false}
-      scrollRegionMaxHeightClass="max-h-96"
-      separated={false}
-      onItemClick={input.onItemClick}
-      onStopItem={input.onStopItem}
-      onStopAll={input.onStopAll}
-    />
+    <TabHostProvider hostId="host-1">
+      <BackgroundItemsPanel
+        items={input.items}
+        epicId="epic-1"
+        chatId="chat-1"
+        viewTabId="tab-1"
+        canAct
+        readOnly={false}
+        pendingStopTaskIds={new Set()}
+        stopAllPending={false}
+        sessionStopPending={input.sessionStopPending ?? false}
+        turnActive={input.turnActive ?? false}
+        scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
+        onItemClick={input.onItemClick}
+        onStopItem={input.onStopItem}
+        onStopAll={input.onStopAll}
+        onStopSession={input.onStopSession ?? (() => null)}
+      />
+    </TabHostProvider>
   );
 }
 

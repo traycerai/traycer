@@ -8,6 +8,7 @@ import {
   providerNoticeNormalizedMetadataSchema,
   subAgentBlockSchema,
   textBlockSchema,
+  toolCallBlockSchema,
   type ApprovalBlock,
   type AutonomousResumeBlock,
   type FileChangeBlock,
@@ -15,6 +16,7 @@ import {
   type SubAgentBlock,
   type TextBlock,
   type ToolCallBlock,
+  type ToolCallManagedCommandRestarted,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -266,6 +268,138 @@ describe("fileChangeBlockSchema backward-compat", () => {
   });
 });
 
+describe("toolCallManagedCommandSchema (started/restarted union)", () => {
+  const baseToolCall = {
+    type: "tool_call" as const,
+    blockId: "tc-shell",
+    status: "completed" as const,
+    timestamp: 1,
+    toolName: "traycer_run_shell",
+    error: null,
+  };
+
+  it("parses a legacy identity-only managedCommand (pre-restart-correlation) as a started event with cwd:null", () => {
+    // Every block stamped before restarts were correlated carries only the
+    // identity fields - the union's started member defaults `event` and
+    // `cwd` so this old shape still parses instead of failing the block.
+    const block = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: {
+        commandId: "cmd-1",
+        description: "deploy watcher",
+        monitoring: true,
+      },
+    }) as ToolCallBlock;
+    expect(block.managedCommand).toEqual({
+      event: "started",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      cwd: null,
+    });
+  });
+
+  it("round-trips a started payload carrying cwd", () => {
+    const block = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: {
+        event: "started",
+        commandId: "cmd-1",
+        description: "deploy watcher",
+        monitoring: true,
+        cwd: "/work/repo",
+      },
+    }) as ToolCallBlock;
+    expect(block.managedCommand).toEqual({
+      event: "started",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      cwd: "/work/repo",
+    });
+  });
+
+  it("round-trips a restarted payload with a running outcome", () => {
+    const restarted: ToolCallManagedCommandRestarted = {
+      event: "restarted",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      effectiveCommand: "tail -f deploy.log --since 1h",
+      effectiveCwd: "/work/repo",
+      commandChanged: true,
+      cwdChanged: false,
+      outcome: { state: "running", pid: 4410, startedAtMs: 10 },
+    };
+    const block = toolCallBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: restarted,
+    });
+    expect(block.managedCommand).toEqual(restarted);
+
+    // Through the full contentBlockSchema union too - the restarted member is
+    // tried FIRST precisely so a shape carrying its own required `event`
+    // literal is never reinterpreted as a defaulted started shape.
+    const viaContentBlock = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: restarted,
+    }) as ToolCallBlock;
+    expect(viaContentBlock.managedCommand).toEqual(restarted);
+  });
+
+  it("round-trips a restarted payload with an exited/null-code outcome (spawn failure)", () => {
+    const restarted: ToolCallManagedCommandRestarted = {
+      event: "restarted",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: false,
+      effectiveCommand: "tail -f deploy.log",
+      effectiveCwd: "/work/repo",
+      commandChanged: false,
+      cwdChanged: true,
+      outcome: {
+        state: "exited",
+        exitCode: null,
+        signal: null,
+        exitedAtMs: 20,
+      },
+    };
+    const block = toolCallBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: restarted,
+    });
+    expect(block.managedCommand).toEqual(restarted);
+  });
+
+  it("rejects a restarted payload missing a required field (effectiveCwd)", () => {
+    const incomplete = {
+      event: "restarted" as const,
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      effectiveCommand: "tail -f deploy.log",
+      // effectiveCwd omitted - the restarted member has no default for it,
+      // and the started member's literal "started" cannot match "restarted".
+      commandChanged: true,
+      cwdChanged: false,
+      outcome: { state: "running" as const, pid: 1, startedAtMs: 1 },
+    };
+    const result = toolCallBlockSchema.safeParse({
+      ...baseToolCall,
+      managedCommand: incomplete,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("still parses managedCommand: null (every non-shell tool call)", () => {
+    const block = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: null,
+    }) as ToolCallBlock;
+    expect(block.managedCommand).toBeNull();
+  });
+});
+
 describe("subAgentBlockSchema workflowMeta (no new persisted block type)", () => {
   const workflowSubAgentBlock = {
     type: "subagent",
@@ -376,6 +510,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
+          live: false,
         },
       ],
       wakeTriggers: undefined,
@@ -383,6 +519,61 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     const decoded = decodeAutonomousResumeBlock(rawV113Stored);
     expect(decoded.triggers.map((t) => t.kind)).toEqual(["command"]);
     expect("wakeTriggers" in decoded).toBe(false);
+  });
+
+  it("defaults `live` to false, so every trigger persisted before it existed reads as terminal", () => {
+    const stored = {
+      ...baseFields,
+      triggers: [
+        { kind: "monitor", title: "build", status: "completed", summary: "s" },
+      ],
+    };
+    const parsed = contentBlockSchema.parse(stored);
+    if (parsed.type !== "autonomous_resume") {
+      throw new Error("Expected parsed block to be autonomous_resume");
+    }
+    expect(parsed.triggers[0]?.live).toBe(false);
+  });
+
+  it("round-trips a live trigger through the storage codec", () => {
+    // `live` says the producing command was STILL RUNNING when the digest was
+    // rendered - the one thing the `status` enum cannot express. It has to
+    // survive the encode/decode the storage path puts every block through, or
+    // the divider would silently revert to claiming the command finished.
+    const stored = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "monitor",
+          title: "build",
+          status: "completed",
+          summary: "still running - 12 new log lines",
+          live: true,
+        },
+      ],
+    };
+    const parsed = contentBlockSchema.parse(stored);
+    if (parsed.type !== "autonomous_resume") {
+      throw new Error("Expected parsed block to be autonomous_resume");
+    }
+    expect(parsed.triggers[0]?.live).toBe(true);
+    const reDecoded = decodeAutonomousResumeBlock(
+      encodeAutonomousResumeBlock(parsed),
+    );
+    expect(reDecoded.triggers[0]?.live).toBe(true);
+  });
+
+  it("never marks a fired wake as live: a wake is terminal by construction", () => {
+    const stored = {
+      ...baseFields,
+      triggers: [],
+      wakeTriggers: [{ title: "wake1", status: "completed", summary: "woke" }],
+    };
+    const parsed = contentBlockSchema.parse(stored);
+    if (parsed.type !== "autonomous_resume") {
+      throw new Error("Expected parsed block to be autonomous_resume");
+    }
+    expect(parsed.triggers[0]?.live).toBe(false);
   });
 
   it("parses a legacy pre-fix block with kind:'wakeup' inline in triggers (rc/dev data)", () => {
@@ -410,6 +601,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
         blockId: "",
         outputFile: null,
         mcp: null,
+        managedCommand: null,
+        live: false,
       },
     ]);
     expect("wakeTriggers" in parsed).toBe(false);
@@ -441,6 +634,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
       blockId: "",
       outputFile: null,
       mcp: null,
+      managedCommand: null,
+      live: false,
     });
     expect("wakeTriggers" in parsed).toBe(false);
   });
@@ -479,6 +674,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
+          live: false,
         },
       ],
     };
@@ -503,6 +700,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "sub-block",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
+          live: false,
         },
         {
           kind: "wakeup",
@@ -512,6 +711,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
+          live: false,
         },
       ],
     };
@@ -520,7 +721,13 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     expect(encoded.triggers).toHaveLength(1);
     expect(encoded.triggers[0]?.kind).toBe("subagent");
     expect(encoded.wakeTriggers).toEqual([
-      { title: "wake1", status: "completed", summary: "woke", blockId: "", outputFile: null },
+      {
+        title: "wake1",
+        status: "completed",
+        summary: "woke",
+        blockId: "",
+        outputFile: null,
+      },
     ]);
 
     const decoded = decodeAutonomousResumeBlock(encoded);
@@ -539,6 +746,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
+          live: false,
         },
       ],
     };
@@ -558,6 +767,8 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
+          live: false,
         },
       ],
     };
@@ -567,7 +778,13 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     }
     expect(encoded.triggers).toEqual([]);
     expect(encoded.wakeTriggers).toEqual([
-      { title: "wake1", status: "completed", summary: "woke", blockId: "", outputFile: null },
+      {
+        title: "wake1",
+        status: "completed",
+        summary: "woke",
+        blockId: "",
+        outputFile: null,
+      },
     ]);
   });
 
@@ -579,7 +796,9 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     // embeds this block) gets its fields JSON-schema-serialized.
     expect(Object.keys(hostStreamRpcRegistry)).toContain("chat.subscribe");
     expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
-    expect(() => z.toJSONSchema(contentBlockSchema, { io: "input" })).not.toThrow();
+    expect(() =>
+      z.toJSONSchema(contentBlockSchema, { io: "input" }),
+    ).not.toThrow();
   });
 });
 

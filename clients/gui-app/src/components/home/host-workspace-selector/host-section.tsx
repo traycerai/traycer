@@ -1,93 +1,123 @@
-import { Check, Globe, Monitor, Server, type LucideIcon } from "lucide-react";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-
-const HOST_KIND_ICONS: Record<HostDirectoryEntry["kind"], LucideIcon> = {
-  remote: Globe,
-  mock: Server,
-  local: Monitor,
-};
+import {
+  HostSwitcher,
+  type HostSwitcherSurface,
+} from "@/components/settings/host-scope/host-switcher";
+import {
+  findHostOption,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
+import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 interface HostSectionProps {
-  readonly entries: ReadonlyArray<HostDirectoryEntry>;
+  /**
+   * The account's hosts, from `useHostOptions` — the same merged list Settings
+   * and the usage popover read. This section used to take raw directory
+   * entries, which is why a host you own but cannot dial right now was absent
+   * here and present there: the picker in the composer said the machine did not
+   * exist, the picker in Settings said it was offline.
+   */
+  readonly hosts: readonly HostScopeOption[];
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
+  /**
+   * `bind` for the composer (window rebind). `pin` for git-diff / file-tree /
+   * new-terminal (surface-local RPC scope). Both keep undialable rows inert
+   * and omit the Active chip.
+   */
+  readonly intent: Extract<HostPickIntent, "bind" | "pin">;
+  /**
+   * Per-host reasons THIS surface cannot use a host — the chat fork dialog's
+   * "needs update" for a target whose build predates the cross-host fork
+   * contract. `NO_HOST_OPTION_REFUSALS` everywhere else.
+   */
+  readonly refusalByHostId: ReadonlyMap<string, string>;
+  /**
+   * Every row but this one goes inert, WITHOUT a word — a blocker owned by the
+   * surface, not by any host. `null` imposes nothing. Kept separate from
+   * `refusalByHostId` so a surface-level reason is never written onto a row as
+   * if it were that host's fault.
+   */
+  readonly inertExceptHostId: string | null;
+  /**
+   * A pending submission (or a surface pinned to one host) owns the selection.
+   * The control goes inert rather than accepting a click and discarding it.
+   */
+  readonly disabled: boolean;
+  readonly isLoading: boolean;
+  /** A host list request FAILED, so an empty `hosts` proves nothing. */
+  readonly listsFailed: boolean;
+  readonly onRetryLists: () => void;
+}
+
+interface WorkspaceHostSwitcherProps extends HostSectionProps {
+  readonly surface: Extract<HostSwitcherSurface, "field" | "inline">;
+  readonly keepFocusableWhenDisabled?: boolean;
+}
+
+export function WorkspaceHostSwitcher(
+  props: WorkspaceHostSwitcherProps,
+): ReactNode {
+  const { openSettings } = useSystemTabModalActions();
+  useRegisteredHostsPollLiveness();
+  return (
+    <HostSwitcher
+      hosts={props.hosts}
+      selected={findHostOption(props.hosts, props.activeHostId)}
+      activeHostId={props.activeHostId}
+      onSelect={props.onSelect}
+      refusalByHostId={props.refusalByHostId}
+      inertExceptHostId={props.inertExceptHostId}
+      intent={props.intent}
+      action={{
+        kind: "manage-hosts",
+        onSelect: () => {
+          if (props.activeHostId !== null) {
+            useSettingsHostScopeStore
+              .getState()
+              .setScopedHostId(props.activeHostId);
+          }
+          openSettings({ section: "host", resetToGeneral: false });
+        },
+      }}
+      surface={props.surface}
+      isLoading={props.isLoading}
+      listsFailed={props.listsFailed}
+      onRetryLists={props.onRetryLists}
+      disabled={props.disabled}
+      keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
+    />
+  );
 }
 
 /**
- * Host list for the worktree picker popovers (git-diff panel, terminal
- * creation, file tree). Clicking a row swaps the app-wide active host via
- * the directory binding; the host-scoped folder queries underneath refetch
- * automatically.
+ * Host block for the workspace/worktree picker surfaces (composer, git-diff
+ * panel, terminal creation, file tree, the fork dialogs). What a click
+ * writes is `intent`: `bind` rebinds the window; `pin` writes a surface pin.
+ *
+ * It is the same `HostSwitcher` the Settings rail and the usage popover mount —
+ * one row of chrome that names the current host and opens the list — rather
+ * than a flat list of every host inline. The flat list was fine at one host and
+ * became the whole top of the panel at four, pushing the Workspaces section it
+ * heads below the fold on exactly the accounts that own several machines.
+ *
+ * What stays local to this surface is only its framing: the "Host" heading that
+ * pairs with "Workspaces" below it.
  */
-export function HostSection(props: HostSectionProps) {
+export function HostSection(props: HostSectionProps): ReactNode {
   return (
     <section
-      aria-label="Host"
       data-testid="host-workspace-selector-host-section"
       className="w-full max-w-full min-w-0"
     >
       <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
         Host
       </DropdownMenuLabel>
-      <ul className="flex min-w-0 flex-col gap-0.5">
-        {props.entries.length === 0 ? (
-          <li className="rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground">
-            No hosts available.
-          </li>
-        ) : (
-          props.entries.map((entry) => {
-            const isActive = entry.hostId === props.activeHostId;
-            return (
-              <li key={entry.hostId} className="min-w-0">
-                <button
-                  type="button"
-                  data-testid={`host-workspace-selector-host-row-${entry.hostId}`}
-                  data-selected={isActive ? "true" : "false"}
-                  onClick={() => {
-                    props.onSelect(entry.hostId);
-                  }}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm transition-colors hover:bg-accent/50 hover:text-foreground",
-                    isActive ? "text-foreground" : "text-muted-foreground",
-                  )}
-                >
-                  <HostKindIcon kind={entry.kind} />
-                  <span className="min-w-0 flex-1 truncate text-left">
-                    {entry.label}
-                  </span>
-                  <HostStatusDot status={entry.status} />
-                  {isActive ? (
-                    <Check className="size-3.5 text-foreground" />
-                  ) : null}
-                </button>
-              </li>
-            );
-          })
-        )}
-      </ul>
+      <WorkspaceHostSwitcher {...props} surface="field" />
     </section>
-  );
-}
-
-function HostKindIcon(props: { readonly kind: HostDirectoryEntry["kind"] }) {
-  const Icon = HOST_KIND_ICONS[props.kind];
-  return <Icon className="size-4 shrink-0 text-muted-foreground" />;
-}
-
-function HostStatusDot(props: {
-  readonly status: HostDirectoryEntry["status"];
-}) {
-  return (
-    <span
-      aria-label={props.status === "available" ? "Available" : "Unavailable"}
-      className={cn(
-        "size-1.5 rounded-full",
-        props.status === "available"
-          ? "bg-emerald-500"
-          : "bg-muted-foreground/40",
-      )}
-    />
   );
 }

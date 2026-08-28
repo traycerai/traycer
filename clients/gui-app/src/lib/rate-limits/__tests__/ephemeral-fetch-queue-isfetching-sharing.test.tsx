@@ -49,6 +49,7 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     const { method, params, options } = providerRateLimitQueryOptions(
       "codex",
       null,
+      true,
     );
     const rendered = renderHook(
       () =>

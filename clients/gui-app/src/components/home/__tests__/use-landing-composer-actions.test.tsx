@@ -1,22 +1,43 @@
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { tabItemId, type SplitStripItem } from "@/stores/tabs/layout";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
-import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import {
+  useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../../../../__tests__/test-browser-apis";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  clearSessionCreatedEpics,
+  sessionCreatedEpicHostId,
+  wasEpicCreatedRecentlyThisSession,
+  wasEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
 
 const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
@@ -30,7 +51,7 @@ const landingMocks = vi.hoisted(() => ({
     kind: "local",
     websocketUrl: "ws://127.0.0.1:4917/rpc",
     version: "0.0.0-test",
-    status: "available",
+    transportDialability: "dialable",
   })),
 }));
 
@@ -48,16 +69,53 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
+// `landing-draft-store.ts` (real, unmocked - `createDraft` reads the global
+// workspace snapshot through it) and `use-landing-composer-actions.ts` itself
+// (the imperative "create draft" path) both resolve the per-host
+// workspace-folder / run-settings buckets through this imperative snapshot,
+// not through a hook. Left unmocked it falls back to the real (unbound)
+// implementation, which always reports `null` - so every fixture below would
+// seed a host bucket the code never reads. Pin it to the SAME host id
+// `landingMocks.getActiveHostId()` returns, so the two ways this suite's
+// production code resolves "the active host" agree.
+// `activeHostIdOrNull` is what `ensureSubmissionDraft` reads for the run-
+// settings bucket now: the spine accessor below answers `null` for every host
+// since P4.2/D17 deleted the active slot, so the id has to come from the
+// authority's projection instead. Both are driven by the SAME knob, so a test
+// that moves the host still moves it everywhere this suite reaches.
+vi.mock("@/lib/host/runtime", () => ({
+  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
+  getHostBindingSnapshot: () => ({
+    hostClient: { getActiveHostId: landingMocks.getActiveHostId },
+  }),
+}));
+
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({
+  useCreateTuiAgentForClient: () => ({
     create: landingMocks.createTerminalAgent,
     isPending: false,
   }),
 }));
 
+/**
+ * The composer's resolved placement (redesign P1.2). These tests exercise the
+ * READY arm - `resolveLandingPlacement`'s own refusals have their own unit
+ * suite - so the target names the same host the mocked client addresses.
+ */
+function useTestPlacementTarget(): LandingPlacementTarget {
+  return {
+    resolvedHostId: landingMocks.getActiveHostId(),
+    client: useHostClient(),
+    hostLabel: "Local",
+    isPinned: false,
+    namedHostDead: false,
+  };
+}
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
@@ -67,22 +125,101 @@ const imageStoreMocks = vi.hoisted(() => ({
     Promise.resolve(undefined),
   ),
   imageHashKeys: vi.fn<() => Promise<string[]>>(() => Promise.resolve([])),
+  sessionHashKeys: vi.fn<() => ReadonlySet<string>>(() => new Set<string>()),
+  deleteImage: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  releaseSession: vi.fn(),
 }));
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionImageBytes: imageStoreMocks.sessionImageBytes,
   getImageBytes: imageStoreMocks.getImageBytes,
   imageHashKeys: imageStoreMocks.imageHashKeys,
+  sessionHashKeys: imageStoreMocks.sessionHashKeys,
+  deleteImage: imageStoreMocks.deleteImage,
+  releaseSession: imageStoreMocks.releaseSession,
 }));
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
+
+// The recorded RPC payload is `unknown` at this boundary, so the folded chat's
+// id is narrowed structurally rather than asserted through a cast.
+function foldedChatIdFromCreateEpicPayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (!("chat" in payload)) return null;
+  const chat = payload.chat;
+  if (typeof chat !== "object" || chat === null) return null;
+  if (!("chatId" in chat)) return null;
+  const chatId = chat.chatId;
+  return typeof chatId === "string" ? chatId : null;
+}
+
+// Same structural-narrowing shape as the chat-id reader above, for the
+// epic's own id - present on both flows' `epic.create` payload (`chat` is
+// `null` on the terminal-agent flow, but `epic.id` always rides along).
+function epicIdFromCreateEpicPayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (!("epic" in payload)) return null;
+  const epic = payload.epic;
+  if (typeof epic !== "object" || epic === null) return null;
+  if (!("id" in epic)) return null;
+  const id = epic.id;
+  return typeof id === "string" ? id : null;
+}
 const WORKSPACE_PATH = "/tmp/traycer";
 const DRAFT_WORKSPACE_PATH = "/tmp/draft-workspace";
 const GLOBAL_WORKSPACE_PATH = "/tmp/global-workspace";
 const UNKNOWN_WORKSPACE_PATH = "/tmp/unknown-workspace";
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason: Error) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: Error) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+// Every workspace-folder / run-settings bucket in this suite is keyed by
+// this host id, matching `landingMocks.getActiveHostId()`'s default return
+// value - the same id `client.getActiveHostId()` resolves to via the mocked
+// `@/lib/host` client.
+const TEST_HOST_ID = "host-landing";
+
+function setGlobalWorkspaceFolders(input: {
+  readonly folders: ReadonlyArray<string>;
+  readonly folderInfoByPath: Readonly<
+    Record<
+      string,
+      {
+        readonly path: string;
+        readonly name: string;
+        readonly repoIdentifier: { owner: string; repo: string } | null;
+        readonly hostId: string | null;
+      }
+    >
+  >;
+  readonly primaryPath?: string | null;
+}): void {
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [TEST_HOST_ID]: {
+        folders: input.folders,
+        folderInfoByPath: input.folderInfoByPath,
+        primaryPath: input.primaryPath ?? null,
+      },
+    },
+  });
+}
+
 describe("useLandingComposerActions", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
+    draftRuntimeRegistry.resetForTesting();
     window.localStorage.clear();
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
@@ -98,22 +235,25 @@ describe("useLandingComposerActions", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
       version: "0.0.0-test",
-      status: "available",
+      transportDialability: "dialable",
     });
     vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.info).mockClear();
     imageStoreMocks.sessionImageBytes.mockReset();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     imageStoreMocks.getImageBytes.mockReset();
     imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -128,16 +268,20 @@ describe("useLandingComposerActions", () => {
   });
 
   afterEach(() => {
+    __resetTabNavigationControllerForTesting();
+    draftRuntimeRegistry.resetForTesting();
     cleanup();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -146,17 +290,85 @@ describe("useLandingComposerActions", () => {
     });
   });
 
+  // Regression: consuming the landing session was gated on the SUBMITTING
+  // host having an intent, so staging on host A and then submitting from a
+  // folderless host B left A's slot alive - to seed the next landing session
+  // (null draft) or linger against the staging cap (minted draft).
+  it("consumes another host's staged pick even when the submitting host has none", async () => {
+    const otherHostKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: "host-other",
+      draftId: null,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(otherHostKey, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/elsewhere/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+    // The submitting host is folderless, so its own intent is null...
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: { worktreeIntent: null },
+    });
+    // ...and the other host's copy is still consumed with the session.
+    await waitFor(() => {
+      expect(
+        useWorktreeIntentStagingStore.getState().intentByKey[
+          worktreeStagingKeyString(otherHostKey)
+        ],
+      ).toBeUndefined();
+    });
+
+    queryClient.clear();
+  });
+
   it("creates a folderless epic without a selected workspace folder", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -178,9 +390,116 @@ describe("useLandingComposerActions", () => {
         worktreeIntent: null,
       },
     });
-    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+    });
     expect(toast.error).not.toHaveBeenCalled();
 
+    queryClient.clear();
+  });
+
+  it("folds the SAME chat id into epic.create that the launch handoff carries", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    // ONE MINT. The launch tab is opened around `handoff.chatId` (see
+    // `initial-chat-handoff.test.tsx`, which asserts the eager-opened tile
+    // carries exactly that id) and the chat itself is created by the folded
+    // seed on this request - so if these two ids could ever diverge, the tab
+    // would sit on a chat id that exists on no host and in no cloud row while
+    // the real chat lived under the other one.
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    const foldedChatId = foldedChatIdFromCreateEpicPayload(createEpicCall?.[1]);
+    const handoff = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    ).at(0);
+    expect(foldedChatId).not.toBeNull();
+    expect(handoff?.chatId).toBe(foldedChatId);
+
+    queryClient.clear();
+  });
+
+  it("refuses launch while a staged worktree path has unresolved metadata", () => {
+    setSingleWorkspace();
+    const key = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: WORKSPACE_PATH,
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, [WORKSPACE_PATH]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    expect(landingMocks.request).not.toHaveBeenCalled();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString({
+          surface: "landing",
+          hostId: TEST_HOST_ID,
+          draftId: null,
+        })
+      ],
+    ).toBeDefined();
     queryClient.clear();
   });
 
@@ -188,13 +507,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: {
           ...defaultToolbar(),
           selection: {
@@ -215,7 +539,8 @@ describe("useLandingComposerActions", () => {
     // run-settings store unconditionally (independent of the initial-message
     // path, which needs a signed-in profile this suite doesn't mock).
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings?.profileId,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID)
+        ?.profileId,
     ).toBe("work-profile");
 
     queryClient.clear();
@@ -225,19 +550,24 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
-      result.current.selectTerminalAgent({
-        harnessId: "claude",
-        agentMode: "regular",
-        model: null,
-        reasoningEffort: null,
-        terminalAgentArgs: "",
-        profileId: null,
-      });
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        null,
+      );
     });
 
     await waitFor(() => {
@@ -273,19 +603,24 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
-      result.current.selectTerminalAgent({
-        harnessId: "claude",
-        agentMode: "regular",
-        model: null,
-        reasoningEffort: null,
-        terminalAgentArgs: "",
-        profileId: "work-profile",
-      });
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: "work-profile",
+        },
+        null,
+      );
     });
 
     await waitFor(() => {
@@ -299,26 +634,32 @@ describe("useLandingComposerActions", () => {
   });
 
   it("blocks epic creation while the model slug is unresolved", () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: TEST_HOST_ID,
         },
       },
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: {
           ...defaultToolbar(),
           selection: { harnessId: "codex", modelSlug: "", profileId: null },
@@ -329,7 +670,7 @@ describe("useLandingComposerActions", () => {
     expect(landingMocks.request).not.toHaveBeenCalled();
     expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toBeNull();
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
 
@@ -337,26 +678,32 @@ describe("useLandingComposerActions", () => {
   });
 
   it("creates an epic with workspace paths and repo identifiers, then navigates", async () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: TEST_HOST_ID,
         },
       },
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -380,8 +727,9 @@ describe("useLandingComposerActions", () => {
     });
 
     await waitFor(() => {
-      expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
 
     const tabIds = useEpicCanvasStore.getState().openTabOrder;
     expect(tabIds).toHaveLength(1);
@@ -406,12 +754,12 @@ describe("useLandingComposerActions", () => {
       profileId: null,
     };
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toEqual(expectedSettings);
     expect(
       useComposerRunSettingsStore
         .getState()
-        .getEpicRunSettings(firstTab.epicId),
+        .getEpicRunSettings(firstTab.epicId, TEST_HOST_ID),
     ).toEqual(expectedSettings);
 
     queryClient.clear();
@@ -423,20 +771,25 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-same-session", "look here"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
 
-    // The session fast path resolves bytes without an await, so navigation fires
-    // synchronously inside the act() and IndexedDB is never read.
-    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    // The session fast path resolves bytes without an await, but placement waits
+    // for the one-shot create response and never steals foreground focus.
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(imageStoreMocks.getImageBytes).not.toHaveBeenCalled();
 
     await waitFor(() => {
@@ -451,6 +804,63 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  // The workspace context is read for the host active at submit; on the
+  // session-cold image path an IndexedDB await separates that read from the
+  // create, and `epic.create` dispatches to whichever host is active THEN.
+  // Creating on B with A's paths would bind the epic to a machine the user
+  // never composed against and file its remembered intent under a host that
+  // will never read it.
+  it("does not trip the drift refusal when the binding flips mid-await - placement and context are both captured at submit", async () => {
+    setSingleWorkspace();
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    const imageGate = deferred<Uint8Array | undefined>();
+    imageStoreMocks.getImageBytes.mockReturnValue(imageGate.promise);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage("hash-restored", "restored draft"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    // The app binding moves while the IndexedDB read is in flight. Under the
+    // frozen-placement model the placement target AND the workspace context
+    // were both captured at submit, so the flip cannot make them diverge -
+    // the fail-closed divergence guard stays silent and the flow proceeds to
+    // the create attempt (which this suite's stub client then rejects; that
+    // host-error toast is the non-vacuity signal the flow really ran).
+    landingMocks.getActiveHostId.mockReturnValue("host-switched");
+    await act(async () => {
+      imageGate.resolve(HELLO_BYTES);
+      await imageGate.promise;
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "Couldn't create epic.",
+      expect.objectContaining({
+        description:
+          "The active device changed while this was being prepared. Try again.",
+      }),
+    );
+
+    landingMocks.getActiveHostId.mockReturnValue(TEST_HOST_ID);
+    queryClient.clear();
+  });
+
   it("awaits IndexedDB for a restored (session-cold) image before sending", async () => {
     setSingleWorkspace();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
@@ -458,13 +868,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-restored", "restored draft"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -474,8 +889,9 @@ describe("useLandingComposerActions", () => {
     expect(landingMocks.navigate).not.toHaveBeenCalled();
 
     await waitFor(() => {
-      expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith("hash-restored");
 
     await waitFor(() => {
@@ -497,13 +913,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-missing", "wiped image"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -531,13 +952,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-error", "unreadable image"),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -564,9 +990,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     // Two synchronous submits before the async IndexedDB read resolves. The second
     // hits the in-flight guard; without it, both would resolve and finalize → two
@@ -576,12 +1005,22 @@ describe("useLandingComposerActions", () => {
         "hash-restored",
         "restored draft",
       );
-      result.current.submit({ editor, toolbar: defaultToolbar() });
-      result.current.submit({ editor, toolbar: defaultToolbar() });
+      result.current.submit({
+        draftId: null,
+        editor,
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+      result.current.submit({
+        draftId: null,
+        editor,
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
     });
 
     await waitFor(() => {
-      expect(landingMocks.navigate).toHaveBeenCalled();
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     // Let any second (unguarded) dispatch flush before asserting.
     await act(async () => {
@@ -591,32 +1030,51 @@ describe("useLandingComposerActions", () => {
     expect(
       landingMocks.request.mock.calls.filter((c) => c[0] === "epic.create"),
     ).toHaveLength(1);
-    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+
+    // The guarded submit still STARTED an attempt before bailing, and each
+    // `draftId: null` resolves to its own draft - so the guard has to settle
+    // the attempt it is refusing. Otherwise that second draft keeps a composer
+    // disabled forever with nothing left in flight to release it.
+    const stillSubmitting = useLandingDraftStore
+      .getState()
+      .drafts.filter(
+        (draft) =>
+          draftRuntimeRegistry.getOrHydrate(draft.id)?.store.getState()
+            .isSubmitting === true,
+      );
+    expect(stillSubmitting).toEqual([]);
 
     queryClient.clear();
   });
 
   it("marks the first valid optimistic workspace binding as primary", async () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [UNKNOWN_WORKSPACE_PATH, WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: TEST_HOST_ID,
         },
       },
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -652,18 +1110,20 @@ describe("useLandingComposerActions", () => {
 
   it("emits associations primary-first and restamps the outgoing intent when the explicit primary isn't the first folder", async () => {
     const SECOND_PATH = "/tmp/second-workspace";
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH, SECOND_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: TEST_HOST_ID,
         },
         [SECOND_PATH]: {
           path: SECOND_PATH,
           name: "second",
           repoIdentifier: null,
+          hostId: TEST_HOST_ID,
         },
       },
       // The user explicitly switched primary to the SECOND folder.
@@ -672,7 +1132,7 @@ describe("useLandingComposerActions", () => {
     // The staged intent still carries a STALE primary bit on the first
     // folder (staged before the switch) - launch must restamp it by path.
     useWorktreeIntentStagingStore.getState().setIntent(
-      { surface: "landing", draftId: null },
+      { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
       {
         entries: [
           {
@@ -693,13 +1153,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -736,10 +1201,12 @@ describe("useLandingComposerActions", () => {
         },
       },
     });
-    expect(useWorkspaceFoldersStore.getState().folders).toEqual([
-      WORKSPACE_PATH,
-      SECOND_PATH,
-    ]);
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        TEST_HOST_ID,
+      ).folders,
+    ).toEqual([WORKSPACE_PATH, SECOND_PATH]);
 
     queryClient.clear();
   });
@@ -761,6 +1228,7 @@ describe("useLandingComposerActions", () => {
               path: WORKSPACE_PATH,
               name: "traycer",
               repoIdentifier: { owner: "traycerai", repo: "traycer" },
+              hostId: TEST_HOST_ID,
             },
           },
           primaryPath: "/tmp/ghost",
@@ -769,7 +1237,7 @@ describe("useLandingComposerActions", () => {
     );
     await useWorkspaceFoldersStore.persist.rehydrate();
     useWorktreeIntentStagingStore.getState().setIntent(
-      { surface: "landing", draftId: null },
+      { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
       {
         entries: [
           {
@@ -790,13 +1258,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -835,18 +1308,20 @@ describe("useLandingComposerActions", () => {
     // so the launch boundary MUST synthesize a `local` entry for it, or the
     // outgoing intent carries zero primaries.
     const NON_GIT_PATH = "/tmp/non-git-workspace";
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH, NON_GIT_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: TEST_HOST_ID,
         },
         [NON_GIT_PATH]: {
           path: NON_GIT_PATH,
           name: "non-git",
           repoIdentifier: null,
+          hostId: TEST_HOST_ID,
         },
       },
       // The user clicked the pin on the NON-GIT folder.
@@ -856,7 +1331,7 @@ describe("useLandingComposerActions", () => {
     // folder's worktree entry, demoted, and no entry at all for the non-git
     // folder it was demoted in favour of.
     useWorktreeIntentStagingStore.getState().setIntent(
-      { surface: "landing", draftId: null },
+      { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
       {
         entries: [
           {
@@ -878,13 +1353,18 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -940,26 +1420,32 @@ describe("useLandingComposerActions", () => {
 
   it("clears pre-seeded epic settings when epic creation fails", async () => {
     landingMocks.request.mockRejectedValue(new Error("create failed"));
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          hostId: TEST_HOST_ID,
         },
       },
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -969,17 +1455,11 @@ describe("useLandingComposerActions", () => {
         landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
       ).toBe(true);
     });
-    await waitFor(() => {
-      const tabId = useEpicCanvasStore.getState().openTabOrder.at(0);
-      if (tabId === undefined) throw new Error("expected optimistic tab");
-      const epicId = useEpicCanvasStore.getState().tabsById[tabId]?.epicId;
-      if (epicId === undefined) throw new Error("expected optimistic epic");
-      expect(
-        useComposerRunSettingsStore.getState().getEpicRunSettings(epicId),
-      ).toBeNull();
-    });
+    // T6 does not materialize a tab before the one-shot create succeeds, so a
+    // rejected request leaves no optimistic result to clean up.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toEqual({
       harnessId: "codex",
       model: "gpt-5-codex",
@@ -993,38 +1473,156 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("places a success after close once in the background without navigating", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-closing", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    expect(tabCommandCoordinator.closeRef(draftRef)).toBe(true);
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+    });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith("Epic created in the background.");
+    queryClient.clear();
+  });
+
+  it("re-preflights a moved draft ref and replaces its current location", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-moving", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    // Another layout mutation moves the same ref; success must not revive the
+    // captured original item id.
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: "moved-draft-item", ref: draftRef }],
+      activeItemId: "moved-draft-item",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "tab",
+        ref: { kind: "epic" },
+      });
+    });
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
   it("creates an epic from the active draft workspace instead of the global workspace", async () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [DRAFT_WORKSPACE_PATH],
       folderInfoByPath: {
         [DRAFT_WORKSPACE_PATH]: {
           path: DRAFT_WORKSPACE_PATH,
           name: "draft-workspace",
           repoIdentifier: { owner: "traycerai", repo: "draft-workspace" },
+          hostId: TEST_HOST_ID,
         },
       },
     });
-    useLandingDraftStore.getState().createDraft(null);
-    useWorkspaceFoldersStore.setState({
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    setGlobalWorkspaceFolders({
       folders: [GLOBAL_WORKSPACE_PATH],
       folderInfoByPath: {
         [GLOBAL_WORKSPACE_PATH]: {
           path: GLOBAL_WORKSPACE_PATH,
           name: "global-workspace",
           repoIdentifier: { owner: "traycerai", repo: "global-workspace" },
+          hostId: TEST_HOST_ID,
         },
       },
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
+        draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1047,6 +1645,965 @@ describe("useLandingComposerActions", () => {
     );
 
     queryClient.clear();
+  });
+
+  it("retires a started create at identity teardown without opening, navigating, or updating its handoff", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-retired", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    const handoffBefore = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(handoffBefore.status).toBe("pending");
+
+    draftRuntimeRegistry.teardown();
+    createGate.resolve({ initialTurnStarted: true });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useTabsStore.getState().items).toEqual([
+      { kind: "tab", id: tabItemId(draftRef), ref: draftRef },
+    ]);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+    const handoffAfter = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(handoffAfter.status).toBe("pending");
+    queryClient.clear();
+  });
+
+  it("retires a REJECTED create at identity teardown without marking its handoff failed", async () => {
+    // The mirror of the test above on the failure arm. A late rejection after
+    // teardown must not write `failed` back onto the torn-down identity: the
+    // bridge has already moved on, so the next identity would inherit a
+    // failure banner for a submission it never made.
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-retired-reject", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      Object.values(useInitialChatHandoffStore.getState().handoffs)[0].status,
+    ).toBe("pending");
+
+    draftRuntimeRegistry.teardown();
+    createGate.reject(new Error("epic.create rejected after teardown"));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      Object.values(useInitialChatHandoffStore.getState().handoffs)[0].status,
+    ).toBe("pending");
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+    queryClient.clear();
+  });
+
+  it("preserves a newer exact-draft snapshot and backgrounds the earlier create", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-post-intent-edit", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt("first request"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
+    if (runtime === null) throw new Error("expected draft runtime");
+    const newerContent = jsonContentForPrompt("newer unsent draft");
+    runtime.setSnapshot(newerContent, null);
+    runtime.flush();
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId)?.content,
+    ).toEqual(newerContent);
+    expect(useTabsStore.getState().stripOrder).toEqual([draftRef]);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith("Epic created in the background.");
+    queryClient.clear();
+  });
+
+  it("replaces the draft in place when only the caret moves after submit", async () => {
+    // Under the event-driven contract, `setEditable(!disabled, false)` no
+    // longer re-emits a document `update` on submit, and selection moves go
+    // through `setSelection` (no contentRevision bump). A caret-only path
+    // after submit must keep settlement current so the epic replaces the
+    // draft tab in place - not a background tab with the sent prompt left
+    // behind on the landing page.
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-editable-echo", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        // A fresh object per `getJSON()` call, exactly like the real editor.
+        editor: {
+          ...editorHandleForPrompt(SUBMITTED_PROMPT),
+          getJSON: () => jsonContentForPrompt(SUBMITTED_PROMPT),
+        },
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+
+    // Caret-only after submit - must not retire the placement.
+    const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
+    if (runtime === null) throw new Error("expected draft runtime");
+    runtime.setSelection({ from: 2, to: 2 });
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "tab",
+        ref: { kind: "epic" },
+      });
+    });
+    expect(useTabsStore.getState().items).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(toast.info).not.toHaveBeenCalledWith(
+      "Epic created in the background.",
+    );
+    queryClient.clear();
+  });
+
+  it("keeps foreground suppressed when focus was acquired after submit intent", async () => {
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-a", null);
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "right")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: draftA,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "left")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    // Focus away and back after intent cannot retroactively grant ownership.
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "right")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "left")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "split",
+        left: { kind: "tab", ref: { kind: "epic" } },
+        right: { kind: "tab", ref: refB },
+        focusedSide: "left",
+      });
+    });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("replaces a moved draft in its current split side without disturbing its partner or focus", async () => {
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-move-a", null);
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-move-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("move-split", refA, refB, "left")],
+      activeItemId: "move-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: draftA,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    useTabsStore.setState({
+      items: [splitItem("move-split", refB, refA, "right")],
+      activeItemId: "move-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refB, refA],
+    });
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "split",
+        id: "move-split",
+        left: { kind: "tab", ref: refB },
+        right: { kind: "tab", ref: { kind: "epic" } },
+        focusedSide: "right",
+        routeBackingSide: "right",
+      });
+    });
+    expect(useTabsStore.getState().stripOrder).toEqual([
+      refB,
+      expect.objectContaining({ kind: "epic" }),
+    ]);
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
+  it("settles simultaneous exact-draft submissions in their own split members and preserves newer focus", async () => {
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-dual-a", null);
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-dual-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("dual-split", refA, refB, "left")],
+      activeItemId: "dual-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const firstCreate = deferred<unknown>();
+    const secondCreate = deferred<unknown>();
+    let createCount = 0;
+    landingMocks.request.mockImplementation((method) => {
+      if (method !== "epic.create") return Promise.resolve({});
+      createCount += 1;
+      return createCount === 1 ? firstCreate.promise : secondCreate.promise;
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: draftA,
+        editor: editorHandleForPrompt("submit A"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => expect(createCount).toBe(1));
+    useTabsStore.setState({
+      items: [splitItem("dual-split", refA, refB, "right")],
+      activeItemId: "dual-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    act(() => {
+      result.current.submit({
+        draftId: draftB,
+        editor: editorHandleForPrompt("submit B"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => expect(createCount).toBe(2));
+
+    firstCreate.resolve({ roomInfo: null });
+    secondCreate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "split",
+        left: { kind: "tab", ref: { kind: "epic" } },
+        right: { kind: "tab", ref: { kind: "epic" } },
+        focusedSide: "right",
+      });
+    });
+    expect(useTabsStore.getState().activeItemId).toBe("dual-split");
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
+  it("uses the caller's terminal-agent draft in an A/B split, not the active sibling", async () => {
+    setWorkspace("/tmp/terminal-a", "terminal-a");
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("terminal-a", null);
+    setWorkspace("/tmp/terminal-b", "terminal-b");
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("terminal-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("terminal-split", refA, refB, "right")],
+      activeItemId: "terminal-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        draftA,
+      );
+    });
+    await waitFor(() => {
+      expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+    });
+    const createCall = landingMocks.request.mock.calls.find(
+      (call) => call[0] === "epic.create",
+    );
+    expect(createCall?.[1]).toMatchObject({
+      workspaces: [{ workspacePath: "/tmp/terminal-a" }],
+    });
+    expect(JSON.stringify(createCall?.[1])).not.toContain("/tmp/terminal-b");
+    expect(useTabsStore.getState().items[0]).toMatchObject({
+      kind: "split",
+      left: { kind: "tab", ref: { kind: "epic" } },
+      right: { kind: "tab", ref: refB },
+    });
+    queryClient.clear();
+  });
+
+  it("retains a staged intent when image preparation aborts before create", async () => {
+    setSingleWorkspace();
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
+    const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-precreate");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(stagingKey, stagedIntent);
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    const imageGate = deferred<Uint8Array | undefined>();
+    imageStoreMocks.getImageBytes.mockReturnValue(imageGate.promise);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage("retry-image", "retry"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    if (draftId === null) throw new Error("expected generated draft");
+    draftRuntimeRegistry.close(draftId);
+    imageGate.resolve(HELLO_BYTES);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(landingMocks.request).not.toHaveBeenCalled();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString({
+          surface: "landing",
+          hostId: TEST_HOST_ID,
+          draftId: null,
+        })
+      ],
+    ).toEqual(stagedIntent);
+    queryClient.clear();
+  });
+
+  it("retains a staged intent when the one-shot create rejects", async () => {
+    setSingleWorkspace();
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
+    const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-reject");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(stagingKey, stagedIntent);
+    landingMocks.request.mockRejectedValue(new Error("create rejected"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt("retry create"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString({
+          surface: "landing",
+          hostId: TEST_HOST_ID,
+          draftId: null,
+        })
+      ],
+    ).toEqual(stagedIntent);
+    queryClient.clear();
+  });
+
+  /**
+   * `isPending`, the field `landing-composer.tsx`'s `isSubmitting` now reads
+   * (`runtimeState.isSubmitting || actions.isPending`). Before that change
+   * the composer built its OWN `useEpicCreateForClient` /
+   * `useCreateTuiAgentForClient` pair and read `isPending` off THOSE - two
+   * observers nobody ever called `.mutate()` on, so the read was permanently
+   * `false` no matter what a create in flight was actually doing. These pins
+   * are on the hook that now backs it, exercising the REAL
+   * `useEpicCreateForClient(target.client)` mutation this suite's harness
+   * already wires (a deferred `landingMocks.request`, not a mocked
+   * `isPending`), so a regression back to a second, uncalled observer would
+   * fail this rather than pass silently the way it did before.
+   */
+  describe("isPending", () => {
+    it("is false before any submit", () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      expect(result.current.isPending).toBe(false);
+      queryClient.clear();
+    });
+
+    it("goes true while epic.create is in flight, and false again once it settles", async () => {
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+      expect(result.current.isPending).toBe(false);
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some(
+            (call) => call[0] === "epic.create",
+          ),
+        ).toBe(true);
+      });
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(true);
+      });
+
+      createGate.resolve({ roomInfo: null });
+
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(false);
+      });
+      queryClient.clear();
+    });
+
+    it("goes false again after epic.create REJECTS - a failed create must not strand the composer disabled", async () => {
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(true);
+      });
+
+      createGate.reject(new Error("create rejected"));
+
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(false);
+      });
+      queryClient.clear();
+    });
+  });
+
+  // `markEpicCreatedThisSession` fires once before `epic.create` (for the
+  // existence reconciler) and again in each flow's SUCCESS handler, to
+  // re-anchor `CREATE_RACE_WINDOW_MS` (2 minutes) on COMPLETION rather than on
+  // the request. `epic.create` can legitimately hold a 30s host RPC deadline
+  // (longer under retry), so anchoring on the request alone would let a slow
+  // create hand an already-expired seed to the session that opens right after
+  // it - reintroducing the exact NOT_FOUND race this marker exists to
+  // prevent. `Date` is faked (not the timer queue) so the clock is fully
+  // controllable while `waitFor`'s own real-timer polling - and every
+  // TanStack Query internal `setTimeout(0)` hop the mutation pipeline relies
+  // on - keeps working unmodified.
+  describe("create-race window re-anchoring on completion", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps the create-race window open 90s after a GUI-chat create resolves, even though the request itself took 60s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      setSingleWorkspace();
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The request is still pending - advance 60s before it resolves.
+      vi.advanceTimersByTime(60_000);
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+      });
+
+      // 90s after completion - 150s after the request, past the 2-minute
+      // window if it were still anchored there. Only the success handler's
+      // re-anchor keeps this seed alive.
+      vi.advanceTimersByTime(90_000);
+
+      expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
+      expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
+
+      queryClient.clear();
+    });
+
+    it("keeps the create-race window open 90s after a terminal-agent create resolves, even though the request itself took 60s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.selectTerminalAgent(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: "",
+            profileId: null,
+          },
+          null,
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The request is still pending - advance 60s before it resolves.
+      vi.advanceTimersByTime(60_000);
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+      });
+
+      // 90s after completion - 150s after the request, past the 2-minute
+      // window if it were still anchored there. Only the success handler's
+      // re-anchor keeps this seed alive.
+      vi.advanceTimersByTime(90_000);
+
+      expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
+      expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
+
+      queryClient.clear();
+    });
+
+    it("does not restore the create marker when the identity changed while the create was in flight", async () => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-initial",
+          userName: "Initial User",
+          email: "initial@example.com",
+        },
+        { userId: "user-initial", username: "initial" },
+        [],
+      );
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.selectTerminalAgent(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: "",
+            profileId: null,
+          },
+          null,
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The identity transition `auth-lifecycle-bridge` performs on
+      // sign-out / user-switch: swap in a DIFFERENT user and clear the
+      // session-created-epics markers, while the create is still in flight.
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-different",
+          userName: "Different User",
+          email: "different@example.com",
+        },
+        { userId: "user-different", username: "different" },
+        [],
+      );
+      clearSessionCreatedEpics();
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+      });
+
+      // The completion re-anchor must not restore the marker for the
+      // OUTGOING account: the dispatching identity no longer matches the
+      // identity live at completion.
+      expect(sessionCreatedEpicHostId(epicId)).toBeNull();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(false);
+
+      useAuthStore.getState().setSignedOut();
+      queryClient.clear();
+    });
   });
 });
 
@@ -1072,21 +2629,27 @@ function defaultToolbar() {
     reasoning: "high" as const,
     serviceTier: "" as const,
     permission: "supervised" as const,
-    agentMode: "regular" as const,
   };
 }
 
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
+    beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,
@@ -1171,14 +2734,59 @@ const HELLO_BYTES = new Uint8Array([104, 101, 108, 108, 111]);
 const HELLO_BASE64 = "aGVsbG8=";
 
 function setSingleWorkspace(): void {
-  useWorkspaceFoldersStore.setState({
-    folders: [WORKSPACE_PATH],
+  setWorkspace(WORKSPACE_PATH, "traycer");
+}
+
+function setWorkspace(path: string, name: string): void {
+  setGlobalWorkspaceFolders({
+    folders: [path],
     folderInfoByPath: {
-      [WORKSPACE_PATH]: {
-        path: WORKSPACE_PATH,
-        name: "traycer",
-        repoIdentifier: { owner: "traycerai", repo: "traycer" },
+      [path]: {
+        path,
+        name,
+        repoIdentifier: { owner: "traycerai", repo: name },
+        hostId: TEST_HOST_ID,
       },
     },
   });
+}
+
+// Typed as the real store item so a change to the split shape (a renamed
+// `routeBackingSide`, say) fails these fixtures instead of letting them keep
+// compiling against a layout contract that no longer exists.
+function splitItem(
+  id: string,
+  left: { readonly kind: "draft"; readonly id: string },
+  right: { readonly kind: "draft"; readonly id: string },
+  focusedSide: "left" | "right",
+): SplitStripItem {
+  return {
+    kind: "split" as const,
+    id,
+    left: { kind: "tab" as const, ref: left },
+    right: { kind: "tab" as const, ref: right },
+    focusedSide,
+    routeBackingSide: focusedSide,
+    leftRatio: 0.5,
+  };
+}
+
+function worktreeIntentFor(workspacePath: string, branchName: string) {
+  return {
+    entries: [
+      {
+        kind: "worktree" as const,
+        scripts: null,
+        workspacePath,
+        repoIdentifier: { owner: "traycerai", repo: "traycer" },
+        isPrimary: true,
+        branch: {
+          type: "new" as const,
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+    ],
+  };
 }

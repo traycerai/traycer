@@ -1,8 +1,15 @@
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import {
   buildGitDiffRepoSwitcherModel,
   type GitDiffRepoSelection,
@@ -14,8 +21,8 @@ import {
 } from "../git-diff-repo-switcher";
 
 function row(
-  overrides: Partial<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow {
+  overrides: Partial<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/repo",
@@ -30,6 +37,7 @@ function row(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
     ...overrides,
   };
 }
@@ -90,6 +98,9 @@ function roots(): ReadonlyArray<GitDiffRepoSwitcherRootInput> {
         workspacePath: "/setup-failed",
         repoIdentifier: { owner: "acme", repo: "setup-failed" },
         branch: "feature/setup",
+        setupState: "failed",
+        // Legacy hosts also sent this as a blocking reason. The client keeps
+        // it compatible as a visible, non-blocking warning.
         disabledReason: "setup_failed",
       }),
       fileChangeCount: null,
@@ -138,7 +149,7 @@ function referenceOnlySubmodules(): ReadonlyArray<GitSubmoduleSummary> {
 function DropdownHarness(props: {
   readonly selected: GitDiffRepoSelection;
   readonly submodules: ReadonlyArray<GitSubmoduleSummary>;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
 }) {
   const [query, setQuery] = useState("");
   const model = buildGitDiffRepoSwitcherModel({
@@ -187,13 +198,13 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
       screen.getByTestId("repo-switcher-trigger").textContent,
     ).not.toContain("vendor/traycer");
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain(`Path: /repo`);
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain("1 changed submodule");
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain("6 changed files");
     expect(
       screen.getByRole("button", {
@@ -260,7 +271,7 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     expect(trigger.getAttribute("data-unavailable")).toBe("true");
     expect(trigger.getAttribute("aria-invalid")).toBeNull();
     expect(trigger.getAttribute("aria-label")).toContain("unavailable");
-    expect(trigger.getAttribute("title")).toContain("Status: unavailable");
+    expect(tooltipTextNear(trigger)).toContain("Status: unavailable");
   });
 
   it("renders workspace rows only with stable path subtext", () => {
@@ -349,7 +360,7 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     ).toBeNull();
   });
 
-  it("renders disabled non-Git roots and blocks selection", () => {
+  it("keeps setup failure visible and selectable while blocking non-Git roots", () => {
     const onSelectRoot = vi.fn();
     render(
       <DropdownHarness
@@ -365,12 +376,19 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     );
     expect(disabled.getAttribute("aria-disabled")).toBe("true");
     expect(disabled.textContent).toContain("not git");
-    expect(setupFailed.getAttribute("aria-disabled")).toBe("true");
-    expect(setupFailed.textContent).toContain("failed");
+    expect(setupFailed.getAttribute("aria-disabled")).toBeNull();
+    const setupWarning = within(setupFailed).getByText("setup failed");
+    expect(setupWarning.getAttribute("data-status-tone")).toBe("warning");
+    expect(setupWarning.getAttribute("aria-label")).toContain(
+      "worktree is still usable",
+    );
 
     fireEvent.click(disabled);
-    fireEvent.click(setupFailed);
     expect(onSelectRoot).not.toHaveBeenCalled();
+    fireEvent.click(setupFailed);
+    expect(onSelectRoot).toHaveBeenCalledWith(
+      expect.objectContaining({ runningDir: "/setup-failed" }),
+    );
   });
 
   it("moves keyboard focus through workspace rows only", () => {

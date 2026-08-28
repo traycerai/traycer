@@ -1,5 +1,8 @@
 import { sessionWorkspaceSnapshotSchema } from "@traycer/protocol/common/workspace-association";
-import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaPreReasonix,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 
 /**
@@ -81,7 +84,9 @@ export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
  */
 export const agentSenderSchemaPreInReplyTo = z.object({
   type: z.literal("agent"),
-  harnessId: guiHarnessIdSchema,
+  // Pre-Reasonix pin: this copy is bound only to released `1.0–1.3`, so it
+  // carries the enum freeze as well as the `inReplyTo` freeze.
+  harnessId: guiHarnessIdSchemaPreReasonix,
   agentId: z.string(),
   displayName: z.string().nullable(),
   reply: z
@@ -101,6 +106,42 @@ export const userMessageSenderSchemaPreInReplyTo = z.discriminatedUnion(
   "type",
   [userSenderSchema, agentSenderSchemaPreInReplyTo],
 );
+
+/**
+ * Wire-freeze copy of the LIVE {@link agentSenderSchema} (it keeps `inReplyTo`)
+ * with `harnessId` pinned to the pre-Reasonix enum. Bound to the released
+ * `chat.subscribe@1.4`/`@1.5` lines, which shipped after `inReplyTo` but before
+ * Reasonix; `1.0–1.3` get the same pin on `agentSenderSchemaPreInReplyTo` above.
+ *
+ * This is the single highest-traffic leak of the harness enum: the host stamps
+ * every assistant row's sender straight off the chat's settings, so a Reasonix
+ * chat's persisted tree carries `harnessId: "reasonix"` on every assistant
+ * message, every chat event actor, every queue-item sender and every steer
+ * block. Field-for-field hand copy, NOT `.extend()` off the live shape.
+ */
+export const agentSenderSchemaPreReasonix = z.object({
+  type: z.literal("agent"),
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  agentId: z.string(),
+  displayName: z.string().nullable(),
+  reply: z
+    .discriminatedUnion("expectsReply", [
+      z.object({
+        expectsReply: z.literal(true),
+        responseId: z.string(),
+      }),
+      z.object({
+        expectsReply: z.literal(false),
+      }),
+    ])
+    .default({ expectsReply: false }),
+  inReplyTo: z.string().nullable().default(null),
+});
+
+export const userMessageSenderSchemaPreReasonix = z.discriminatedUnion("type", [
+  userSenderSchema,
+  agentSenderSchemaPreReasonix,
+]);
 
 export const activeSessionChainSchema = z.object({
   harnessId: guiHarnessIdSchema,
@@ -124,6 +165,24 @@ export const activeSessionChainSchema = z.object({
   profileId: z.string().nullable().default(null),
 });
 export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
+
+/**
+ * Wire-freeze copy of {@link activeSessionChainSchema} with `harnessId` pinned
+ * to the pre-Reasonix enum, bound to the frozen chat records for released
+ * `chat.subscribe@1.0–1.5`.
+ *
+ * Like the assistant sender and unlike `activeTurn`, this is PERMANENT rather
+ * than transient: it is set for every live session on a Reasonix chat and rides
+ * the snapshot frame, which is the first thing a subscriber receives.
+ * Field-for-field hand copy, NOT `.extend()` off the live shape.
+ */
+export const activeSessionChainSchemaPreReasonix = z.object({
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  coveredUntilMessageId: z.string().nullable().default(null),
+  profileId: z.string().nullable().default(null),
+});
 
 // `coveredUntilMessageId` (on every anchor below) records the last chat message
 // covered by the fake-context seed file written when this session's lineage root
@@ -160,6 +219,24 @@ export const claudeChatSessionAnchorSchema = z.object({
   sessionId: z.string(),
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   claudeMessageUuid: z.string(),
+  // Last transcript row uuid of this message's turn slice, recorded live from
+  // the stream (monotone last-write-wins) rather than re-derived later from
+  // the transcript. `claudeMessageUuid` marks where the turn STARTS; this
+  // marks where it ENDS, which is what a rewind fork must slice at. It is a
+  // recorded fact where the fallback boundary scan is a best-effort
+  // classification of raw rows - the host prefers the FURTHEST endpoint the
+  // two can prove, so a tail that went stale (e.g. a crash after later rows
+  // were written) extends rather than truncates. The scan itself is
+  // compact-proof: it runs over raw transcript rows, which a `/compact`
+  // re-root orphans from the parent chain but never removes from the file
+  // (only the pre-fix chain-walk view lost them). For a message closed out
+  // by a mid-turn steer this is CLEARED, not frozen - steer acceptance is
+  // stdin-enqueue, so rows in the enqueue window still belong to the
+  // previous message and only the scan (which stops at the steer's
+  // queued_command attachment row) knows the true boundary. `null`: cleared
+  // by hand-off, anchors persisted before this field existed, or a turn that
+  // died before any row streamed - all resolve via the scan alone.
+  turnTailUuid: z.string().nullable().default(null),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
   ...profileSnapshotFields,
@@ -380,6 +457,72 @@ export const piChatSessionAnchorSchema = z.object({
 });
 export type PiChatSessionAnchor = z.infer<typeof piChatSessionAnchorSchema>;
 
+// Hermes (ACP) resumes at session granularity only — `session/load` reloads
+// the whole ACP session, with no per-message truncation/fork point — so the
+// anchor carries just the ACP session id. `sessionId` is that ACP session id.
+export const hermesChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("hermes"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type HermesChatSessionAnchor = z.infer<
+  typeof hermesChatSessionAnchorSchema
+>;
+
+// omp (Oh My Pi, `omp --mode rpc`) resumes at session granularity only — the
+// RPC surface reloads a whole session id with no per-message truncation/fork
+// point — so the anchor carries just the session id. `sessionId` is the omp
+// RPC session id.
+export const ompChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("omp"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type OmpChatSessionAnchor = z.infer<typeof ompChatSessionAnchorSchema>;
+
+// Hugging Face runs on the bundled OpenCode engine (a synthetic
+// OpenAI-compatible provider pointed at `router.huggingface.co`), so its anchor
+// is opencode-shaped: the OpenCode session id plus the OpenCode user-message id
+// that turn started at, which is the truncation/fork point on resume.
+export const huggingFaceChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("huggingface"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  opencodeUserMessageId: z.string(),
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type HuggingFaceChatSessionAnchor = z.infer<
+  typeof huggingFaceChatSessionAnchorSchema
+>;
+
+// Reasonix (`reasonix acp`) resumes at session granularity only — `session/load`
+// reloads the whole ACP session and there is no per-message truncation/fork
+// point (`session/fork` is genuinely absent: it answers `-32601`) — so the
+// anchor carries just the ACP session id. `sessionId` is that ACP session id.
+export const reasonixChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("reasonix"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type ReasonixChatSessionAnchor = z.infer<
+  typeof reasonixChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -397,5 +540,85 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   ampChatSessionAnchorSchema,
   devinChatSessionAnchorSchema,
   piChatSessionAnchorSchema,
+  hermesChatSessionAnchorSchema,
+  ompChatSessionAnchorSchema,
+  huggingFaceChatSessionAnchorSchema,
+  reasonixChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
+
+// Wire-freeze copy of the LIVE anchor union minus the Reasonix variant, bound
+// to `chat.subscribe@1.6`. `1.0–1.5` take `chatSessionAnchorSchemaPreTurnTail`
+// below, which predates Reasonix for a different reason; this copy keeps every
+// live anchor field (including the Claude `turnTailUuid`) and drops only the
+// discriminant a released `1.6` client cannot decode.
+export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
+  "harnessId",
+  [
+    claudeChatSessionAnchorSchema,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+  ],
+);
+
+// ── Wire-freeze variant (pre-turnTailUuid) ──────────────────────────────────
+// Hand-frozen copy of the claude anchor from before `turnTailUuid` existed.
+// Bound (via `userMessageSchemaPreTurnTail` -> `messageSchemaPreImage`) to the
+// released `chat.subscribe@1.4`/`@1.5` snapshot trees, so those lines can never
+// observe the field. It also backed a `1.6` freeze until the release collapsed
+// that unreleased minor with `1.7`; `1.6` binds the live schemas now.
+// Field-for-field hand copy, NOT `.omit()`, so a future anchor field cannot
+// silently leak onto the frozen lines.
+export const claudeChatSessionAnchorSchemaPreTurnTail = z.object({
+  harnessId: z.literal("claude"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  claudeMessageUuid: z.string(),
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+
+// Non-claude variants reuse their live shapes: the pre-turn-tail freeze point
+// only concerns the claude anchor.
+export const chatSessionAnchorSchemaPreTurnTail = z.discriminatedUnion(
+  "harnessId",
+  [
+    claudeChatSessionAnchorSchemaPreTurnTail,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+  ],
+);

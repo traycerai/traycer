@@ -11,6 +11,7 @@ import {
   createServiceController,
   serviceLabelFor,
   type ServiceLabel,
+  type StopServiceOptions,
   type UninstallServiceOptions,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
@@ -25,7 +26,7 @@ export interface HostUninstallArgs {
 }
 
 export interface RuntimePurgeStopController {
-  stop(label: ServiceLabel): Promise<void>;
+  stop(label: ServiceLabel, options: StopServiceOptions): Promise<void>;
 }
 
 export interface HostUninstallServiceController extends RuntimePurgeStopController {
@@ -58,7 +59,7 @@ export async function stopServiceBeforeRuntimePurge(
   args: StopServiceBeforeRuntimePurgeArgs,
 ): Promise<boolean> {
   try {
-    await args.controller.stop(args.label);
+    await args.controller.stop(args.label, { force: false });
     return true;
   } catch (err) {
     args.logger.warn("Host uninstall service stop failed; preserving runtime", {
@@ -120,6 +121,7 @@ export async function runHostUninstall(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     const controller = deps.createServiceController();
     const label = serviceLabelFor(ctx.environment);
@@ -153,6 +155,7 @@ export async function runHostUninstall(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   const result = await deps.uninstallHost({
     environment: ctx.environment,
@@ -162,6 +165,7 @@ export async function runHostUninstall(
     environment: ctx.environment,
     serviceUninstalled,
     removedInstallDir: result.removedInstallDir,
+    removedStagedDir: result.removedStagedDir,
     purgedRuntime: result.purgedRuntime,
     hadInstallRecord: result.removedRecord !== null,
   });
@@ -169,6 +173,7 @@ export async function runHostUninstall(
     data: {
       removedRecord: result.removedRecord,
       removedInstallDir: result.removedInstallDir,
+      removedStagedDir: result.removedStagedDir,
       serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
     },

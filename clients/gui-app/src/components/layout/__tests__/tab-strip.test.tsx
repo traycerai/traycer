@@ -1,18 +1,30 @@
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
+import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
+import type { TabRef } from "@/stores/tabs/types";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import {
   ensureHistoryTab,
   ensureSettingsTab,
 } from "@/lib/commands/actions/open-system-tab";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  publishAgentActivity,
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
@@ -20,6 +32,8 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { phaseMigrationController } from "@/components/epic-tabs/phase-migration-controller";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -34,18 +48,109 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
+  within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../../../../__tests__/test-browser-apis";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+
+const notificationIndicatorTestState = vi.hoisted(
+  (): {
+    request: {
+      readonly epicIds: ReadonlyArray<string>;
+      readonly chatIds: ReadonlyArray<string>;
+    } | null;
+  } => ({ request: null }),
+);
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
-  useHostNotificationIndicators: () => ({
-    data: { epics: {}, chats: {} },
-    isPending: false,
-    isFetching: false,
-    error: null,
-    refetch: () => Promise.resolve(),
+  useHostNotificationIndicators: (request: {
+    readonly epicIds: ReadonlyArray<string>;
+    readonly chatIds: ReadonlyArray<string>;
+  }) => {
+    notificationIndicatorTestState.request = request;
+    return {
+      data: { epics: {}, chats: {} },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    };
+  },
+}));
+
+interface TestSetPinnedVariables {
+  readonly epicId: string;
+  readonly pinned: boolean;
+}
+
+interface TestSetPinnedOptions {
+  readonly onSuccess: () => void;
+}
+
+interface TestToastOptions {
+  readonly action: {
+    readonly label: string;
+    readonly onClick: () => void;
+  };
+}
+
+const pinTestState = vi.hoisted(
+  (): {
+    pinnedByEpicId: Map<string, boolean>;
+    pendingEpicIds: Set<string>;
+    mutate: Mock<
+      (
+        variables: TestSetPinnedVariables,
+        options: TestSetPinnedOptions | undefined,
+      ) => void
+    >;
+  } => ({
+    pinnedByEpicId: new Map(),
+    pendingEpicIds: new Set(),
+    mutate: vi.fn(),
   }),
+);
+
+const toastTestState = vi.hoisted(
+  (): {
+    messages: string[];
+    actionLabel: string | null;
+    undo: (() => void) | null;
+  } => ({
+    messages: [],
+    actionLabel: null,
+    undo: null,
+  }),
+);
+
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => pinTestState.pinnedByEpicId,
+}));
+
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+  usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: (message: string, options: TestToastOptions) => {
+      toastTestState.messages.push(message);
+      toastTestState.actionLabel = options.action.label;
+      toastTestState.undo = options.action.onClick;
+    },
+    error: vi.fn(),
+  },
 }));
 
 interface EpicTab {
@@ -71,6 +176,9 @@ const SPEC_B: EpicNodeRef = {
   hostId: "host-a",
 };
 const EPIC_C: EpicTab = { id: "e-c", name: "Gamma", draft: false };
+const PHASE_TAB_ID = "phase-tab";
+const PHASE_ID = "phase-1";
+const PARTNER_TAB_ID = "partner-tab";
 let queryClient: QueryClient;
 
 function epicFixture(index: number): EpicTab {
@@ -88,6 +196,30 @@ function openEpicFixture(tab: EpicTab): string {
   return tab.id;
 }
 
+function seedSplitHeaderTabs(): void {
+  openEpicFixture(EPIC_A);
+  openEpicFixture(EPIC_B);
+  const left: TabRef = { kind: "epic", id: EPIC_A.id };
+  const right: TabRef = { kind: "epic", id: EPIC_B.id };
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      {
+        kind: "split",
+        id: "split-a",
+        left: { kind: "tab", ref: left },
+        right: { kind: "tab", ref: right },
+        focusedSide: "left",
+        routeBackingSide: "left",
+        leftRatio: 0.5,
+      },
+    ],
+    activeItemId: "split-a",
+    stripOrder: [left, right],
+    systemTabs: { history: null, settings: null },
+  });
+}
+
 function canvasTabIds(tabId: string): ReadonlyArray<string> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId] ?? null;
   if (canvas === null) return [];
@@ -101,8 +233,33 @@ function registerEpicHeader(
   permissionRole: PermissionRole,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, [], []),
+    buildHeaderEpicHandle(tab, permissionRole, []),
   );
+}
+
+/**
+ * Agent activity now arrives on the per-user notification room, so the epic
+ * handle only supplies the live projection (the liveness filter) while the
+ * working set is published as host presence.
+ */
+const headerActivityByEpic = new Map<string, ReadonlyArray<string>>();
+
+function publishHeaderActivity(
+  tab: EpicTab,
+  activeAgentIds: ReadonlyArray<string>,
+): void {
+  // Accumulate: one host publishes ONE entry carrying every epic it is working
+  // on, so republishing only the latest tab would silently clear the activity
+  // an earlier call established.
+  headerActivityByEpic.set(tab.id, activeAgentIds);
+  const byEpic: Record<
+    string,
+    { working: ReadonlyArray<string>; turn: ReadonlyArray<string> }
+  > = {};
+  for (const [epicId, ids] of headerActivityByEpic) {
+    byEpic[epicId] = { working: ids, turn: ids };
+  }
+  publishAgentActivity([{ hostId: "host-a", byEpic }]);
 }
 
 function registerActiveEpicHeader(
@@ -111,8 +268,9 @@ function registerActiveEpicHeader(
   activeAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds, activeAgentIds),
+    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds),
   );
+  publishHeaderActivity(tab, activeAgentIds);
 }
 
 function registerLiveEpicHeader(
@@ -121,24 +279,29 @@ function registerLiveEpicHeader(
   liveAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, [], liveAgentIds),
+    buildHeaderEpicHandle(tab, permissionRole, liveAgentIds),
   );
 }
 
+/**
+ * Presence naming an agent the epic's live projection no longer holds. The
+ * session IS registered, so its (empty) projection is authoritative and the
+ * liveness filter must drop the stale id.
+ */
 function registerStaleActiveEpicHeader(
   tab: EpicTab,
   permissionRole: PermissionRole,
   activeAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds, []),
+    buildHeaderEpicHandle(tab, permissionRole, []),
   );
+  publishHeaderActivity(tab, activeAgentIds);
 }
 
 function buildHeaderEpicHandle(
   tab: EpicTab,
   permissionRole: PermissionRole,
-  activeAgentIds: ReadonlyArray<string>,
   liveAgentIds: ReadonlyArray<string>,
 ): OpenEpicStoreHandle {
   const liveChatsById = Object.fromEntries(
@@ -162,7 +325,6 @@ function buildHeaderEpicHandle(
     epic: {
       title: tab.name,
       updatedAt: 1,
-      isTitleEditedByUser: false,
     },
     chats: {
       byId: liveChatsById,
@@ -180,15 +342,7 @@ function buildHeaderEpicHandle(
     subscribe: () => () => undefined,
   });
   const awareness = {
-    getStates: () =>
-      new Map<number, Record<string, unknown>>([
-        [
-          1,
-          {
-            [AGENT_WORKING_AWARENESS_FIELD]: activeAgentIds,
-          },
-        ],
-      ]),
+    getStates: () => new Map<number, Record<string, unknown>>(),
     on: () => undefined,
     off: () => undefined,
   };
@@ -199,18 +353,28 @@ function buildHeaderEpicHandle(
     awareness: awareness as never,
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
+    hotArtifactRoomIdsForTests: () => [],
   };
 }
 
+/** Chat sessions are keyed by (epic, chat, host); these fixtures all live on
+ *  one host, so the header's aggregate reads see them all. */
+const CHAT_SESSION_HOST = "host-1";
+
 function registerChatSession(epicId: string, chatId: string): void {
   __getChatSessionRegistryForTests().acquire(
-    epicId,
-    chatId,
-    `test:${epicId}:${chatId}`,
+    {
+      epicId,
+      chatId,
+      hostId: CHAT_SESSION_HOST,
+      scopeKey: `test:${epicId}:${chatId}`,
+    },
     (factoryEpicId, factoryChatId) =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId: factoryEpicId,
         chatId: factoryChatId,
         userId: null,
@@ -219,6 +383,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => undefined,
         }),
       }),
@@ -226,6 +391,10 @@ function registerChatSession(epicId: string, chatId: string): void {
 }
 
 function resetStores(): void {
+  // This unit router omits the permanent root bridge. Production releases the
+  // controller's hydration gate through that bridge before strip commands run.
+  __resetTabNavigationControllerForTesting();
+  phaseMigrationController.resetForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -235,6 +404,55 @@ function resetStores(): void {
   });
   __getOpenEpicRegistryForTests().disposeAll();
   __getChatSessionRegistryForTests().disposeAll();
+}
+
+function seedPhaseMigrationHeaderTabs(): void {
+  useEpicCanvasStore.setState({
+    tabsById: {
+      [PHASE_TAB_ID]: {
+        tabId: PHASE_TAB_ID,
+        epicId: PHASE_ID,
+        name: "Legacy Phase",
+        surfaceMode: { kind: "phase-migration", phaseId: PHASE_ID },
+      },
+      [PARTNER_TAB_ID]: {
+        tabId: PARTNER_TAB_ID,
+        epicId: "epic-partner",
+        name: "Partner",
+      },
+    },
+    canvasByTabId: {
+      [PHASE_TAB_ID]: createEmptyCanvas(),
+      [PARTNER_TAB_ID]: createEmptyCanvas(),
+    },
+    openTabOrder: [PHASE_TAB_ID, PARTNER_TAB_ID],
+    activeTabId: PHASE_TAB_ID,
+    mostRecentTabIdByEpicId: {
+      [PHASE_ID]: PHASE_TAB_ID,
+      "epic-partner": PARTNER_TAB_ID,
+    },
+  });
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      {
+        kind: "tab",
+        id: `tab:epic:${PHASE_TAB_ID}`,
+        ref: { kind: "epic", id: PHASE_TAB_ID },
+      },
+      {
+        kind: "tab",
+        id: `tab:epic:${PARTNER_TAB_ID}`,
+        ref: { kind: "epic", id: PARTNER_TAB_ID },
+      },
+    ],
+    activeItemId: `tab:epic:${PHASE_TAB_ID}`,
+    stripOrder: [
+      { kind: "epic", id: PHASE_TAB_ID },
+      { kind: "epic", id: PARTNER_TAB_ID },
+    ],
+    systemTabs: { history: null, settings: null },
+  });
 }
 
 function buildRouter(initialPath: string) {
@@ -323,12 +541,29 @@ describe("<TabStrip />", () => {
       },
     });
     window.localStorage.clear();
+    pinTestState.pinnedByEpicId.clear();
+    pinTestState.pendingEpicIds.clear();
+    pinTestState.mutate.mockReset();
+    pinTestState.mutate.mockImplementation(
+      (
+        _variables: TestSetPinnedVariables,
+        options: TestSetPinnedOptions | undefined,
+      ) => options?.onSuccess(),
+    );
+    toastTestState.messages.length = 0;
+    toastTestState.actionLabel = null;
+    toastTestState.undo = null;
+    notificationIndicatorTestState.request = null;
+    __resetAppLocalNotificationsStoreForTests();
     resetStores();
   });
 
   afterEach(() => {
     cleanup();
     queryClient.clear();
+    headerActivityByEpic.clear();
+    resetAgentActivity();
+    __resetAppLocalNotificationsStoreForTests();
     resetStores();
   });
 
@@ -341,6 +576,57 @@ describe("<TabStrip />", () => {
     expect(await screen.findByTestId("tab-epic-e-a")).toBeDefined();
     expect(screen.getByTestId("tab-epic-e-b")).toBeDefined();
     expect(screen.getByTestId("tab-new")).toBeDefined();
+  });
+
+  it("queries every open task tab without requiring a live Epic session", async () => {
+    const epics = Array.from({ length: 6 }, (_value, index) =>
+      epicFixture(index),
+    );
+    for (const epic of epics) openEpicFixture(epic);
+    const router = buildRouter(`/epics/${epics[0].id}/${epics[0].id}`);
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId(`tab-epic-${epics[5].id}`)).toBeDefined();
+    await waitFor(() => {
+      expect(notificationIndicatorTestState.request?.epicIds).toHaveLength(6);
+      expect(notificationIndicatorTestState.request?.epicIds).toEqual(
+        epics.map((epic) => epic.id),
+      );
+      expect(notificationIndicatorTestState.request?.chatIds).toEqual([]);
+    });
+  });
+
+  it("updates a Phase migration close button without rebuilding its unlocked partner", async () => {
+    seedPhaseMigrationHeaderTabs();
+    phaseMigrationController.attach(PHASE_TAB_ID, PHASE_ID, () => undefined);
+    const pendingPartner = getHeaderTabs().find(
+      (tab) => tab.id === PARTNER_TAB_ID,
+    );
+    const router = buildRouter(`/epics/${PHASE_ID}/${PHASE_TAB_ID}`);
+    render(<RouterProvider router={router} />);
+
+    const closeButton = await screen.findByTestId(
+      `tab-close-epic-${PHASE_TAB_ID}`,
+    );
+    expect(closeButton.hasAttribute("disabled")).toBe(true);
+
+    act(() =>
+      phaseMigrationController.fail(PHASE_TAB_ID, PHASE_ID, 1, "failed"),
+    );
+    await waitFor(() =>
+      expect(closeButton.hasAttribute("disabled")).toBe(false),
+    );
+    expect(getHeaderTabs().find((tab) => tab.id === PARTNER_TAB_ID)).toBe(
+      pendingPartner,
+    );
+
+    act(() => phaseMigrationController.retry(PHASE_TAB_ID));
+    await waitFor(() =>
+      expect(closeButton.hasAttribute("disabled")).toBe(true),
+    );
+    expect(getHeaderTabs().find((tab) => tab.id === PARTNER_TAB_ID)).toBe(
+      pendingPartner,
+    );
   });
 
   it("caps header tab frames while preserving the shrink floor", async () => {
@@ -396,6 +682,217 @@ describe("<TabStrip />", () => {
     expect(hoverChrome?.querySelector("svg")).toBeNull();
   });
 
+  it("separates a split group from the next strip item like any other tab", async () => {
+    // A split group is one strip item, so the separator rule ("hairline unless
+    // this item or the next one is active") has to apply to it too. It didn't:
+    // the rule was restated inside the plain-tab branch only, so a group drew
+    // no trailing hairline and the group-to-tab boundary read as a blank gap.
+    const tabD = epicFixture(4);
+    const tabE = epicFixture(5);
+    for (const epic of [EPIC_A, EPIC_B, EPIC_C, tabD, tabE]) {
+      openEpicFixture(epic);
+    }
+    const refA: TabRef = { kind: "epic", id: EPIC_A.id };
+    const refB: TabRef = { kind: "epic", id: EPIC_B.id };
+    const refC: TabRef = { kind: "epic", id: EPIC_C.id };
+    const refD: TabRef = { kind: "epic", id: tabD.id };
+    const refE: TabRef = { kind: "epic", id: tabE.id };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-a",
+          left: { kind: "tab", ref: refA },
+          right: { kind: "tab", ref: refB },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: tabItemId(refC), ref: refC },
+        { kind: "tab", id: tabItemId(refD), ref: refD },
+        { kind: "tab", id: tabItemId(refE), ref: refE },
+      ],
+      // Last item active, so the group and C both have an inactive successor -
+      // the only arrangement that exercises the positive and both negative
+      // branches of the rule in one render.
+      activeItemId: tabItemId(refE),
+      stripOrder: [refA, refB, refC, refD, refE],
+      systemTabs: { history: null, settings: null },
+    });
+    const router = buildRouter(`/epics/${tabE.id}/${tabE.id}`);
+    render(<RouterProvider router={router} />);
+
+    const group = await screen.findByTestId("split-tab-group-split-a");
+    // Exactly one: the group's own trailing hairline. The two halves inside
+    // must not draw their own, or a group would read as two tabs.
+    expect(within(group).queryAllByTestId("header-tab-separator")).toHaveLength(
+      1,
+    );
+    // Distinct from the unconditional divider between the halves - a fix that
+    // reused that divider would leave the group-to-tab boundary still blank.
+    expect(screen.getByTestId("split-tab-divider-split-a")).toBeDefined();
+    expect(
+      screen.getByTestId("split-tab-group-underline-left-split-a").className,
+    ).toContain("bg-primary");
+    expect(
+      screen.getByTestId("split-tab-group-underline-right-split-a").className,
+    ).toContain("bg-primary");
+
+    const plainC = screen.getByTestId(`tab-epic-${EPIC_C.id}`);
+    const plainD = screen.getByTestId(`tab-epic-${tabD.id}`);
+    const plainE = screen.getByTestId(`tab-epic-${tabE.id}`);
+    expect(within(plainC).queryByTestId("header-tab-separator")).not.toBeNull();
+    // Suppressed next to the active tab, and after the last item.
+    expect(within(plainD).queryByTestId("header-tab-separator")).toBeNull();
+    expect(within(plainE).queryByTestId("header-tab-separator")).toBeNull();
+  });
+
+  it("keeps the separator between adjacent split groups when one is active", async () => {
+    const tabD = epicFixture(4);
+    for (const epic of [EPIC_A, EPIC_B, EPIC_C, tabD]) {
+      openEpicFixture(epic);
+    }
+    const refA: TabRef = { kind: "epic", id: EPIC_A.id };
+    const refB: TabRef = { kind: "epic", id: EPIC_B.id };
+    const refC: TabRef = { kind: "epic", id: EPIC_C.id };
+    const refD: TabRef = { kind: "epic", id: tabD.id };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-a",
+          left: { kind: "tab", ref: refA },
+          right: { kind: "tab", ref: refB },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        {
+          kind: "split",
+          id: "split-b",
+          left: { kind: "tab", ref: refC },
+          right: { kind: "tab", ref: refD },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-a",
+      stripOrder: [refA, refB, refC, refD],
+      systemTabs: { history: null, settings: null },
+    });
+    const router = buildRouter(`/epics/${EPIC_A.id}/${EPIC_A.id}`);
+    render(<RouterProvider router={router} />);
+
+    const firstGroup = await screen.findByTestId("split-tab-group-split-a");
+    expect(
+      within(firstGroup).queryByTestId("header-tab-separator"),
+    ).not.toBeNull();
+    expect(
+      within(screen.getByTestId("split-tab-group-split-b")).queryByTestId(
+        "header-tab-separator",
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps split arrangement commands flat in the main tab context menu", async () => {
+    seedSplitHeaderTabs();
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+
+    const separate = await screen.findByTestId("tab-separate-split-epic-e-a");
+    expect(screen.queryByTestId("tab-arrange-split-epic-e-a")).toBeNull();
+    expect(separate.parentElement?.dataset.slot).toBe("context-menu-content");
+    expect(screen.getByTestId("tab-close-left-epic-e-a")).not.toBeNull();
+    expect(screen.getByTestId("tab-close-right-epic-e-a")).not.toBeNull();
+    expect(screen.getByTestId("tab-swap-split-epic-e-a")).not.toBeNull();
+  });
+
+  it("shows leading quick split actions without shrinking the merged titles", async () => {
+    seedSplitHeaderTabs();
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    // Purely cosmetic geometry (frame width, underline thickness, member
+    // padding) is not asserted via Tailwind class strings - those break on
+    // any restyle without proving behavior. The focus semantics that matter
+    // are the data-focused-side/data-focused attributes and bg-primary state
+    // asserted below.
+    await screen.findByTestId("split-tab-group-split-a");
+    const trigger = screen.getByTestId("split-quick-actions-split-a");
+    const indicator = screen.getByTestId("split-focus-indicator-split-a");
+    const controlUnderline = screen.getByTestId(
+      "split-tab-group-underline-control-split-a",
+    );
+    const leftUnderline = screen.getByTestId(
+      "split-tab-group-underline-left-split-a",
+    );
+    const rightUnderline = screen.getByTestId(
+      "split-tab-group-underline-right-split-a",
+    );
+    const leftTab = screen.getByTestId("tab-epic-e-a");
+    const rightTab = screen.getByTestId("tab-epic-e-b");
+    const leftPane = indicator.querySelector('[data-split-pane="left"]');
+    const rightPane = indicator.querySelector('[data-split-pane="right"]');
+    expect(controlUnderline.className).toContain("bg-primary");
+    expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
+    expect(leftUnderline.className).not.toContain("bg-primary");
+    expect(rightUnderline.className).toContain("bg-primary");
+    expect(
+      within(leftTab).getByTestId("tab-chrome-center").style.borderTopColor,
+    ).toBe("var(--color-primary)");
+    expect(within(rightTab).queryByTestId("tab-chrome-center")).toBeNull();
+    expect(screen.queryByTestId("split-member-focus-accent")).toBeNull();
+    expect(trigger.className).toContain("text-blue-600");
+    expect(
+      screen.queryByTestId("split-quick-actions-status-split-a"),
+    ).toBeNull();
+    expect(trigger.getAttribute("aria-label")).toContain("left view focused");
+    expect(indicator.dataset.focusedSide).toBe("left");
+    expect(leftPane?.getAttribute("data-focused")).toBe("true");
+    expect(rightPane?.getAttribute("data-focused")).toBe("false");
+    expect(leftPane?.getAttribute("width")).toBe("8");
+    expect(rightPane?.getAttribute("width")).toBe("8");
+    expect(leftPane?.getAttribute("fill")).toBe("currentColor");
+    expect(rightPane?.getAttribute("fill")).toBe("none");
+
+    act(() => {
+      useTabsStore
+        .getState()
+        .focusSplitSide({ splitId: "split-a", side: "right" });
+    });
+
+    expect(trigger.getAttribute("aria-label")).toContain("right view focused");
+    expect(indicator.dataset.focusedSide).toBe("right");
+    expect(leftPane?.getAttribute("data-focused")).toBe("false");
+    expect(rightPane?.getAttribute("data-focused")).toBe("true");
+    expect(leftPane?.getAttribute("width")).toBe("8");
+    expect(rightPane?.getAttribute("width")).toBe("8");
+    expect(leftPane?.getAttribute("fill")).toBe("none");
+    expect(rightPane?.getAttribute("fill")).toBe("currentColor");
+    expect(leftUnderline.className).toContain("bg-primary");
+    expect(rightUnderline.className).not.toContain("bg-primary");
+    expect(leftTab.className).toContain("px-1.5");
+    expect(rightTab.className).toContain("px-5");
+    expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
+    expect(
+      within(rightTab).getByTestId("tab-chrome-center").style.borderTopColor,
+    ).toBe("var(--color-primary)");
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByTestId("split-quick-swap-epic-e-a"));
+
+    expect(useTabsStore.getState().items[0]).toMatchObject({
+      kind: "split",
+      left: { kind: "tab", ref: { kind: "epic", id: EPIC_B.id } },
+      right: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    });
+  });
+
   it("keeps the new-tab button after the tabs while preserving overflow", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
@@ -425,6 +922,23 @@ describe("<TabStrip />", () => {
     expect(newTabButton.className).toContain("shrink-0");
   });
 
+  it("shows the New task shortcut on the trailing button", async () => {
+    openEpicFixture(EPIC_A);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const newTaskButton = await screen.findByRole("button", {
+      name: "Start Page",
+    });
+    expect(
+      anyTooltipHasText(`New task (${formatChordForDisplay("mod+n")})`),
+    ).toBe(true);
+    expect(
+      anyTooltipHasText(`New task (${formatChordForDisplay("mod+t")})`),
+    ).toBe(false);
+    expect(newTaskButton).toBeDefined();
+  });
+
   it("scrolls the active header tab into view after any route activation", async () => {
     const scrollTargets: Element[] = [];
     const scrollSpy = vi
@@ -436,6 +950,7 @@ describe("<TabStrip />", () => {
       openEpicFixture(EPIC_A);
       openEpicFixture(EPIC_B);
       openEpicFixture(EPIC_C);
+      useTabsStore.setState({ activeItemId: "tab:epic:e-a" });
       const router = buildRouter("/epics/e-a/e-a");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("tab-epic-e-a");
@@ -455,6 +970,7 @@ describe("<TabStrip />", () => {
           focusTileInstanceId: undefined,
         },
       });
+      useTabsStore.setState({ activeItemId: "tab:epic:e-c" });
       await flushNav();
 
       const activeTab = screen.getByTestId("tab-epic-e-c");
@@ -492,6 +1008,48 @@ describe("<TabStrip />", () => {
     ).toBeDefined();
   });
 
+  it("shows the chat error glyph on a task tab when chat and terminal failures coexist", async () => {
+    openEpicFixture(EPIC_A);
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "chat-failure",
+      updatedAt: 1,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-1",
+      payload: { kind: "chat", epicId: EPIC_A.id, chatId: "chat-1" },
+      message: "Chat failed",
+      detail: null,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-failure",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-1",
+      payload: {
+        kind: "terminal",
+        epicId: EPIC_A.id,
+        terminalId: "terminal-1",
+        tabId: EPIC_A.id,
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance-1",
+      },
+      message: "Terminal failed",
+      detail: null,
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const indicator = await screen.findByTestId(
+      `header-tab-failure-${EPIC_A.id}`,
+    );
+    expect(indicator.getAttribute("class")).toContain(
+      "lucide-message-square-x",
+    );
+    expect(screen.queryByTestId(`header-tab-done-${EPIC_A.id}`)).toBeNull();
+  });
+
   it("shows a task activity spinner while any chat is active in the epic", async () => {
     openEpicFixture(EPIC_A);
     registerActiveEpicHeader(EPIC_A, "owner", ["chat-active"]);
@@ -510,6 +1068,7 @@ describe("<TabStrip />", () => {
     const handle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,
       "chat-background",
+      CHAT_SESSION_HOST,
     );
     if (handle === null) throw new Error("expected chat session handle");
     handle.store.setState({
@@ -530,13 +1089,14 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    expect(
-      await screen.findByTestId(`header-tab-background-activity-${EPIC_A.id}`),
-    ).toBeDefined();
+    const backgroundIcon = await screen.findByTestId(
+      `header-tab-background-activity-${EPIC_A.id}`,
+    );
+    expect(backgroundIcon.getAttribute("class")).toContain(
+      "lucide-message-square-clock",
+    );
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
-    expect(
-      screen.queryByTitle("Background tasks running — task idle"),
-    ).not.toBeNull();
+    expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
 
   it("prioritizes turn activity over background work from another chat", async () => {
@@ -547,10 +1107,12 @@ describe("<TabStrip />", () => {
     const backgroundHandle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,
       "chat-background",
+      CHAT_SESSION_HOST,
     );
     const turnHandle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,
       "chat-turn",
+      CHAT_SESSION_HOST,
     );
     if (backgroundHandle === null || turnHandle === null) {
       throw new Error("expected chat session handles");
@@ -596,6 +1158,7 @@ describe("<TabStrip />", () => {
     const handle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,
       "chat-waiting",
+      CHAT_SESSION_HOST,
     );
     if (handle === null) throw new Error("expected chat session handle");
     handle.store.setState({
@@ -614,6 +1177,7 @@ describe("<TabStrip />", () => {
     const handle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,
       "chat-permission",
+      CHAT_SESSION_HOST,
     );
     if (handle === null) throw new Error("expected chat session handle");
     handle.store.setState({
@@ -655,6 +1219,58 @@ describe("<TabStrip />", () => {
 
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
     expect(screen.queryByText("Edit Title")).toBeNull();
+    expect(screen.getByText("Pin Task in History")).toBeDefined();
+  });
+
+  it("pins a task from its tab context menu and offers Undo", async () => {
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, false);
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    fireEvent.click(await screen.findByText("Pin Task in History"));
+
+    expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+    const firstCall = pinTestState.mutate.mock.calls[0];
+    expect(firstCall[0]).toEqual({ epicId: EPIC_A.id, pinned: true });
+    expect(typeof firstCall[1]?.onSuccess).toBe("function");
+    expect(toastTestState.messages).toEqual([
+      "Pinned “Alpha” to the top of History",
+    ]);
+    expect(toastTestState.actionLabel).toBe("Undo");
+    expect(toastTestState.undo).not.toBeNull();
+
+    toastTestState.undo?.();
+
+    expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
+      epicId: EPIC_A.id,
+      pinned: false,
+    });
+  });
+
+  it("shows the inverse task-history action for a pinned task", async () => {
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, true);
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+
+    expect(await screen.findByText("Unpin Task in History")).toBeDefined();
+  });
+
+  it("does not expose the task-history pin action on system tabs", async () => {
+    ensureHistoryTab();
+    const router = buildRouter("/epics");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-history-history"));
+
+    expect(screen.queryByText("Pin Task in History")).toBeNull();
+    expect(screen.queryByText("Unpin Task in History")).toBeNull();
   });
 
   it("delays leader digit badges on header tabs", async () => {
@@ -906,6 +1522,9 @@ describe("<TabStrip />", () => {
     if (secondTabId === null || thirdTabId === null) {
       throw new Error("Expected duplicate tabs");
     }
+    useTabsStore.setState({
+      activeItemId: `tab:epic:${secondTabId}`,
+    });
     const router = buildRouter(`/epics/epic-shared/${secondTabId}`);
     render(<RouterProvider router={router} />);
 

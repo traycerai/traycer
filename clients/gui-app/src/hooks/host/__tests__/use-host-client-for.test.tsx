@@ -1,28 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
 }));
 
+// `useHostClientFor` builds a requester for an EXPLICITLY named host, so it
+// reads the spine (redesign P2.1) - never the effective host's own requester.
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => {
+  useHostRuntimeClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
     }
     return globalClientRef.value;
   },
+}));
+
+// The hook now reads `runnerHost.authnBaseUrl` (for the remote transport's
+// attach-grant minting). Local targets never touch it; stub the minimum shape.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
 }));
 
 import {
@@ -62,17 +70,24 @@ class RetryTestWebSocket {
   }
 }
 
+// The SPINE `useHostRuntimeClient` hands back - never bound to any one host
+// (redesign P4.2 deleted the active slot `.bind()` used to fill), so it must
+// resolve every entry a test builds a transient client for on its own.
+const knownHostEntries = new Map<string, HostDirectoryEntry>([
+  [mockLocalHostEntry.hostId, mockLocalHostEntry],
+]);
+
 function buildGlobalClient(withContext: boolean): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) => knownHostEntries.get(hostId) ?? null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {},
     }),
   });
-  client.bind(mockLocalHostEntry);
   if (withContext) {
     client.setRequestContext(
       createRequestContextFixture({
@@ -121,9 +136,10 @@ describe("useHostClientFor", () => {
     // Auth is per-user, not per-host: the transient client reuses the
     // global client's request context verbatim.
     expect(client?.getRequestContext()).toBe(globalClient.getRequestContext());
-    // Building a transient client for host B must not move the global
-    // client off its own active host (no global side effect).
-    expect(globalClient.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
+    // Building a transient client for host B must not give the global
+    // SPINE an active host of its own (no global side effect) - it stays
+    // unbound (redesign P4.2 deleted the active slot `.bind()` used to set).
+    expect(globalClient.getActiveHostId()).toBeNull();
   });
 
   it("memoizes for a stable target and rebuilds for a different host", () => {
@@ -144,7 +160,7 @@ describe("useHostClientFor", () => {
     expect(result.current?.getActiveHostId()).toBe("host-c");
   });
 
-  it("keeps every retry pinned to the original target after the default host changes", async () => {
+  it("routes through the provider client instead of creating a transient messenger", async () => {
     vi.stubGlobal("WebSocket", RetryTestWebSocket);
     const hostA: HostDirectoryEntry = {
       ...mockLocalHostEntry,
@@ -156,36 +172,26 @@ describe("useHostClientFor", () => {
       hostId: "host-b",
       websocketUrl: "ws://host-b/rpc",
     };
+    knownHostEntries.set(hostA.hostId, hostA);
     const globalClient = buildGlobalClient(true);
-    globalClient.bind(hostA);
     const client = buildTransientHostClient(globalClient, hostA);
     expect(client).not.toBeNull();
     if (client === null) {
       throw new Error("Expected a host-pinned transient client");
     }
 
+    // Host A leaves the directory and B takes its place. This used to be
+    // spelled `globalClient.bind(hostB)`, which made A unresolvable only as a
+    // SIDE EFFECT of the slot moving - the staleness under test was always the
+    // directory's answer, not the binding's. P4.2 deleted the slot, so the
+    // fixture states the fact directly: `captureAuthority` re-resolves this
+    // requester's entry and refuses one the directory no longer has.
+    knownHostEntries.delete(hostA.hostId);
+    knownHostEntries.set(hostB.hostId, hostB);
     const request = client.request("terminal.kill", { sessionId: "session-a" });
-    await waitFor(() => {
-      expect(RetryTestWebSocket.instances).toHaveLength(1);
-    });
-    globalClient.bind(hostB);
-    RetryTestWebSocket.instances[0]?.emitError();
-
-    await waitFor(() => {
-      expect(RetryTestWebSocket.instances).toHaveLength(2);
-    });
-    RetryTestWebSocket.instances[1]?.emitError();
-
-    await waitFor(() => {
-      expect(RetryTestWebSocket.instances).toHaveLength(3);
-    });
-    RetryTestWebSocket.instances[2]?.emitError();
-
-    await expect(request).rejects.toBeInstanceOf(RetryableTransportError);
-    expect(RetryTestWebSocket.instances.map((socket) => socket.url)).toEqual([
-      "ws://host-a/rpc",
-      "ws://host-a/rpc",
-      "ws://host-a/rpc",
-    ]);
+    await expect(request).rejects.toBeInstanceOf(
+      StaleHostBindingAuthorityError,
+    );
+    expect(RetryTestWebSocket.instances).toHaveLength(0);
   });
 });

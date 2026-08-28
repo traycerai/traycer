@@ -118,7 +118,7 @@ function DesktopZoomIndicator(props: {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 8, scale: 0.98 }}
           transition={INDICATOR_TRANSITION}
-          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 items-center gap-2 text-popover-foreground"
+          className="fixed bottom-safe-bottom-gutter left-safe-center-x z-[70] flex -translate-x-1/2 items-center gap-2 text-popover-foreground"
           role="status"
           aria-live="polite"
           data-testid="desktop-zoom-indicator"

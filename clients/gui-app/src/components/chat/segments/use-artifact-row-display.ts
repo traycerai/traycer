@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CheckpointFileOperation } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { useArtifactById, useOpenEpicId } from "@/lib/epic-selectors";
@@ -34,7 +34,7 @@ export function useArtifactRowDisplay(input: {
 }): ArtifactRowDisplay {
   const live = useArtifactById(input.artifactId);
   const epicId = useOpenEpicId();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useTabHostId();
   const tileNavigation = useEpicTileNavigation();
 
   const displayKind: EpicArtifactKind =
@@ -44,10 +44,10 @@ export function useArtifactRowDisplay(input: {
     nonEmpty(input.fallbackTitle) ??
     EPIC_NODE_LABELS[displayKind];
   const isDeleted = input.operation === "delete";
-  const canOpen = live !== null && activeHostId !== null && !isDeleted;
+  const canOpen = live !== null && !isDeleted;
 
   const openArtifact = (): void => {
-    if (live === null || activeHostId === null || input.artifactId === null) {
+    if (live === null || input.artifactId === null) {
       return;
     }
     tileNavigation.openTileInEpic(epicId, {

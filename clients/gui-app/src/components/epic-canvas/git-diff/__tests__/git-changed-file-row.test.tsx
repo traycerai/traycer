@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import { GitChangedFileRow } from "@/components/epic-canvas/git-diff/git-changed-file-row";
 import { NO_HIGHLIGHT, type HighlightRanges } from "@/lib/git/path-highlight";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 afterEach(() => {
   cleanup();
 });
@@ -46,6 +47,7 @@ function renderRow(args: {
       active={args.active}
       leading={null}
       trailing={null}
+      showStats
       pathRanges={args.pathRanges}
       onClick={() => {}}
       onDoubleClick={undefined}
@@ -64,6 +66,7 @@ function renderNestedPanelRow(file: GitChangedFile) {
       active={false}
       leading={null}
       trailing={null}
+      showStats
       pathRanges={NO_HIGHLIGHT}
       onClick={() => {}}
       onDoubleClick={undefined}
@@ -293,6 +296,37 @@ describe("GitChangedFileRow panel density", () => {
     expect(row.className).toContain("text-accent-foreground");
   });
 
+  it("reveals the counts in flow on a coarse pointer, where hover never fires", () => {
+    renderRow({
+      file: makeFile({ path: "src/app.tsx", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    const stats = screen.getByText("+3").parentElement;
+    expect(stats?.className).toContain("group-hover:flex");
+    expect(stats?.className).toContain("pointer-coarse:flex");
+    // In flow, not the hover overlay: nothing may cover the row's tail on a
+    // surface where the overlay can never be dismissed by moving a cursor away.
+    expect(stats?.className).toContain("pointer-coarse:static");
+  });
+
+  it("gives touch rows the 44px tap target without changing mouse density", () => {
+    renderRow({
+      file: makeFile({ path: "src/app.tsx", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    const row = screen.getByRole("button", {
+      name: "Modified app.tsx in src",
+    });
+    expect(row.className).toContain("min-h-6");
+    expect(row.className).toContain("pointer-coarse:min-h-11");
+  });
+
   it("leaves inactive rows without aria-current", () => {
     renderRow({
       file: makeFile({ path: "src/app.tsx", previousPath: null }),
@@ -309,7 +343,25 @@ describe("GitChangedFileRow panel density", () => {
 });
 
 describe("GitChangedFileRow tile density", () => {
-  it("keeps the native title tooltip", () => {
+  it("keeps the full-path tooltip", () => {
+    renderRow({
+      file: makeFile({ path: "src/app.tsx", previousPath: null }),
+      density: "tile",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    // Scoped to the FILENAME, not the row: the row also carries the status
+    // badge, which owns its own tooltip at this density.
+    const row = screen.getByRole("button", { name: "Modified app.tsx" });
+    expect(tooltipTextNear(within(row).getByText("app.tsx"))).toBe(
+      "src/app.tsx",
+    );
+  });
+
+  it("keeps the status badge's own tooltip separate from the path", () => {
+    // One tooltip per hover target: hovering the badge must explain the STATUS,
+    // not repeat the path.
     renderRow({
       file: makeFile({ path: "src/app.tsx", previousPath: null }),
       density: "tile",
@@ -318,6 +370,8 @@ describe("GitChangedFileRow tile density", () => {
     });
 
     const row = screen.getByRole("button", { name: "Modified app.tsx" });
-    expect(row.getAttribute("title")).toBe("src/app.tsx");
+    expect(tooltipTextNear(within(row).getByLabelText("Modified"))).toBe(
+      "Modified",
+    );
   });
 });

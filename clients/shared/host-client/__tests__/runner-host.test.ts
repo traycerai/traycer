@@ -14,6 +14,7 @@ function makeSnapshot(hostId: string): LocalHostSnapshot {
     pid: 4242,
     systemHostName: hostId,
     displayName: hostId,
+    availability: "available",
   };
 }
 
@@ -123,38 +124,6 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect(handler).toHaveBeenNthCalledWith(1);
   });
 
-  it("tracks hostPicker open/close/onChange transitions", () => {
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.invalid/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-
-    const onChange = vi.fn();
-    host.hostPicker.onChange(onChange);
-
-    expect(host.hostPicker.isOpen).toBe(false);
-
-    host.hostPicker.requestOpen();
-    expect(host.hostPicker.isOpen).toBe(true);
-    expect(onChange).toHaveBeenNthCalledWith(1, true);
-
-    // Repeated open is idempotent.
-    host.hostPicker.requestOpen();
-    expect(onChange).toHaveBeenCalledTimes(1);
-
-    host.hostPicker.requestClose();
-    expect(host.hostPicker.isOpen).toBe(false);
-    expect(onChange).toHaveBeenNthCalledWith(2, false);
-
-    host.hostPicker.requestClose();
-    expect(onChange).toHaveBeenCalledTimes(2);
-  });
-
   it("exposes no-op tray and notification surfaces that never fire", async () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -175,7 +144,15 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     await host.tray.setEpics([
       { epicId: "e1", title: "Epic 1", subtitle: "2 hours ago" },
     ]);
-    await host.notifications.show("Title", "Body", { kind: "info" }, null);
+    await host.notifications.show(
+      "Title",
+      "Body",
+      { kind: "info" },
+      null,
+      "delivery-1",
+      "host",
+      null,
+    );
 
     expect(host.tray.indicator).toBe("attention");
     expect(host.tray.epics).toHaveLength(1);
@@ -185,6 +162,9 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
         body: "Body",
         payload: { kind: "info" },
         replaceKey: null,
+        deliveryKey: "delivery-1",
+        feedSource: "host",
+        foregroundAppLocal: null,
       },
     ]);
     expect(traySelection).not.toHaveBeenCalled();
@@ -259,7 +239,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect("remoteHosts" in host).toBe(false);
   });
 
-  it("round-trips the tokenStore through set/get/delete", async () => {
+  it("round-trips the tokenStore through signIn/get/delete", async () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
       authnBaseUrl: "http://localhost:5005",
@@ -272,61 +252,22 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
 
     await expect(host.tokenStore.get()).resolves.toBe(null);
 
-    await host.tokenStore.set({ token: "foo", refreshToken: "foo-refresh" });
+    await host.tokenStore.signIn(
+      { token: "foo", refreshToken: "foo-refresh" },
+      { id: "u1", email: "u1@example.com", name: "U One" },
+    );
+    // No `authnBaseUrl`: the stored session carries only the token pair and the
+    // cached identity. The origin lives on the runner host's own config (the
+    // `authnBaseUrl` option above), which is what the refresh closes over.
     await expect(host.tokenStore.get()).resolves.toEqual({
       token: "foo",
       refreshToken: "foo-refresh",
+      savedAt: expect.any(String),
+      user: { id: "u1", email: "u1@example.com", name: "U One" },
     });
 
     await host.tokenStore.delete();
     await expect(host.tokenStore.get()).resolves.toBe(null);
-  });
-
-  it("validates auth tokens through the shared HTTP helper", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              user: {
-                id: "mock-user-id",
-                name: "Mock User",
-                providerHandle: "mock-user",
-                email: "mock@example.com",
-              },
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        ),
-      ),
-    );
-
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.invalid/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-
-    await expect(host.validateAuthToken("jwt-1", "refresh-1")).resolves.toEqual(
-      {
-        kind: "valid",
-        profile: {
-          userId: "mock-user-id",
-          userName: "Mock User",
-          email: "mock@example.com",
-        },
-      },
-    );
-
-    vi.unstubAllGlobals();
   });
 
   it("resolves requestHostRespawn and increments the test counter", async () => {
@@ -342,7 +283,9 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
 
     expect(host.requestHostRespawnCalls).toBe(0);
 
-    await expect(host.requestHostRespawn()).resolves.toBeUndefined();
+    await expect(host.requestHostRespawn()).resolves.toEqual({
+      kind: "restarted",
+    });
     expect(host.requestHostRespawnCalls).toBe(1);
 
     await host.requestHostRespawn();

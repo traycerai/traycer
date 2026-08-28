@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
@@ -9,16 +8,46 @@ import {
   type ProviderProfile,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
+import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   act,
   cleanup,
   fireEvent,
+  queries,
   render,
   screen,
   waitFor,
   within,
+  type BoundFunctions,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
+
+// Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
+function selectTab(name: string): void {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }));
+}
 
 type StartLoginVariables = {
   readonly providerId: ProviderCliState["providerId"];
@@ -102,18 +131,31 @@ type RecolorProfileMutate = (
   options: MutationSuccessOptions,
 ) => void;
 
+// `providers.setEnabled@2.2`'s request shape - typing this mock's calls lets
+// tests read `.mock.calls[0]` without an unsafe `any` destructure.
+type SetEnabledVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.setEnabled"
+>;
+type SetEnabledMutate = (variables: SetEnabledVariables) => void;
+
 const providerMocks = vi.hoisted(() => ({
   listResult: {
     data: { providers: [] as ProviderCliState[] },
     isPending: false,
     isError: false,
     isFetching: false,
-    error: undefined as { message: string; code: string } | undefined,
+    error: undefined as
+      | HostRpcError
+      | { message: string; code: string }
+      | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
-  setEnabledMutate: vi.fn(),
+  setEnabledMutate: vi.fn<SetEnabledMutate>(),
+  setProfileEnabledMutate: vi.fn(),
+  refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
   setApiKeyMutate: vi.fn(),
   clearApiKeyMutate: vi.fn(),
   setTerminalAgentArgsMutate: vi.fn(),
@@ -128,20 +170,117 @@ const providerMocks = vi.hoisted(() => ({
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
   submitLoginCodeData: undefined as
-    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+    | { readonly outcome: "accepted" | "noActiveLogin" }
+    | undefined,
   submitLoginCodeError: null as Error | null,
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
   renameProfileMutate: vi.fn<RenameProfileMutate>(),
+  renameProfilePending: false,
+  renameProfileError: null as Error | null,
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
+  /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
+  refreshedHostIds: [] as string[],
+  /** The app-wide binding. Null unless a test opts into a distinct ambient. */
+  ambientBinding: null as {
+    hostClient: { getActiveHostId: () => string };
+  } | null,
   refreshUsageLimits: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
+}));
+
+vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
+  useProvidersPluginsList: () => ({
+    data: { plugins: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-plugins-mutate-mutation", () => ({
+  useProvidersPluginsMutate: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
+  useProvidersSkillsList: () => ({
+    data: { skills: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
+  useProvidersSkillsMutate: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// Sibling ticket 11 owns the MCP tab; mock its hooks so panel tests stay isolated.
+vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
+  useProvidersMcpList: () => ({
+    data: { servers: [] },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
+  useProvidersMcpMutate: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-discover-mutation", () => ({
+  useProvidersMcpDiscover: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
+  useProvidersMcpAuth: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
+// goes through TanStack Query. Mocked here alongside the other provider
+// mutations so this panel test keeps rendering without a QueryClientProvider.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
+}));
+
+// Same reason: the MCP tab's scope picker reads the host's worktree listing,
+// which is a real TanStack query. This panel suite is about the tab shell, not
+// worktree rows, so it reports none.
+vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
+  useWorktreeListByWorkspacePathsForClient: () => ({
+    data: { workspaces: [] },
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
@@ -171,6 +310,28 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
     isPending: false,
   }),
 }));
+
+// The panel's profile controls use a host-scoped TanStack mutation in
+// production. This legacy panel harness intentionally has no QueryClient;
+// keep its provider-detail coverage focused on rendering and the existing
+// provider mutations while the dedicated hook suite covers cache behavior.
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: providerMocks.setProfileEnabledMutate,
+    isPending: false,
+  }),
+  useProviderProfileEnablementPending: () => () => false,
+}));
+
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
+  () => ({
+    useProvidersRefreshProfileStatusForClient: () => ({
+      mutateAsync: providerMocks.refreshProfileStatusMutate,
+      isPending: false,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
   useProvidersSetApiKey: () => ({
@@ -282,8 +443,8 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => {
 vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => {
   const useRenameProviderProfile = () => ({
     mutate: providerMocks.renameProfileMutate,
-    isPending: false,
-    error: null,
+    isPending: providerMocks.renameProfilePending,
+    error: providerMocks.renameProfileError,
   });
   return {
     useRenameProviderProfile,
@@ -324,6 +485,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-supports-method")
+    >();
+  return { ...actual, useHostSupportsMethod: () => true };
+});
+
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   useProvidersDetectVersion: () => ({
     isFetching: false,
@@ -333,13 +502,34 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({
-    data: { harnesses: [] },
+    data: {
+      harnesses: [
+        { id: "claude", modes: ["gui", "tui"] },
+        { id: "codex", modes: ["gui", "tui"] },
+      ],
+    },
   }),
 }));
 
-vi.mock("@/hooks/providers/use-refresh-providers", () => ({
-  useRefreshProviders: () => providerMocks.refreshProviders,
-}));
+vi.mock("@/hooks/providers/use-refresh-providers", async () => {
+  const { useContext } = await import("react");
+  const { HostRuntimeContext } = await import("@/lib/host/runtime");
+  return {
+    // Resolves its client the way the real hook does - off
+    // `HostRuntimeContext` - rather than being handed one. That is the whole
+    // point: a stub that ignores context cannot tell a header inside the
+    // provider from a header outside it, which is exactly the bug this suite
+    // needs to be able to fail on.
+    useRefreshProviders: () => {
+      const binding = useContext(HostRuntimeContext);
+      const hostId = binding?.hostClient.getActiveHostId() ?? "ambient";
+      return async () => {
+        providerMocks.refreshedHostIds.push(hostId);
+        await providerMocks.refreshProviders();
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   useRunnerOpenExternalLink: () => ({
@@ -351,6 +541,76 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     openExternalLink: providerMocks.openExternalLink,
   }),
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: providerMocks.openExternalLink,
+  }),
+}));
+
+// MCP Project scope resolves workspaces via host query; this harness has no
+// QueryClient, so stub a stable empty host-resolved set.
+vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
+  useResolvedWorkspaceFolders: () => ({
+    folders: [],
+    isLoading: false,
+    isFetching: false,
+  }),
+}));
+
+// Same reason: the MCP scope picker can add a workspace folder, and the real
+// action hook opens with `useQueryClient()` - which THROWS, not degrades, with
+// no provider above it. Every host hook in this file is stubbed the same way.
+vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
+  useWorkspaceFolderActionsForClient: () => ({
+    isPreparing: false,
+    isRemoving: false,
+    prepareFoldersMutation: null,
+    removeEpicRepoMutation: null,
+    pickAndPrepareFolders: () => Promise.resolve(null),
+  }),
+  preparedWorkspaceFolderToWorkspaceFolderInfo: () => ({
+    path: "",
+    name: "",
+    repoIdentifier: null,
+    hostId: null,
+  }),
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    // The SAME binding the `@/lib/host/runtime` mock below supplies, because
+    // `@/lib/host` re-exports that symbol and the two must not disagree. They
+    // used to: this returned `null` while the runtime mock returned the
+    // ambient binding, and nothing noticed because the panel read the runtime
+    // path. It now re-provides through `useScopedHostBinding`, which reads
+    // this one - so a fixture answering `null` here silently withholds the
+    // wrapper and the selected-host refresh lands on the ambient host.
+    useHostBinding: () => providerMocks.ambientBinding,
+    useHostClient: () => null,
+    // The SPINE, a separate export since redesign P2.1.
+    useHostRuntimeClient: () => null,
+  };
+});
+
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    // `HostRuntimeContext` stays REAL - the panel's provider swap is the thing
+    // under test. Only the ambient binding is faked, and it is null by DEFAULT
+    // so every existing test keeps the shape it was written against. A non-null
+    // one is what lets the provider actually wrap the shell, which is the only
+    // way the wrong-host regression can observe anything at all.
+    useHostBinding: () => providerMocks.ambientBinding,
+  };
+});
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -404,12 +664,19 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
     isRefreshing: false,
   }),
 }));
+// The section also asks whether a read we stopped waiting for still has its
+// delayed follow-up coming. That reads the queue registry through
+// `useRateLimitQueueScope`, which needs the QueryClient this harness has none
+// of; no target is ever enqueued here, so an idle answer is the truthful one.
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
+  useIsRateLimitReadFollowUpExhausted: () => false,
+}));
 
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
 // returns null without a `<HostRuntimeProvider>`.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -419,7 +686,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         hostId: "local",
         kind: "local",
         label: "Local host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://127.0.0.1:0",
       },
     ],
@@ -430,60 +697,175 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
 }));
 
+// Once a sign-in-intent dialog closes itself on a same-account reconnect, the
+// toast is the ONLY surviving success signal - so it has to be assertable
+// rather than a real Sonner store write with no `<Toaster />` to land in.
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+  },
+}));
+
 // The profile-scoped section's `ProfileDropdown` renders through Radix's real
 // DropdownMenu, which opens on pointerdown rather than click - render it
 // inline + always-open so tests can select a row without fighting
 // pointer-open semantics in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
-vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
+vi.mock("@/components/ui/dropdown-menu", async () => ({
+  ...(await import("./dropdown-menu-passthrough-mock")),
+}));
+
+// Radix's Select needs a pointer-capable layout to open its listbox, which
+// jsdom does not provide. Mirrors the stand-in
+// `provider-model-provider-connect-dialog.test.tsx` uses: same element
+// structure, every option always rendered, `onValueChange` forwarded so a
+// test can pick an option by clicking it - plus `disabled` forwarding on both
+// `Select` and `SelectItem`, which that mock doesn't need but the enablement
+// floor here does (the "Off" item disables itself rather than vanishing).
+vi.mock("@/components/ui/select", async () => {
+  const { createContext, useContext } = await import("react");
+  const ValueChangeContext = createContext<(value: string) => void>(() => {});
+  // The currently-selected value, threaded down to `SelectItem` so it can
+  // report `data-state` the way real Radix does. Absent from the mock until
+  // the mobile section picker's "reopening marks the picked row as checked"
+  // test needed it - every other consumer just clicks an item and never reads
+  // this attribute back.
+  const SelectedValueContext = createContext<string | undefined>(undefined);
   return {
-    DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
-    DropdownMenuItem: (props: {
+    Select: (props: {
       readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
-      readonly "aria-label": string | undefined;
-      readonly "aria-current": "true" | undefined;
-      readonly className: string | undefined;
-      readonly disabled: boolean | undefined;
-      readonly title: string | undefined;
-    }): ReactNode => (
+      readonly value?: string;
+      readonly onValueChange?: (value: string) => void;
+      readonly disabled?: boolean;
+    }) => (
+      <ValueChangeContext.Provider
+        value={
+          props.disabled === true
+            ? () => {}
+            : (props.onValueChange ?? (() => {}))
+        }
+      >
+        <SelectedValueContext.Provider value={props.value}>
+          <div>{props.children}</div>
+        </SelectedValueContext.Provider>
+      </ValueChangeContext.Provider>
+    ),
+    // `role="combobox"` and the forwarded `aria-label` mirror real Radix
+    // (`SelectPrimitive.Trigger` sets `role="combobox"`; the trigger's
+    // `aria-label` prop passes straight through). Without both, every
+    // `getByRole("combobox", { name: ... })` query this file already had
+    // before this mock existed - the mobile provider/section pickers - would
+    // find a plain unnamed `role="button"` element instead.
+    SelectTrigger: (props: {
+      readonly children: ReactNode;
+      readonly id?: string;
+      readonly "aria-label"?: string;
+    }) => (
       <button
         type="button"
-        role="menuitem"
+        role="combobox"
+        id={props.id}
         aria-label={props["aria-label"]}
-        aria-current={props["aria-current"]}
-        className={props.className}
-        disabled={props.disabled}
-        title={props.title}
-        onClick={props.onSelect}
+        aria-expanded={false}
+        aria-controls="select-mock-content"
       >
         {props.children}
       </button>
     ),
-    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
-    DropdownMenuShortcut: (props: {
-      readonly children: ReactNode;
-      readonly "data-testid": string | undefined;
-    }): ReactNode => (
-      <span data-testid={props["data-testid"]}>{props.children}</span>
+    SelectValue: () => null,
+    SelectContent: (props: { readonly children: ReactNode }) => (
+      <div>{props.children}</div>
     ),
+    SelectItem: (props: {
+      readonly children: ReactNode;
+      readonly value: string;
+      readonly disabled?: boolean;
+    }) => {
+      const onValueChange = useContext(ValueChangeContext);
+      const selectedValue = useContext(SelectedValueContext);
+      return (
+        <button
+          type="button"
+          data-value={props.value}
+          data-state={props.value === selectedValue ? "checked" : "unchecked"}
+          disabled={props.disabled ?? false}
+          onClick={() => onValueChange(props.value)}
+        >
+          {props.children}
+        </button>
+      );
+    },
+  };
+});
+/**
+ * The only thing the panel calls on a scope client, so the only thing a stub
+ * has to be. Named rather than asserted: the real `HostClient` is far wider
+ * than this test needs, and casting to it would be claiming a shape nothing
+ * here provides.
+ */
+type ScopeClientStub = { readonly getActiveHostId: () => string };
+
+const hostScopeMocks: {
+  status: HostScopeStatus | undefined;
+  client: ScopeClientStub | null;
+  setHostId: Mock<(hostId: string) => void>;
+  hostId: string;
+  host: HostScopeOption | undefined;
+} = vi.hoisted(() => ({
+  status: undefined,
+  client: null,
+  setHostId: vi.fn<(hostId: string) => void>(),
+  hostId: "host-a",
+  host: undefined,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => ({
+      ...hostScopeFixture({
+        setHostId: hostScopeMocks.setHostId,
+        hostId: hostScopeMocks.hostId,
+        // `host: undefined` must be OMITTED, not passed: the fixture's final
+        // spread would clobber its default host with the explicit undefined.
+        ...(hostScopeMocks.host === undefined
+          ? {}
+          : { host: hostScopeMocks.host }),
+        // Same omit-don't-pass rule as `host`: an explicit undefined would
+        // clobber the fixture's derived status.
+        ...(hostScopeMocks.status === undefined
+          ? {}
+          : { status: hostScopeMocks.status }),
+      }),
+      // Spread OUTSIDE the fixture call: the stub satisfies what the panel
+      // uses, not the full `HostClient` the fixture's type demands.
+      client: hostScopeMocks.client,
+    }),
   };
 });
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { ProviderProfileReauthPanel } from "@/components/settings/panels/provider-profile-reauth-panel";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
-} from "@/components/settings/panels/use-provider-profile-login-flow";
+} from "@/lib/providers/provider-ambient-auth";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "sonner";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
     kind: "bundled",
@@ -506,7 +888,10 @@ function providerState(input: {
   readonly selected: ProviderSelection;
   readonly candidates: readonly ProviderCliCandidate[];
   readonly envOverrides: ProviderCliState["envOverrides"];
+  readonly nativeCapabilities?: ProviderNativeCapabilities;
   readonly profiles?: readonly ProviderProfile[];
+  readonly terminalAgentArgs?: string;
+  readonly apiKey?: ProviderCliState["apiKey"];
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -522,11 +907,20 @@ function providerState(input: {
     },
     authPending: false,
     checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
+    apiKey: input.apiKey ?? {
+      supported: false,
+      configured: false,
+      source: null,
+    },
+    terminalAgentArgs: input.terminalAgentArgs ?? "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities:
+      input.nativeCapabilities ?? DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...(input.profiles ?? [])],
   };
 }
@@ -544,6 +938,101 @@ function providerStateWithAuth(
   return { ...providerState(input), auth, authPending };
 }
 
+const BOTH_SCOPES = ["global", "project"] as const;
+
+const SAMPLE_MCP: NonNullable<ProviderNativeCapabilities["mcp"]> = {
+  transports: ["stdio", "http"],
+  authTypes: ["none", "header"],
+  authActions: ["login", "logout"],
+  actionScopes: {
+    list: [...BOTH_SCOPES],
+    add: [...BOTH_SCOPES],
+    update: [...BOTH_SCOPES],
+    remove: [...BOTH_SCOPES],
+    toggleServer: [...BOTH_SCOPES],
+    toggleTool: [...BOTH_SCOPES],
+    discover: [...BOTH_SCOPES],
+    auth: [...BOTH_SCOPES],
+  },
+  addServer: "cli",
+  removeServer: "cli",
+  updateServer: "patch",
+  perToolBacking: "native",
+  statusSource: "probe",
+  toolsSource: "probe",
+  schemasSource: "probe",
+  instructionsSource: "probe",
+  traycerSessionsOnlyEnforcement: false,
+  stdioDegradeNotice: false,
+  oauthDegradesToConfigOnly: true,
+};
+
+const FULL_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["general", "env", "usage", "mcp", "plugins", "skills"],
+  mcp: SAMPLE_MCP,
+  plugins: {
+    addModes: ["cli-source"],
+    marketplaceBrowse: false,
+    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // plain "every workspace" line instead of a trigger with locationLabel).
+    actionScopes: {
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      remove: [...BOTH_SCOPES],
+      setEnabled: [...BOTH_SCOPES],
+    },
+    traycerSessionToolsNotice: false,
+  },
+  skills: {
+    actionScopes: {
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      create: [...BOTH_SCOPES],
+      import: [],
+      remove: [...BOTH_SCOPES],
+    },
+  },
+  modelProviders: null,
+};
+
+const CURSOR_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["env", "mcp", "plugins", "skills"],
+  mcp: {
+    ...SAMPLE_MCP,
+    perToolBacking: "degraded-server-level",
+    instructionsSource: "none",
+  },
+  plugins: {
+    addModes: ["read-only"],
+    marketplaceBrowse: false,
+    actionScopes: {
+      list: ["global"],
+      add: [],
+      remove: [],
+      setEnabled: [],
+    },
+    traycerSessionToolsNotice: false,
+  },
+  skills: {
+    actionScopes: {
+      list: ["global"],
+      add: ["global"],
+      create: ["global"],
+      import: [],
+      remove: ["global"],
+    },
+  },
+  modelProviders: null,
+};
+
+const ENV_ONLY_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["env"],
+  mcp: null,
+  plugins: null,
+  skills: null,
+  modelProviders: null,
+};
+
 type TestProfileInput = {
   readonly profileId: string;
   readonly kind: ProviderProfile["kind"];
@@ -559,12 +1048,22 @@ function profile(input: TestProfileInput): ProviderProfile {
   return profileWithAccent(input, null);
 }
 
+function legacyAwaitLoginProfile(
+  input: TestProfileInput,
+): Omit<ProviderProfile, "enabled"> {
+  const current = profile(input);
+  const { enabled: _enabled, ...legacy } = current;
+  void _enabled;
+  return legacy;
+}
+
 function profileWithAccent(
   input: TestProfileInput,
   accentColor: ProviderProfileAccentColor | null,
 ): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: true,
     kind: input.kind,
     authType: "oauth",
     label: input.label,
@@ -584,6 +1083,7 @@ function profileWithAccent(
           },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: input.duplicateOfProfileId,
     ambientDriftNotice: input.ambientDriftNotice,
     accentColor,
@@ -608,6 +1108,12 @@ function firstAwaitLoginCall(): readonly [
   return call;
 }
 
+function firstSetEnabledCall(): SetEnabledVariables {
+  const call = providerMocks.setEnabledMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected setEnabled call.");
+  return call[0];
+}
+
 function firstSubmitLoginCodeCall(): readonly [
   SubmitLoginCodeVariables,
   SubmitLoginCodeOptions,
@@ -615,6 +1121,56 @@ function firstSubmitLoginCodeCall(): readonly [
   const call = providerMocks.submitLoginCodeMutate.mock.calls.at(0);
   if (call === undefined) throw new Error("Expected submit login code call.");
   return call;
+}
+
+/** An oauth-only codex with the ambient row plus one managed "Work" profile,
+ *  so a test can hand it a different `managed-1` before and after a sign-in
+ *  and drive the reauth panel's changed-account branch. */
+function codexWithManaged(managed: ProviderProfile): ProviderCliState {
+  return {
+    ...providerState({
+      providerId: "codex",
+      selected: { kind: "bundled" },
+      candidates: [],
+      envOverrides: [],
+      profiles: [
+        profile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          email: "ambient@example.test",
+          tier: null,
+          authStatus: "authenticated",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+        managed,
+      ],
+    }),
+    loginCapability: {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    },
+  };
+}
+
+/** `managed-1` as a given account. The pre-sign-in address is the signed-OUT
+ *  row (that is the state the row is in when its "Sign in" button shows); any
+ *  other address is the authenticated result of a sign-in. */
+function workProfileSignedInAs(email: string): ProviderProfile {
+  return profile({
+    profileId: "managed-1",
+    kind: "managed",
+    label: "Work",
+    email,
+    tier: "Pro",
+    authStatus:
+      email === "work@example.test" ? "unauthenticated" : "authenticated",
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+  });
 }
 
 function codePasteReauthProviderState(): ProviderCliState {
@@ -651,6 +1207,7 @@ function codePasteReauthProviderState(): ProviderCliState {
       oauthArgs: ["auth", "login"],
       token: null,
       codePaste: {},
+      terminalLogin: null,
     },
   };
 }
@@ -714,6 +1271,7 @@ function codePasteCreateProviderState(): ProviderCliState {
       oauthArgs: ["auth", "login"],
       token: null,
       codePaste: {},
+      terminalLogin: null,
     },
   };
 }
@@ -745,8 +1303,121 @@ function firstRemoveProfileCall(): readonly [
   return call;
 }
 
+// A non-null runner host so the desktop external-link path (preventDefault +
+// openExternalLink) runs; host-less renders fall back to native anchor nav.
+function createRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.example/sign-in",
+    authnBaseUrl: "https://auth.example",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
+/**
+ * Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
+ * tab, so every profile assertion has to activate that tab after mounting.
+ * Kept as one helper so the next time the section moves (or the label changes
+ * again) this is a one-line change, not forty.
+ */
+function openProfilesTab(): void {
+  selectTab("Profiles & Limits");
+}
+
+/**
+ * The SAME tab for a provider without managed profiles, which is most of them.
+ *
+ * The label is per-provider now: the tab holds profiles and usage limits, and
+ * for a provider that cannot have profiles it holds only the second - so
+ * promising them in the rail was promising a section that is not there.
+ */
+function openUsageLimitsTab(): void {
+  selectTab("Usage limits");
+}
+
+/**
+ * The provider header and tab rail are PINNED rows; only the active tab's body
+ * scrolls.
+ *
+ * Asserted structurally (what contains what) plus the one class that carries
+ * the mechanism, because jsdom has no layout engine - it reports every element
+ * as 0×0 and never computes an overflow, so "does this scroll?" has no
+ * observable answer here beyond the declaration. The containment checks are the
+ * load-bearing half: the regression this guards against is the rail or the
+ * header drifting back INSIDE the scroll box, which is exactly a parent/child
+ * relationship and is checked as one.
+ */
+function expectPinnedRailLayout(): void {
+  const panel = screen.getByRole("tabpanel");
+  expect(panel.className).toContain("overflow-y-auto");
+
+  // The rail must be a SIBLING of the scrolling body, not a descendant of it -
+  // a sticky-positioned rail inside the scroll box would satisfy neither this
+  // nor the background constraint that motivated the flex layout.
+  const list = screen.getByRole("tablist");
+  expect(panel.contains(list)).toBe(false);
+
+  // Same for the provider header. `openProfilesTab` has run, so the enable
+  // switch is the header's stable anchor regardless of which tab is active.
+  expect(panel.contains(screen.getByRole("switch"))).toBe(false);
+
+  // ...and nothing else scrolls above it, which is what made the pin possible:
+  // the column that used to own `overflow-y-auto` must have handed it over.
+  const scrollers: string[] = [];
+  for (
+    let node: HTMLElement | null = panel.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (node.className.includes("overflow-y-auto")) {
+      scrollers.push(node.className);
+    }
+  }
+  // The provider rail `<nav>` is a sibling, never an ancestor, so it is not in
+  // this chain.
+  expect(scrollers).toEqual([]);
+}
+
+/**
+ * Provider rows currently in the rail, in rendered order. Scoped to the LIST
+ * rather than the nav, which also holds the search row's filter button - and
+ * returns `[]` for the filtered-empty rail, where no list is rendered at all.
+ */
+function railProviderNames(): readonly string[] {
+  const nav = screen.getByRole("navigation", { name: "Providers" });
+  const list = within(nav).queryByRole("list", { name: "Providers" });
+  if (list === null) return [];
+  return within(list)
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label") ?? "");
+}
+
+/**
+ * The rail row for a provider, scoped to the rail LIST like
+ * `railProviderNames` above - never bare `screen`. Below `md` the
+ * always-mounted `ProvidersMobileSelect` renders one item per provider under
+ * the SAME display name (jsdom applies no CSS, so `md:hidden` never actually
+ * hides it there), so an unscoped `getByRole("button", { name })` collides
+ * with that item the moment more than one provider is in the fixture.
+ * `hidden` is threaded through explicitly rather than defaulted, since the
+ * one caller behind a dialog's `hideOthers` needs it true and every other
+ * caller needs it false.
+ */
+function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
+  const nav = screen.getByRole("navigation", { name: "Providers", hidden });
+  const list = within(nav).getByRole("list", { name: "Providers", hidden });
+  return within(list).getByRole("button", { name, hidden });
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusTab: null,
+    });
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -754,18 +1425,21 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: OPENCODE_CANDIDATES,
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "traycer",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "openrouter",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -801,10 +1475,23 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.touchLoginReset.mockClear();
     providerMocks.openExternalLink.mockClear();
     providerMocks.renameProfileMutate.mockReset();
+    providerMocks.renameProfilePending = false;
+    providerMocks.renameProfileError = null;
     providerMocks.recolorProfileMutate.mockReset();
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    vi.mocked(toast.success).mockClear();
+    hostScopeMocks.setHostId.mockClear();
+    hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.host = undefined;
+    // Reset alongside the rest: a test that pins an unusable status would
+    // otherwise leave every later one scoped to a host with no client.
+    hostScopeMocks.status = undefined;
+    providerMocks.refreshedHostIds.length = 0;
+    providerMocks.ambientBinding = null;
+    hostScopeMocks.client = null;
+    useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
   afterEach(() => {
@@ -812,12 +1499,195 @@ describe("<ProvidersSettingsPanel />", () => {
     // fake timers mid-test, and a leaked fake clock would strand every later
     // test's timers (and Testing Library's own unmount work).
     vi.useRealTimers();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+  });
+
+  it("applies a re-auth deep link's host even though the rail clears the intent on mount", () => {
+    // The rail is a DESCENDANT of the panel and clears the whole focus intent
+    // — host half included — in its own mount effect. React runs child passive
+    // effects before the parent's, so a parent that read the store in an
+    // effect saw an already-emptied store whenever the rail mounted in the
+    // same commit, which is exactly what cached provider data produces. The
+    // deep link then silently consumed its provider/profile intent against
+    // whichever host was already on screen.
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).toHaveBeenCalledWith(
+      "host-that-needs-reauth",
+    );
+    // Consumed exactly once: the host half is cleared at the point of use, so
+    // a later visit does not yank the scope back to a host the user has since
+    // navigated away from.
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
+  it("refuses a profile intent whose target host is not the one on screen", () => {
+    // The target was unreachable or plan-gated, so its rail never mounted and
+    // the harness/profile/sign-in halves stayed armed. Splitting the host half
+    // off (so an unreachable target could not re-yank the scope forever) threw
+    // away WHICH host they belonged to — and the next reachable host the user
+    // picked consumed them, in the worst case starting an automatic sign-in
+    // there. The retained target is what makes the remainder refusable.
+    useProvidersFocusStore.setState({
+      focusHarnessId: "cursor",
+      focusHostId: null,
+      focusTargetHostId: "host-that-needs-reauth",
+      focusProfileId: "profile-1",
+      startSignIn: true,
+    });
+    hostScopeMocks.hostId = "some-other-host";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Not consumed here: the pane stays on the rail's first provider rather
+    // than opening the deep link's target on the wrong machine. The probe is
+    // that provider's DEFAULT tab, which is the first entry of
+    // PROVIDER_TAB_ORDER it supports - "Usage limits" here, since
+    // FULL_TABS advertises `usage` and `providerState` leaves the API key
+    // unsupported so no Account tab precedes it.
+    expect(
+      screen
+        .getByRole("tab", { name: "Usage limits" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
+    // ...and it is cancelled rather than left armed for the next host.
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusProfileId).toBeNull();
+    expect(useProvidersFocusStore.getState().startSignIn).toBe(false);
+  });
+
+  it("leaves the scope alone when no deep link armed a host", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+  });
+
+  it("switches the scope BEFORE any child can consume the rest of the intent", () => {
+    // Capturing the host half before children mount was necessary but not
+    // sufficient: the rail consumes (and clears) the provider/profile half in
+    // its own mount effect, and child passive effects run before the parent's.
+    // So when the rail mounted in the same commit — cached data — it consumed
+    // the intent against the OLD host, in the worst case starting a re-auth
+    // sign-in there, one commit before the scope moved. The panel now holds
+    // its subtree until the switch has landed, so the rail's first mount is
+    // already scoped to the deep-linked host. This asserts the ORDER, which is
+    // the actual contract the two narrower fixes missed.
+    const order: string[] = [];
+    hostScopeMocks.setHostId.mockImplementation(() => {
+      order.push("scope-switched");
+    });
+    // The suite's beforeEach only mockClear()s this spy, which keeps the
+    // implementation — drop it here so it cannot leak into later tests.
+    onTestFinished(() => {
+      hostScopeMocks.setHostId.mockReset();
+    });
+    const unsubscribe = useProvidersFocusStore.subscribe((state, prev) => {
+      if (prev.focusProfileId !== null && state.focusProfileId === null) {
+        order.push("intent-consumed");
+      }
+    });
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    unsubscribe();
+
+    const switched = order.indexOf("scope-switched");
+    expect(switched).not.toBe(-1);
+    // Whether or not the rail consumed the intent during this render, nothing
+    // may have consumed it BEFORE the switch.
+    const consumed = order.indexOf("intent-consumed");
+    if (consumed !== -1) {
+      expect(switched).toBeLessThan(consumed);
+    }
+  });
+
+  it("applies a deep link armed AFTER mount — the keep-alive case", async () => {
+    // The top-level keep-alive host retains this panel while its tab is
+    // hidden, so a re-auth banner click arms the intent against an
+    // already-mounted panel: there is no fresh mount to capture it. A
+    // mount-time snapshot stayed stale, pending never rose, and Sign in
+    // appeared to do nothing while the intent waited to fire against
+    // whichever host a later remount happened to select.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+
+    act(() => {
+      useProvidersFocusStore.getState().setProfileFocus({
+        harnessId: "opencode",
+        hostId: "host-armed-late",
+        profileId: "profile-1",
+        startSignIn: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(hostScopeMocks.setHostId).toHaveBeenCalledWith("host-armed-late");
+    });
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
   });
 
   it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {
@@ -852,6 +1722,88 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("shows connecting copy, not the failure card, while a remote host's transport is still dialing", () => {
+    hostScopeMocks.host = hostScopeOptionFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+    });
+    providerMocks.listResult.isError = true;
+    // The pre-send "session not ready" rejection every host-scoped query gets
+    // while the remote session's first dial is still in flight.
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "req-1",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Connecting to the remote host…")).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+  });
+
+  it("keeps an actionable failure card for an EXHAUSTED local transport failure", () => {
+    // A spinner is a promise that something will refetch, and on a local host
+    // nothing can keep it. The remote path has the messenger's own binding,
+    // whose ready boundary invalidates this query; a local host has no such
+    // binding, `useHostQuery` pins `retry: false`, and by the time this error
+    // surfaces the retry wrapper has already spent its budget - its final
+    // attempt rethrows unchanged, so the class says what the failure WAS, not
+    // that anything is still retrying. Showing "Reconnecting…" here parked the
+    // panel on a permanent spinner with no way to report the fault.
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Local host connection is not ready",
+      requestId: "req-2",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
+  it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
+    providerMocks.listResult.isError = true;
+    // The base class, not the retryable subclass: the request frame WAS on the
+    // wire when the socket died, so nothing may assume it resolves itself.
+    // `useHostQuery` pins `retry: false` and no recovery event is owed, so
+    // showing this as "connecting" parks the panel on a spinner forever and
+    // hides the report-issue affordance.
+    providerMocks.listResult.error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "The connection dropped before a response arrived",
+      requestId: "req-3",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
     render(
       <TooltipProvider>
@@ -859,7 +1811,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    fireEvent.click(railProviderRow(/Traycer/i, false));
+    // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -875,13 +1829,134 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("hides the CLI-candidates picker for Amp - a selected path is never consulted", () => {
+  it("shows the CLI & Args tab and empty-state notice for amp (no longer id-hidden)", () => {
+    // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
+    // premise that those two have no user-selectable binary. Both spawn the
+    // Traycer-resolved binary for MCP write verbs, so the table is the only
+    // route out of the F2 dead end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
           providerId: "amp",
-          selected: { kind: "bundled" },
+          selected: { kind: "path" },
           candidates: [],
+          envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: ["general", "env", "mcp", "plugins", "skills"],
+            mcp: SAMPLE_MCP,
+            plugins: null,
+            skills: null,
+            modelProviders: null,
+          },
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
+    expect(
+      screen.getByText(
+        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("link", { name: "Amp installation guide" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+  });
+
+  it("shows the CLI & Args tab and candidates table for cursor when a path is available", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/cursor-agent",
+              version: "0.50.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: [
+              "general",
+              "env",
+              "usage",
+              "mcp",
+              "plugins",
+              "skills",
+            ],
+            mcp: {
+              ...SAMPLE_MCP,
+              perToolBacking: "degraded-server-level",
+              instructionsSource: "none",
+            },
+            plugins: {
+              addModes: ["read-only"],
+              marketplaceBrowse: false,
+              actionScopes: {
+                list: ["global"],
+                add: [],
+                remove: [],
+                setEnabled: [],
+              },
+              traycerSessionToolsNotice: true,
+            },
+            skills: null,
+            modelProviders: null,
+          },
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
+    expect(
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/cursor-agent",
+      }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/No Cursor CLI was found on this machine/),
+    ).toBeNull();
+  });
+
+  it("selects Hermes' PATH candidate without rendering a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/hermes",
+              version: "0.1.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
           envOverrides: [],
         }),
       ],
@@ -893,8 +1968,59 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    selectTab("CLI & Args");
+
+    const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
+      name: "Select /usr/local/bin/hermes",
+    });
+    expect(pathRadio.checked).toBe(true);
     expect(
-      screen.queryByRole("button", { name: "Add custom path" }),
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
+    ).toBeNull();
+  });
+
+  it("shows Hermes' PATH-only not-found guidance without a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    selectTab("CLI & Args");
+
+    expect(
+      screen.getByText(
+        "No Hermes Agent CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Hermes Agent installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    fireEvent.click(guide);
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
     ).toBeNull();
   });
 
@@ -959,8 +2085,12 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     const nav = screen.getByRole("navigation", { name: "Providers" });
+    // Scoped to the LIST, not the whole nav: the nav also holds the rail's
+    // search row, whose filter trigger is a button too and would otherwise
+    // enter this ordering assertion as a phantom first provider.
+    const list = within(nav).getByRole("list", { name: "Providers" });
     expect(
-      within(nav)
+      within(list)
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
     ).toEqual([
@@ -972,6 +2102,86 @@ describe("<ProvidersSettingsPanel />", () => {
       "Copilot",
       "Kilo Code",
       "Qwen Code",
+    ]);
+  });
+
+  it("narrows the rail to providers matching the search, keeping rail order", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { target: { value: "open" } },
+    );
+
+    expect(railProviderNames()).toEqual(["OpenCode", "OpenRouter"]);
+  });
+
+  it("leaves the detail pane on the selected provider when the rail hides it", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // OpenCode is selected on mount (first in rail order for this fixture).
+    expect(screen.getByText("OpenCode CLI agent.")).toBeDefined();
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { target: { value: "openrouter" } },
+    );
+
+    // The rail is down to one row that is NOT the selected provider, and the
+    // detail pane has not followed it. Re-selecting per keystroke would throw
+    // away whatever was in progress on the right - an unsaved API key, a
+    // half-filled MCP form - for a keystroke that only asked to look.
+    expect(railProviderNames()).toEqual(["OpenRouter"]);
+    expect(screen.getByText("OpenCode CLI agent.")).toBeDefined();
+  });
+
+  it("says so when nothing matches, instead of an empty rail", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      { target: { value: "no-such-provider" } },
+    );
+
+    const nav = within(screen.getByRole("navigation", { name: "Providers" }));
+    expect(nav.queryByRole("list", { name: "Providers" })).toBeNull();
+    expect(nav.getByRole("status").textContent).toBe("No providers match.");
+    // Twice: the live region AND the visible row. The region is `sr-only`, so
+    // asserting only the announcement would let the visible copy be deleted
+    // and leave a sighted user staring at a blank rail.
+    expect(nav.getAllByText("No providers match.")).toHaveLength(2);
+  });
+
+  it("restores every row when the search is cleared", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Search providers" });
+    fireEvent.change(input, { target: { value: "openrouter" } });
+    expect(railProviderNames()).toEqual(["OpenRouter"]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear provider search" }),
+    );
+    expect(railProviderNames()).toEqual([
+      "OpenCode",
+      "Traycer Inference",
+      "OpenRouter",
     ]);
   });
 
@@ -1034,10 +2244,10 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Configured, not verified")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
     expect(screen.getByText("Could not check account status")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Qwen Code" }));
+    fireEvent.click(railProviderRow("Qwen Code", false));
     expect(screen.getByText("Checking account")).toBeDefined();
   });
 
@@ -1083,7 +2293,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.queryByText(/Disabled by/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    fireEvent.click(railProviderRow(/Traycer/i, false));
 
     expect(screen.queryByText(/Disabled by/)).toBeNull();
   });
@@ -1095,7 +2305,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+    fireEvent.click(railProviderRow(/OpenRouter/i, false));
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -1119,12 +2330,14 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: OPENCODE_CANDIDATES,
           envOverrides: [{ key: "OPENAI_API_KEY", value: null }],
+          nativeCapabilities: FULL_TABS,
         }),
         providerState({
           providerId: "traycer",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -1135,6 +2348,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    selectTab("Env");
+
     expect(screen.getByText("Environment variables")).toBeDefined();
     expect(screen.getByDisplayValue("OPENAI_API_KEY")).toBeDefined();
     expect(
@@ -1142,14 +2357,104 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("renders the host picker in the header (like Worktrees)", () => {
+  // The panel used to carry its own host `Select` in the header - one of four
+  // near-identical dropdowns doing one job - and then, briefly, an inert
+  // readout of the scoped host. Both are gone: the sidebar owns the scope.
+  //
+  // Asserting on the host NAME, not on a testid. An earlier version of this
+  // test checked that `host-scope-line` was absent, which is unfalsifiable -
+  // that testid exists nowhere in the codebase, so the assertion passes no
+  // matter what the panel renders. The name is the thing that must not
+  // reappear, and the fixture puts it on screen the moment anything prints it.
+  it("names no host and offers no host picker, leaving both to the sidebar", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("combobox", { name: "Host" })).toBeDefined();
+    expect(screen.queryByText("host-a")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Host" })).toBeNull();
+    // The controls the header DOES own still render - so this test fails if
+    // the fix that moved them inside the gate ever drops them entirely.
+    expect(
+      screen.getByRole("button", { name: "Refresh all providers" }),
+    ).toBeDefined();
+  });
+
+  it("puts the global status on the heading row, and says it is global", () => {
+    // `checkedAt` is a max over every provider and Refresh re-probes all of
+    // them; at the card's top-right it sat inches from the selected provider's
+    // Enabled toggle and read as that provider's own status.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const status = screen.getByTestId("providers-global-status");
+    expect(status.textContent).toContain("All providers");
+    expect(
+      status.contains(
+        screen.getByRole("button", { name: "Refresh all providers" }),
+      ),
+    ).toBe(true);
+    expect(document.querySelector("header")?.contains(status)).toBe(true);
+  });
+
+  it("refreshes the SELECTED host, never the ambient one", async () => {
+    // The wrong-host bug's actual signature. DOM absence cannot see it: the
+    // failure was never a missing control, it was a present control resolving
+    // the wrong client - so this gives the two hosts distinct identities and
+    // asks which one Refresh reached.
+    //
+    // Moving `HostRuntimeContext.Provider` back below the header - the exact
+    // historical regression - makes this fail, because the header would then
+    // resolve `ambient` instead of the selected host.
+    providerMocks.ambientBinding = {
+      hostClient: { getActiveHostId: () => "host-ambient" },
+    };
+    hostScopeMocks.status = "ready";
+    hostScopeMocks.client = { getActiveHostId: () => "host-selected" };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh all providers" }),
+    );
+    await waitFor(() => {
+      expect(providerMocks.refreshedHostIds).toEqual(["host-selected"]);
+    });
+    expect(providerMocks.refreshedHostIds).not.toContain("host-ambient");
+  });
+
+  it("mounts NO global control - and no RPC - until the scope is ready", () => {
+    // The real invariant, and the reason this control was kept out of the
+    // header for a round. `headerAction` is not gated, so it is only safe
+    // because `HostRuntimeContext.Provider` wraps the whole shell EXACTLY when
+    // the scope resolved a client. Mounted any earlier, `useHostClient()` falls
+    // back to the ambient host - which is how Refresh once re-probed and
+    // rewrote the provider list of a host the page was not showing.
+    //
+    // "Not in the header" was the wrong thing to pin: it forbids a safe
+    // implementation. What must hold is that nothing renders, and nothing is
+    // requested, while the scope is unresolved.
+    hostScopeMocks.status = "unreachable";
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByTestId("providers-global-status")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Refresh all providers" }),
+    ).toBeNull();
   });
 
   it("blocks disabling the last enabled provider", () => {
@@ -1160,6 +2465,7 @@ describe("<ProvidersSettingsPanel />", () => {
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: FULL_TABS,
         }),
       ],
     };
@@ -1175,10 +2481,508 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected provider switch to render as a button.");
     }
 
-    expect(switchElement.disabled).toBe(true);
+    expect(switchElement.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  // The three-way Auto/On/Off enablement control (and the `enablementMode`/
+  // `enablementSource` wire fields, the `mode` param on `providers.setEnabled`,
+  // and the `legacyEnabledForMode` helper that translated a chosen mode into
+  // the legacy `enabled` mirror) are gone. `providers-settings-panel.tsx`'s
+  // own comment on `ProviderEnablementControl` explains why: "nobody could
+  // tell what Auto meant from looking at it, and a provider it enabled could
+  // silently switch itself off a few seconds later when a background probe
+  // finally answered." Every provider row now renders the same binary switch
+  // unconditionally - there is no second rendering path left to contrast it
+  // against, so the "with enablementMode absent" framing this describe block
+  // used to test under is gone too. What survives is the one fact worth
+  // keeping on its own: the switch calls `setEnabled` with the plain
+  // {providerId, enabled, profileAction} shape and no `mode` field.
+  it("clicking the enable switch calls setEnabled with no mode field", () => {
+    // Two enabled providers so the one-enabled floor doesn't block the click.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const switchElement = screen.getByRole("switch");
+    fireEvent.click(switchElement);
+
+    expect(providerMocks.setEnabledMutate).toHaveBeenCalledTimes(1);
+    const variables = firstSetEnabledCall();
+    expect(variables).not.toHaveProperty("mode");
+    // Default-selected provider is whichever ORDERED_PROVIDERS ranks
+    // first (opencode, ahead of traycer) - the row identity isn't the
+    // point of this test, the absent `mode` is.
+    //
+    // `enabled: false` is asserted alongside it because the absence of `mode`
+    // is only half the contract: with the tri-state gone, this boolean is the
+    // ENTIRE payload's worth of intent, so a switch that sent the unflipped
+    // value would satisfy every other assertion here. The row starts enabled
+    // (see the two-provider fixture above), so the click must request off.
+    expect(variables).toMatchObject({
+      providerId: "opencode",
+      enabled: false,
+      profileAction: null,
+    });
+  });
+
+  // The detail pane's inert gate used to be keyed on the sticky MODE rather
+  // than the effective `enabled` boolean, specifically so an auto-undetected
+  // provider (`enabled: false` with no explicit off) stayed reachable for its
+  // sign-in CTA. That distinction is gone along with the mode: `enabled: false`
+  // now has exactly one cause - the user turned the provider off - so
+  // `providers-settings-panel.tsx` keys the gate on `!state.enabled` directly
+  // (see its comment on `detailPaneInert`), and there is no longer a case
+  // where a disabled provider's pane stays reachable.
+  describe("detail pane inert gate", () => {
+    function singleProvider(overrides: { readonly enabled: boolean }): void {
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "traycer",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: overrides.enabled,
+          },
+        ],
+      };
+    }
+
+    it("is inert exactly when the provider is disabled", () => {
+      singleProvider({ enabled: false });
+      const { container, unmount } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).not.toBeNull();
+      unmount();
+
+      singleProvider({ enabled: true });
+      const { container: container2 } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container2.querySelector("[inert]")).toBeNull();
+    });
+  });
+
+  it("renders capability-driven tabs and hides unsupported ones", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openUsageLimitsTab();
+
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Usage limits" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+
+    expectPinnedRailLayout();
+
+    fireEvent.click(railProviderRow("Cursor", false));
+
+    expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+  });
+
+  it("keeps the current tab across providers when both support it", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [{ key: "A", value: "1" }],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [{ key: "B", value: "2" }],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Env");
+    expect(screen.getByDisplayValue("A")).toBeDefined();
+
+    fireEvent.click(railProviderRow("Cursor", false));
+    expect(screen.getByDisplayValue("B")).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("active");
+  });
+
+  // The Account tab renders the API-key field, and Radix UNMOUNTS an inactive
+  // `TabsContent`. Held inside the section, a pasted key would be destroyed by
+  // an ordinary tab switch - the section used to escape that by sitting outside
+  // the tab bar entirely, so moving it onto a tab is what put the draft at
+  // risk. A provider switch is the one case that MUST still clear it: a key
+  // typed for Cursor appearing in Devin's field would be a far worse bug than
+  // losing it.
+  it("keeps a typed API key across tab switches, but not across providers", () => {
+    const apiKeyProvider = (
+      providerId: ProviderCliState["providerId"],
+    ): ProviderCliState =>
+      providerState({
+        providerId,
+        selected: { kind: "bundled" },
+        candidates: [],
+        envOverrides: [],
+        nativeCapabilities: CURSOR_TABS,
+        apiKey: { supported: true, configured: false, source: null },
+      });
+    providerMocks.listResult.data = {
+      providers: [apiKeyProvider("cursor"), apiKeyProvider("devin")],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Account");
+    const field = (): HTMLInputElement =>
+      within(screen.getByRole("tabpanel")).getByLabelText("API key");
+    fireEvent.change(field(), { target: { value: "sk-live-secret" } });
+    expect(field().value).toBe("sk-live-secret");
+
+    selectTab("Env");
+    selectTab("Account");
+    expect(field().value).toBe("sk-live-secret");
+
+    fireEvent.click(railProviderRow("Devin", false));
+    selectTab("Account");
+    expect(field().value).toBe("");
+  });
+
+  it("falls back to the first supported tab when the current tab is missing", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: ENV_ONLY_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("MCP");
+    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+
+    fireEvent.click(railProviderRow("Amp", false));
+    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
+    expect(screen.getByText("Environment variables")).toBeDefined();
+  });
+
+  it("deep-links focusTab once-and-clear alongside focusHarnessId", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("mcp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "MCP" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+  });
+
+  it("opens the FOCUSED provider's own first tab when no focusTab is given", () => {
+    // The "Add API key" CTA sets `focusHarnessId` and no `focusTab`, so the
+    // initial tab falls out of the default rule. That default is now
+    // provider-dependent (account -> usage -> ...), which makes deriving it
+    // from the RAIL'S FIRST provider actively wrong: opencode has no API key
+    // and defaults to `usage`, and because amp also advertises `usage` the
+    // stale value survives `resolveTabForProvider` and the pane settles on
+    // the usage tab - never showing the key field the CTA exists to
+    // reach.
+    useProvidersFocusStore.getState().setFocusHarnessId("amp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+    ).toBe("active");
+    // Discriminating: the usage tab is rendered and selectable for amp,
+    // so this is the deep link picking the right one of two live tabs rather
+    // than the wrong one being absent.
+    expect(
+      screen
+        .getByRole("tab", { name: "Usage limits" })
+        .getAttribute("data-state"),
+    ).toBe("inactive");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+  });
+
+  it("ignores focusTab when the target provider does not support it", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("general");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("active");
+  });
+
+  it("shows Plugins tab body and Skills tab body", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("Plugins");
+    // F5 replaced the "Installed plugins" heading with the shared scope
+    // picker. Match the MCP suite's aria-label idiom so this both identifies
+    // the Plugins tab body and covers the control the heading used to stand
+    // in for.
+    expect(
+      screen.getByRole("button", { name: /^Plugins location/ }),
+    ).toBeDefined();
+
+    selectTab("Skills");
+    expect(
+      screen.getByRole("textbox", { name: "Search skills" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /^Skills location/ }),
+    ).toBeDefined();
+  });
+
+  it("does not flush terminal-agent args on keystroke alone", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("CLI & Args");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: "--foo" } });
+
+    expect(providerMocks.setTerminalAgentArgsMutate).not.toHaveBeenCalled();
+  });
+
+  it("saves terminal-agent args once across the post-save remount", () => {
+    // `TerminalAgentArgsSection` is keyed on `state.terminalAgentArgs`, so a
+    // successful save remounts it. That remount is the dangerous moment: any
+    // commit-on-unmount or commit-on-mount path would re-fire the mutation
+    // with the value it just saved. The `next === saved` guard in `commit()`
+    // plus having no unmount cleanup is what keeps it at exactly one call.
+    const args = "--foo";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("CLI & Args");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: args } });
+    fireEvent.blur(input);
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      terminalAgentArgs: args,
+    });
+
+    // The host now reports the saved value: the key changes and the section
+    // remounts with `saved === draft`.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          terminalAgentArgs: args,
+        }),
+      ],
+    };
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
   });
 
   it("does not render profile management when the host reports no profiles", () => {
@@ -1221,6 +3025,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1231,6 +3036,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     expect(
       screen.getByRole("button", {
@@ -1251,19 +3058,24 @@ describe("<ProvidersSettingsPanel />", () => {
     const addProfileButton = screen.getByRole("button", {
       name: "Add profile",
     });
-    expect(addProfileButton.getAttribute("data-variant")).toBe("outline");
-    expect(addProfileButton.getAttribute("data-size")).toBe("xs");
+    expect(addProfileButton.getAttribute("data-variant")).toBe("default");
+    expect(addProfileButton.getAttribute("data-size")).toBe("sm");
     expect(screen.getByText("Profiles")).toBeDefined();
     const manageProfileButton = screen.getByRole("button", {
       name: "Manage profile",
     });
     expect(manageProfileButton.getAttribute("data-variant")).toBe("outline");
     expect(manageProfileButton.getAttribute("data-size")).toBe("xs");
-    const profileSummaryActions = manageProfileButton.closest(".flex-wrap");
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
     if (!(profileSummaryActions instanceof HTMLElement)) {
       throw new Error("Expected profile summary and actions row");
     }
-    expect(within(profileSummaryActions).getByText("No plan")).toBeDefined();
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
@@ -1290,7 +3102,9 @@ describe("<ProvidersSettingsPanel />", () => {
     }
     const removeProfileDisabledReason =
       "This profile uses your default CLI login and cannot be removed.";
-    expect(removeProfileTooltipTrigger.title).toBe(removeProfileDisabledReason);
+    expect(tooltipTextNear(removeProfileTooltipTrigger)).toBe(
+      removeProfileDisabledReason,
+    );
     expect(removeProfileButton.getAttribute("aria-label")).toBe(
       `Remove profile. ${removeProfileDisabledReason}`,
     );
@@ -1304,7 +3118,15 @@ describe("<ProvidersSettingsPanel />", () => {
     const refreshButton = screen.getByRole("button", {
       name: "Refresh profile statuses and usage limits",
     });
-    expect(addProfileButton.nextElementSibling).toBe(refreshButton);
+    // The add-profile button now sits inside the span that lets its tooltip
+    // fire while it is disabled, so adjacency is measured from that span.
+    // Both buttons now sit inside the span that lets their tooltip fire while
+    // disabled, so adjacency is asserted between those spans.
+    expect(
+      addProfileButton.parentElement?.nextElementSibling?.contains(
+        refreshButton,
+      ),
+    ).toBe(true);
     fireEvent.click(refreshButton);
     await waitFor(() => {
       expect(providerMocks.refreshProviders).toHaveBeenCalledTimes(1);
@@ -1338,6 +3160,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1348,6 +3171,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1389,6 +3214,72 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "ambient",
       createProfile: null,
     });
+  });
+
+  it("shows a copyable CLI command for a managed profile", () => {
+    const command =
+      "CODEX_HOME='/profiles/work' CODEX_SQLITE_HOME='/profiles/ambient' codex";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            {
+              ...profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              launchCommand: { command, shell: "posix" },
+            },
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit profile" });
+    expect(within(dialog).getByText("Open from terminal")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Run this command on this host to open Codex with this profile.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByLabelText("Codex profile launch command").textContent,
+    ).toBe(command);
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Copy Codex profile launch command",
+      }),
+    ).toBeDefined();
   });
 
   it("resets the edit draft when reopening the same or a different profile", () => {
@@ -1436,6 +3327,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1446,6 +3338,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1522,6 +3416,7 @@ describe("<ProvidersSettingsPanel />", () => {
         oauthArgs: ["auth", "login"],
         token: null,
         codePaste: null,
+        terminalLogin: null,
       },
     };
     const renderSection = (hostId: string): ReactNode => (
@@ -1531,11 +3426,17 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
+          startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}
           onDismissFailedAttempt={vi.fn()}
           selectedProfileId={null}
           onSelectedProfileIdChange={vi.fn()}
+          profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={vi.fn()}
         />
       </TooltipProvider>
     );
@@ -1593,6 +3494,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1603,6 +3505,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -1684,6 +3588,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile and shows its persisted label, along
     // with its drift notice, tier, and redacted email.
     expect(screen.getAllByText("Terminal account").length).toBeGreaterThan(0);
@@ -1717,7 +3623,91 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    expect(screen.getAllByText("Signed out").length).toBeGreaterThan(0);
+    const manageProfileButton = screen.getByRole("button", {
+      name: "Manage profile",
+    });
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
+    if (!(profileSummaryActions instanceof HTMLElement)) {
+      throw new Error("Expected signed-out profile summary and actions row");
+    }
+    expect(
+      within(profileSummaryActions).getByText("Signed out", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", {
+        name: "Manage profile",
+      }),
+    ).toBe(manageProfileButton);
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
+  });
+
+  it("selects a disabled managed profile for Settings management", () => {
+    const disabledProfile = {
+      ...profile({
+        profileId: "managed-disabled",
+        kind: "managed",
+        label: "Disabled profile",
+        email: "disabled@example.test",
+        tier: "Pro",
+        authStatus: "authenticated",
+        duplicateOfProfileId: null,
+        ambientDriftNotice: null,
+      }),
+      enabled: false,
+    };
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            disabledProfile,
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Disabled profile, Disabled",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Disabled profile",
+    );
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
@@ -1759,6 +3749,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile - select "Work" to bring its email
     // into view.
@@ -1806,6 +3798,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -1816,6 +3809,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -1868,6 +3863,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -1878,6 +3874,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -1926,6 +3924,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -1936,6 +3935,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2002,6 +4003,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -2012,6 +4014,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2068,6 +4072,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -2078,6 +4083,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2149,6 +4156,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2195,6 +4204,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2266,6 +4277,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -2276,6 +4288,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2305,6 +4319,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2377,6 +4393,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -2430,6 +4448,73 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
   });
 
+  it("normalizes an omitted enabled field on the Settings awaitLogin flow row", async () => {
+    const returnedProfiles: ProviderProfile[] = [];
+    const entryProfile = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "Work",
+      email: "work@example.test",
+      tier: "Pro",
+      authStatus: "unauthenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProviderProfileReauthPanel
+          state={codePasteReauthProviderState()}
+          profile={entryProfile}
+          onSameAccountReconnected={(returnedProfile) =>
+            returnedProfiles.push(returnedProfile)
+          }
+          onCancel={vi.fn()}
+          onDone={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: false,
+        existingProfileId: null,
+        state: {
+          profiles: [
+            legacyAwaitLoginProfile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(returnedProfiles).toHaveLength(1);
+    });
+    expect(returnedProfiles[0]?.enabled).toBe(true);
+  });
+
   it("re-polls awaitLogin instead of failing when the ambient row is still authPending after the login completes (terminal-account switch)", async () => {
     providerMocks.listResult.data = {
       providers: [codePasteReauthProviderState()],
@@ -2440,6 +4525,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -2521,7 +4608,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // Exactly one login child for the whole switch - re-polling never
     // restarts the OAuth flow.
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
-  }, 10_000);
+  });
 
   it("ignores an in-flight ambient re-poll that resolves after the sign-in was cancelled", async () => {
     providerMocks.listResult.data = {
@@ -2533,6 +4620,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -2602,6 +4691,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2662,6 +4753,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -2720,6 +4813,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2798,6 +4893,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: {},
+            terminalLogin: null,
           },
         },
       ],
@@ -2808,6 +4904,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2893,6 +4991,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -2903,6 +5002,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2971,6 +5072,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -2981,6 +5083,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -3034,6 +5138,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3044,6 +5149,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // First attempt fails after the await phase - the section banner appears.
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
@@ -3117,6 +5224,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3167,6 +5275,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3177,6 +5286,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -3231,6 +5342,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3241,6 +5353,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3302,6 +5416,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3312,6 +5427,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3378,6 +5495,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3388,6 +5506,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3452,6 +5572,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3462,6 +5583,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3493,6 +5616,165 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("opens a signed-out profile deep link on the exact provider and starts sign-in", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "work-profile",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "claude",
+      hostId: "local",
+      profileId: "work-profile",
+      startSignIn: true,
+    });
+    // The scope mock's `setHostId` is inert, so model the applied switch: the
+    // rail consumes a profile intent only when the host on screen IS the
+    // intent's target (the foreign-host case is covered separately).
+    hostScopeMocks.hostId = "local";
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The usage tab is now the default first tab for providers without an
+    // API-key Account tab, so startSignIn opens the dialog immediately. That
+    // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
+    // fail getByRole("tab") without { hidden: true }.
+    expect(
+      railProviderRow("Claude Code", true).getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", {
+          name: "Work, Signed out",
+          hidden: true,
+        })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledWith(
+        {
+          providerId: "claude-code",
+          profileId: "work-profile",
+          createProfile: null,
+        },
+        expect.anything(),
+      );
+    });
+  });
+
+  it("opens an ambient profile deep link even when it is not the provider's first profile", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "work-profile",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        }),
+      ],
+    };
+    const focus = useProvidersFocusStore.getState();
+    focus.setProfileFocus({
+      harnessId: "claude",
+      hostId: null,
+      profileId: "ambient",
+      startSignIn: false,
+    });
+    focus.setFocusTab("usage");
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      railProviderRow("Claude Code", false).getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Terminal account, Terminal" })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
   });
 
   it("signs in again for an existing profile, states when a different account was applied, and can cancel the restart", async () => {
@@ -3531,6 +5813,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3542,16 +5825,19 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
       "disabled",
       true,
@@ -3610,6 +5896,13 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("button", { name: "Keep new account" }),
     ).toBeDefined();
+    // Sign-in intent, but a CHANGED account: the acknowledgment survives the
+    // same-account auto-close, because this notice is the only thing telling
+    // the user the profile was rebound. Nothing settled, so no toast either.
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    expect(toast.success).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
 
@@ -3642,6 +5935,350 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the whole dialog with a toast when a sign-in-intent reconnect returns the same account", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    // The row's own "Sign in" button - sign-in intent, so the dialog exists
+    // for the sign-in and nothing else.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              // The same account the signed-out row already named.
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Sign in to Work" }),
+      ).toBeNull();
+    });
+    // Not merely skipped on the way out - never rendered. The acknowledgment
+    // confirmed something the host had already persisted, then stranded the
+    // user on an edit form whose only exit was Cancel.
+    expect(screen.queryByText("Signed in as")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
+    expect(toast.success).toHaveBeenCalledWith(
+      `Signed in as ${redactEmail("work@example.test")}`,
+    );
+  });
+
+  it("freezes the entry row so the header and the changed-account notice survive the list committing the new identity", async () => {
+    providerMocks.listResult.data = {
+      providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+
+    // Production ordering, which a static fixture would otherwise hide:
+    // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row
+    // into the `providers.list` cache, and query-core AWAITS that before the
+    // flow's own per-call `onSuccess` settles the step. So the row this panel
+    // reads ALREADY names the new account by the first render of the settled
+    // step - it cannot be the "before" side of the comparison.
+    //
+    // The re-render is the load-bearing half: mutating the fixture alone
+    // changes nothing, because the settle below re-renders only the panel
+    // LEAF, while the profile row is a prop from an ancestor. `setQueryData`
+    // is what re-renders that ancestor in production.
+    providerMocks.listResult.data = {
+      providers: [
+        codexWithManaged(workProfileSignedInAs("personal@example.test")),
+      ],
+    };
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [workProfileSignedInAs("personal@example.test")] },
+      });
+    });
+
+    expect(
+      screen.getByText((content) =>
+        content.includes(
+          `Work is now signed in as ${redactEmail("personal@example.test")} ` +
+            `(was ${redactEmail("work@example.test")})`,
+        ),
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Keep new account" }),
+    ).toBeDefined();
+    // And emphatically NOT the same-account auto-close: rebinding a profile to
+    // a different account must never be the silent path.
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    expect(toast.success).not.toHaveBeenCalled();
+    // The header names the journey the user started, not the state the commit
+    // above produced - a profile that was signed out is still "Signing in",
+    // never relabelled mid-flow as an account SWITCH it never was.
+    expect(screen.getByText("Signing in")).toBeDefined();
+    expect(screen.queryByText("Switching account")).toBeNull();
+  });
+
+  it("closes a sign-in-intent dialog once the user acknowledges a changed account", async () => {
+    providerMocks.listResult.data = {
+      providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [workProfileSignedInAs("personal@example.test")] },
+      });
+    });
+
+    // The notice still gets its stop - that is the whole carve-out.
+    fireEvent.click(screen.getByRole("button", { name: "Keep new account" }));
+
+    // But acknowledging it ends the dialog rather than handing back an edit
+    // form with nothing staged in it: the user came here to sign in, and the
+    // sign-in is over however the account came back.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Sign in to Work" }),
+      ).toBeNull();
+    });
+    expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
+    // No toast on this path: the notice they just confirmed WAS the
+    // confirmation, so nothing was taken away for a toast to replace.
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("keeps the acknowledgment and the open dialog when a same-account reconnect came from Switch account", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    // Manage-profile intent: the name/color fields are live and uncommitted
+    // until "Save changes", so this entry must land back on the form.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByText("Signed in as")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Done" })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    // And Done still returns to the form rather than closing over the top of
+    // whatever the user was editing.
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Switch account" }),
+    ).toBeDefined();
   });
 
   it("does not show a stale identity step after cancelling a re-auth during waiting and reopening", async () => {
@@ -3680,6 +6317,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3690,6 +6328,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3742,7 +6382,13 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Opening the sign-in page…")).toBeDefined();
   });
 
-  it("does not offer the share-skills-and-plugins checkbox for a provider without the overlay mechanism (codex)", () => {
+  it("does not offer the share-skills-and-plugins checkbox for codex (overlay layout, not a bug)", () => {
+    // Codex's exclusion is CORRECT: seedManagedProfileDir honours
+    // shareSkillsAndPlugins only on the partial-overlay layout branch
+    // (profile-seeding.ts), and codex takes the overlay branch whose seeding
+    // never reads the flag. Offering the checkbox here would send a request
+    // the host silently discards. Do not "fix" this by adding codex to
+    // PROVIDER_SHARES_SKILLS_AND_PLUGINS without changing the host layout.
     providerMocks.listResult.data = {
       providers: [
         {
@@ -3768,6 +6414,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3778,6 +6425,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3811,6 +6460,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3821,6 +6471,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3870,6 +6522,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3880,6 +6533,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3920,6 +6575,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -3930,6 +6586,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3967,11 +6625,506 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(
       screen.getByText(
-        "This account is already linked to Terminal account. No new profile was created.",
+        "Terminal account already uses this account and organization. Sign in again and choose a different organization.",
       ),
     ).toBeDefined();
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
+
+    // "Sign in again" restarts the OAuth flow so the user can pick a
+    // different org in the browser picker (not a dead-end Done-only state).
+    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    });
+    const retryCall = providerMocks.startLoginMutate.mock.calls.at(1);
+    if (retryCall === undefined) {
+      throw new Error("Expected a second start login call.");
+    }
+    expect(retryCall[0]).toEqual({
+      providerId: "codex",
+      profileId: null,
+      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+    });
+  });
+
+  it("holds on a post-auth naming step when the new profile shares an email with an existing one", () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: "Team",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    // Email collision holds the dialog open on the resolved identity instead
+    // of auto-finalizing - the split-by-org case that minting distinct
+    // same-email profiles makes possible.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeDefined();
+    expect(within(dialog).getByText("Signed in as")).toBeDefined();
+    expect(
+      within(dialog).getByText(redactEmail("shared@example.test")),
+    ).toBeDefined();
+    expect(within(dialog).getByText("Team")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByRole("button", { name: "Save profile" }),
+    ).toBeDefined();
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+    expect(within(dialog).getByLabelText("Profile name")).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("auto-finalizes without a naming step when the new profile's email is unique", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "ambient@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "fresh@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    // Single-account / unique-email path must keep auto-finalizing - the
+    // naming step is only for the collision case.
+    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
+    expect(
+      screen.queryByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeNull();
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("saves an unedited naming-step label without calling rename", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDefined();
+    // Label is still the host default - Save must finalize without a rename
+    // RPC (empty labels are disabled; "New profile" is a real non-empty value).
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "New profile",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("renames then finalizes when the naming-step label is edited before Save", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    const [renameVariables, renameOptions] = firstRenameProfileCall();
+    expect(renameVariables).toEqual({
+      providerId: "codex",
+      profileId: "managed-1",
+      label: "Work org",
+    });
+    act(() => renameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("keeps the naming step open with an inline error when rename fails, and allows retry", async () => {
+    const ambient = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const created = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "New profile",
+      email: "shared@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [ambient],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [ambient, created] },
+        existingProfileId: null,
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
+
+    // Simulate a failed rename mutation: no onSuccess, surface the error
+    // the dialog reads from the rename hook, then re-render.
+    act(() => {
+      providerMocks.renameProfileError = new Error("rename failed");
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(
+      screen.getByText("Couldn't save the name. Try again."),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDefined();
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
+
+    // Retry: clear the prior error and let the second Save succeed.
+    act(() => {
+      providerMocks.renameProfileError = null;
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(2);
+    const [, retryRenameOptions] =
+      providerMocks.renameProfileMutate.mock.calls.at(1) ?? [];
+    if (retryRenameOptions === undefined) {
+      throw new Error("Expected a second rename call.");
+    }
+    act(() => retryRenameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+
+    const [, recolorOptions] = firstRecolorProfileCall();
+    act(() => recolorOptions.onSuccess());
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 
   it("warns when the selected accent color is already used by the ambient terminal account", () => {
@@ -4003,6 +7156,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -4013,6 +7167,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -4042,6 +7198,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profiles: [
             {
               profileId: "managed-1",
+              enabled: true,
               kind: "managed",
               authType: "oauth",
               label: "Work",
@@ -4058,6 +7215,7 @@ describe("<ProvidersSettingsPanel />", () => {
               },
               usageUpdatedAt: null,
               rateLimitStatus: "unknown",
+              rateLimitLimitedScopes: null,
               duplicateOfProfileId: null,
               ambientDriftNotice: null,
               accentColor: null,
@@ -4072,6 +7230,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     expect(screen.getAllByText("ChatGPT Pro 20x Subscription").length).toBe(1);
   });
@@ -4116,6 +7276,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile - select "Work" to bring its editable
     // details dialog (name field, actions) into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -4138,7 +7300,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(
-        "Chats that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
+        "Agents that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
       ),
     ).toBeDefined();
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -4177,6 +7339,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -4187,6 +7350,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -4283,6 +7448,7 @@ describe("<ProvidersSettingsPanel />", () => {
             oauthArgs: ["auth", "login"],
             token: null,
             codePaste: null,
+            terminalLogin: null,
           },
         },
       ],
@@ -4293,6 +7459,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -4332,5 +7500,369 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Mobile section picker: below `md`, `ProviderDetail` swaps the desktop tab rail
+// for a dropdown (see `provider-section-select.tsx`). A separate, top-level
+// `describe` rather than nesting inside the suite above - it needs its own
+// narrow-viewport `beforeEach`/`afterEach` (the outer suite's tests assume the
+// default 1024px width), and keeping the override scoped to these tests is what
+// stops it leaking into every test above or below.
+// -----------------------------------------------------------------------------
+
+// Radix Select opens from a click on the trigger, and the trigger is named by
+// its `aria-label` - which is what tells it apart from the PROVIDER select one
+// row above it. (The three-way Auto/On/Off enablement control used to render
+// a THIRD combobox, labelled "Availability", when a provider's `enablementMode`
+// was set - that control is gone, so querying by name is now belt-and-braces
+// rather than load-bearing, and is kept for that reason.)
+function openSectionPicker(): void {
+  fireEvent.click(screen.getByRole("combobox", { name: "Section" }));
+}
+
+/**
+ * The section picker's own rendered items, scoped to ITS `Select` root - not
+ * `screen`, which also holds the always-mounted `ProvidersMobileSelect` one
+ * row above it (same collision `railProviderRow` exists for). The mock
+ * renders a `Select`'s trigger and content as siblings under one wrapping
+ * element (see the `@/components/ui/select` mock), and the trigger is
+ * `role="combobox"` rather than `"button"`, so scoping to that sibling group
+ * and querying `role="button"` reaches exactly the section rows and nothing
+ * else on the page.
+ */
+function sectionPicker(): BoundFunctions<typeof queries> {
+  const trigger = screen.getByRole("combobox", { name: "Section" });
+  const root = trigger.parentElement;
+  if (root === null) {
+    throw new Error("Section picker trigger has no parent element");
+  }
+  return within(root);
+}
+
+// `FULL_TABS` (general/env/usage/mcp/plugins/skills) has no `account` or
+// `modelProviders` entry, so it cannot exercise every section row. This adds
+// both, on top of the same `mcp`/`plugins`/`skills` capability blocks.
+const PICKER_EIGHT_TABS: ProviderNativeCapabilities = {
+  ...FULL_TABS,
+  supportedTabs: [
+    "general",
+    "usage",
+    "env",
+    "modelProviders",
+    "mcp",
+    "plugins",
+    "skills",
+  ],
+};
+
+// Advertises only `general` and `mcp`; combined with `apiKey.supported` below
+// this yields exactly three tabs (account, general, mcp) via
+// `supportedTabsFor` - see `provider-settings-tabs.ts`.
+const PICKER_THREE_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["general", "mcp"],
+  mcp: SAMPLE_MCP,
+  plugins: null,
+  skills: null,
+  modelProviders: null,
+};
+
+function pickerProviderState(input: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly nativeCapabilities: ProviderNativeCapabilities;
+}): ProviderCliState {
+  return providerState({
+    providerId: input.providerId,
+    selected: { kind: "bundled" },
+    candidates: [],
+    envOverrides: [],
+    nativeCapabilities: input.nativeCapabilities,
+    // These fixtures need `account` among the sections, and `supportedTabsFor`
+    // derives that one from the API key rather than from the advertisement.
+    apiKey: { supported: true, configured: false, source: null },
+  });
+}
+
+describe("<ProvidersSettingsPanel /> mobile section picker", () => {
+  beforeEach(() => {
+    // `useIsMobileViewport` reads `window.innerWidth` directly (not
+    // `matchMedia().matches`, which the global test shim always reports as
+    // `false`), so setting it before render is enough to force the phone
+    // presentation.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
+    hostScopeMocks.setHostId.mockClear();
+    hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.host = undefined;
+    hostScopeMocks.status = undefined;
+    hostScopeMocks.client = null;
+    // Default fixture for the "entering a provider" tests below: a single
+    // provider advertising every hub section.
+    providerMocks.listResult.data = {
+      providers: [
+        pickerProviderState({
+          providerId: "claude-code",
+          nativeCapabilities: PICKER_EIGHT_TABS,
+        }),
+      ],
+    };
+    providerMocks.listResult.isError = false;
+    providerMocks.listResult.error = undefined;
+  });
+
+  afterEach(() => {
+    cleanup();
+    // Restore before the next file's tests (or the suite above, if test order
+    // ever changes) see the default desktop width again.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+    });
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
+  });
+
+  it("offers every supported section as a dropdown row, in the desktop order", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The card grid this replaced was a `TabsPrimitive.List` of tab triggers,
+    // and it was the whole of the phone rail. Nothing renders one now.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+
+    openSectionPicker();
+
+    // Same list and same labels the desktop rail draws, in `PROVIDER_TAB_ORDER`
+    // - the point of the swap is that only the CONTAINER differs. Compared as
+    // one ordered array rather than eight presence checks, since the order is
+    // half of what is being asserted.
+    expect(
+      sectionPicker()
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual([
+      "Account",
+      "Profiles & Limits",
+      "CLI & Args",
+      "Env",
+      "Model Providers",
+      "MCP",
+      "Plugins",
+      "Skills",
+    ]);
+  });
+
+  it("shows the picked section's body without a second gesture", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Env" }));
+
+    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByRole("tabpanel")).toBeDefined();
+
+    // The dropdown holds the selection it was given: reopening it marks Env as
+    // the checked row. Asserted through `data-state` rather than
+    // `aria-selected`, which Radix only sets on the FOCUSED item.
+    openSectionPicker();
+    expect(
+      sectionPicker()
+        .getByRole("button", { name: "Env" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
+  });
+
+  it("keeps every inactive section pane hidden", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Env" }));
+
+    // The dead-space regression this pins, now owned entirely by Radix. It
+    // mounts EVERY pane's div - active or not - and hides the inactive ones
+    // through a computed `hidden` that caller props spread over, so a phone arm
+    // that passes `hidden` with `false` or `undefined` (rather than omitting
+    // the key) un-hides all seven empty panes and their stacked vertical
+    // paddings render as a blank band above or below the active body.
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    const mounted = screen.getAllByRole("tabpanel", { hidden: true });
+    expect(mounted).toHaveLength(8);
+    expect(mounted.filter((pane) => pane.hasAttribute("hidden"))).toHaveLength(
+      7,
+    );
+  });
+
+  it("names each section pane, since a phone renders no tab to name it after", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Radix points a pane's `aria-labelledby` at the trigger that selects it.
+    // The dropdown replaces the whole `TabsList`, so that id names an element
+    // that is not rendered - the phone arm labels the pane by its section
+    // instead, and clears the dangling reference.
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.getAttribute("aria-labelledby")).toBeNull();
+    expect(panel.getAttribute("aria-label")).toBe("Account");
+  });
+
+  it("opens a deep link straight on the requested tab", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "openrouter",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    useProvidersFocusStore.setState({
+      focusHarnessId: "opencode",
+      focusTab: "env",
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The deep link's section is the one on screen, and it is READABLE on
+    // arrival rather than merely present in the DOM - a phone spends no gesture
+    // on a chooser for a question the caller already answered.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByRole("tabpanel").getAttribute("aria-label")).toBe("Env");
+  });
+
+  it("renders exactly a 3-section provider's sections, no others", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        pickerProviderState({
+          providerId: "amp",
+          nativeCapabilities: PICKER_THREE_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+
+    expect(
+      sectionPicker()
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Account", "CLI & Args", "MCP"]);
+  });
+
+  it("keeps the same tabpanel element mounted when the active section is re-picked", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const panel = screen.getByRole("tabpanel");
+
+    // Re-picking the section that is already active is a no-op selection, not
+    // a remount: Radix only calls `onValueChange` when the value actually
+    // changes, so the body keeps its queries, scroll position and half-typed
+    // fields.
+    openSectionPicker();
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Account" }));
+
+    expect(screen.getByRole("tabpanel")).toBe(panel);
+  });
+
+  it("does not make the section pane a scroll box on a phone", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Checked as exact class-LIST membership rather than a substring: the
+    // `md:`-prefixed class contains the unprefixed one as a substring
+    // (`md:overflow-y-auto` contains `overflow-y-auto`), so a substring check
+    // cannot tell "scrolls at every width" from "scrolls from md up" apart -
+    // and telling those two apart is the entire point of this assertion.
+    // jsdom applies no CSS and computes no layout, so the class list is the
+    // only observable this test has for which breakpoint a scroll declaration
+    // lives under.
+    const panel = screen.getByRole("tabpanel");
+    const classes = panel.className.split(" ");
+    expect(classes).not.toContain("overflow-y-auto");
+    expect(classes).not.toContain("min-h-0");
+    expect(classes).toContain("md:overflow-y-auto");
+    expect(classes).toContain("md:min-h-0");
+  });
+
+  it("drops the panel blurb on a phone so the sync line shares the heading row", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The blurb's absence is what keeps the global status control on the
+    // title's own line: the shell header is a wrapping row of
+    // [title + description] and [action], and the description's max-content
+    // width alone exceeds a phone-width row, which pushes the action onto a
+    // row of its own.
+    expect(screen.queryByText(/Choose the CLI binary/)).toBeNull();
+    expect(screen.getByTestId("providers-global-status")).toBeDefined();
   });
 });

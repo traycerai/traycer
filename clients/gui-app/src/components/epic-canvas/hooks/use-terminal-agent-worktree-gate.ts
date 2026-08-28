@@ -4,7 +4,6 @@ import type {
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import type { AgentMode } from "@/components/home/data/landing-options";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import {
@@ -16,7 +15,6 @@ export interface TerminalAgentLaunchSelection {
   readonly harnessId: TuiHarnessId;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
-  readonly agentMode: AgentMode;
   readonly terminalAgentArgs: string | null;
   // Which of the harness's logged-in profiles (subscriptions) to launch this
   // agent on. `null` = the ambient/host login.
@@ -43,6 +41,10 @@ export interface TerminalAgentWorktreeGate {
 export function useTerminalAgentWorktreeGate(
   epicId: string,
   tabId: string,
+  // Host the agent launches on. The remembered per-epic intent is host-local
+  // (its paths and branches only exist on one machine), so a `null` host - no
+  // resolved target - records nothing rather than stamping another host's.
+  hostId: string | null,
 ): TerminalAgentWorktreeGate {
   const terminalAgentCreate = useCreateTuiAgent();
 
@@ -52,11 +54,11 @@ export function useTerminalAgentWorktreeGate(
       if (worktreeIntent !== null && worktreeIntent.entries.length > 0) {
         useWorktreeIntentMemoryStore
           .getState()
-          .setEpicIntent(epicId, worktreeIntent, Date.now());
+          .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
       }
       useWorktreeIntentStagingStore
         .getState()
-        .clear(pendingTerminalAgentStagingKey(epicId));
+        .clear(pendingTerminalAgentStagingKey(hostId, epicId));
       void terminalAgentCreate.create({
         epicId,
         tabId,
@@ -66,8 +68,9 @@ export function useTerminalAgentWorktreeGate(
         harnessId: input.harnessId,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
-        agentMode: input.agentMode,
         forkSourceHarnessSessionId: null,
+        sourceTuiAgentId: null,
+        sourceProfileId: null,
         onStatusChange: null,
         worktreeIntent,
         workspaceMode: input.workspaceMode,
@@ -75,7 +78,7 @@ export function useTerminalAgentWorktreeGate(
         profileId: input.profileId,
       });
     },
-    [epicId, tabId, terminalAgentCreate],
+    [epicId, hostId, tabId, terminalAgentCreate],
   );
 
   return {

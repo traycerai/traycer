@@ -1,12 +1,12 @@
 import { useMemo, type ReactNode } from "react";
+import { ImageOff } from "lucide-react";
 
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
+import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+  type AttachmentBlobSrcState,
+  useChatAttachmentBlobSrc,
+} from "@/lib/attachments/use-attachment-blob-src";
 import {
   buildImageAttachmentDisplayLabels,
   fallbackImageAttachmentDisplayLabel,
@@ -15,6 +15,7 @@ import {
 import type { Attachment, ImageAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface UserMessageAttachmentGalleryProps {
   readonly align: "start" | "end";
   readonly attachments: ReadonlyArray<Attachment>;
@@ -74,13 +75,17 @@ function imageAttachmentRenderKey(attachment: ImageAttachment): string {
 }
 
 /**
- * Resolves the image source: persisted images (`hash`) stream their bytes from
- * the epic doc's attachments map into a shared blob URL via the content-addressed
- * cache; draft/optimistic images render their inline `dataUrl` directly. Returns
- * null while a persisted image's blob is still loading.
+ * Resolves the image source: persisted images (`hash`) fetch their bytes off the
+ * chat plane (this chat's tab host, epic doc as the legacy fallback) into a
+ * shared blob URL via the content-addressed cache; draft/optimistic images
+ * render their inline `dataUrl` directly. A persisted hash transitions from
+ * loading to unavailable after its grace period while remaining able to recover
+ * when bytes arrive later.
  */
-function useImageAttachmentSrc(attachment: ImageAttachment): string | null {
-  return useAttachmentBlobSrc(
+function useImageAttachmentSrc(
+  attachment: ImageAttachment,
+): AttachmentBlobSrcState {
+  return useChatAttachmentBlobSrc(
     attachment.hash,
     attachment.mediaType,
     attachment.dataUrl,
@@ -98,53 +103,71 @@ function ImageAttachmentThumb({
   const label =
     displayLabel ??
     fallbackImageAttachmentDisplayLabel({ id: "fallback", fileName: alt });
-  const src = useImageAttachmentSrc(attachment);
+  const image = useImageAttachmentSrc(attachment);
+  const triggerAriaLabel =
+    image.status === "unavailable"
+      ? `Open ${label.ariaLabel} (image unavailable)`
+      : `Open ${label.ariaLabel}`;
+  let thumbnail: ReactNode;
+  if (image.status === "loading") {
+    thumbnail = (
+      // muted-fill-ok: fills the timeline trigger below, same non-raised chat surface
+      <div className="size-full animate-pulse bg-muted/60" aria-hidden />
+    );
+  } else if (image.status === "unavailable") {
+    thumbnail = (
+      <div
+        // muted-fill-ok: fills the timeline trigger above, same non-raised chat surface
+        className="flex size-full items-center justify-center bg-muted/60 text-muted-foreground"
+        data-user-message-image-unavailable
+        aria-hidden
+      >
+        <ImageOff className="size-4" />
+      </div>
+    );
+  } else {
+    thumbnail = (
+      <img
+        src={image.src}
+        alt={alt}
+        className="size-full object-cover transition-transform group-hover:scale-[1.02]"
+        draggable={false}
+      />
+    );
+  }
+
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Open ${label.ariaLabel}`}
-          title={label.title}
-          className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
+        <TooltipWrapper
+          label={label.title}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <span
-            className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
-            data-user-message-image-badge={label.badgeLabel}
+          <button
+            type="button"
+            aria-label={triggerAriaLabel}
+            // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
+            className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {label.badgeLabel}
-          </span>
-          {src === null ? (
-            <div className="size-full animate-pulse bg-muted/60" aria-hidden />
-          ) : (
-            <img
-              src={src}
-              alt={alt}
-              className="size-full object-cover transition-transform group-hover:scale-[1.02]"
-              draggable={false}
-            />
-          )}
-        </button>
+            <span
+              className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+              data-user-message-image-badge={label.badgeLabel}
+            >
+              {label.badgeLabel}
+            </span>
+            {thumbnail}
+          </button>
+        </TooltipWrapper>
       </DialogTrigger>
-      <DialogContent
-        className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
-        showCloseButton
-      >
-        <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {src === null ? (
-          <div
-            className="aspect-video w-full animate-pulse rounded-lg bg-muted/60"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            className="block max-h-[min(90vh,52rem)] w-full rounded-lg object-contain"
-            draggable={false}
-          />
-        )}
-      </DialogContent>
+      <ExpandedImageDialogContent
+        title={alt}
+        alt={alt}
+        image={image}
+        suggestedName={attachment.name ?? null}
+        onCloseAutoFocus={undefined}
+      />
     </Dialog>
   );
 }

@@ -10,6 +10,8 @@ import {
   hostResponseFrameSchema,
   hostFatalErrorFrameSchema,
   fatalErrorDetailsSchema,
+  hostRestartIntentSchema,
+  HOST_RESTARTING_FATAL_CODE,
 } from "@traycer/protocol/framework/ws-protocol";
 
 /**
@@ -44,6 +46,51 @@ describe("ws-protocol canonical Zod schemas", () => {
       if (unionParse.success) {
         expect(unionParse.data.kind).toBe("open");
       }
+    });
+
+    it("accepts supportedMajors on manifest entries and strips unrelated future keys", () => {
+      const parsed = clientOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "t-0",
+        manifest: {
+          "host.echo": {
+            major: 2,
+            minor: 3,
+            supportedMajors: [1, 2],
+            futureKey: true,
+          },
+        },
+      });
+
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.manifest["host.echo"]).toEqual({
+          major: 2,
+          minor: 3,
+          supportedMajors: [1, 2],
+        });
+      }
+    });
+
+    it.each([
+      { supportedMajors: [] },
+      { supportedMajors: [-1] },
+      { supportedMajors: [1.5] },
+      { supportedMajors: ["1"] },
+    ])("rejects malformed supportedMajors: %j", ({ supportedMajors }) => {
+      expect(
+        clientOpenFrameSchema.safeParse({
+          kind: "open",
+          token: "t-0",
+          manifest: {
+            "host.echo": {
+              major: 2,
+              minor: 3,
+              supportedMajors,
+            },
+          },
+        }).success,
+      ).toBe(false);
     });
 
     it("pins current `open` frame wire bytes", () => {
@@ -304,6 +351,76 @@ describe("ws-protocol canonical Zod schemas", () => {
       expect(hostFrameSchema.safeParse(frame).success).toBe(true);
     });
 
+    it("keeps WORKTREE_BUSY holders on a `response` error envelope", () => {
+      const frame = {
+        kind: "response" as const,
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 1 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [
+            {
+              ownerRef: {
+                epicId: "e1",
+                ownerKind: "terminal-agent",
+                ownerId: "a1",
+              },
+              holdKind: "terminal-agent-pty",
+              activity: "idle",
+              label: "Claude Code",
+            },
+          ],
+        },
+      };
+
+      const parsed = hostResponseFrameSchema.parse(frame);
+      expect(parsed.error?.holders).toHaveLength(1);
+      expect(parsed.error?.holders?.[0]?.holdKind).toBe("terminal-agent-pty");
+    });
+
+    it("sanitizes malformed holders instead of rejecting the error envelope", () => {
+      const busy = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 1 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [{ not: "a holder" }],
+        },
+      });
+      expect(busy.success).toBe(true);
+      if (busy.success) {
+        expect(busy.data.error?.code).toBe("WORKTREE_BUSY");
+        expect(busy.data.error?.message).toBe("in use");
+        expect(busy.data.error?.holders).toBeUndefined();
+      }
+
+      const other = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-2",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "SOME_OTHER_ERROR",
+          message: "resolver failed",
+          holders: [{ not: "a holder" }],
+        },
+      });
+      expect(other.success).toBe(true);
+      if (other.success) {
+        expect(other.data.error?.code).toBe("SOME_OTHER_ERROR");
+        expect(other.data.error?.message).toBe("resolver failed");
+        expect(other.data.error?.holders).toBeUndefined();
+      }
+    });
+
     it("accepts a host `fatalError` frame with UNAUTHORIZED code", () => {
       const frame = {
         kind: "fatalError" as const,
@@ -405,6 +522,93 @@ describe("ws-protocol canonical Zod schemas", () => {
         retryable: "yes",
       };
       expect(fatalErrorDetailsSchema.safeParse(details).success).toBe(false);
+    });
+
+    it("parses a restart tombstone and returns it intact (P1.4 / D5 / M1)", () => {
+      const details = {
+        code: HOST_RESTARTING_FATAL_CODE,
+        reason: "The host is restarting and expects to be back shortly",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+        restartIntent: {
+          tombstoneId: "tombstone-1",
+          expiresAt: 1_700_000_000_000,
+        },
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.restartIntent).toEqual({
+          tombstoneId: "tombstone-1",
+          expiresAt: 1_700_000_000_000,
+        });
+      }
+    });
+
+    it("reads `restartIntent` as undefined on a frame from a host that predates the tombstone", () => {
+      const details = {
+        code: "UNAUTHORIZED" as const,
+        reason: "Invalid token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.restartIntent).toBeUndefined();
+      }
+    });
+
+    it("is not `.strict()`: an unknown extra key is stripped rather than rejected - the exact mechanism that lets every shipped client tolerate a new additive field", () => {
+      const details = {
+        code: "UNAUTHORIZED",
+        reason: "Invalid token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        someFutureFieldThisSchemaHasNeverHeardOf: { nested: "value" },
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect("someFutureFieldThisSchemaHasNeverHeardOf" in parsed.data).toBe(
+          false,
+        );
+        expect(parsed.data).toEqual({
+          code: "UNAUTHORIZED",
+          reason: "Invalid token",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+      }
+    });
+  });
+
+  describe("hostRestartIntentSchema", () => {
+    it("accepts a tombstone with a numeric `expiresAt`", () => {
+      const intent = {
+        tombstoneId: "tombstone-1",
+        expiresAt: 1_700_000_000_000,
+      };
+      const parsed = hostRestartIntentSchema.safeParse(intent);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data).toEqual(intent);
+      }
+    });
+
+    it("accepts `expiresAt: null` as a real answer, not a missing field", () => {
+      const intent = { tombstoneId: "tombstone-1", expiresAt: null };
+      const parsed = hostRestartIntentSchema.safeParse(intent);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.expiresAt).toBeNull();
+      }
+    });
+
+    it("rejects an empty `tombstoneId`", () => {
+      const intent = { tombstoneId: "", expiresAt: null };
+      expect(hostRestartIntentSchema.safeParse(intent).success).toBe(false);
     });
   });
 });

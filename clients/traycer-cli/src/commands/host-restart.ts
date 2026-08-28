@@ -3,6 +3,9 @@ import {
   finalizePendingCliUpgrade,
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
+import { assertHostNotBusy } from "../host/busy-check";
+import { attestInstallRuntime } from "../host/attested-install-runtime";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
@@ -10,6 +13,7 @@ import {
   type ServiceController,
   type ServiceLabel,
 } from "../service";
+import { withCliLock } from "../store/cli-lock";
 import {
   defaultSpawnImpl,
   defaultWriteImpl,
@@ -45,32 +49,92 @@ import {
 // A failed in-process finalize is non-fatal: the service is still
 // started, the pending state remains visible in Doctor, and the next
 // restart (or the helper) retries the swap.
-export const hostRestartCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
-  const label = serviceLabelFor(ctx.runtime.environment);
-  const controller = createServiceController();
-  const result = await restartWithPendingCliUpgradeFinalize({
-    environment: ctx.runtime.environment,
-    controller,
-    label,
-    parentPid: process.pid,
-    platform: osPlatform(),
-    spawnImpl: defaultSpawnImpl,
-    writeImpl: defaultWriteImpl,
-  });
-  return {
-    data: {
-      restarted: true,
-      label: label.id,
-      cliUpgrade: result.finalize,
-      helper: result.helper,
-      markerReconcile: result.markerReconcile,
-    },
-    human: humanForRestart(label.id, result),
-    exitCode: 0,
+//
+// `cli-lock` coverage (Host Update Layer Redesign Tech Plan, "Lifecycle
+// lock coverage"): a terminal restart must not enter another actor's
+// apply/install/activation critical section and stop/kill the process
+// it just started - the whole marker-reconcile -> stop -> finalize ->
+// start sequence runs inside ONE lock acquisition.
+//
+// `--if-idle` (hidden, internal - the CLI-owned activation mode): after
+// acquiring the lock, probe `assertHostNotBusy` before the disruptive
+// step; busy -> `E_HOST_BUSY`, the lock releases with nothing touched.
+// The only step between the probe and `controller.stop()` is
+// `reconcilePostFinalizeMarker`'s local file read - not the network or
+// long-running work the TOCTOU-floor principle guards against - so the
+// probe runs immediately before this call rather than being threaded
+// into `restartWithPendingCliUpgradeFinalize` itself. Plain `host
+// restart` (no `--if-idle`) skips the probe entirely, keeping today's
+// unconditional semantics for explicit user restarts.
+// `--force` (user-facing): skip the cooperative shutdown claim and kill the
+// host process before relaunching. The user explicitly accepted losing
+// running sessions and in-flight agent work; see `host stop --force` for the
+// mechanics. Mutually exclusive with `--if-idle` - one flag widens the busy
+// gate, the other removes it, and a command carrying both has no coherent
+// intent.
+export interface HostRestartArgs {
+  readonly ifIdle: boolean;
+  readonly force: boolean;
+}
+
+export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
+  return async (ctx): Promise<CommandResult> => {
+    // Validated INSIDE the CommandFn so the runner catches it (CliError →
+    // NDJSON error envelope) - same reason as host install's flag check.
+    if (args.ifIdle && args.force) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "host restart: --if-idle and --force are mutually exclusive; pass one or the other",
+        details: null,
+        exitCode: 1,
+      });
+    }
+    const label = serviceLabelFor(ctx.runtime.environment);
+    const controller = createServiceController();
+    const locked = await withCliLock(
+      {
+        environment: ctx.runtime.environment,
+        reason: "host-restart",
+        waitMs: 30_000,
+        pollIntervalMs: 100,
+      },
+      async () => {
+        if (args.ifIdle) {
+          await assertHostNotBusy(ctx.runtime.environment);
+        }
+        const result = await restartWithPendingCliUpgradeFinalize({
+          environment: ctx.runtime.environment,
+          controller,
+          label,
+          parentPid: process.pid,
+          platform: osPlatform(),
+          spawnImpl: defaultSpawnImpl,
+          writeImpl: defaultWriteImpl,
+          force: args.force,
+        });
+        return {
+          result,
+          attestation: await attestInstallRuntime(ctx.runtime.environment),
+        };
+      },
+    );
+    return {
+      data: {
+        restarted: true,
+        label: label.id,
+        cliUpgrade: locked.result.finalize,
+        helper: locked.result.helper,
+        markerReconcile: locked.result.markerReconcile,
+        installGeneration: locked.attestation.installGeneration,
+        runtimeVersion: locked.attestation.runtimeVersion,
+        runtimeWasNull: locked.attestation.runtimeWasNull,
+      },
+      human: humanForRestart(label.id, locked.result),
+      exitCode: 0,
+    };
   };
-};
+}
 
 interface RestartFinalizeArgs {
   readonly environment: import("../runner/environment").Environment;
@@ -80,6 +144,7 @@ interface RestartFinalizeArgs {
   readonly platform: NodeJS.Platform;
   readonly spawnImpl: SpawnImpl;
   readonly writeImpl: WriteImpl;
+  readonly force: boolean;
 }
 
 export interface RestartFinalizeResult {
@@ -106,7 +171,16 @@ export async function restartWithPendingCliUpgradeFinalize(
     environment: args.environment,
   });
 
-  await args.controller.stop(args.label);
+  // `stopForRestart`, never `stop`: on a Desktop-managed machine a host whose
+  // RPC endpoint is unreachable (or that outlived its own force-exit
+  // watchdog) makes `stop` throw, and this command would exit before ever
+  // relaunching - the exact broken-host state report 2 asked `host restart`
+  // to repair. The restart half reports that as `forcedRecycle` instead, and
+  // the relaunch below recycles the job rather than no-opping a kickstart
+  // against a process that never left. A busy host still throws.
+  const stop = await args.controller.stopForRestart(args.label, {
+    force: args.force,
+  });
 
   // 2. Try the in-process finalize. On POSIX this almost always works
   //    once the host supervisor releases the binary.
@@ -126,7 +200,6 @@ export async function restartWithPendingCliUpgradeFinalize(
       environment: args.environment,
       stagedBinaryPath: finalize.stagedBinaryPath,
       livePath: finalize.livePath,
-      serviceLabel: args.label,
       parentPid: args.parentPid,
       parentExitTimeoutSeconds: 60,
       platform: args.platform,
@@ -137,7 +210,7 @@ export async function restartWithPendingCliUpgradeFinalize(
   }
 
   if (!helperOwnsServiceStart) {
-    await args.controller.start(args.label);
+    await args.controller.relaunchAfterRestart(args.label, stop);
   }
 
   return {

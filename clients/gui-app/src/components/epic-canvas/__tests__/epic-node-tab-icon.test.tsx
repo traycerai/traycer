@@ -1,14 +1,26 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  publishAgentActivity,
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicArtifactRef,
+  EpicTerminalRef,
+} from "@/stores/epics/canvas/types";
 
 const TERMINAL_NODE: EpicTerminalRef = {
   id: "terminal-1",
@@ -20,16 +32,27 @@ const TERMINAL_NODE: EpicTerminalRef = {
   cwd: "/repo",
 };
 
-describe("<EpicNodeTabIcon /> terminal indicator", () => {
+const COMPLETED_TUI_AGENT_NODE: EpicArtifactRef = {
+  id: "tui-agent-1",
+  instanceId: "tui-agent-instance-1",
+  type: "terminal-agent",
+  name: "Enable Claude Model Versions",
+  hostId: "host-1",
+  pendingTuiHarnessId: "claude",
+};
+
+describe("<EpicNodeTabIcon /> terminal indicators", () => {
   afterEach(() => {
     cleanup();
     __resetAppLocalNotificationsStoreForTests();
   });
 
-  it("shows and clears the app-local crash dot for the exact terminal tile", () => {
+  it("shows and clears the app-local terminal crash icon for the exact tile", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
     emitTerminalCrashedNotification({
       instanceId: TERMINAL_NODE.instanceId,
+      hostId: TERMINAL_NODE.hostId,
+      terminalName: TERMINAL_NODE.name,
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -46,15 +69,15 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     const indicator = screen.getByRole("status", {
       name: "Task needs attention",
     });
-    expect(indicator.firstElementChild?.className).toContain(
-      "text-destructive",
-    );
-    expect(indicator.textContent).toBe("⠿");
+    const terminalGlyph = indicator.querySelector(".lucide-square-terminal");
+    expect(terminalGlyph?.getAttribute("class")).toContain("text-destructive");
+    expect(indicator.querySelector(".lucide-message-square-x")).toBeNull();
 
     act(() => {
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(
+          TERMINAL_NODE.hostId,
           { epicId: "epic-1", chatId: TERMINAL_NODE.id },
           Date.now(),
         );
@@ -63,6 +86,73 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     expect(
       screen.queryByRole("status", { name: "Task needs attention" }),
     ).toBeNull();
+  });
+
+  it("shows the message-style done icon for a completed TUI agent", () => {
+    render(
+      <NotificationIndicatorsProvider
+        indicators={{
+          epics: {},
+          chats: {
+            [COMPLETED_TUI_AGENT_NODE.id]: {
+              pendingApproval: false,
+              pendingInterview: false,
+              unreadFailure: false,
+              unreadDone: true,
+              pendingFork: false,
+            },
+          },
+        }}
+      >
+        <EpicNodeTabIcon
+          node={COMPLETED_TUI_AGENT_NODE}
+          epicId="epic-1"
+          variant="live"
+          className="size-3.5 shrink-0"
+          defaultIcon={undefined}
+        />
+      </NotificationIndicatorsProvider>,
+    );
+
+    const completedIndicator = screen.getByRole("status", {
+      name: "Task completed",
+    });
+    expect(
+      completedIndicator.querySelector("svg")?.getAttribute("class"),
+    ).toContain("lucide-message-square-check");
+  });
+
+  it("shows the terminal failure glyph for a failed TUI agent", () => {
+    render(
+      <NotificationIndicatorsProvider
+        indicators={{
+          epics: {},
+          chats: {
+            [COMPLETED_TUI_AGENT_NODE.id]: {
+              pendingApproval: false,
+              pendingInterview: false,
+              unreadFailure: true,
+              unreadDone: false,
+              pendingFork: false,
+            },
+          },
+        }}
+      >
+        <EpicNodeTabIcon
+          node={COMPLETED_TUI_AGENT_NODE}
+          epicId="epic-1"
+          variant="live"
+          className="size-3.5 shrink-0"
+          defaultIcon={undefined}
+        />
+      </NotificationIndicatorsProvider>,
+    );
+
+    const failure = screen.getByRole("status", {
+      name: "Task needs attention",
+    });
+    expect(failure.querySelector(".lucide-square-terminal")).not.toBeNull();
+    expect(failure.querySelector(".lucide-message-square-x")).toBeNull();
   });
 });
 
@@ -79,3 +169,109 @@ function renderTerminalTabIcon(): void {
     </NotificationIndicatorsProvider>,
   );
 }
+
+const TUI_AGENT_NODE: EpicArtifactRef = {
+  id: "agent-1",
+  instanceId: "agent-instance-1",
+  type: "terminal-agent",
+  name: "Plan Critic",
+  hostId: "host-1",
+};
+
+const SPINNER_LABEL = "Agent in progress";
+
+describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetAgentActivity();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  // Regression: the TUI-agent tab used to hardcode `running={false}`, so a
+  // working agent spun in the sidebar but never in its own tab.
+  it("swaps the idle icon for the spinner while the agent is working", () => {
+    registerEpicSession("epic-1");
+
+    renderTuiAgentTabIcon();
+
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
+
+    act(() => {
+      publishWorking([TUI_AGENT_NODE.id]);
+    });
+
+    expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+
+    act(() => {
+      publishWorking([]);
+    });
+
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
+  });
+
+  // The shared icon renders outside an open-epic session too (drag previews,
+  // mount-lifecycle tests); an Epic with no presence must read as idle, not
+  // throw.
+  it("renders the idle icon with no registered Epic session", () => {
+    renderTuiAgentTabIcon();
+
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
+  });
+
+  // The defect this whole signal move fixes: activity for an Epic this window
+  // has NEVER opened. There is no session and no per-epic room here, so the
+  // spinner can only come from the host-selected activity view.
+  it("spins for an Epic that was never opened in this window", () => {
+    renderTuiAgentTabIcon();
+
+    act(() => {
+      publishWorking([TUI_AGENT_NODE.id]);
+    });
+
+    expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+  });
+});
+
+function publishWorking(agentIds: readonly string[]): void {
+  publishAgentActivity([
+    {
+      hostId: "host-1",
+      byEpic: { "epic-1": { working: agentIds, turn: agentIds } },
+    },
+  ]);
+}
+
+function registerEpicSession(epicId: string): OpenEpicStoreHandle {
+  return __getOpenEpicRegistryForTests().acquire(epicId, () =>
+    createOpenEpicStore({
+      epicId,
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    }),
+  );
+}
+
+function renderTuiAgentTabIcon(): void {
+  render(
+    <NotificationIndicatorsProvider indicators={{ epics: {}, chats: {} }}>
+      <EpicNodeTabIcon
+        node={TUI_AGENT_NODE}
+        epicId="epic-1"
+        variant="live"
+        className="size-3.5 shrink-0"
+        defaultIcon={undefined}
+      />
+    </NotificationIndicatorsProvider>,
+  );
+}
+
+const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,7 +9,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+  installLegendListViewportMetrics,
+  restoreLegendListTestClock,
+  settleLegendList,
+} from "@/components/chat/__tests__/legend-list-test-environment";
+import { modLabel } from "@/lib/keybindings/platform";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -23,7 +29,16 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
 }));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
+  reset: vi.fn<() => void>(),
 }));
+const cloudChatListTestState = vi.hoisted(() => ({
+  knownChatIds: new Set<string>(),
+}));
+// The one host this suite runs on. The mocked binding/directory, the tile
+// fixtures, and the per-host run-settings buckets all key off it, so they
+// cannot drift apart into a fixture that tests a host the tile never sees.
+// Hoisted because the module mocks below read it from their factories.
+const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -47,12 +62,16 @@ vi.mock(
 
 const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
-  getActiveHostId: () => "host-test",
+  getActiveHostId: () => HOST_ID,
+  // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
+  // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
+  // mock fails every case in this file at once through the error boundary.
+  getActiveHost: () => MOCK_HOST_ENTRY,
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
 const MOCK_HOST_ENTRY = {
-  hostId: "host-test",
+  hostId: HOST_ID,
   label: "Test host",
   kind: "local" as const,
   websocketUrl: "ws://127.0.0.1:1/rpc",
@@ -71,6 +90,8 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
 // useEpicCreateChatForHost (called inside ChatForkDialog) uses
@@ -81,6 +102,38 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
 
+// The tile subscribes to the command catalog itself, because its next-step /
+// compact / implement-plan sends bypass the composer and its picker store. The
+// mocked host client above never resolves a request, so without this the
+// catalog would stay loading forever and every `$` prompt would (correctly) be
+// left as prose. Serve one skill so the gated conversion has something to
+// resolve; unknown names still fall through to the ungated `/` fallback.
+vi.mock("@/hooks/composer/use-slash-commands", () => ({
+  useSlashCommands: () => ({
+    data: [
+      {
+        harnessId: "claude",
+        name: "traycer-implement",
+        description: "Implement a ticket",
+        argumentHint: null,
+        kind: "skill",
+        metadata: { path: "/repo/.agents/skills/traycer-implement/SKILL.md" },
+        source: "provider",
+        preview: {
+          kind: "text",
+          primary: "Implement a ticket",
+          secondary: null,
+          mono: false,
+        },
+      },
+    ],
+    isLoading: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(undefined),
+  }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
   ...(await importActual<
     typeof import("@/hooks/epic/use-epic-chat-mutations")
@@ -88,6 +141,35 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
   useEpicCreateChatForHost: () => ({
     mutate: forkCreateTestState.mutate,
     isPending: false,
+  }),
+  // The fork dialog creates on the SELECTED host's client, not the tab's, so
+  // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
+  // only that wrapper left the spread's REAL client hook in place: the fork
+  // ran for real, the spy recorded nothing, and the assertion read `[0]` off
+  // an undefined call.
+  //
+  // Unlike the wrapper above - which the tile tree reads for `mutate` and
+  // `isPending` alone - this hook has consumers that call `reset()` and read
+  // the result channel, so the stub carries the WHOLE `UseMutationResult`
+  // surface. A partial one type-checks (the factory is untyped) and then
+  // fails every case in the file at once on a member the test never mentions.
+  useEpicCreateChatForHostClient: () => ({
+    mutate: forkCreateTestState.mutate,
+    isPending: false,
+    reset: forkCreateTestState.reset,
+    error: null,
+    variables: null,
+    data: null,
+    isError: false,
+    isSuccess: false,
+    isIdle: true,
+    status: "idle",
+    failureCount: 0,
+    failureReason: null,
+    isPaused: false,
+    submittedAt: 0,
+    context: null,
+    mutateAsync: () => Promise.resolve(undefined),
   }),
 }));
 
@@ -100,8 +182,16 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 // production-legitimate value (useProvidersListForClient/useHostQuery own the
 // client === null disabled gate) so no consumer downstream needs a real
 // client here.
+//
+// The fork dialog is the exception, and only since it began creating on the
+// SELECTED host's client: its submit reads `getActiveHostId()` back off that
+// client and RETURNS EARLY when it cannot resolve one, so a blanket `null`
+// turned every fork submit in this file into a silent no-op. This suite's own
+// host therefore resolves; every other id still answers null, leaving the
+// gate's downstream queries disabled exactly as before.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === HOST_ID ? MOCK_HOST_CLIENT : null,
 }));
 
 // The chat registry now OWNS its transport (built in its factory) and drives
@@ -118,20 +208,83 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  // No stream client means nothing has been negotiated yet, which is what
+  // `null` says - the tile's Shells menu reads this and stays quiet.
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
+}));
+
+// The Epic session resolves its host through the selection authority's derived
+// pointer (selection model §1), not the active-host projection above - seed the
+// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-test",
+}));
+
+// The tile's record gate consults `epic.listCloudChats` for a chat with no
+// local doc record (chat-sync-v2 ticket 49 - post-sweep that is the ordinary
+// state of a healthy owned chat, so the published row is the only local
+// evidence left that it exists). Driven from test state at the hook boundary
+// so a test can put this suite's chat in or out of the cloud list; `data` is
+// always DEFINED so "not cloud-known" is a settled answer rather than a
+// pending one.
+//
+// Rows are built as WHOLE `CloudChatSummary` values: the consumer reads
+// `isOwnedByViewer` as well as `identity`, and an enumerating factory answers
+// `undefined` for whatever it forgot - which a boolean predicate reads as
+// "not the viewer's", silently re-closing the gate this exists to open. The
+// return annotation is the gate: the next field the row gains fails
+// `compile` here instead of quietly turning these tests red in CI.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatList: () => ({
+    data: {
+      chats: [...cloudChatListTestState.knownChatIds].map(
+        (chatId): CloudChatSummary => ({
+          identity: { taskId: EPIC_ID, chatId, ownerUserId: "owner-1" },
+          ownerHostId: HOST_ID,
+          createdAt: 1,
+          visibility: "task",
+          title: null,
+          isTitleEditedByUser: false,
+          parentChatId: null,
+          isArchived: false,
+          runSettingsSummary: null,
+          metadataUpdatedAt: 1,
+          headSha256: null,
+          publishedAt: null,
+          throughRecordSeq: null,
+          isOwnedByViewer: true,
+        }),
+      ),
+    },
+    isError: false,
+    isPending: false,
+    isFetching: false,
+  }),
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -146,7 +299,10 @@ import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatEvent,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -156,7 +312,12 @@ import type {
   ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeFolderIntent,
+} from "@traycer/protocol/host/worktree-schemas";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   getFocusedComposerControls,
   resetFocusedComposerControlsForTests,
@@ -169,7 +330,7 @@ const CHAT_ARTIFACT = {
   instanceId: "inst-chat-1",
   type: "chat" as const,
   name: "Chat 1",
-  hostId: "host-test",
+  hostId: HOST_ID,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",
@@ -204,7 +365,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   permissionMode: "supervised",
   reasoningEffort: "medium",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
@@ -213,7 +374,7 @@ const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   permissionMode: "full_access",
   reasoningEffort: "low",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const INITIAL_HANDOFF_CONTENT: JsonContent = {
@@ -231,7 +392,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   permissionMode: "supervised",
   reasoningEffort: "high",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
@@ -240,7 +401,7 @@ const SESSION_SETTINGS: ChatRunSettings = {
   permissionMode: "full_access",
   reasoningEffort: "low",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 
@@ -313,10 +474,14 @@ function createChatHarness(): ChatHarness {
           );
         }, 0);
       }
-      const client: Pick<ChatStreamClient, "sendAction" | "close"> = {
+      const client: Pick<
+        ChatStreamClient,
+        "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+      > = {
         sendAction: (frame) => {
           sent.push(frame);
         },
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
       return client;
@@ -385,8 +550,10 @@ function emitChatSnapshotWithMessages(input: {
   readonly queueItems: ReadonlyArray<ChatQueuedItem>;
   readonly settings: ChatRunSettings | null;
   readonly messages: ReadonlyArray<Message>;
+  readonly events?: ReadonlyArray<ChatEvent>;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
+  readonly managedCommands?: ReadonlyArray<ManagedCommand>;
 }): void {
   input.callbacks.onSnapshot({
     kind: "snapshot",
@@ -407,7 +574,10 @@ function emitChatSnapshotWithMessages(input: {
         activeSessionChain: null,
         claudePendingWakes: [],
         messages: [...input.messages],
-        events: [],
+        events: [...(input.events ?? [])],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: {
         role: input.access,
@@ -423,6 +593,8 @@ function emitChatSnapshotWithMessages(input: {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [...(input.managedCommands ?? [])],
+      heldUpdates: [],
     },
   });
 }
@@ -471,6 +643,20 @@ function hostUserMessage(): Message {
   };
 }
 
+const DELIVERED_A2A_MESSAGE_ID = "message-delivered-a2a";
+
+/**
+ * The shape a communication-graph `gui_message` origin ref points at: an A2A
+ * message delivered into the RECEIVING chat, which lands as a user row.
+ */
+function deliveredA2aUserMessage(): Message {
+  return {
+    ...hostUserMessage(),
+    messageId: DELIVERED_A2A_MESSAGE_ID,
+    timestamp: 5,
+  };
+}
+
 function nextStepsAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -505,6 +691,47 @@ function nextStepsAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
+// The `$` sibling of the fixture above. Kept separate rather than parameterized
+// because every other next-step case asserts against the `/` prompt text.
+function skillNextStepsAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "next-steps-msg",
+    startedAt: 1,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: "next-steps-block",
+        text: [
+          "<TRAYCER_NEXT_STEPS>",
+          "Implementation is complete.",
+          "",
+          "- [] $traycer-implement Implement the runtime ticket.",
+          "</TRAYCER_NEXT_STEPS>",
+        ].join("\n"),
+        status: "completed",
+        timestamp: 2,
+        providerNotice: null,
+      },
+    ],
+    timestamp: 2,
+    turnId: "turn-next-steps",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -545,6 +772,12 @@ function streamingInterviewAssistantMessage(): Message {
         answers: [],
         error: null,
         metadata: null,
+        outcome: null,
+        draftAnswers: [],
+        settlement: null,
+        diagnostics: [],
+        delivery: null,
+        settlementExtensions: {},
       },
     ],
     timestamp: 3,
@@ -552,6 +785,7 @@ function streamingInterviewAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -589,10 +823,17 @@ function answeredInterviewAssistantMessage(): Message {
             question: "Which path should we take?",
             values: ["Option A"],
             notes: null,
+            selection: null,
           },
         ],
         error: null,
         metadata: null,
+        outcome: null,
+        draftAnswers: [],
+        settlement: null,
+        diagnostics: [],
+        delivery: null,
+        settlementExtensions: {},
       },
     ],
     timestamp: 4,
@@ -622,11 +863,12 @@ function skippedInterviewAssistantMessage(): Message {
 
 function runningActiveTurn(): ChatActiveTurn {
   return {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
     turnId: "turn-active",
     status: "running",
     harnessId: "codex",
     model: "gpt-live",
-    agentMode: "regular",
     profileId: null,
     userMessageId: "message-1",
     startedAt: 3,
@@ -679,42 +921,38 @@ function renderSwitchableChatTile() {
   };
 }
 
-function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
+function chatTileTestTree(
+  queryClient: QueryClient,
+  chatVisible: boolean,
+  node: typeof CHAT_ARTIFACT = CHAT_ARTIFACT,
+) {
   return (
     <TestRouterProvider>
-      <VirtuosoMessageListTestingContext.Provider
-        value={{ itemHeight: 120, viewportHeight: 900 }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <RunnerHostProvider
-            runnerHost={
-              new MockRunnerHost({
-                signInUrl: "https://example.com",
-                authnBaseUrl: "https://auth.example.com",
-                localHost: null,
-                hosts: [],
-                workspaceFolderPickerPaths: undefined,
-                hasLocalHost: undefined,
-                traycerCli: undefined,
-              })
-            }
-          >
-            <TooltipProvider>
-              <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {chatVisible ? (
-                    <ChatTile
-                      node={CHAT_ARTIFACT}
-                      viewTabId="tab-test"
-                      isActive
-                    />
-                  ) : null}
-                </TabHostProvider>
-              </TestEpicSessionWrapper>
-            </TooltipProvider>
-          </RunnerHostProvider>
-        </QueryClientProvider>
-      </VirtuosoMessageListTestingContext.Provider>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={
+            new MockRunnerHost({
+              signInUrl: "https://example.com",
+              authnBaseUrl: "https://auth.example.com",
+              localHost: null,
+              hosts: [],
+              workspaceFolderPickerPaths: undefined,
+              hasLocalHost: undefined,
+              traycerCli: undefined,
+            })
+          }
+        >
+          <TooltipProvider>
+            <TestEpicSessionWrapper epicId={EPIC_ID}>
+              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                {chatVisible ? (
+                  <ChatTile node={node} viewTabId="tab-test" isActive />
+                ) : null}
+              </TabHostProvider>
+            </TestEpicSessionWrapper>
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
     </TestRouterProvider>
   );
 }
@@ -722,7 +960,14 @@ function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
 async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
     expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
+    // Since invariant 6 the pre-session state is this one; without it the
+    // wait above would be vacuous (an id that never renders is always absent).
+    expect(screen.queryByTestId("chat-tile-load-chat-1")).toBeNull();
   });
+  // LegendList needs a few frames (plus its scroll-finish fallback) to
+  // bootstrap its initial scroll position and measure rows in jsdom before
+  // any message content actually mounts - see legend-list-test-environment.ts.
+  await settleLegendList();
   await waitFor(() => {
     expect(screen.getByText("Host chat content")).not.toBeNull();
   });
@@ -745,6 +990,17 @@ function queryButtonByAriaLabel(label: string): HTMLButtonElement | null {
   return button;
 }
 
+function pasteInlineEditText(text: string): void {
+  fireEvent.paste(screen.getByRole("textbox", { name: "Edit message" }), {
+    clipboardData: {
+      files: [],
+      items: [],
+      types: ["text/plain"],
+      getData: (type: string) => (type === "text/plain" ? text : ""),
+    },
+  });
+}
+
 function getButtonContainingText(text: string): HTMLButtonElement {
   const button = screen.getByText(text).closest("button");
   if (!(button instanceof HTMLButtonElement)) {
@@ -755,7 +1011,7 @@ function getButtonContainingText(text: string): HTMLButtonElement {
 
 function registerWaitingChatHandoff(): void {
   const scope = {
-    hostId: "host-test",
+    hostId: HOST_ID,
     userId: "owner-1",
     epicId: EPIC_ID,
   };
@@ -777,6 +1033,8 @@ function registerWaitingChatHandoff(): void {
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    installLegendListViewportMetrics();
+    installLegendListTestClock();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -793,6 +1051,7 @@ describe("<ChatTile />", () => {
           content: PENDING_DRAFT_CONTENT,
           selection: null,
           resetEpoch: 0,
+          revision: 0,
         },
       },
     });
@@ -800,6 +1059,7 @@ describe("<ChatTile />", () => {
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
     forkCreateTestState.mutate.mockReset();
+    forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -813,12 +1073,17 @@ describe("<ChatTile />", () => {
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
     useInitialChatHandoffStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
+    cloudChatListTestState.knownChatIds.clear();
   });
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
+    vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
     chatHarness.teardown();
     useInitialChatHandoffStore.getState().resetForTests();
@@ -827,6 +1092,7 @@ describe("<ChatTile />", () => {
     });
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -836,9 +1102,12 @@ describe("<ChatTile />", () => {
 
   it("does not open chat.subscribe until the chat record is in the projection", async () => {
     // Re-install the epic session with NO chat seeded so the tile's gate
-    // (`chatRecord !== null`) stays closed. This is the local-first
-    // subscribe-first race regression: the renderer must not open the epic via
-    // `chat.subscribe` before the create has seeded the chat.
+    // stays closed. This is the local-first subscribe-first race regression:
+    // the renderer must not open the epic via `chat.subscribe` before the
+    // create has landed. `cloudChatListTestState` is empty here, which is
+    // what a create in flight looks like - the owning host publishes long
+    // after `epic.createChat` returns, so no cloud row can vouch for it yet
+    // (chat-sync-v2 ticket 49).
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -849,12 +1118,63 @@ describe("<ChatTile />", () => {
 
     renderChatTile();
     // Flush the epic snapshot (fired via setTimeout(0)) + effects.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+    // The pre-session presentation is now the BOUNDED load state, not the
+    // unbounded spinner: with no session handle the tile renders
+    // `TileHostLoadState`, which says which host it is waiting on and stops
+    // waiting (redesign invariant 6). The gating claim above is unchanged.
+    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
+  });
+
+  it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
+    // The post-migration steady state of a HEALTHY chat: publication proven,
+    // so `ChatDocEntrySweep` deleted the doc entry (ticket 20) and creation
+    // never re-projects one (ticket 19). The record gate used to refuse this
+    // shape forever, which is why every swept chat opened as the locked
+    // published copy on its own connected host.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.install("owner", []);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+
+    renderChatTile();
+
+    await waitFor(() => {
+      expect(chatHarness.streamCreations()).toBe(1);
+    });
+    await waitForChatTileLoaded();
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+  });
+
+  it("stays gated for a record-less chat when the cloud row belongs to someone else", async () => {
+    // Identity is the taskId + ownerUserId + chatId TRIPLE. `chatId` is
+    // host-minted and the list carries every task-visible row, so an id-only
+    // match would open a collaborator's transcript under this tab.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    vi.spyOn(
+      await import("@/lib/chats/unified-chat-list"),
+      "cloudRowIsViewersOwn",
+    ).mockReturnValue(false);
+    const chatStreamSpy = vi.fn(() => {
+      throw new Error("chat.subscribe must not open for another owner's row");
+    });
+    __setChatStreamClientFactoryForTests(chatStreamSpy);
+
+    renderChatTile();
+    await advanceLegendListTime(0);
+
+    expect(chatStreamSpy).not.toHaveBeenCalled();
+    // The pre-session presentation is now the BOUNDED load state, not the
+    // unbounded spinner: with no session handle the tile renders
+    // `TileHostLoadState`, which says which host it is waiting on and stops
+    // waiting (redesign invariant 6). The gating claim above is unchanged.
+    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
   });
 
   it("keeps a cold sidebar-opened chat in one loading state until its first snapshot", async () => {
@@ -866,7 +1186,9 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(chatHarness.streamCreations()).toBe(1);
     });
-    expect(screen.getByRole("status", { name: "Loading chat" })).not.toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Loading agent" }),
+    ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
@@ -896,7 +1218,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
     expect(chatHarness.streamCreations()).toBe(1);
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
-    expect(screen.queryByRole("status", { name: "Loading chat" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading agent" })).toBeNull();
     expect(
       screen
         .getByTestId("host-workspace-selector")
@@ -956,11 +1278,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
           model: "haiku",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1004,9 +1327,9 @@ describe("<ChatTile />", () => {
     expect(frame.fromMessageId).toBe("message-1");
   });
 
-  it("sends edit-user-message from the inline editor with current composer settings", async () => {
+  it("resubmits an unchanged inline message with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: QUEUED_SETTINGS },
     });
     renderChatTile();
 
@@ -1031,7 +1354,12 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
-    fireEvent.click(getButtonByAriaLabel("Send edit"));
+    const sendEditButton = getButtonByAriaLabel("Send edit");
+    if (!(sendEditButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send edit button");
+    }
+    expect(sendEditButton.disabled).toBe(false);
+    fireEvent.click(sendEditButton);
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
@@ -1048,6 +1376,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
+    pasteInlineEditText(" updated");
     expect(getButtonByAriaLabel("Send edit")).not.toBeNull();
 
     fireEvent.click(getButtonByAriaLabel("Send edit"));
@@ -1086,7 +1415,7 @@ describe("<ChatTile />", () => {
 
   it("seeds composer settings from last-used local settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: SESSION_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: SESSION_SETTINGS },
     });
     chatHarness.teardown();
     chatHarness.install("owner", []);
@@ -1115,11 +1444,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
           model: "gpt-live",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1208,7 +1538,7 @@ describe("<ChatTile />", () => {
     await screen.findByText("Implementation is complete.");
     fireEvent.click(screen.getByTestId("assistant-fork-chat"));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
@@ -1228,11 +1558,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
           model: "gpt-live",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1406,6 +1737,11 @@ describe("<ChatTile />", () => {
         blockId: "question-1",
         reason: "interrupted",
         resolvedAt: 4,
+        settlementId: null,
+        settlementSource: null,
+        outcome: null,
+        draftAnswers: [],
+        delivery: null,
       });
     });
 
@@ -1438,13 +1774,17 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
     expect(titleInput.value).toBe("Cross Question - Chat 1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    const forkButton = screen.getByRole("button", { name: "Fork" });
+    expect(within(forkButton).getByText(modLabel())).not.toBeNull();
+    expect(within(forkButton).getByText("↵")).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
     const [forkCall] = forkCreateTestState.mutate.mock.calls;
     expect(forkCall[0].forkSource.interviewBlockId).toBe("question-1");
@@ -1474,7 +1814,7 @@ describe("<ChatTile />", () => {
 
   it("falls back to client-local last-used settings when the chat has no session settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: UPDATED_QUEUE_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: UPDATED_QUEUE_SETTINGS },
     });
 
     renderChatTile();
@@ -1491,10 +1831,10 @@ describe("<ChatTile />", () => {
   it("uses per-epic settings before global settings when the chat has no session settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setGlobalRunSettings(UPDATED_QUEUE_SETTINGS, 1);
+      .setGlobalRunSettings(HOST_ID, UPDATED_QUEUE_SETTINGS, 1);
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 2);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 2);
 
     renderChatTile();
 
@@ -1510,7 +1850,7 @@ describe("<ChatTile />", () => {
   it("keeps an existing null-settings chat on its first copied epic settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 1);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 1);
 
     renderChatTile();
 
@@ -1519,7 +1859,7 @@ describe("<ChatTile />", () => {
     act(() => {
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(EPIC_ID, UPDATED_QUEUE_SETTINGS, 2);
+        .setEpicRunSettings(EPIC_ID, HOST_ID, UPDATED_QUEUE_SETTINGS, 2);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -1532,7 +1872,7 @@ describe("<ChatTile />", () => {
   it("keeps a remounted null-settings chat on its first copied epic settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 1);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 1);
 
     const rendered = renderChatTile();
 
@@ -1543,7 +1883,7 @@ describe("<ChatTile />", () => {
     act(() => {
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(EPIC_ID, UPDATED_QUEUE_SETTINGS, 2);
+        .setEpicRunSettings(EPIC_ID, HOST_ID, UPDATED_QUEUE_SETTINGS, 2);
     });
 
     renderChatTile();
@@ -1560,10 +1900,10 @@ describe("<ChatTile />", () => {
   it("seeds composer settings from persisted chat settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setGlobalRunSettings(UPDATED_QUEUE_SETTINGS, 1);
+      .setGlobalRunSettings(HOST_ID, UPDATED_QUEUE_SETTINGS, 1);
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 2);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 2);
     chatHarness.teardown();
     chatHarness.installWithSettings("owner", [], SESSION_SETTINGS);
 
@@ -1688,16 +2028,18 @@ describe("<ChatTile />", () => {
     });
 
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings(EPIC_ID),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings(EPIC_ID, HOST_ID),
     ).toEqual(UPDATED_QUEUE_SETTINGS);
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_ID),
     ).toBeNull();
   });
 
   it("sends next-step clicks as current-setting slash commands during active turns", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: QUEUED_SETTINGS },
     });
 
     renderChatTile();
@@ -1722,9 +2064,7 @@ describe("<ChatTile />", () => {
       );
     });
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     act(() => {
       emitChatSnapshotWithMessages({
@@ -1757,9 +2097,68 @@ describe("<ChatTile />", () => {
           content: [
             {
               type: "slashCommand",
-              attrs: { commandName: "implementation-validation" },
+              attrs: {
+                commandName: "implementation-validation",
+                trigger: "/",
+              },
             },
             { type: "text", text: " all" },
+          ],
+        },
+      ],
+    });
+  });
+
+  // A next-step click never touches the composer, so the chip has to come out of
+  // `buildSubmittedChatJSONContent`. When that converter was `/`-only the `$`
+  // prompt stayed prose, which cost more than the pill: with neither a
+  // `slashCommand` node nor a leading `/name` in the text, the host resolved no
+  // invocation at all and the skill silently never ran.
+  it("sends a $-prefixed next step as a skill chip", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skillNextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "$traycer-implement Implement the runtime ticket.",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.content).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: {
+                commandName: "traycer-implement",
+                harnessId: "claude",
+                kind: "skill",
+                description: "Implement a ticket",
+                argumentHint: null,
+                path: "/repo/.agents/skills/traycer-implement/SKILL.md",
+                trigger: "$",
+              },
+            },
+            { type: "text", text: " Implement the runtime ticket." },
           ],
         },
       ],
@@ -1896,7 +2295,7 @@ describe("<ChatTile />", () => {
 
   it("sends active permission updates when the toolbar permission changes during a turn", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: QUEUED_SETTINGS },
     });
 
     renderChatTile();
@@ -1937,9 +2336,7 @@ describe("<ChatTile />", () => {
     renderChatTile();
     expect(chatHarness.sent).toHaveLength(0);
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
@@ -1988,9 +2385,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2027,13 +2422,151 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(1);
   });
 
-  it("marks rejected initial handoffs failed and restores the prompt", async () => {
+  // `-MPLN`, the CLASS: every restoration path ends at one unconditional
+  // `replaceDraftContent`, so any of them could overwrite a newer unsent
+  // draft. The accepted-send pass makes it typical rather than rare - queueing
+  // a send and carrying on typing is the ordinary way to use a queue - but the
+  // guard belongs at the consumption point, where all four paths arrive.
+  it("keeps a newer composer draft and states the restored prompt instead", async () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await advanceLegendListTime(0);
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
     });
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+
+    // The user has started a different message while the send was in flight.
+    const newerDraft = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "a newer thought" }],
+        },
+      ],
+    };
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(CHAT_ARTIFACT.id, newerDraft, null);
+    });
+
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "Only the agent owner can perform this action.",
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    });
+
+    // The handoff still settles - the restoration was consumed, not stranded.
+    await waitFor(() => {
+      expect(
+        Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
+      ).toMatchObject({ status: "failed" });
+    });
+
+    // ...and the newer draft is untouched. The older prompt's own durability
+    // is `stateFailedSendRestoration`'s job, asserted at the store level.
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(newerDraft);
+  });
+
+  // `-NRiY`: submittability is text OR image atoms, and `contentIsSubmittable`
+  // is the shared answer. A plain-text reading calls an attachment-only draft
+  // empty and this guard then overwrites images the user could have SENT -
+  // content that cannot be retyped at all.
+  it("keeps an attachment-only newer draft and states the restored prompt", async () => {
+    registerWaitingChatHandoff();
+
+    renderChatTile();
+    await advanceLegendListTime(0);
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+
+    const attachmentOnlyDraft = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "imageAttachment" as const,
+          attrs: {
+            id: "image-newer",
+            fileName: "newer.png",
+            b64content: "zzz",
+            mimeType: "image/png",
+            size: 64,
+          },
+        },
+      ],
+    };
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(CHAT_ARTIFACT.id, attachmentOnlyDraft, null);
+    });
+
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "Only the agent owner can perform this action.",
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
+      ).toMatchObject({ status: "failed" });
+    });
+
+    // The images survive - projecting to "" does not make them absent.
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(attachmentOnlyDraft);
+  });
+
+  it("marks rejected initial handoffs failed and restores the prompt", async () => {
+    registerWaitingChatHandoff();
+    // The shared fixture seeds a non-empty draft for the send tests. A chat
+    // opened FROM a landing prompt has an empty composer - the prompt went to
+    // the host, not to the draft - so this is the precondition the case is
+    // named for. With text already there the prompt is stated instead, which
+    // the sibling test above pins.
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(
+          CHAT_ARTIFACT.id,
+          { type: "doc", content: [{ type: "paragraph" }] },
+          null,
+        );
+    });
+
+    renderChatTile();
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2050,7 +2583,7 @@ describe("<ChatTile />", () => {
         clientActionId: frame.clientActionId,
         action: "send",
         status: "rejected",
-        reason: "Only the chat owner can perform this action.",
+        reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
       });
@@ -2067,12 +2600,19 @@ describe("<ChatTile />", () => {
         },
       ],
     });
-    expect(
-      Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
-    ).toMatchObject({
-      status: "failed",
-      failureReason: "Only the chat owner can perform this action.",
-    });
+    const failed = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(failed).toMatchObject({ status: "failed" });
+    // CONTAINS, not equals. `failureReason` carries the restoration's reason,
+    // which is a COMPOSED statement - the host's sentence plus whatever
+    // qualifications the send inherited (drift, delivery, worktree). Its exact
+    // text is owned by `chat-queue-reconciler` and asserted there; pinning the
+    // whole string here made this tile test fail for a qualification firing
+    // correctly one layer down.
+    expect(failed.failureReason).toContain(
+      "Only the agent owner can perform this action.",
+    );
   });
 
   it("does not send an initial handoff while the chat opens read-only", async () => {
@@ -2095,7 +2635,7 @@ describe("<ChatTile />", () => {
     });
     expect(
       await screen.findByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2113,7 +2653,7 @@ describe("<ChatTile />", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(
       screen.getByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2122,6 +2662,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     const queueItems: ChatQueuedItem[] = [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-same-turn",
         messageId: "message-same-turn",
         message: {
@@ -2140,6 +2681,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-next-turn",
         messageId: "message-next-turn",
         message: {
@@ -2189,11 +2731,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: QUEUED_SETTINGS.harnessId,
           model: QUEUED_SETTINGS.model,
-          agentMode: QUEUED_SETTINGS.agentMode,
           profileId: null,
           userMessageId: "message-active",
           startedAt: 4,
@@ -2228,6 +2771,7 @@ describe("<ChatTile />", () => {
     chatHarness.install(
       "owner",
       Array.from({ length: 8 }, (_, index) => ({
+        kind: "prompt" as const,
         queueItemId: `queue-${index}`,
         messageId: `message-${index}`,
         message: {
@@ -2261,6 +2805,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("viewer", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2294,6 +2839,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2356,11 +2902,18 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
+  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
+  // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
+  // which drives the real useChatComposerSubmit + the tile's edit-arm logic
+  // without depending on TipTap DOM key events under jsdom. Plain Enter edit
+  // → queueSettingsUpdate remains covered by the settings-update test above.
+
   it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
     useComposerDraftStore.setState({ drafts: {} });
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2415,6 +2968,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2471,6 +3025,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2489,6 +3044,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-2",
         messageId: "message-queue-2",
         message: {
@@ -2546,6 +3102,456 @@ describe("<ChatTile />", () => {
     expect(screen.getByTestId("composer-editor").textContent).toBe(
       "pending message",
     );
+  });
+
+  /**
+   * Cross-tile transcript jumps (the communication-graph timeline parks one,
+   * this tile performs it).
+   *
+   * The load-bearing case is a WARM tile: the graph stream and the chat stream
+   * are independent, so the timeline routinely exposes a row before this tile's
+   * own transcript has it. Consuming the request then would burn it - the
+   * transcript marks the request handled and only afterwards finds it has no
+   * index entry - and the row would arrive with nothing left parked.
+   */
+  it("holds a parked transcript jump until its target message streams in", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // A2A rows anchor on the DELIVERED message, which reaches the receiving
+          // chat as a user row - and user rows are the ones keyed by `messageId`.
+          messageId: DELIVERED_A2A_MESSAGE_ID,
+        });
+    });
+
+    // Warm tile, target absent: the request must SURVIVE, not be swallowed.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
+    ).not.toBeUndefined();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), deliveredA2aUserMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+  });
+
+  it("consumes an end jump without waiting for a transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, { kind: "end" });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+  });
+
+  it("resolves a durable assistant message id to its projected transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // Notification rows persist the protocol message id. Assistant
+          // transcript rows are keyed by turn (`assistant:<turnId>`), so the
+          // jump must resolve through ChatMessageModel.persistentMessageId.
+          messageId: "next-steps-msg",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  it("lands an event jump on the exact inline queued-preparation failure", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "event",
+          eventId: "queued-preparation-failure",
+        });
+    });
+
+    const failure = {
+      eventId: "queued-preparation-failure",
+      type: "send.failed",
+      timestamp: 2_000,
+      clientActionId: null,
+      actor: null,
+      message: "The queued prompt could not be prepared.",
+      turnId: null,
+      messageId: null,
+      queueItemId: "queue-item-1",
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: {
+        code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        notificationAnchor: true,
+      },
+    } satisfies ChatEvent;
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        events: [failure],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      screen.getByText("The queued prompt could not be prepared."),
+    ).not.toBeNull();
+  });
+
+  it("expands the target card once a parked block jump resolves", async () => {
+    useToolOpenStore.getState().reset(CHAT_ARTIFACT.instanceId);
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "block",
+          blockId: "next-steps-block",
+        });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Nothing opened yet - the block's message has not arrived.
+    expect(
+      useToolOpenStore
+        .getState()
+        .openIds.has(
+          scopedChatOpenId(CHAT_ARTIFACT.instanceId, "next-steps-block"),
+        ),
+    ).toBe(false);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    // The scroll path ran: landing on a card expands it.
+    await waitFor(() => {
+      expect(
+        useToolOpenStore
+          .getState()
+          .openIds.has(
+            scopedChatOpenId(CHAT_ARTIFACT.instanceId, "next-steps-block"),
+          ),
+      ).toBe(true);
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
+    ).toBeUndefined();
+  });
+
+  it("drops a parked jump quietly when its target never arrives", async () => {
+    // `shouldAdvanceTime` keeps every other timer in the tile running on the
+    // real clock; only the jump's TTL is fast-forwarded.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      act(() => {
+        useChatTranscriptJumpStore
+          .getState()
+          .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+            kind: "message",
+            messageId: "message-that-never-arrives",
+          });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).not.toBeUndefined();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+
+      // Cleared, with no error surfaced: the tile is open on the right agent,
+      // which is the degrade this feature already accepts for anchor-less rows.
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  function stageChatWorktreeDraft(worktreePath: string): void {
+    const entry: WorktreeFolderIntent = {
+      kind: "import",
+      workspacePath: "/Users/test/project",
+      repoIdentifier: null,
+      isPrimary: true,
+      worktreePath,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(
+      {
+        surface: "owner",
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        ownerKind: "chat",
+        ownerId: CHAT_ARTIFACT.id,
+      },
+      { entries: [entry] },
+    );
+  }
+
+  function runningShellOnProject(): ManagedCommand {
+    return {
+      id: "sh-dropped",
+      monitoring: false,
+      description: "watch",
+      command: "npm run dev",
+      cwd: "/Users/test/project/apps",
+      cadence: null,
+      status: { state: "running", pid: 42, startedAtMs: 1 },
+      chatId: CHAT_ARTIFACT.id,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+  }
+
+  async function loadChatWithDroppedShell(): Promise<void> {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+  }
+
+  it("keeps the send confirmation open with a reason when it cannot proceed", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(screen.getByTestId("teardown-commit-refusal").textContent).toBe(
+      "You don't have permission to send.",
+    );
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
+  });
+
+  it("re-discloses when staging mutates under an armed chat send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    act(() => {
+      stageChatWorktreeDraft("/wt/b");
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") {
+      throw new Error("expected send frame");
+    }
+    expect(frame.worktreeIntent?.entries[0]).toMatchObject({
+      kind: "import",
+      worktreePath: "/wt/b",
+    });
+  });
+
+  it("drops an armed send when the tile repoints to another chat", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const rendered = render(chatTileTestTree(queryClient, true));
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    rendered.rerender(
+      chatTileTestTree(queryClient, true, {
+        ...CHAT_ARTIFACT,
+        id: "chat-2",
+        instanceId: "inst-chat-2",
+        name: "Chat 2",
+      }),
+    );
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("re-discloses when the holder set changes under an armed chat send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [
+          runningShellOnProject(),
+          {
+            ...runningShellOnProject(),
+            id: "sh-other",
+            command: "sleep 1",
+          },
+        ],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "sleep 1",
+    );
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

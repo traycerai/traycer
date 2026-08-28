@@ -31,7 +31,8 @@ import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-ca
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -41,11 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ContextMenuContent } from "@/components/ui/context-menu";
-import {
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-} from "@/components/ui/sidebar";
+import { SidebarGroup, SidebarGroupContent } from "@/components/ui/sidebar";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   Tooltip,
@@ -53,9 +50,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  isArtifactFilterActive,
   useAcknowledgedRootCreatePending,
-  useArtifactFilter,
   useArtifactSort,
   useLocalRootCreatePending,
   type RootCreatePanelId,
@@ -144,13 +139,19 @@ import {
   collectVisibleSidebarTreeIds,
   useMaybeSidebarBulkSelection,
 } from "./epic-sidebar-selection";
+import {
+  ARTIFACT_FILTER_EMPTY_DESCRIPTION,
+  FILTERED_EMPTY_TITLE,
+  useArtifactFilterMatchIds,
+} from "./epic-sidebar-panel-filters";
 import { useEpicStore } from "@/hooks/use-epic-store";
-import { useShallow } from "zustand/react/shallow";
 import {
   getSidebarNodeDragId,
+  getPaneScopedDndId,
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
@@ -226,52 +227,27 @@ function usePanelRootIds(
 }
 
 /**
- * Visible-id set for an active artifact filter (status / kind / read), expanded
- * to include ancestors so a matched ticket nested under a spec stays reachable.
- * Status and read are evaluated only against artifacts that carry them; specs
- * and reviews (status `null`, never assignable) drop out whenever a status or
- * kind constraint excludes them. `null` when no filter is active.
+ * Visible-id set for an active artifact filter (status / kind / read): the
+ * filter's matches, expanded to include ancestors so a matched ticket nested
+ * under a spec stays reachable in the rendered tree. `null` when no filter is
+ * active.
+ *
+ * The two halves are separate because only the first is about the FILTER. The
+ * ancestor pass is what a tree owes its own render path - a flat surface
+ * filtering the same epic wants the matches and nothing else - so the match
+ * producer lives in `epic-sidebar-panel-filters` and is shared, while the
+ * expansion stays here with the tree that needs it.
  */
 function useArtifactVisibleIds(epicId: string): ReadonlySet<string> | null {
-  const filter = useArtifactFilter(epicId);
-  const artifacts = useEpicStore((s) => s.artifacts);
+  const matchIds = useArtifactFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
-  const readState = useArtifactReadStateStore(
-    useShallow((s) => ({
-      seedAtByEpic: s.seedAtByEpic,
-      lastSeenByArtifact: s.lastSeenByArtifact,
-    })),
+  return useMemo(
+    () =>
+      matchIds === null
+        ? null
+        : collectWithAncestors([...matchIds], tree.nodeById),
+    [matchIds, tree],
   );
-  return useMemo(() => {
-    if (!isArtifactFilterActive(filter)) return null;
-    const statusSet = new Set<number>(filter.statuses);
-    const kindSet = new Set<string>(filter.kinds);
-    const matches: string[] = [];
-    for (const id of artifacts.allIds) {
-      if (!Object.hasOwn(artifacts.byId, id)) continue;
-      const artifact = artifacts.byId[id];
-      if (kindSet.size > 0 && !kindSet.has(artifact.kind)) continue;
-      if (
-        statusSet.size > 0 &&
-        (artifact.status === null || !statusSet.has(artifact.status))
-      ) {
-        continue;
-      }
-      if (filter.read !== "all") {
-        const unread = isArtifactUnread({
-          epicId,
-          artifactId: artifact.id,
-          updatedAt: artifact.updatedAt,
-          seedAtByEpic: readState.seedAtByEpic,
-          lastSeenByArtifact: readState.lastSeenByArtifact,
-        });
-        if (filter.read === "unread" && !unread) continue;
-        if (filter.read === "read" && unread) continue;
-      }
-      matches.push(artifact.id);
-    }
-    return collectWithAncestors(matches, tree.nodeById);
-  }, [filter, artifacts, tree, readState, epicId]);
 }
 
 /**
@@ -508,6 +484,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
         expandedIds,
         tree,
         treeFilter: ARTIFACTS_TREE_FILTER,
+        emitFilter: ARTIFACTS_TREE_FILTER,
         visibleIds,
         comparator,
       }),
@@ -557,8 +534,8 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={FileText}
-        title="No artifacts match the filter."
-        description={null}
+        title={FILTERED_EMPTY_TITLE}
+        description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
         testId="epic-artifact-sidebar-filter-empty"
       />
     );
@@ -601,13 +578,13 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   return (
     <SidebarSortContext.Provider value={comparator}>
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-        <SidebarContent className="gap-0">
+        <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
           <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
             <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
               {panelContent}
             </SidebarGroupContent>
           </SidebarGroup>
-        </SidebarContent>
+        </ArtifactPanelSearchShell>
       </SidebarFilterVisibilityContext.Provider>
     </SidebarSortContext.Provider>
   );
@@ -757,12 +734,17 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const renamePending = renameArtifact.isPending;
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = deleteArtifact.isPending;
 
-  const activeHostId = useReactiveActiveHostId() ?? "unknown-host";
+  // The Epic SESSION's host, not the app-wide pointer: this tree projects the
+  // session's artifacts, and the refs built below stamp a tile with this id
+  // for life (`hostId` on the ref) and name the fallback host a created child
+  // is opened against. Read app-wide, an A-bound Epic that stays rendered
+  // through an A→B re-point (establishing, or failed) opened A's artifacts
+  // against B. `null` only outside a session, where this row never renders.
+  const activeHostId = useEpicSessionHostId() ?? "unknown-host";
 
   const openProjectedChildInTab = useCallback(
     (
@@ -945,7 +927,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   }, [canMutate, nodeName]);
 
   const commitRename = useCallback(() => {
-    if (renamePending) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -955,16 +936,53 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
-    renameArtifact.mutate(
-      { epicId, artifactId: nodeId, title: trimmed },
-      {
-        onSuccess: () => {
-          setIsRenaming(false);
+    // Settle the editor on COMMIT, not on the ack. The overlay stamped below
+    // IS the feedback, and `useInlineRename` — the shared state machine both
+    // tab strips rename through — already calls `setIsEditing(false)` before
+    // its `onCommit`. Holding the input open for the round trip made this row
+    // the one surface where a rename did not feel instant: every other surface
+    // bound to the node repainted from the overlay while the row the cursor
+    // was in sat there for the whole RPC (~1.2 s against a local host, and
+    // unbounded against a slow one).
+    //
+    // Failure is not silent: the mutation hook toasts (`Couldn't rename
+    // artifact.`) and `retire("failed")` rolls the overlay back to the old
+    // title, so the row reverts under a toast rather than never leaving edit
+    // mode. Deliberately NOT re-opening the editor on failure — that would
+    // steal focus seconds later, wherever the user had moved on to.
+    setIsRenaming(false);
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do — rationale and the promise-carried retire contract live in
+    // `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    void renameArtifact
+      .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
+      .then(
+        () => {
+          retire("landed");
+          // The tab snapshot only on settlement - it is a persisted fallback
+          // with no rollback path, so a speculative write would preserve a
+          // rejected title across restarts - and only while this is still
+          // the LATEST stamped rename for the node: settles are unordered,
+          // and an older ack landing last must not overwrite the newer
+          // snapshot. See `use-rename-canvas-tab.ts`.
+          if (
+            requestId === null ||
+            epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+          ) {
+            renameArtifactInTab(tabId, nodeId, trimmed);
+          }
         },
-      },
-    );
+        () => {
+          retire("failed");
+        },
+      );
   }, [
     epicHandle,
     epicId,
@@ -972,14 +990,12 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     nodeId,
     renameArtifactInTab,
     renameArtifact,
-    renamePending,
     renameValue,
     tabId,
   ]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (renamePending) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename();
@@ -988,7 +1004,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename, renamePending],
+    [commitRename],
   );
 
   const performDelete = () => {
@@ -1075,7 +1091,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       onRenameValueChange={setRenameValue}
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
-      renamePending={renamePending}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
@@ -1128,7 +1143,6 @@ interface ArtifactNodeShellProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1180,7 +1194,6 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     onRenameValueChange,
     onCommitRename,
     onRenameKeyDown,
-    renamePending,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1243,7 +1256,6 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
             unreadMarkerVariant={unreadMarkerVariant}
@@ -1435,7 +1447,6 @@ interface ArtifactRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
   readonly unreadMarkerVariant: ArtifactUnreadMarkerVariant | null;
@@ -1454,7 +1465,6 @@ function ArtifactRenameRow(props: ArtifactRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renamePending,
     nodeName,
     nodeId,
     unreadMarkerVariant,
@@ -1484,18 +1494,10 @@ function ArtifactRenameRow(props: ArtifactRenameRowProps) {
         }}
         onBlur={onBlur}
         onKeyDown={onKeyDown}
-        disabled={renamePending}
         className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
         aria-label={`Rename ${nodeName}`}
         data-testid={`epic-sidebar-rename-input-${nodeId}`}
       />
-      {renamePending ? (
-        <AgentSpinningDots
-          className="shrink-0 text-muted-foreground"
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
     </div>
   );
 }
@@ -1554,24 +1556,36 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isSelected,
     onToggleSelection,
   } = props;
-  const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
-    () => ({
-      kind: SIDEBAR_NODE_DND_TYPE,
-      epicId,
-      viewTabId,
-      nodeId,
-    }),
-    [epicId, nodeId, viewTabId],
+  // Session host, as above: the drag payload names the host the dropped tile
+  // binds to.
+  const activeHostId = useEpicSessionHostId();
+  const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
+    () =>
+      activeHostId === null
+        ? null
+        : {
+            kind: SIDEBAR_NODE_DND_TYPE,
+            epicId,
+            viewTabId,
+            hostId: activeHostId,
+            nodeId,
+          },
+    [activeHostId, epicId, nodeId, viewTabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getSidebarNodeDragId(nodeId),
-    disabled: selectionMode || openableType === null,
-    data: dragData,
+    id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
+    disabled:
+      dragDisabled ||
+      selectionMode ||
+      openableType === null ||
+      dragData === null,
+    data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -1588,6 +1602,9 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     nodePadRightClass(
       selectionMode ? false : canEdit,
       selectionMode ? false : showAdd,
+      // The artifact tree has no touch surface of its own; its controls always
+      // wait for hover.
+      false,
     ),
     selectionMode && "cursor-pointer",
     isActive
@@ -1803,6 +1820,7 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
     <AddNodeDropdown
       open={undefined}
       onOpenChange={undefined}
+      menuPlacement="row"
       epicId={epicId}
       menuTestId={`epic-sidebar-add-menu-${nodeId}`}
       itemTestId={(t) => `epic-sidebar-add-${t}-${nodeId}`}
@@ -1883,6 +1901,7 @@ function useArtifactRowMenuEntries(
       label: "Export as Markdown",
       icon: exportIcon,
       disabled: exportArtifacts.isPending,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-export-markdown-${props.nodeId}`,
@@ -1896,6 +1915,7 @@ function useArtifactRowMenuEntries(
       label: "Export as PDF",
       icon: exportIcon,
       disabled: exportArtifacts.isPending,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-export-pdf-${props.nodeId}`,
@@ -1910,6 +1930,7 @@ function useArtifactRowMenuEntries(
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-rename-${props.nodeId}`,
@@ -1924,6 +1945,7 @@ function useArtifactRowMenuEntries(
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "destructive",
       testIds: {
         dropdown: `epic-sidebar-delete-${props.nodeId}`,

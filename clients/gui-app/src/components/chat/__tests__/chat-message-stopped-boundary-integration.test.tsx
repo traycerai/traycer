@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -110,7 +109,7 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
-  contentBlocksText: () => "",
+  contentBlocksPreview: () => "",
 };
 
 function userMessage(messageId: string): Extract<Message, { role: "user" }> {
@@ -139,6 +138,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 

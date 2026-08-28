@@ -2,7 +2,8 @@ import type { CheckpointFileOperation } from "@traycer/protocol/persistence/epic
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
 
 type ArtifactOperationVerbKey =
-  CheckpointFileOperation | ArtifactOperationAction;
+  | CheckpointFileOperation
+  | ArtifactOperationAction;
 
 const ARTIFACT_OPERATION_VERBS = {
   create: "Created",

@@ -1,19 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS,
   EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   useEpicCollaboratorsQuery,
 } from "@/hooks/epics/use-epic-collaborators-query";
 
+const guiAppSrc = path.resolve(import.meta.dirname, "../..");
+
 interface CapturedHostQuery {
   readonly client: unknown;
   readonly method: string;
   readonly params: { readonly epicId: string };
   readonly options: {
-    readonly refetchInterval: number | false | undefined;
-    readonly refetchIntervalInBackground: boolean | undefined;
+    readonly poll: boolean | undefined;
     readonly staleTime: number | undefined;
   } | null;
 }
@@ -39,10 +44,22 @@ const mockQueryResult = vi.hoisted((): { current: MockQueryResult } => ({
   },
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useHostClient: () => ({ getActiveHostId: () => "host-remote" }),
-}));
+// A complete-but-inert HostRequester: `useHostQuery` is mocked below, so no
+// member is ever invoked - the shape exists only to satisfy the options type.
+const fakeClient: HostRequester<HostRpcRegistry> = {
+  getRegistry: () => {
+    throw new Error("unused in this test");
+  },
+  getActiveHost: () => null,
+  getActiveHostId: () => "host-remote",
+  getRequestContext: () => null,
+  getRequestContextUserId: () => null,
+  onChange: () => () => undefined,
+  request: () => Promise.reject(new Error("unused in this test")),
+  requestWithSignal: () => Promise.reject(new Error("unused in this test")),
+  requestWithResponseTimeout: () =>
+    Promise.reject(new Error("unused in this test")),
+};
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: CapturedHostQuery) => {
@@ -119,10 +136,11 @@ describe("useEpicCollaboratorsQuery", () => {
     };
   });
 
-  it("arms focus-gated periodic refetching while the Sharing panel is open", () => {
+  it("opts the Sharing panel into table-owned fixed polling while open", () => {
     renderHook(() =>
       useEpicCollaboratorsQuery("epic-open", {
-        refetchInterval: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+        client: fakeClient,
+        poll: true,
         staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
       }),
     );
@@ -130,18 +148,25 @@ describe("useEpicCollaboratorsQuery", () => {
     expect(capturedQuery.current?.method).toBe("epic.listCollaborators");
     expect(capturedQuery.current?.params).toEqual({ epicId: "epic-open" });
     expect(capturedQuery.current?.options).toMatchObject({
-      refetchInterval: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
-      refetchIntervalInBackground: false,
+      poll: true,
       staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
     });
+    // The caller-chosen client must reach the query untouched - host binding
+    // is this hook's caller's decision, never an ambient default.
+    expect(capturedQuery.current?.client).toBe(fakeClient);
   });
 
   it("keeps the closed-panel query relaxed and non-polling by default", () => {
-    renderHook(() => useEpicCollaboratorsQuery("epic-closed", null));
+    renderHook(() =>
+      useEpicCollaboratorsQuery("epic-closed", {
+        client: fakeClient,
+        poll: undefined,
+        staleTime: undefined,
+      }),
+    );
 
     expect(capturedQuery.current?.options).toMatchObject({
-      refetchInterval: false,
-      refetchIntervalInBackground: false,
+      poll: false,
       staleTime: EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS,
     });
   });
@@ -157,7 +182,8 @@ describe("useEpicCollaboratorsQuery", () => {
 
     const hook = renderHook(() =>
       useEpicCollaboratorsQuery("epic-open", {
-        refetchInterval: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+        client: fakeClient,
+        poll: true,
         staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
       }),
     );
@@ -185,7 +211,8 @@ describe("useEpicCollaboratorsQuery", () => {
 
     const hook = renderHook(() =>
       useEpicCollaboratorsQuery("epic-open", {
-        refetchInterval: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+        client: fakeClient,
+        poll: true,
         staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
       }),
     );
@@ -209,3 +236,59 @@ describe("useEpicCollaboratorsQuery", () => {
     });
   });
 });
+
+describe("epic.listCollaborators fixed-path poll inventory", () => {
+  it("keeps Sharing opt-in and the two cache readers opt-out", () => {
+    const sharing = readFileSync(
+      path.join(
+        guiAppSrc,
+        "components/epic-canvas/panels/epic-sharing/use-controller.ts",
+      ),
+      "utf8",
+    );
+    expect(sharing).toMatch(/useEpicCollaboratorsQuery\([\s\S]*?poll:\s*true/);
+
+    const mention = readFileSync(
+      path.join(guiAppSrc, "hooks/comments/use-mention-collaborators.ts"),
+      "utf8",
+    );
+    expect(mention).toMatch(/useEpicCollaboratorsQuery\([\s\S]*?poll:\s*false/);
+
+    const chatTile = readFileSync(
+      path.join(guiAppSrc, "components/epic-canvas/renderers/chat-tile.tsx"),
+      "utf8",
+    );
+    expect(chatTile).toMatch(
+      /method:\s*"epic\.listCollaborators"[\s\S]*?poll:\s*false/,
+    );
+
+    const sourcePaths = sourceFiles(guiAppSrc);
+    const listCollaboratorsCallSites = sourcePaths.filter((relativePath) => {
+      const source = readFileSync(path.join(guiAppSrc, relativePath), "utf8");
+      return (
+        /method:\s*"epic\.listCollaborators"/.test(source) ||
+        /useEpicCollaboratorsQuery\(/.test(source)
+      );
+    });
+    // Mutation activation is not a Query observer and is out of inventory.
+    expect(listCollaboratorsCallSites).toEqual(
+      expect.arrayContaining([
+        "components/epic-canvas/panels/epic-sharing/use-controller.ts",
+        "components/epic-canvas/renderers/chat-tile.tsx",
+        "hooks/comments/use-mention-collaborators.ts",
+        "hooks/epics/use-epic-collaborators-query.ts",
+      ]),
+    );
+  });
+});
+
+function sourceFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolutePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return entry.name === "__tests__" ? [] : sourceFiles(absolutePath);
+    }
+    if (!/\.tsx?$/.test(entry.name)) return [];
+    return [path.relative(guiAppSrc, absolutePath)];
+  });
+}

@@ -1,4 +1,6 @@
 import type {
+  InterviewErroredEvent,
+  InterviewResolvedEvent,
   RuntimeApprovalDecision,
   RuntimeEvent,
   RuntimePlanAction,
@@ -8,6 +10,7 @@ import type {
 import type {
   ApprovalDecision as PersistenceApprovalDecision,
   ContentBlock,
+  InterviewBlock,
   ParsedTaskTodoPersisted,
   PlanAction,
   PlanBlock,
@@ -18,6 +21,11 @@ import type {
   WorkflowActivityEntry,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  applyInterviewSettlement,
+  isInterviewBlockSettled,
+  type InterviewSettlement,
+} from "@traycer/protocol/host/agent/gui/interview-settlement";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -51,6 +59,108 @@ function replaceBlock(
   updated: ContentBlock,
 ): ContentBlock[] {
   return blocks.map((b) => (b.blockId === blockId ? updated : b));
+}
+
+/**
+ * The canonical-settlement fields of a brand-new interview block, at their
+ * "nothing has happened yet" values.
+ *
+ * Written once here so every construction site in this file starts from the
+ * same baseline - a missed field would type-check as an incomplete block only
+ * where the schema demands it, and would silently diverge in the shapes the
+ * reducer reads.
+ */
+function emptyInterviewBlockFacts(): Pick<
+  InterviewBlock,
+  | "answers"
+  | "error"
+  | "outcome"
+  | "draftAnswers"
+  | "settlement"
+  | "diagnostics"
+  | "delivery"
+  | "settlementExtensions"
+> {
+  return {
+    answers: [],
+    error: null,
+    outcome: null,
+    draftAnswers: [],
+    settlement: null,
+    diagnostics: [],
+    delivery: null,
+    settlementExtensions: {},
+  };
+}
+
+/**
+ * A replay-safe settlement id for a RUNTIME-originated settlement.
+ *
+ * ARCHITECTURAL CONSTRAINT, stated rather than papered over: the runtime
+ * interview events carry NO identity of their own.
+ * `InterviewResolvedEvent`/`InterviewErroredEvent` are `{ blockId, timestamp,
+ * parentBlockId, type }` plus their payload - there is no event id to key
+ * settlement on. So this derives one from everything that does identify the
+ * event, and the derivation has a known collision: two DISTINCT runtime events
+ * of the same kind, for the same block, in the same millisecond produce the
+ * same id, and the reducer reads the second as a replay of the first.
+ *
+ * That collision is contained rather than fixed, and deliberately not hidden
+ * behind a random id. A random id would make every replay - hydration,
+ * reconciliation, a reconnect re-delivering the same event - look like a NEW
+ * settlement, which is a permanent correctness bug traded for a
+ * same-millisecond edge case. The containment is the reducer's authority
+ * rules: a colliding second event cannot install its own answers over a
+ * canonical winner in any case (see `applyInterviewSettlement`'s payload
+ * gating), so the observable loss is limited to a distinct diagnostic code
+ * that lands in the same millisecond as its twin.
+ *
+ * The real fix is an id on the event itself, which is a change to the
+ * runtime-event contract (a new `chat.subscribe` minor and an adapter
+ * obligation), not something this function can invent. Until then, a
+ * host-originated settlement supplies its own durable id and never comes here
+ * - which is the path every user-visible settlement actually takes.
+ */
+function runtimeSettlementId(
+  event: InterviewResolvedEvent | InterviewErroredEvent,
+): string {
+  return `runtime:${event.type}:${event.blockId}:${event.timestamp}`;
+}
+
+function applyRuntimeInterviewSettlement(
+  blocks: ContentBlock[],
+  event: InterviewResolvedEvent | InterviewErroredEvent,
+  settlement: InterviewSettlement,
+): ContentBlock[] {
+  const existing = findBlockOfType(blocks, event.blockId, "interview");
+  // A settlement can arrive for a block this accumulator never saw requested
+  // (a resumed session, a detached interview whose request block was trimmed).
+  // Reducing against a synthetic empty block keeps that path on the same rules
+  // as every other, instead of a second hand-written block literal.
+  const base: InterviewBlock = existing ?? {
+    ...emptyInterviewBlockFacts(),
+    type: "interview",
+    blockId: event.blockId,
+    parentBlockId: event.parentBlockId,
+    status: "streaming",
+    timestamp: event.timestamp,
+    toolName: null,
+    title: null,
+    description: null,
+    questions: [],
+    metadata: null,
+  };
+
+  const { changed, patch } = applyInterviewSettlement(base, settlement);
+  const metadata = event.metadata ?? base.metadata;
+  if (existing !== undefined && !changed && metadata === existing.metadata) {
+    return blocks;
+  }
+
+  const updated: InterviewBlock = { ...base, ...patch, metadata };
+  return existing === undefined
+    ? [...blocks, updated]
+    : replaceBlock(blocks, event.blockId, updated);
 }
 
 /**
@@ -163,6 +273,22 @@ export function finalizeStreamingActionBlocks(
             block.planStatus === "drafting" ? "ready" : block.planStatus,
         };
       }
+      // A compaction still in flight at turn end never reported a boundary, so
+      // it folded nothing. The content fallthrough below would mark it
+      // "completed" and the bar would claim a result it never produced - the
+      // silent version of a failed compaction, with no error line to contradict
+      // it. Compaction is not an action block, so `interrupted`/`superseded` are
+      // not in its schema; `errored` is the honest terminal state. No harness
+      // leaves a compaction running across a turn end (each yields its own
+      // terminal event first), so this only ever fires on a genuine cut-short.
+      if (block.type === "compaction") {
+        return {
+          ...block,
+          status: "errored" as const,
+          error: block.error ?? "Compaction did not finish",
+          timestamp,
+        };
+      }
       // text/reasoning are content, not actions: a partial thought/sentence is
       // not a failure. Always "completed", with `timestamp` advanced to turn-end
       // so a derived duration ("Thought for Xs") spans first delta → turn end.
@@ -175,14 +301,15 @@ export function finalizeStreamingActionBlocks(
   return hasUpdates ? finalizedBlocks : blocks;
 }
 
-// Option B (backgrounded work): restore any subagent/background-tool block that
-// `finalizeStreamingActionBlocks` just finalized but was "streaming" before, to
-// its pre-finalize (streaming) state. Detached work still streaming at a CLEAN
-// turn end outlives the turn that spawned it, so its card must keep reading
-// "running" until its OWN completion finalizes it (the host's detached
-// execution). Other turn-scoped action blocks (ordinary tool_call/command/
-// file_change) stay finalized. Only applied on `turn.completed` - a
-// stopped/interrupted turn DOES finalize still-running detached work.
+// Option B (backgrounded work): restore any subagent block, or any background-
+// marked tool_call/command block, that `finalizeStreamingActionBlocks` just
+// finalized but was "streaming" before, to its pre-finalize (streaming) state.
+// Detached work still streaming at a CLEAN turn end outlives the turn that
+// spawned it, so its card must keep reading "running" until its OWN completion
+// finalizes it (the host's detached execution). Turn-scoped action blocks
+// (unmarked tool_call/command, file_change) stay finalized. Only applied on
+// `turn.completed` - a stopped/interrupted turn DOES finalize still-running
+// detached work.
 export function reopenStreamingSubagentBlocks(
   before: ContentBlock[],
   finalized: ContentBlock[],
@@ -207,7 +334,8 @@ function streamingDetachedBlockIds(
         (block) =>
           block.status === "streaming" &&
           (block.type === "subagent" ||
-            (block.type === "tool_call" && block.backgroundTask)),
+            (block.type === "tool_call" && block.backgroundTask) ||
+            (block.type === "command" && block.backgroundTask)),
       )
       .map((block) => block.blockId),
   );
@@ -304,6 +432,17 @@ function makeSubAgentBlock(fields: {
   return { type: "subagent", ...fields };
 }
 
+function isNewSubagentRun(
+  incomingSpawnToolCallId: string | undefined,
+  existingSpawnToolCallId: string | null,
+): boolean {
+  return (
+    incomingSpawnToolCallId !== undefined &&
+    existingSpawnToolCallId !== null &&
+    incomingSpawnToolCallId !== existingSpawnToolCallId
+  );
+}
+
 // Appends a new workflow activity entry, skipping a consecutive duplicate
 // (the same aggregate `task_progress` line can re-arrive on repeated polls
 // with no new milestone) so the persisted timeline reads as distinct steps.
@@ -313,7 +452,11 @@ function appendWorkflowActivity(
 ): WorkflowActivityEntry[] {
   if (entry === null) return activity;
   const last = activity[activity.length - 1];
-  if (last !== undefined && last.kind === entry.kind && last.text === entry.text) {
+  if (
+    last !== undefined &&
+    last.kind === entry.kind &&
+    last.text === entry.text
+  ) {
     return activity;
   }
   return [...activity, entry];
@@ -566,7 +709,14 @@ export function accumulateEvent(
     case "session.resumed":
     case "turn.started":
     case "user_message.anchor_resolved":
+    case "user_message.anchor_tail_updated":
     case "usage.updated":
+      return blocks;
+
+    // Updates the message-level `imageResolutions` record, not a content
+    // block - out of scope for this block-only reducer (ticket 04 owns the
+    // message-level accumulator that applies it).
+    case "image_resolution.updated":
       return blocks;
 
     case "steer.submitted":
@@ -743,6 +893,7 @@ export function accumulateEvent(
         ...blocks,
         {
           type: "tool_call",
+          managedCommand: null,
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
@@ -758,6 +909,7 @@ export function accumulateEvent(
           endedAt: null,
           backgroundTask: event.backgroundTask ?? null,
           stopped: false,
+          imageResults: [],
         },
       ];
     }
@@ -771,6 +923,11 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          // The shell this call created, known only now that it has returned.
+          // Kept if a later event does not re-send it, exactly like
+          // `agentMessageSend`: re-completing a block must not erase identity
+          // the first completion established.
+          managedCommand: event.managedCommand ?? existing.managedCommand,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
@@ -778,6 +935,13 @@ export function accumulateEvent(
             existing.backgroundTask,
             event.backgroundTask,
           ),
+          // Stamped explicitly in both completion branches (see the
+          // no-existing-block branch below) so a persisted block always
+          // carries the same shape the live broadcast did.
+          imageResults:
+            event.imageResults.length > 0
+              ? event.imageResults
+              : existing.imageResults,
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -795,12 +959,14 @@ export function accumulateEvent(
           taskTodoItems: null,
           error: null,
           agentMessageSend: event.agentMessageSend,
+          managedCommand: event.managedCommand ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
           endedAt: event.timestamp,
           backgroundTask: event.backgroundTask ?? null,
           stopped: false,
+          imageResults: event.imageResults,
         },
       ];
     }
@@ -830,6 +996,7 @@ export function accumulateEvent(
         ...blocks,
         {
           type: "tool_call",
+          managedCommand: null,
           blockId: event.blockId,
           status: "errored",
           timestamp: event.timestamp,
@@ -846,6 +1013,7 @@ export function accumulateEvent(
           endedAt: event.timestamp,
           backgroundTask: event.backgroundTask ?? null,
           stopped: event.terminationReason === "stopped",
+          imageResults: [],
         },
       ];
     }
@@ -1232,6 +1400,42 @@ export function accumulateEvent(
     case "interview.requested": {
       const existing = findBlockOfType(blocks, event.blockId, "interview");
       if (existing) {
+        // A late or duplicate request never reopens a settled interview. Its
+        // answer or Skip may already have reached a provider, so re-arming the
+        // pending gate would ask the user to answer something the agent has
+        // already consumed. Only the explicit pending-fork transform may clear
+        // terminal facts (`clearInterviewSettlement`) and synthesize a fresh
+        // request. The predicate is the shared union rule, so this agrees with
+        // host hydration and notification reconciliation by construction.
+        if (isInterviewBlockSettled(existing)) {
+          // A settlement can be observed before its request (resume/replay or
+          // transport reordering), producing a terminal synthetic block with
+          // no framing. A late request must never REOPEN or rewrite that fact,
+          // but it is authoritative framing evidence. Fill only fields that
+          // are still absent, preserving terminal timestamp and every
+          // settlement-owned field byte-for-value.
+          const enriched = {
+            ...existing,
+            toolName: existing.toolName ?? event.toolName,
+            title: existing.title ?? nullableString(event.title),
+            description:
+              existing.description ?? nullableString(event.description),
+            questions:
+              existing.questions.length === 0 && event.questions.length > 0
+                ? [...event.questions]
+                : existing.questions,
+            metadata: existing.metadata ?? nullableMetadata(event.metadata),
+          };
+          const framingUnchanged =
+            enriched.toolName === existing.toolName &&
+            enriched.title === existing.title &&
+            enriched.description === existing.description &&
+            enriched.questions === existing.questions &&
+            enriched.metadata === existing.metadata;
+          return framingUnchanged
+            ? blocks
+            : replaceBlock(blocks, event.blockId, enriched);
+        }
         const updated = {
           ...existing,
           status: "streaming" as const,
@@ -1247,6 +1451,7 @@ export function accumulateEvent(
       return [
         ...blocks,
         {
+          ...emptyInterviewBlockFacts(),
           type: "interview",
           blockId: event.blockId,
           status: "streaming",
@@ -1255,78 +1460,57 @@ export function accumulateEvent(
           title: nullableString(event.title),
           description: nullableString(event.description),
           questions: [...event.questions],
-          answers: [],
-          error: null,
           metadata: nullableMetadata(event.metadata),
         },
       ];
     }
 
+    // Both settlement arms below route through the shared protocol reducer
+    // rather than switching on status/answers/error themselves. That is what
+    // makes an adapter's late cleanup, a duplicate resolution and a replayed
+    // event behave identically here and in the host - and it is where the
+    // OpenCode empty-second-resolution protection now lives (as the reducer's
+    // "non-empty beats empty" rule), rather than as a local special case.
     case "interview.resolved": {
-      const existing = findBlockOfType(blocks, event.blockId, "interview");
-      if (existing) {
-        const updated = {
-          ...existing,
-          status: "completed" as const,
-          // A resolution that carries no answers must not erase answers already
-          // recorded for this block. The OpenCode adapter resolves the card with
-          // the user's real answers, then the converter emits a SECOND
-          // `interview.resolved` whose answers are empty (OpenCode's question
-          // tool output is an unparseable English sentence). Keep the recorded
-          // answers so the card never regresses to "No answer".
-          answers:
-            event.answers.length > 0 ? [...event.answers] : existing.answers,
-          metadata: event.metadata ?? existing.metadata,
-          timestamp: event.timestamp,
-        };
-        return replaceBlock(blocks, event.blockId, updated);
-      }
-      return [
-        ...blocks,
-        {
-          type: "interview",
-          blockId: event.blockId,
-          status: "completed",
-          timestamp: event.timestamp,
-          toolName: null,
-          title: null,
-          description: null,
-          questions: [],
-          answers: [...event.answers],
-          error: null,
-          metadata: nullableMetadata(event.metadata),
-        },
-      ];
+      return applyRuntimeInterviewSettlement(blocks, event, {
+        settlementId: runtimeSettlementId(event),
+        outcome: "answered",
+        // Normalized at the boundary: an adapter can emit an answer with no
+        // `selection` key at all, and the reducer's `changed` detection reads
+        // an absent key as different from an explicit null.
+        answers: event.answers.map((answer) => ({
+          ...answer,
+          selection: answer.selection ?? null,
+        })),
+        draftAnswers: [],
+        reason: null,
+        source: "runtime",
+        diagnostic: null,
+        delivery: null,
+        timestamp: event.timestamp,
+      });
     }
 
     case "interview.errored": {
-      const existing = findBlockOfType(blocks, event.blockId, "interview");
-      if (existing) {
-        const updated = {
-          ...existing,
-          status: "errored" as const,
-          error: event.error,
-          metadata: event.metadata ?? existing.metadata,
-          timestamp: event.timestamp,
-        };
-        return replaceBlock(blocks, event.blockId, updated);
-      }
-      return [
-        ...blocks,
-        {
-          type: "interview",
-          blockId: event.blockId,
-          status: "errored",
-          timestamp: event.timestamp,
-          toolName: null,
-          title: null,
-          description: null,
-          questions: [],
-          answers: [],
-          error: event.error,
-          metadata: nullableMetadata(event.metadata),
+      return applyRuntimeInterviewSettlement(blocks, event, {
+        settlementId: runtimeSettlementId(event),
+        outcome: "failed",
+        answers: [],
+        draftAnswers: [],
+        reason: event.error,
+        source: "runtime",
+        // Content-free, id-deduplicated, and recorded SEPARATELY from the
+        // user-visible reason. When this settlement loses - an adapter
+        // reporting failure after an accepted Skip - the code is retained
+        // while `outcome`/`error` stay exactly what the user experienced.
+        diagnostic: {
+          diagnosticId: runtimeSettlementId(event),
+          code: "runtime.interview_errored",
+          source: "runtime",
         },
-      ];
+        delivery: null,
+        timestamp: event.timestamp,
+      });
     }
 
     case "file_change.started": {
@@ -1437,6 +1621,24 @@ export function accumulateEvent(
     }
 
     case "command.started": {
+      // A harness that discovers backgrounding only after the card is open
+      // (Codex promotes at the parent turn's end) re-emits this event to stamp
+      // the marker, so an existing block is updated in place - appending would
+      // duplicate the card. The open block's `timestamp` is its elapsed anchor
+      // and its `status` may already be terminal, so neither is touched here.
+      const existing = findBlockOfType(blocks, event.blockId, "command");
+      if (existing) {
+        return replaceBlock(blocks, event.blockId, {
+          ...existing,
+          command: event.command,
+          cwd: event.cwd === undefined ? existing.cwd : event.cwd,
+          parentBlockId: resolveParentBlockId(event, existing),
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
+        });
+      }
       return [
         ...blocks,
         {
@@ -1448,11 +1650,14 @@ export function accumulateEvent(
           cwd: nullableString(event.cwd),
           exitCode: null,
           parentBlockId: resolveParentBlockId(event, undefined),
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: false,
         },
       ];
     }
 
     case "command.completed": {
+      const stopped = event.terminationReason === "stopped";
       const existing = findBlockOfType(blocks, event.blockId, "command");
       if (existing) {
         const updated = {
@@ -1461,6 +1666,11 @@ export function accumulateEvent(
           exitCode: event.exitCode ?? existing.exitCode,
           timestamp: event.timestamp,
           parentBlockId: resolveParentBlockId(event, existing),
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
+          stopped: existing.stopped || stopped,
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -1475,6 +1685,8 @@ export function accumulateEvent(
           cwd: null,
           exitCode: nullableNumber(event.exitCode),
           parentBlockId: resolveParentBlockId(event, undefined),
+          backgroundTask: event.backgroundTask ?? null,
+          stopped,
         },
       ];
     }
@@ -1486,6 +1698,20 @@ export function accumulateEvent(
       // name/task in place rather than appending a duplicate card.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+          return replaceBlock(blocks, event.blockId, {
+            ...existing,
+            status: "streaming",
+            timestamp: event.timestamp,
+            startedAt: event.timestamp,
+            task: nullableString(event.task),
+            progressUpdates: [],
+            result: null,
+            spawnToolCallId: event.spawnToolCallId ?? null,
+            stopped: false,
+            workflowMeta: null,
+          });
+        }
         return replaceBlock(blocks, event.blockId, {
           ...existing,
           name: event.name,
@@ -1610,6 +1836,23 @@ export function accumulateEvent(
       // open a fresh dual-written subagent block.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+          return replaceBlock(blocks, event.blockId, {
+            ...existing,
+            status: "streaming",
+            timestamp: event.timestamp,
+            startedAt: event.timestamp,
+            task: event.intent,
+            progressUpdates: [],
+            result: null,
+            spawnToolCallId: event.spawnToolCallId ?? null,
+            stopped: false,
+            workflowMeta: {
+              ...emptyWorkflowMeta(existing.name),
+              intent: event.intent,
+            },
+          });
+        }
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(event.name);
         // A re-emit's `intent` is a required key but not necessarily a
         // meaningful one - only a genuine non-null value overwrites, mirroring
@@ -1658,8 +1901,7 @@ export function accumulateEvent(
 
     case "workflow.progress": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
-      const progressLine =
-        event.activity !== null ? event.activity.text : null;
+      const progressLine = event.activity !== null ? event.activity.text : null;
       if (existing) {
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(existing.name);
         const updated = {

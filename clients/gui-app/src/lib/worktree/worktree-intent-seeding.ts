@@ -3,6 +3,7 @@ import type {
   WorktreeFolderIntent,
   WorktreeWorkspaceSummary,
 } from "@traycer/protocol/host/worktree-schemas";
+import { createWorktreeRetryIdentity } from "@/lib/worktree/worktree-retry-identity";
 
 type RepoIdentifier = WorktreeFolderIntent["repoIdentifier"];
 
@@ -48,6 +49,8 @@ export function defaultFolderIntent(
       name: folder.defaultNewBranchName,
       source: folder.currentBranch,
       carryUncommittedChanges: false,
+      collision: "random",
+      retryIdentity: createWorktreeRetryIdentity(),
     },
   };
 }
@@ -101,6 +104,8 @@ export function applySeedIntentOverride(input: {
       name: folder.defaultNewBranchName,
       source: folder.currentBranch,
       carryUncommittedChanges: true,
+      collision: "random",
+      retryIdentity: createWorktreeRetryIdentity(),
     },
   };
 }
@@ -175,6 +180,8 @@ export function resolveRememberedFolderIntent(input: {
         name: folder.defaultNewBranchName,
         source: remembered.branch.source,
         carryUncommittedChanges: false,
+        collision: "random",
+        retryIdentity: createWorktreeRetryIdentity(),
       },
     };
   }

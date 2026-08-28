@@ -3,6 +3,8 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -10,6 +12,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -29,7 +32,9 @@ export interface KillTerminalMutationContext {
  * rejecting no-op - callers gate the affordance on a resolved client + a live
  * session, matching `useHostQuery`'s null-client behavior.
  *
- * `useTerminalKill` is the default-host convenience wrapper over this hook.
+ * Every caller passes the client of the host that OWNS the session (a tile's
+ * or the Epic session's); the app-wide convenience wrapper that used to
+ * sit beside this hook had no caller left and was removed (PR #1243).
  */
 export function useTerminalKillFor(
   client: HostClient<HostRpcRegistry> | null,
@@ -47,33 +52,36 @@ export function useTerminalKillFor(
     HostRpcError,
     RequestOfMethod<HostRpcRegistry, "terminal.kill">,
     KillTerminalMutationContext
-  >({
-    mutationKey: terminalMutationKeys.kill(),
-    mutationFn: (variables) => {
-      if (client === null) {
-        return Promise.reject<
-          ResponseOfMethod<HostRpcRegistry, "terminal.kill">
-        >(new Error("Host client unavailable"));
-      }
-      return client.request("terminal.kill", variables);
-    },
-    onMutate: () => ({
-      hostId: client === null ? null : client.getActiveHostId(),
-    }),
-    onSuccess: (_data, _variables, ctx) => {
-      if (trackUserIntent) {
-        Analytics.getInstance().track(AnalyticsEvent.TerminalKilled, {
-          kind: "shell",
+  >(
+    withHostMutationLifecycleBoundary("terminal.kill", {
+      mutationKey: terminalMutationKeys.kill(),
+      mutationFn: (variables) =>
+        withHostQueryErrorBoundary("terminal.kill", () => {
+          if (client === null) {
+            return Promise.reject<
+              ResponseOfMethod<HostRpcRegistry, "terminal.kill">
+            >(hostClientUnavailableError("terminal.kill"));
+          }
+          return client.request("terminal.kill", variables);
+        }),
+      onMutate: () => ({
+        hostId: client === null ? null : client.getActiveHostId(),
+      }),
+      onSuccess: (_data, _variables, ctx) => {
+        if (trackUserIntent) {
+          Analytics.getInstance().track(AnalyticsEvent.TerminalKilled, {
+            kind: "shell",
+          });
+        }
+        if (ctx.hostId === null) return;
+        // Only the terminal-session list changed; invalidating the whole host
+        // scope would also force-refetch the manual-refresh-only cloud-tasks
+        // history.
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
         });
-      }
-      if (ctx.hostId === null) return;
-      // Only the terminal-session list changed; invalidating the whole host
-      // scope would also force-refetch the manual-refresh-only cloud-tasks
-      // history.
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
-      });
-    },
-    onError: (error) => toastFromHostError(error, errorMessage),
-  });
+      },
+      onError: (error) => toastFromHostError(error, errorMessage),
+    }),
+  );
 }

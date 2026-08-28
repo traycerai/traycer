@@ -18,18 +18,18 @@ describe("useHostQueries enabled handling", () => {
 
   it("respects a function-form `enabled` rather than collapsing it to true", async () => {
     const fixture = createHostQueriesFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     renderHook(
       () =>
         useHostQueries({
-          client: fixture.client,
+          client,
           cacheKeyIdentity: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: { enabled: () => false },
@@ -43,7 +43,7 @@ describe("useHostQueries enabled handling", () => {
     renderHook(
       () =>
         useHostQueries({
-          client: fixture.client,
+          client,
           cacheKeyIdentity: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: { enabled: () => true },
@@ -58,13 +58,13 @@ describe("useHostQueries enabled handling", () => {
 
   it("keeps a combined result stable when its query data is unchanged", async () => {
     const fixture = createHostQueriesFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     const { result, rerender } = renderHook(
       () =>
@@ -73,10 +73,11 @@ describe("useHostQueries enabled handling", () => {
           "host.status",
           {
             readonly data:
-              ResponseOfMethod<HostRpcRegistry, "host.status"> | undefined;
+              | ResponseOfMethod<HostRpcRegistry, "host.status">
+              | undefined;
           }
         >({
-          client: fixture.client,
+          client,
           cacheKeyIdentity: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: null,
@@ -111,6 +112,8 @@ function createHostQueriesFixture(): {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -121,6 +124,10 @@ function createHostQueriesFixture(): {
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
           };
         },
       },

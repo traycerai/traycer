@@ -3,7 +3,6 @@
  * mutating a Y.Doc through the public store API and asserting the
  * projected slices match a reference projection of the live doc.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
@@ -16,6 +15,11 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { projectFullState } from "@/stores/epics/open-epic/projection-helpers";
+import { EMPTY_PENDING_OVERLAY } from "@/stores/epics/open-epic/pending-metadata-overlay";
+import {
+  EMPTY_CHATS_SLICE,
+  EMPTY_TERMINAL_AGENTS_SLICE,
+} from "@/stores/epics/open-epic/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -117,6 +121,24 @@ function makeTerminalAgentEntry(
   return agent;
 }
 
+function makeRoleClaimEntry(args: {
+  readonly claimId: string;
+  readonly agentId: string;
+  readonly userId: string;
+  readonly role: string;
+  readonly scope: string;
+  readonly claimedAt: number;
+}): Y.Map<unknown> {
+  const claim = new Y.Map<unknown>();
+  claim.set("claimId", args.claimId);
+  claim.set("agentId", args.agentId);
+  claim.set("userId", args.userId);
+  claim.set("role", args.role);
+  claim.set("scope", args.scope);
+  claim.set("claimedAt", args.claimedAt);
+  return claim;
+}
+
 /**
  * Build a deleted-artifact tombstone entry exactly as the host writes it into
  * `epic.deletedArtifacts`. `status` is only set for ticket/story (spec/review
@@ -145,7 +167,6 @@ describe("epic-projector", () => {
     expect(state.artifacts.allIds).toEqual([]);
     expect(state.chats.allIds).toEqual([]);
     expect(state.tree.rootIds).toEqual([]);
-    expect(Object.keys(state.contentRevByArtifactId)).toEqual([]);
     expect(state.epic.title).toBe("");
     handle.dispose();
   });
@@ -284,7 +305,12 @@ describe("epic-projector", () => {
     void a;
     void c;
 
-    const live = projectFullState(handle.doc, null);
+    const live = projectFullState(handle.doc, null, {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     const state = handle.store.getState();
 
     expect(state.epic).toEqual(live.epic);
@@ -313,13 +339,23 @@ describe("epic-projector", () => {
 
     // Signed in as user-a: their own chat + the unowned chat show; user-b's
     // chat is hidden from every derived slice.
-    const mine = projectFullState(doc, "user-a");
+    const mine = projectFullState(doc, "user-a", {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(mine.chats.allIds.slice().sort()).toEqual(["mine", "orphan"]);
     expect(Object.keys(mine.chats.byId).sort()).toEqual(["mine", "orphan"]);
     expect(mine.tree.rootIds.slice().sort()).toEqual(["mine", "orphan"]);
 
     // Fail open when the signed-in user is unknown (hydrating): show everything.
-    const anon = projectFullState(doc, null);
+    const anon = projectFullState(doc, null, {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(anon.chats.allIds.slice().sort()).toEqual([
       "mine",
       "orphan",
@@ -341,13 +377,23 @@ describe("epic-projector", () => {
     tuiAgents.set("legacy", makeTerminalAgentEntry("legacy", null, "Legacy"));
     doc.getMap("epic").set("tuiAgents", tuiAgents);
 
-    const mine = projectFullState(doc, "user-a");
+    const mine = projectFullState(doc, "user-a", {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(mine.tuiAgents.allIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(Object.keys(mine.tuiAgents.byId).sort()).toEqual(["legacy", "mine"]);
     expect(mine.tree.rootIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(mine.tree.nodeById.theirs).toBeUndefined();
 
-    const anon = projectFullState(doc, null);
+    const anon = projectFullState(doc, null, {
+      chatRecords: EMPTY_CHATS_SLICE,
+      tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+      pendingOverlay: EMPTY_PENDING_OVERLAY,
+      reportDeadMutations: null,
+    });
     expect(anon.tuiAgents.allIds.slice().sort()).toEqual([
       "legacy",
       "mine",
@@ -389,6 +435,80 @@ describe("epic-projector", () => {
       expect(state.tree.nodeById.theirs).toBeUndefined();
       handle.dispose();
     } finally {
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("projects live same-account role claims and removes badges with their agents", () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-a", userName: "A", email: "a@example.com" },
+        { userId: "user-a", username: "A" },
+        [],
+      );
+    const { handle } = newSession();
+    try {
+      const claimId = "10000000-0000-4000-8000-000000000001";
+      const visibleClaim = makeRoleClaimEntry({
+        claimId,
+        agentId: "agent-a",
+        userId: "user-a",
+        role: "Planner",
+        scope: "Authentication",
+        claimedAt: 1,
+      });
+      handle.doc.transact(() => {
+        const chats = new Y.Map<unknown>();
+        chats.set("agent-a", makeChatEntry("agent-a", "user-a", "Agent A"));
+        const claims = new Y.Map<unknown>();
+        claims.set(claimId, visibleClaim);
+        claims.set(
+          "10000000-0000-4000-8000-000000000002",
+          makeRoleClaimEntry({
+            claimId: "10000000-0000-4000-8000-000000000002",
+            agentId: "agent-a",
+            userId: "user-b",
+            role: "Foreign",
+            scope: "Hidden",
+            claimedAt: 2,
+          }),
+        );
+        claims.set(
+          "10000000-0000-4000-8000-000000000003",
+          makeRoleClaimEntry({
+            claimId: "10000000-0000-4000-8000-000000000003",
+            agentId: "deleted-agent",
+            userId: "user-a",
+            role: "Stale",
+            scope: "Hidden",
+            claimedAt: 3,
+          }),
+        );
+        handle.doc.getMap("epic").set("chats", chats);
+        handle.doc.getMap("epic").set("roleClaims", claims);
+      });
+
+      expect(handle.store.getState().agentRoles.byAgentId["agent-a"]).toEqual([
+        expect.objectContaining({ role: "Planner", scope: "Authentication" }),
+      ]);
+      expect(
+        handle.store.getState().agentRoles.byAgentId["deleted-agent"],
+      ).toBeUndefined();
+
+      visibleClaim.set("role", "Lead Planner");
+      expect(
+        handle.store.getState().agentRoles.byAgentId["agent-a"][0].role,
+      ).toBe("Lead Planner");
+
+      const chats = handle.doc.getMap("epic").get("chats");
+      if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+      chats.delete("agent-a");
+      expect(
+        handle.store.getState().agentRoles.byAgentId["agent-a"],
+      ).toBeUndefined();
+    } finally {
+      handle.dispose();
       useAuthStore.getState().setSignedOut();
     }
   });

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeEach,
@@ -38,15 +37,34 @@ const state = vi.hoisted((): GateTestState => ({
     repoState: null,
     repoMode: null,
     pollStartedAtMs: null,
+    watcherStatus: null,
   })),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => state.activeHostId,
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
+// to, so `git.subscribeStatus` cannot ride the window's effective host while
+// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
+// answer, so the tile falls back to the ambient binding this suite supplies -
+// which is what every assertion here is about. Which transport a host resolves
+// to is a different question with its own suite:
+// `use-surface-host-stream-binding.test.tsx`.
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => state.activeHostId,
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => state.reachability,
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
@@ -72,8 +90,19 @@ vi.mock("react-virtuoso", () => ({
   Virtuoso: () => <div data-testid="virtuoso" />,
 }));
 
+// The toolbar's "open file" now dispatches on the TAB client (D15); these tests
+// mount the tile without the whole host runtime, so the seam is stubbed the
+// same way the sibling git-diff-tile suites already stub it.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
+// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
+// mocked hook ignores the client it is handed; what this repoint pins is that
+// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
-  useEditorOpen: () => ({
+  useEditorOpenForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
@@ -132,6 +161,7 @@ describe("<GitDiffTile /> host-binding gate", () => {
       repoState: null,
       repoMode: null,
       pollStartedAtMs: null,
+      watcherStatus: null,
     });
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -151,14 +181,18 @@ describe("<GitDiffTile /> host-binding gate", () => {
     expect(state.subscribe).not.toHaveBeenCalled();
   });
 
-  it("shows the inactive banner without opening a git stream", () => {
+  it("opens the git stream when the bound host is reachable but not the active host", () => {
     state.activeHostId = "host-B";
     renderTile("host-A");
 
-    expect(
-      screen.getByText(/Switch your active host to "Host A"/),
-    ).toBeTruthy();
-    expect(state.subscribe).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.queryByText(/currently unreachable/)).toBeNull();
+    expect(state.subscribe).toHaveBeenCalledWith({
+      hostId: "host-A",
+      runningDir: "/work/repo",
+      ignoreWhitespace: false,
+      enabled: true,
+    });
   });
 
   it("opens the git stream when the bound host is active and reachable", () => {
@@ -212,6 +246,7 @@ describe("<GitDiffTile /> host-binding gate", () => {
       repoState: null,
       repoMode: "normal",
       pollStartedAtMs: 1,
+      watcherStatus: null,
     });
     const updateView = vi.spyOn(
       useEpicCanvasStore.getState(),

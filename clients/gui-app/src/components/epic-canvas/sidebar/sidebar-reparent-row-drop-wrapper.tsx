@@ -3,6 +3,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import {
   getSidebarReparentRowDropId,
+  getPaneScopedDndId,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { useSidebarReparentTargetActive } from "@/components/epic-canvas/dnd/dnd-store";
@@ -35,10 +36,10 @@ export function SidebarReparentRowDropWrapper(props: {
     [epicId, viewTabId, nodeId, panelId],
   );
   const { setNodeRef } = useDroppable({
-    id: getSidebarReparentRowDropId(nodeId),
+    id: getPaneScopedDndId(viewTabId, getSidebarReparentRowDropId(nodeId)),
     data: dropData,
   });
-  const isReparentTarget = useSidebarReparentTargetActive(nodeId);
+  const isReparentTarget = useSidebarReparentTargetActive(viewTabId, nodeId);
   const row = (
     <div
       ref={setNodeRef}

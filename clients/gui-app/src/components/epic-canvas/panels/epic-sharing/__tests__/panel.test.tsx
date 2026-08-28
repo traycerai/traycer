@@ -47,6 +47,17 @@ interface TestState {
     dataUpdatedAt: number;
     readonly refetch: Mock;
   };
+  sharingDefaultSupported: boolean;
+  sharingInFlight: boolean;
+  setSharingDefault: {
+    readonly mutate: Mock;
+    isPending: boolean;
+  };
+  ownCloudChats: ReadonlyArray<{
+    readonly visibility: "private" | "task";
+    readonly isOwnedByViewer: boolean;
+  }>;
+  cloudChatListSuccess: boolean;
 }
 
 const testState = vi.hoisted<TestState>(() => ({
@@ -62,6 +73,11 @@ const testState = vi.hoisted<TestState>(() => ({
   },
   sendInvites: { mutateAsync: vi.fn(), isPending: false },
   collaboratorsQuery: { isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() },
+  sharingDefaultSupported: false,
+  sharingInFlight: false,
+  setSharingDefault: { mutate: vi.fn(), isPending: false },
+  ownCloudChats: [],
+  cloudChatListSuccess: true,
 }));
 
 vi.mock("sonner", () => ({
@@ -72,9 +88,25 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => testState.role,
 }));
 
+// Captures the client the controller hands the list query, so the suite can
+// say WHICH host the panel reads on - the two client mocks below answer
+// different ids for exactly this reason.
+const collaboratorsQueryClientIds = vi.hoisted(
+  () => [] as Array<string | null>,
+);
+
 vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
   EPIC_COLLABORATORS_OPEN_REFRESH_MS: 5 * 60_000,
-  useEpicCollaboratorsQuery: () => ({
+  useEpicCollaboratorsQuery: (
+    _epicId: string,
+    options: {
+      readonly client: { getActiveHostId: () => string | null } | null;
+    },
+  ) => ({
+    ...(collaboratorsQueryClientIds.push(
+      options.client?.getActiveHostId() ?? null,
+    ),
+    {}),
     data: testState.collaborators,
     error: null,
     isError: false,
@@ -100,6 +132,63 @@ vi.mock("@/hooks/epic/use-epic-send-queued-invites-mutation", () => ({
 vi.mock("@/hooks/epic/use-epic-shareable-teams", () => ({
   useEpicShareableTeams: () => testState.shareableTeams,
 }));
+
+vi.mock("@/hooks/epic/use-chat-sharing-support", () => ({
+  useChatSharingDefaultSupported: () => testState.sharingDefaultSupported,
+  useCloudChatVisibilitySupported: () => false,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-visibility-mutations", () => ({
+  useEpicSetChatSharingDefault: () => testState.setSharingDefault,
+  useEpicSetCloudChatVisibility: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
+  return {
+    ...actual,
+    useCloudChatList: () =>
+      testState.cloudChatListSuccess
+        ? {
+            data: { chats: testState.ownCloudChats },
+            isEnabled: true,
+            isSuccess: true,
+            isError: false,
+          }
+        : {
+            data: undefined,
+            isEnabled: true,
+            isSuccess: false,
+            isError: false,
+          },
+    useCloudChatViewerId: () => "user-1",
+  };
+});
+
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => ({ getActiveHostId: () => "active-host" }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ getActiveHostId: () => "active-host" }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => ({ getActiveHostId: () => "epic-host" }),
+}));
+
+vi.mock("@/lib/chats/chat-sharing-inflight", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/chats/chat-sharing-inflight")>();
+  return {
+    ...actual,
+    useChatSharingInFlight: () => testState.sharingInFlight,
+  };
+});
 
 import { SharingPanel } from "../panel";
 import { parseInviteIdentifier, validateInviteInput } from "@/lib/epic-invites";
@@ -180,6 +269,11 @@ function resetTestState(): void {
     dataUpdatedAt: 0,
     refetch: vi.fn(),
   };
+  testState.sharingDefaultSupported = false;
+  testState.sharingInFlight = false;
+  testState.setSharingDefault = { mutate: vi.fn(), isPending: false };
+  testState.ownCloudChats = [];
+  testState.cloudChatListSuccess = true;
 }
 
 function renderSharingPanel(): void {
@@ -271,17 +365,33 @@ describe("<SharingPanel />", () => {
             {
               identifier: "sharm@gmail.com",
               identifierType: "email",
-              role: "viewer",
+              role: "editor",
             },
             {
               identifier: "asjnfakjsnf",
               identifierType: "github_handle",
-              role: "viewer",
+              role: "editor",
             },
           ],
         }),
       );
     });
+  });
+
+  it("reads the collaborator list on the EPIC SESSION's client, not the app-wide one", () => {
+    // Codex #1243 sweep: the panel's grant/revoke/role mutations were moved
+    // onto the Epic session's client, and the list must agree with the host
+    // those writes land on. The controller's own comment recorded this as
+    // deferred ("would have to move the mutation hooks with it"); this pins
+    // that it is no longer deferred. Both client mocks are installed with
+    // distinct ids, so a controller reading the app-wide client fails here
+    // by name.
+    collaboratorsQueryClientIds.length = 0;
+    renderSharingPanel();
+    expect(collaboratorsQueryClientIds.length).toBeGreaterThan(0);
+    expect(new Set(collaboratorsQueryClientIds)).toEqual(
+      new Set(["epic-host"]),
+    );
   });
 
   it("renders direct people separately from shared and unshared teams", () => {
@@ -377,7 +487,7 @@ describe("<SharingPanel />", () => {
         input: {
           kind: "team",
           teamId: "team-2",
-          role: "viewer",
+          role: "editor",
         },
       },
       expect.objectContaining({}),
@@ -401,7 +511,7 @@ describe("<SharingPanel />", () => {
     expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("spins the refresh icon while collaborators are refreshing", () => {
+  it("shows the standard agent spinner while collaborators are refreshing", () => {
     testState.collaboratorsQuery = {
       isFetching: true,
       dataUpdatedAt: Date.now(),
@@ -416,8 +526,8 @@ describe("<SharingPanel />", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(
-      screen.getByTestId("epic-sharing-refresh-spinner").getAttribute("class"),
-    ).toContain("animate-spin");
+      screen.getByTestId("epic-sharing-refresh-spinner").className,
+    ).toContain("font-mono");
   });
 
   it("keeps role triggers visible for teams and direct collaborators", () => {
@@ -449,5 +559,119 @@ describe("<SharingPanel />", () => {
     expect(
       screen.getByTestId("collaborator-role-select").textContent,
     ).toContain("Editor");
+  });
+});
+
+describe("<SharingPanel /> My agents", () => {
+  beforeEach(() => {
+    resetTestState();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("hides the section when the host does not advertise the RPC", () => {
+    renderSharingPanel();
+    expect(screen.queryByTestId("epic-sharing-my-agents-section")).toBeNull();
+  });
+
+  it("keeps the switch inert until the cloud chat list has answered", () => {
+    // The confirm copy counts the chats about to be exposed and the request
+    // always applies to existing rows - so an unanswered list must not be
+    // able to arm the toggle with a count of zero.
+    testState.sharingDefaultSupported = true;
+    testState.cloudChatListSuccess = false;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+    ];
+
+    renderSharingPanel();
+
+    const toggle = screen.getByTestId("epic-sharing-my-agents-switch");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
+  });
+
+  it("shows the section to a viewer and derives on from any task-visible own row", () => {
+    testState.role = "viewer";
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+      { visibility: "task", isOwnedByViewer: true },
+    ];
+
+    renderSharingPanel();
+
+    expect(screen.queryByTestId("invite-card")).toBeNull();
+    expect(screen.getByTestId("epic-sharing-my-agents-section")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("epic-sharing-my-agents-switch")
+        .getAttribute("data-state"),
+    ).toBe("checked");
+  });
+
+  it("confirms the share direction with the count of chats about to become visible", () => {
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+      { visibility: "private", isOwnedByViewer: true },
+      { visibility: "task", isOwnedByViewer: false },
+    ];
+
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).toContain("2 of your agent chats");
+
+    fireEvent.click(
+      screen.getByTestId("epic-sharing-my-agents-confirm-action"),
+    );
+    expect(testState.setSharingDefault.mutate).toHaveBeenCalledTimes(1);
+    expect(testState.setSharingDefault.mutate.mock.calls[0]?.[0]).toEqual({
+      taskId: "epic-1",
+      defaultVisibility: "task",
+      applyToExisting: true,
+    });
+  });
+
+  it("confirms the private direction without a count", () => {
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [{ visibility: "task", isOwnedByViewer: true }];
+
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).toContain("Make your agents private?");
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).toContain("all of your agents on this task private");
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).not.toContain("will be able to view and clone");
+  });
+
+  it("disables the master toggle while any sharing write is in flight", () => {
+    testState.sharingDefaultSupported = true;
+    testState.sharingInFlight = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+    ];
+
+    renderSharingPanel();
+
+    expect(
+      screen
+        .getByTestId("epic-sharing-my-agents-switch")
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
   });
 });

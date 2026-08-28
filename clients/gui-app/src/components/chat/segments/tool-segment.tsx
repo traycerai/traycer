@@ -5,26 +5,29 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   AgentMessageSend,
   BackgroundTaskOutput,
+  ImageGenerationResult,
+  ToolCallManagedCommand,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
+import { useEpicAgentReference, useOpenEpicId } from "@/lib/epic-selectors";
 import {
   resolveToolInputDetail,
   type ToolInputDetail,
 } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import type {
-  ArtifactProjection,
   ChatProjection,
   TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn, formatSingleLine } from "@/lib/utils";
-import { AgentReferenceMarkdown } from "./agent-reference-markdown";
+import { AgentHeaderLink } from "./agent-header-link";
+import { AgentMessageBody } from "./agent-message-body";
+import { ReplyExpectedBadge } from "./reply-expected-badge";
 import { SegmentCard } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
@@ -45,10 +48,16 @@ import {
   useChatOpenStoreScope,
 } from "@/stores/chats/open-store-scope";
 import { ElapsedTime } from "./segment-elapsed";
+import { ImageGenerationCard } from "./image-generation-card";
+import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
+import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 
 interface ToolSegmentProps {
   id: string;
   toolName: string;
+  // The shell a `traycer_run_shell` call created, stamped on the block at
+  // completion. Non-null routes this call to the shell start card.
+  managedCommand: ToolCallManagedCommand | null;
   // Precomputed on the host (raw input not persisted): the ≤80-char header
   // line and the optional expand body.
   inputSummary: string | null;
@@ -72,6 +81,7 @@ interface ToolSegmentProps {
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
   durationMs: number | null;
+  imageResults: ReadonlyArray<ImageGenerationResult>;
   variant: "card" | "row";
   headerFindUnitId: string | null;
 }
@@ -99,7 +109,7 @@ interface ToolSegmentBodyProps {
   readonly toolName: string;
 }
 
-type ReceiverNode = ArtifactProjection | ChatProjection | TuiAgentProjection;
+type ReceiverNode = ChatProjection | TuiAgentProjection;
 
 interface ReceiverOpenTarget {
   readonly type: "chat" | "terminal-agent";
@@ -107,7 +117,11 @@ interface ReceiverOpenTarget {
 }
 
 type ToolBadgeState =
-  "background-complete" | "end-state" | "error" | "stopped" | "streaming";
+  | "background-complete"
+  | "end-state"
+  | "error"
+  | "stopped"
+  | "streaming";
 
 type ToolHeaderLayout = "inline" | "stacked";
 
@@ -134,7 +148,6 @@ function receiverOpenTarget(
   if ("harnessId" in receiverNode) {
     return { type: "terminal-agent", hostId: receiverNode.hostId };
   }
-  if ("kind" in receiverNode) return null;
   const hostId = receiverNode.hostId ?? fallbackHostId;
   if (hostId === null) return null;
   return { type: "chat", hostId };
@@ -218,10 +231,18 @@ function resolveToolHeaderElapsed(props: {
   readonly startedAt: number;
   readonly variant: ToolSegmentProps["variant"];
 }): ToolHeaderElapsed {
-  if (props.variant !== "card") return { kind: "hidden" };
+  // A RUNNING row shows its elapsed inline, like the card always has. It used
+  // to be pushed into the streaming footer, which put the number on a second
+  // line under the header and read as a separate entry in the group.
   if (props.isStreaming) {
     return { kind: "live", startedAt: props.startedAt };
   }
+  // A SETTLED row shows no total - unchanged, not newly dropped: the elapsed
+  // only ever appeared while streaming, because it lived in the streaming
+  // footer. Note the group header above does NOT make up for it; its summary
+  // counts commands and files and carries a duration only for thinking. This is
+  // a deliberate density call for a list of finished rows, not a deferral.
+  if (props.variant !== "card") return { kind: "hidden" };
   if (props.durationMs !== null) {
     return { kind: "static", durationMs: props.durationMs };
   }
@@ -232,22 +253,74 @@ function renderToolStreamingFooter(props: {
   readonly isStreaming: boolean;
   readonly progress: string | null;
   readonly stackedHeader: boolean;
-  readonly startedAt: number;
 }): ReactNode {
   if (!props.isStreaming || props.stackedHeader) return null;
-  return (
-    <StreamingActivityFooter
-      startedAt={props.startedAt}
-      progress={props.progress}
-    />
-  );
+  // Nothing to say, no second line. The footer carries only the progress line
+  // now that the elapsed counter lives in the header, so a tool that reports no
+  // progress (every command, and most tools) renders no footer at all.
+  const { progress } = props;
+  if (progress === null || progress.length === 0) return null;
+  return <StreamingActivityFooter progress={progress} />;
 }
 
 export function ToolSegment(props: ToolSegmentProps) {
+  if (props.toolName === "image_generation" && props.variant === "card") {
+    return (
+      <ImageGenerationCard
+        id={props.id}
+        inputSummary={props.inputSummary}
+        inputDetail={props.inputDetail}
+        error={props.error}
+        isStreaming={props.isStreaming}
+        endState={props.endState}
+        stopped={props.stopped}
+        imageResults={props.imageResults}
+      />
+    );
+  }
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
   }
+  // A shell is not a tool call that finished - it is an object that outlives
+  // the turn - so the call site renders it as one, live status and all. Keyed
+  // off the stamped payload rather than the tool name: the name alone would
+  // also match a call from a host too old to correlate, which has no shell to
+  // point at and belongs in the generic row. A restart is the other kind of
+  // stamped call: not the shell's live card but the immutable record of one
+  // relaunch, at the place in the transcript where it happened.
+  if (props.managedCommand !== null) {
+    if (props.managedCommand.event === "restarted") {
+      return (
+        <ManagedCommandRestartSegment
+          id={props.id}
+          restart={props.managedCommand}
+          variant={props.variant}
+          headerFindUnitId={props.headerFindUnitId}
+        />
+      );
+    }
+    return (
+      <ManagedCommandStartSegment
+        id={props.id}
+        managedCommand={props.managedCommand}
+        command={runShellCommand(props.inputDetail)}
+        variant={props.variant}
+        headerFindUnitId={props.headerFindUnitId}
+      />
+    );
+  }
   return <GenericToolSegment {...props} />;
+}
+
+/**
+ * The command a `traycer_run_shell` call asked for, off the block's own input.
+ * `deriveToolInputDetail` short-circuits on the `command` field for this tool,
+ * so the detail is always the `command` kind when the input was captured at
+ * all - anything else is a block from before that, and has no command to show.
+ */
+function runShellCommand(detail: ToolInputDetail | null): string | null {
+  if (detail === null || detail.kind !== "command") return null;
+  return detail.command;
 }
 
 function GenericToolSegment(props: ToolSegmentProps) {
@@ -299,7 +372,6 @@ function GenericToolSegment(props: ToolSegmentProps) {
     isStreaming,
     progress,
     stackedHeader,
-    startedAt,
   });
 
   const header = (
@@ -333,10 +405,13 @@ function GenericToolSegment(props: ToolSegmentProps) {
   ) : null;
 
   if (variant === "row") {
-    // The streaming footer (progress + elapsed) sits beneath the row via
-    // SegmentRow's `footer` slot - visible whether or not the group is expanded.
+    // The streaming footer is the progress LINE only - the elapsed counter went
+    // to the header row. It sits beneath the row via SegmentRow's `footer` slot,
+    // visible whether or not the group is expanded, and is absent entirely when
+    // the tool reports no progress.
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}
@@ -433,25 +508,33 @@ function GenericToolHeader(props: GenericToolHeaderProps) {
   );
 }
 
+// `data-find-skip`: the counter now sits INSIDE the row's find anchor, and it is
+// ephemeral chrome the projection never indexes. Without the skip a find query
+// on the digits would paint a highlight inside an anchor that counted no match,
+// so paint and count would disagree.
 function ToolHeaderElapsedLabel(props: {
   readonly elapsed: ToolHeaderElapsed;
 }) {
   if (props.elapsed.kind === "live") {
     return (
-      <ElapsedTime
-        startedAt={props.elapsed.startedAt}
-        durationMs={null}
-        isStreaming
-      />
+      <span data-find-skip className="contents">
+        <ElapsedTime
+          startedAt={props.elapsed.startedAt}
+          durationMs={null}
+          isStreaming
+        />
+      </span>
     );
   }
   if (props.elapsed.kind === "static") {
     return (
-      <ElapsedTime
-        startedAt={null}
-        durationMs={props.elapsed.durationMs}
-        isStreaming={false}
-      />
+      <span data-find-skip className="contents">
+        <ElapsedTime
+          startedAt={null}
+          durationMs={props.elapsed.durationMs}
+          isStreaming={false}
+        />
+      </span>
     );
   }
   return null;
@@ -592,16 +675,16 @@ function A2ASendToolSegment(
     isStreaming,
     isStopped: false,
   });
-  const receiverNode = useEpicArtifact(send.receiverAgentId);
-  const activeHostId = useReactiveActiveHostId();
+  const receiverNode = useEpicAgentReference(send.receiverAgentId);
+  const activeHostId = useTabHostId();
   const epicId = useOpenEpicId();
   const tileNavigation = useEpicTileNavigation();
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
-    if (openTarget === null) return;
+    if (openTarget === null || receiverNode === null) return;
     tileNavigation.openTileInEpic(epicId, {
-      id: send.receiverAgentId,
+      id: receiverNode.id,
       instanceId: uuidv4(),
       type: openTarget.type,
       name: receiverName,
@@ -610,9 +693,15 @@ function A2ASendToolSegment(
   };
 
   const receiver = (
-    <span className="min-w-0 flex-1 truncate text-ui-sm">
-      <span className="text-muted-foreground">to agent </span>
-      <span className="font-medium text-foreground/85">{receiverName}</span>
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+      <span className="min-w-0 truncate">
+        <span className="text-muted-foreground">to agent </span>
+        <AgentHeaderLink
+          name={receiverName}
+          onOpen={openTarget !== null ? openReceiverTab : null}
+        />
+      </span>
+      {send.expectReply ? <ReplyExpectedBadge /> : null}
     </span>
   );
 
@@ -639,45 +728,11 @@ function A2ASendToolSegment(
   const preview = <AgentMessagePreview message={send.message} tone="primary" />;
   const body = open ? (
     <div className="flex flex-col gap-2">
-      {openTarget !== null ? (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={openReceiverTab}
-            className="w-fit rounded px-1.5 py-0.5 text-ui-sm font-medium text-primary underline-offset-2 transition-colors hover:bg-primary/10 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            Open receiving agent
-          </button>
-          {send.expectReply ? (
-            <>
-              <span aria-hidden className="text-muted-foreground/40">
-                ·
-              </span>
-              <span className="shrink-0 rounded border border-primary/30 bg-primary/10 px-1.5 text-overline font-medium uppercase text-primary">
-                reply expected
-              </span>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-      <SegmentPanel
-        label="Message"
-        copyValue={send.message}
-        tone="default"
-        bodyChrome="framed"
-        className={undefined}
-      >
-        <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <div data-chat-find-unit={bodyFindUnitId}>
-            <AgentReferenceMarkdown
-              isStreaming={false}
-              markdown={send.message}
-              proseSize="compact"
-              quotable={false}
-            />
-          </div>
-        </div>
-      </SegmentPanel>
+      <AgentMessageBody
+        value={send.message}
+        bodyFindUnitId={bodyFindUnitId}
+        isStreaming={isStreaming}
+      />
       {hasError ? (
         <SegmentPanel
           label="Error"
@@ -697,6 +752,7 @@ function A2ASendToolSegment(
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}

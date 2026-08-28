@@ -1,21 +1,24 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import {
-  formatProgressKind,
-  formatTransfer,
-  type HostProgressState,
-} from "@/components/settings/panels/host-settings-panel-model";
+import { buildHostProgressView } from "@/lib/host/host-progress-copy";
+import type { HostProgressState } from "@/components/settings/panels/host-settings-panel-model";
 
 interface HostProgressBannerProps {
   readonly progress: HostProgressState;
 }
 
+/**
+ * Settings' live host-mutation banner.
+ *
+ * Reads the SAME copy table as the window narrator (F19). These two surfaces
+ * used to phrase one install two ways - "Setting up host" here against
+ * "Setting up Traycer Host…" there, MiB here against MB there - so watching a
+ * download from Settings and from the boot surface showed different words and
+ * different sizes for the same bytes.
+ */
 export function HostProgressBanner(props: HostProgressBannerProps) {
-  const { kind, event } = props.progress;
-  const percent =
-    event.percent !== null
-      ? Math.max(0, Math.min(100, Math.round(event.percent)))
-      : null;
-  const transferLabel = formatTransfer(event.bytes, event.totalBytes);
+  const view = buildHostProgressView(props.progress);
+  if (view === null) return null;
+  const { percent, transferLabel } = view;
   return (
     <output
       className="flex flex-col gap-2 border-b border-border/40 bg-muted/30 px-5 py-3 text-ui-sm"
@@ -29,12 +32,14 @@ export function HostProgressBanner(props: HostProgressBannerProps) {
             testId={undefined}
             variant={undefined}
           />
-          <span className="font-medium text-foreground">
-            {formatProgressKind(kind)}
-          </span>
-          <span className="font-mono text-code-xs text-muted-foreground">
-            {event.stage}
-          </span>
+          <span className="font-medium text-foreground">{view.heading}</span>
+          {/* The raw stage token stays beside the sentence: it is the
+              diagnostic line, and the heading only names the phase. */}
+          {view.stage === null ? null : (
+            <span className="font-mono text-code-xs text-muted-foreground">
+              {view.stage}
+            </span>
+          )}
         </div>
         <ProgressLabel percent={percent} transferLabel={transferLabel} />
       </div>
@@ -46,11 +51,11 @@ export function HostProgressBanner(props: HostProgressBannerProps) {
           />
         </div>
       ) : null}
-      {event.message !== null && event.message.length > 0 ? (
+      {view.detail === null ? null : (
         <div className="truncate text-ui-xs text-muted-foreground">
-          {event.message}
+          {view.detail}
         </div>
-      ) : null}
+      )}
     </output>
   );
 }

@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import type { TerminalCursorStyle } from "@/stores/settings/settings-store";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface TerminalCursorStylePickerProps {
   value: TerminalCursorStyle;
   onChange: (next: TerminalCursorStyle) => void;
@@ -31,37 +32,43 @@ export function TerminalCursorStylePicker(
   return (
     <div
       aria-label="Terminal cursor style"
-      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5"
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5"
     >
       {STYLES.map((style) => {
         const active = style.id === value;
         return (
-          <button
+          <TooltipWrapper
             key={style.id}
-            type="button"
-            aria-pressed={active}
-            aria-label={style.label}
-            title={style.label}
-            onClick={() => {
-              onChange(style.id);
-            }}
-            className={cn(
-              "grid h-8 w-11 place-items-center rounded-sm transition-colors",
-              active
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
+            label={style.label}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <span className="relative block h-5 w-[0.55rem] text-current">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "absolute rounded-[1px] bg-current",
-                  SHAPE_CLASS[style.id],
-                )}
-              />
-            </span>
-          </button>
+            <button
+              type="button"
+              aria-pressed={active}
+              aria-label={style.label}
+              onClick={() => {
+                onChange(style.id);
+              }}
+              className={cn(
+                "grid h-8 w-11 place-items-center rounded-sm transition-colors",
+                active
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <span className="relative block h-5 w-[0.55rem] text-current">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute rounded-[1px] bg-current",
+                    SHAPE_CLASS[style.id],
+                  )}
+                />
+              </span>
+            </button>
+          </TooltipWrapper>
         );
       })}
     </div>

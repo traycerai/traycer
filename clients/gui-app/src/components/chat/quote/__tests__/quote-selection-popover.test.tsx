@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -87,6 +86,7 @@ function renderPopover(
         snapshot={snapshot}
         onDismiss={onDismiss}
         boundaryRef={NO_BOUNDARY}
+        bottomOverlayInsetPx={0}
       />
     </TooltipProvider>,
   );
@@ -226,6 +226,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
     snapshot: QuoteSelectionSnapshot,
     boundaryRef: RefObject<HTMLElement | null>,
     onDismiss: () => void,
+    bottomOverlayInsetPx: number,
   ): void {
     render(
       <TooltipProvider>
@@ -234,6 +235,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
           snapshot={snapshot}
           onDismiss={onDismiss}
           boundaryRef={boundaryRef}
+          bottomOverlayInsetPx={bottomOverlayInsetPx}
         />
       </TooltipProvider>,
     );
@@ -246,7 +248,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
       rectOf(50, -120, 200, 16),
     ]);
 
-    renderWithBoundary(snapshot, boundaryRef, onDismiss);
+    renderWithBoundary(snapshot, boundaryRef, onDismiss, 0);
 
     expect(onDismiss).not.toHaveBeenCalled();
     expect(popoverElement().style.visibility).toBe("hidden");
@@ -258,11 +260,23 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
       rectOf(50, 120, 200, 16),
     ]);
 
-    renderWithBoundary(snapshot, boundaryRef, onDismiss);
+    renderWithBoundary(snapshot, boundaryRef, onDismiss, 0);
 
     expect(onDismiss).not.toHaveBeenCalled();
     expect(popoverElement().style.visibility).toBe("visible");
     expect(screen.getByRole("button", { name: "Quote" })).toBeTruthy();
+  });
+
+  it("hides a selected line covered by the bottom overlay inset", () => {
+    const onDismiss = vi.fn();
+    const { snapshot, boundaryRef } = scrolledFixture([
+      rectOf(50, 520, 200, 16),
+    ]);
+
+    renderWithBoundary(snapshot, boundaryRef, onDismiss, 120);
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(popoverElement().style.visibility).toBe("hidden");
   });
 
   it("re-shows when a scrolled-out selection scrolls a line back into view", () => {
@@ -300,6 +314,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
       { text: "quotable text", fenceLanguage: null, range, root: host },
       boundaryRef,
       onDismiss,
+      0,
     );
     expect(popoverElement().style.visibility).toBe("hidden");
 

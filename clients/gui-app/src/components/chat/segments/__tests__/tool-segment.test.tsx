@@ -18,6 +18,11 @@ import {
 } from "@/stores/chats/chat-find-force-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
+const PREFIX_RECEIVER_ID = "9600b202-1111-4111-8111-111111111111";
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTileInEpic: vi.fn(),
+}));
+
 function render(ui: ReactNode) {
   return rtlRender(
     <ChatExpansionTestProviders tileInstanceId="tool-segment-test-tile">
@@ -33,12 +38,13 @@ function inputProps(toolName: string, input: unknown) {
   return {
     inputSummary: deriveToolInputSummary(toolName, input),
     inputDetail: deriveToolInputDetail(toolName, input),
+    imageResults: [],
   };
 }
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: (artifactId: string | null) => {
-    if (artifactId === "agent-receiver-1") {
+  useEpicAgentReference: (referenceId: string) => {
+    if (referenceId === "agent-receiver-1") {
       return {
         id: "agent-receiver-1",
         parentId: null,
@@ -46,7 +52,7 @@ vi.mock("@/lib/epic-selectors", () => ({
         hostId: "host-1",
       };
     }
-    if (artifactId === "agent-receiver-optimistic") {
+    if (referenceId === "agent-receiver-optimistic") {
       return {
         id: "agent-receiver-optimistic",
         parentId: null,
@@ -54,13 +60,27 @@ vi.mock("@/lib/epic-selectors", () => ({
         hostId: null,
       };
     }
+    if (referenceId === PREFIX_RECEIVER_ID || referenceId === "9600b202") {
+      return {
+        id: PREFIX_RECEIVER_ID,
+        parentId: null,
+        title: "Prefix Receiver",
+        hostId: "host-1",
+      };
+    }
     return null;
   },
   useOpenEpicId: () => "epic-1",
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "active-host-1",
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTileInEpic: tileNavigationMocks.openTileInEpic,
+  }),
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "active-host-1",
 }));
 
 interface OpenA2ASendButtonProps {
@@ -96,6 +116,7 @@ function ForceA2ASendButton(props: ForceA2ASendButtonProps) {
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
     useToolOpenStore.getState().reset("default");
+    tileNavigationMocks.openTileInEpic.mockClear();
     cleanup();
   });
 
@@ -118,6 +139,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           responseId: "response-1",
           expectReply: true,
         }}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -133,12 +155,16 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     expect(screen.getByText("Sent message")).toBeTruthy();
     expect(screen.getByText("Receiver Agent")).toBeTruthy();
     expect(screen.getByText(/Please inspect the failing test/)).toBeTruthy();
-    expect(screen.queryByText("reply expected")).toBeNull();
+    // The badge sits in the always-visible header next to the receiver link,
+    // so it's already present before the card is expanded.
+    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Receiver Agent" })).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.getByText("Please inspect the failing test.")).toBeTruthy();
     expect(
       screen
@@ -167,6 +193,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
             responseId: "response-1",
             expectReply: true,
           }}
+          managedCommand={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -180,11 +207,11 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       </>,
     );
 
-    expect(screen.queryByText("Open receiving agent")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Open sent A2A" }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
   });
 
@@ -205,6 +232,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
             responseId: "response-1",
             expectReply: true,
           }}
+          managedCommand={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -220,11 +248,11 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Force sent A2A" }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    expect(screen.queryByText("Open receiving agent")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
   });
 
   it("keeps tools without an agentMessageSend payload on the generic tool surface", () => {
@@ -236,6 +264,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         {...inputProps("shell", { command: "echo hi" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -266,6 +295,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           responseId: null,
           expectReply: false,
         }}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -281,8 +311,48 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
     expect(
-      screen.getByRole("button", { name: /Open receiving agent/i }),
+      screen.getByRole("button", { name: "Optimistic Receiver" }),
     ).toBeTruthy();
+  });
+
+  it("resolves a unique receiver prefix and opens the canonical agent id", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-prefix"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "9600b202",
+          message: "Please inspect the prefix resolution.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prefix Receiver" }));
+
+    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
+      "epic-1",
+      expect.objectContaining({
+        id: PREFIX_RECEIVER_ID,
+        type: "chat",
+        name: "Prefix Receiver",
+        hostId: "host-1",
+      }),
+    );
   });
 });
 
@@ -306,6 +376,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -337,6 +408,7 @@ describe("<ToolSegment /> input rendering", () => {
         {...inputProps("mcp__probe__slow_op", {})}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -369,6 +441,7 @@ describe("<ToolSegment /> input rendering", () => {
         {...inputProps("mcp__probe__slow_op", {})}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -399,6 +472,7 @@ describe("<ToolSegment /> input rendering", () => {
         {...inputProps("glob", { pattern: "**/*.tsx" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -428,6 +502,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -465,6 +540,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -495,6 +571,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error="stopped: user requested stop"
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -527,6 +604,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error="Monitor deadline exceeded"
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped
@@ -567,6 +645,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -588,7 +667,11 @@ describe("<ToolSegment /> streaming heartbeat", () => {
   // The row variant is the path generic tools actually render on (they group
   // into the activity timeline); the footer renders beneath the row.
   it("shows the latest progress line and an elapsed counter while streaming", () => {
-    const startedAt = Date.now();
+    // Pinned: `LiveElapsed` reads the wall clock, so a render that crossed a
+    // second boundary turned the "0s" assertions below into "1s" at random.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
     render(
       <ToolSegment
         headerFindUnitId={null}
@@ -597,6 +680,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -609,13 +693,79 @@ describe("<ToolSegment /> streaming heartbeat", () => {
       />,
     );
 
-    // Streaming row surfaces the progress line + a 0s elapsed tick beneath it.
-    expect(screen.getByText("Fetched 3/10 pages")).toBeTruthy();
-    expect(screen.getByText("0s")).toBeTruthy();
+    // The progress line keeps its own line under the row - it is a sentence
+    // that changes as the tool works, so it wants the width. The elapsed
+    // counter does NOT: it rides the header row, left of the status badge, the
+    // way the standalone card has always shown it. Both used to share that
+    // second line, which gave a progress-less tool (every command, most tools)
+    // a whole row holding nothing but a number.
+    // Anchored to the row TRIGGER, not to `parentElement`: the contract is
+    // "the counter shares the header row", and one more wrapper around the tool
+    // name would silently retarget a parent-walk at that wrapper and fail here
+    // for a reason that has nothing to do with placement.
+    const headerRow = screen
+      .getByText("mcp__fetch")
+      .closest("[data-row-header]");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
+    expect(headerRow?.contains(screen.getByText("Fetched 3/10 pages"))).toBe(
+      false,
+    );
+    // Ephemeral chrome inside a find anchor: without the skip a query on the
+    // digits paints a highlight in a unit that counted no match.
+    expect(screen.getByText("0s").closest("[data-find-skip]")).not.toBeNull();
+    // A progress line DOES earn the second row.
+    expect(screen.getByTestId("segment-row-footer")).toBeTruthy();
+  });
+
+  it("renders no footer for a streaming tool that reports no progress", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="streaming-tool-quiet"
+        toolName="mcp__fetch"
+        {...inputProps("mcp__fetch", { url: "https://example.com" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={startedAt}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+
+    // The counter is on the header row and there is nothing else to say, so the
+    // row is one line - not a line plus an empty strip carrying a lone number.
+    const headerRow = screen
+      .getByText("mcp__fetch")
+      .closest("[data-row-header]");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
+    // And the footer element is ABSENT, not merely empty. Asserting only on the
+    // counter's position left a mutation that rendered the footer with an empty
+    // progress string undetected - an invisible second row that still costs the
+    // padding, which is the defect this whole change removes.
+    expect(screen.queryByTestId("segment-row-footer")).toBeNull();
   });
 
   it("omits the heartbeat once the call completes", () => {
-    const startedAt = Date.now();
+    // Pinned for a second reason than the tests above: on a real clock this
+    // one passes VACUOUSLY. `queryByText("0s")` also returns null when a
+    // counter is rendered and the clock has ticked to "1s", so a regression
+    // that kept the heartbeat alive would go unseen. Pin the clock so "0s" is
+    // what a surviving counter would say, and match any counter besides.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
     render(
       <ToolSegment
         headerFindUnitId={null}
@@ -624,6 +774,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -639,6 +790,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     // No footer once streaming ends - progress is a streaming-only affordance.
     expect(screen.queryByText("Fetched 10/10 pages")).toBeNull();
     expect(screen.queryByText("0s")).toBeNull();
+    expect(screen.queryByText(/^\d+s$/)).toBeNull();
   });
 
   it("shows a 'stopped' badge for an interrupted call and 'superseded' for a steered one", () => {
@@ -650,6 +802,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("shell", { command: "sleep 30" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState="interrupted"
         stopped={false}
@@ -671,6 +824,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("shell", { command: "sleep 30" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState="superseded"
         stopped={false}

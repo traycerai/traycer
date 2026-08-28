@@ -112,12 +112,15 @@ export function ChatAccumulatedChangesPanel(
         open={open}
         onOpenChange={setOpen}
         className={cn(
+          // muted-fill-ok: panel on the chat dock / pinned stack bg-canvas; --canvas never equals --muted
           "bg-muted/30",
           props.separated ? "border-t border-border/50" : null,
         )}
         data-testid="accumulated-changes-panel"
       >
         <div className="flex items-stretch">
+          {/* muted-fill-ok: trigger inside the canvas-surface panel above;
+              --canvas never equals --muted */}
           <CollapsibleTrigger className="group/acc flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
             <ChevronDown
               aria-hidden
@@ -126,7 +129,11 @@ export function ChatAccumulatedChangesPanel(
                 open ? null : "-rotate-90",
               )}
             />
-            <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
+            {/* The one shrinkable item in the row. Every sibling is a fixed
+                chip (chevron, +/− counts, the action buttons), so if this
+                label could not give up width, a narrow viewport would push
+                the counts out of the trigger's box and under the buttons. */}
+            <span className="min-w-0 truncate text-ui-xs font-medium text-foreground/85">
               {changes.length}{" "}
               {changes.length === 1 ? "file changed" : "files changed"}
             </span>
@@ -197,8 +204,9 @@ export function ChatAccumulatedChangesPanel(
         </div>
         <CollapsibleContent>
           <div
+            data-native-scrollbar="true"
             className={cn(
-              "overflow-y-auto border-t border-border/50 px-2 py-1.5 chat-scrollbar-native-thin",
+              "overflow-y-auto border-t border-border/50 px-2 py-1.5",
               props.scrollRegionMaxHeightClass ?? "max-h-[min(40dvh,24rem)]",
             )}
           >
@@ -275,7 +283,7 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
           </DialogTitle>
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             This reverts every changed file to the snapshot from the first time
-            it was edited in this chat.
+            it was edited by this agent.
           </DialogDescription>
           <RevertArtifactsCheckbox
             count={props.artifactCount}
@@ -284,7 +292,7 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
             disabled={props.isPending}
           />
         </div>
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+        <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"
@@ -334,6 +342,7 @@ function AccumulatedChangeRow(props: AccumulatedChangeRowProps) {
   const { additions, deletions } = counts;
   const undoEnabled = gate.enabled && change.undoable && !pending;
   return (
+    // muted-fill-ok: row inside the canvas-surface panel above; --canvas never equals --muted
     <div className="group flex items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/40">
       {change.artifact ? (
         <ArtifactAccumulatedHeader
@@ -362,7 +371,7 @@ function AccumulatedChangeRow(props: AccumulatedChangeRowProps) {
         sideOffset={undefined}
         align={undefined}
       >
-        <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <Button
             type="button"
             variant="ghost"
@@ -458,7 +467,10 @@ function ArtifactAccumulatedHeader(props: {
 
 function revertGate(restore: ChatRestoreContextValue): RevertGate {
   if (restore.accessRole !== "owner") {
-    return { enabled: false, tooltip: "Only the chat owner can revert files." };
+    return {
+      enabled: false,
+      tooltip: "Only the agent owner can revert files.",
+    };
   }
   if (restore.activeTurnStatus !== null) {
     return {

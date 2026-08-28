@@ -1,15 +1,18 @@
 import { type CSSProperties, type ReactNode } from "react";
-import {
-  createLucideIcon,
-  MessageSquareCheck,
-  MessageSquareWarning,
-  MessageSquareX,
-  type LucideIcon,
-} from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
+import {
+  attentionTone,
+  DONE_TONE,
+  terminalFailureTone,
+  type AgentNotificationSurface,
+  type IndicatorTone,
+} from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
+
+export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually
@@ -30,22 +33,20 @@ interface NotificationIndicatorIconProps {
   readonly className: string | undefined;
   readonly style: CSSProperties | undefined;
   readonly runningTitle: string;
-  /**
-   * Tooltip/label for the `"background"` running tier. `undefined` is valid
-   * for consumers whose activity signal is binary and never passes
-   * `"background"`; if the tier does render without one, the turn title is
-   * reused rather than showing an untitled indicator.
-   */
-  readonly backgroundRunningTitle: string | undefined;
   readonly defaultIcon: ReactNode;
   readonly statusPresentation: "message" | "spinner";
+  /** Agent surface whose identity owns the failure glyph. "Terminal" in the
+   * indicator state means a latest outcome, not necessarily a TUI agent. */
+  readonly agentSurface: AgentNotificationSurface;
 }
 
 /**
  * The single renderer for notification status icons. Notification state wins
- * over live activity: errors first, then unresolved prompts, followed by the
- * session-backed running indicator (turn spinner, or the muted background
- * variant) and unread completion.
+ * over live activity for high-attention states: chat/other failures first,
+ * then unresolved prompts, followed by the session-backed running indicator
+ * (turn spinner, or the muted background variant), unread completion, and
+ * finally terminal failure. Producers retain historical failures in the feed
+ * while projecting only the latest terminal outcome into this renderer.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
@@ -56,27 +57,22 @@ export function NotificationIndicatorIcon(
   }
   if (props.running === "turn") {
     return (
-      <IndicatorSpan
-        indicatorProps={props}
-        title={props.runningTitle}
-        dotsClassName="text-current"
-        variant={undefined}
-        testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
-      />
+      <IndicatorSpan indicatorProps={props} tooltip={props.runningTitle}>
+        <AgentSpinningDots
+          className="text-current"
+          testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
+          variant={undefined}
+        />
+      </IndicatorSpan>
     );
   }
   if (props.running === "background") {
     return (
-      <IndicatorSpan
-        indicatorProps={props}
-        title={props.backgroundRunningTitle ?? props.runningTitle}
-        dotsClassName="text-muted-foreground"
-        // A slow single-dot bounce, deliberately distinct from the busy
-        // multi-dot turn spin: "something is ticking over" rather than
-        // "the agent is working".
-        variant="bounce"
-        testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
-      />
+      <IndicatorSpan indicatorProps={props} tooltip={BACKGROUND_ACTIVITY_TITLE}>
+        <BackgroundActivityGlyph
+          testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
+        />
+      </IndicatorSpan>
     );
   }
   if (props.state.unreadDone) {
@@ -84,68 +80,13 @@ export function NotificationIndicatorIcon(
       <IndicatorTonePresentation tone={DONE_TONE} indicatorProps={props} />
     );
   }
+  const terminalTone = terminalFailureTone(props.state, props.agentSurface);
+  if (terminalTone !== null) {
+    return (
+      <IndicatorTonePresentation tone={terminalTone} indicatorProps={props} />
+    );
+  }
   return props.defaultIcon;
-}
-
-interface IndicatorTone {
-  readonly testId: "failure" | "interview" | "approval" | "done";
-  readonly title: string;
-  readonly className: string;
-  readonly Icon: LucideIcon;
-}
-
-const MessageSquareQuestionMark = createLucideIcon(
-  "message-square-question-mark",
-  [
-    [
-      "path",
-      {
-        d: "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z",
-        key: "18887p",
-      },
-    ],
-    ["path", { d: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", key: "1u773s" }],
-    ["path", { d: "M12 17h.01", key: "p32p05" }],
-  ],
-);
-
-const DONE_TONE: IndicatorTone = {
-  testId: "done",
-  title: "Task completed",
-  // `--success-foreground` (unlike `--success`) is verified >=3:1 against
-  // every preset's `--background`/`--canvas` - see index.css.
-  className: "text-success-foreground",
-  Icon: MessageSquareCheck,
-};
-
-const FAILURE_TONE: IndicatorTone = {
-  testId: "failure",
-  title: "Task needs attention",
-  className: "text-destructive",
-  Icon: MessageSquareX,
-};
-
-const INTERVIEW_TONE: IndicatorTone = {
-  testId: "interview",
-  title: "Task waiting for your interview response",
-  className: "text-warning-foreground",
-  Icon: MessageSquareQuestionMark,
-};
-
-const APPROVAL_TONE: IndicatorTone = {
-  testId: "approval",
-  title: "Task waiting for your approval",
-  className: "text-warning-foreground",
-  Icon: MessageSquareWarning,
-};
-
-function attentionTone(
-  state: NotificationIndicatorState,
-): IndicatorTone | null {
-  if (state.unreadFailure) return FAILURE_TONE;
-  if (state.pendingInterview) return INTERVIEW_TONE;
-  if (state.pendingApproval) return APPROVAL_TONE;
-  return null;
 }
 
 function IndicatorTonePresentation(props: {
@@ -164,22 +105,16 @@ function IndicatorStatus(props: {
 }): ReactNode {
   const Icon = props.tone.Icon;
   return (
-    <span
-      role="status"
-      aria-label={props.tone.title}
-      className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
-        props.indicatorProps.className,
-      )}
-      style={props.indicatorProps.style}
-      title={props.tone.title}
+    <IndicatorSpan
+      indicatorProps={props.indicatorProps}
+      tooltip={props.tone.title}
     >
       <Icon
         aria-hidden
         className={cn("size-3.5", props.tone.className)}
         data-testid={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
       />
-    </span>
+    </IndicatorSpan>
   );
 }
 
@@ -188,48 +123,53 @@ function IndicatorDot(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
 }): ReactNode {
   return (
-    <span
-      role="status"
-      aria-label={props.tone.title}
-      className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
-        props.indicatorProps.className,
-      )}
-      style={props.indicatorProps.style}
-      title={props.tone.title}
+    <IndicatorSpan
+      indicatorProps={props.indicatorProps}
+      tooltip={props.tone.title}
     >
       <AgentSpinningDots
         className={props.tone.className}
         testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
         variant="static"
       />
-    </span>
+    </IndicatorSpan>
   );
 }
 
+/**
+ * The one status-glyph leaf: `role="status"` + accessible name + the hover
+ * tooltip. The tone/dot/running variants above differ only in their glyph, and
+ * each used to re-spell this span - including its own native `title`, which is
+ * how three copies of the same "aria-label and title say the same thing"
+ * pairing ended up here.
+ *
+ * The prop is `tooltip`, not `title`: `title` on a component that spreads onto
+ * a DOM node is indistinguishable at the call site from the native attribute
+ * this replaces.
+ */
 function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
-  readonly title: string;
-  readonly dotsClassName: string;
-  readonly variant: AgentSpinnerVariant | undefined;
-  readonly testId: string;
+  readonly tooltip: string;
+  readonly children: ReactNode;
 }): ReactNode {
   return (
-    <span
-      role="status"
-      aria-label={props.title}
-      className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
-        props.indicatorProps.className,
-      )}
-      style={props.indicatorProps.style}
-      title={props.title}
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <AgentSpinningDots
-        className={cn(props.dotsClassName)}
-        testId={props.testId}
-        variant={props.variant}
-      />
-    </span>
+      <span
+        role="status"
+        aria-label={props.tooltip}
+        className={cn(
+          "inline-flex size-3.5 shrink-0 items-center justify-center",
+          props.indicatorProps.className,
+        )}
+        style={props.indicatorProps.style}
+      >
+        {props.children}
+      </span>
+    </TooltipWrapper>
   );
 }

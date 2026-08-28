@@ -3,6 +3,7 @@ import type {
   ProviderRateLimits,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
+import { isTransientRateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -13,6 +14,10 @@ export type AvailableProviderRateLimits = Extract<
   ProviderRateLimits,
   { available: true }
 >;
+type UnavailableProviderRateLimits = Extract<
+  ProviderRateLimits,
+  { available: false }
+>;
 
 /** The raw wire response for `host.getRateLimitUsage` at whatever version the GUI currently negotiates. */
 export type RateLimitUsageResponse = ResponseOfMethod<
@@ -21,23 +26,30 @@ export type RateLimitUsageResponse = ResponseOfMethod<
 >;
 
 /**
- * Reasons a provider-pull can fail that are transient - a fetch problem on
- * THIS attempt, not a statement about the account's capability to ever report
- * usage. `usage_fetch_failed` is the CLI usage-HTTP-fetch failure the Claude
- * usage-limit fix's protocol ticket split out (e.g. a server-side 429 on
- * Anthropic's `/api/oauth/usage` with a multi-minute penalty window);
- * `timeout`/`connection_failed` are the probe-level analogues. Every other
- * reason (`rate_limits_not_available`, `cli_not_found`, etc.) is authoritative
- * - it says something about the account/setup, not "try again shortly" - so a
- * retained last-good reading must NOT survive alongside one of those.
+ * Whether a provider-pull failure is transient - a fetch problem on THIS
+ * attempt, not a statement about the account's capability to ever report usage
+ * - so a retained last-good reading may survive alongside it.
+ *
+ * Delegates to the protocol's own classifier rather than repeating the reason
+ * set: the host's gauge cache retains its last known reading under exactly this
+ * rule, and a renderer that disagreed about which reasons are transient would
+ * dim a reading the host had already replaced (or blank one it still holds).
+ * Re-exported under this module's name so the retention rule reads locally at
+ * the call sites below.
  */
-const TRANSIENT_UNAVAILABLE_REASONS: ReadonlySet<RateLimitUnavailableReason> =
-  new Set(["usage_fetch_failed", "timeout", "connection_failed"]);
+export const isTransientUnavailableReason =
+  isTransientRateLimitUnavailableReason;
 
-export function isTransientUnavailableReason(
-  reason: RateLimitUnavailableReason,
+function canRetainPreviousRateLimits(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: UnavailableProviderRateLimits,
 ): boolean {
-  return TRANSIENT_UNAVAILABLE_REASONS.has(reason);
+  if (latest.provider !== "opencode") return true;
+  return (
+    latest.credentialGeneration !== undefined &&
+    previous?.lastGood?.provider === "opencode" &&
+    previous.lastGood.credentialGeneration === latest.credentialGeneration
+  );
 }
 
 /**
@@ -105,12 +117,11 @@ export interface ProviderRateLimitEnvelope {
 }
 
 /**
- * Whether `response` carries a snapshot for one of the two providers that
- * support managed profiles (v1 is claude-code/codex only) - the only
- * providers `providers.list`'s per-profile `rateLimitStatus` can ever report
- * anything for. Openrouter/kilocode/traycer-aperture reads gate out here so a
- * convergence invalidation isn't spent on a provider that could never affect
- * the switch-prompt banner. Failed probes (`available: false` - timeout,
+ * Whether `response` carries a snapshot for a provider whose `providers.list`
+ * profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
+ * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence
+ * invalidation isn't spent on a provider that could never affect the
+ * switch-prompt banner. Failed probes (`available: false` - timeout,
  * cli_not_found, ...) gate out too: they carry no usage the host's gauge cache
  * could have captured, so `providers.list` has nothing new to converge on.
  */
@@ -121,7 +132,9 @@ function isManagedProfileCapableRateLimitsResponse(
   return (
     provider !== null &&
     provider.available &&
-    (provider.provider === "codex" || provider.provider === "claude-code")
+    (provider.provider === "codex" ||
+      provider.provider === "claude-code" ||
+      provider.provider === "grok")
   );
 }
 
@@ -159,7 +172,8 @@ function invalidateProvidersListForConvergence(
  * - `available: true` -> becomes the new `lastGood` outright.
  * - `available: false` with a transient reason -> `latest` reflects the
  *   failure, but `lastGood`/`lastGoodAt` carry over unchanged from `previous`
- *   (retention). `lastFailureAt` advances to `now`.
+ *   (retention). OpenCode retains only a matching credential generation.
+ *   `lastFailureAt` advances to `now`.
  * - `available: false` with an authoritative reason (`rate_limits_not_available`
  *   and friends), or no provider snapshot at all (`providerRateLimits: null` -
  *   an aperture-only call; never expected for the provider-pull branch this
@@ -173,8 +187,18 @@ export function buildProviderRateLimitEnvelope(
   response: RateLimitUsageResponse,
   now: number,
 ): ProviderRateLimitEnvelope {
-  const latest = response.providerRateLimits;
+  return buildProviderRateLimitEnvelopeFromSnapshot(
+    previous,
+    response.providerRateLimits,
+    now,
+  );
+}
 
+export function buildProviderRateLimitEnvelopeFromSnapshot(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: ProviderRateLimits | null,
+  now: number,
+): ProviderRateLimitEnvelope {
   if (latest !== null && latest.available) {
     const retainedLatest = retainCodexResetCreditDetails(previous, latest);
     return {
@@ -186,10 +210,11 @@ export function buildProviderRateLimitEnvelope(
   }
 
   if (latest !== null && isTransientUnavailableReason(latest.reason)) {
+    const canRetainPrevious = canRetainPreviousRateLimits(previous, latest);
     return {
       latest,
-      lastGood: previous?.lastGood ?? null,
-      lastGoodAt: previous?.lastGoodAt ?? null,
+      lastGood: canRetainPrevious ? (previous?.lastGood ?? null) : null,
+      lastGoodAt: canRetainPrevious ? (previous?.lastGoodAt ?? null) : null,
       lastFailureAt: now,
     };
   }
@@ -215,7 +240,7 @@ export function buildProviderRateLimitEnvelope(
  * for this purpose because it runs inside the same queryFn invocation that
  * will overwrite that slot.
  *
- * Also the single point where a resolved codex/claude-code fetch converges
+ * Also the single point where a resolved codex/claude-code/grok fetch converges
  * `providers.list` (`invalidateProvidersListForConvergence`) - every real
  * `host.getRateLimitUsage` fetch for those two providers folds through this
  * function (the ephemeral queue's own `queryFn`; every other observer of

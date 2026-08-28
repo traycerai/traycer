@@ -2,9 +2,10 @@ import { useMemo } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
 
 const EMPTY_HOST_DIRECTORY: ReadonlyArray<HostDirectoryEntry> = [];
 
@@ -49,7 +50,7 @@ function isHostLocal(
 export function useCreateProfileHostIsLocal(
   createProfileHostId: string | null,
 ): boolean {
-  const defaultActiveHostId = useReactiveActiveHostId();
+  const defaultActiveHostId = useAddressableHostId();
   const hostDirectory = useHostDirectoryList();
   return useMemo(
     () =>
@@ -65,6 +66,18 @@ export function resolveCreateProfileGate(
   hostIsLocal: boolean,
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): { readonly disabled: boolean; readonly reason: string | undefined } {
+  // A terminal-login provider has real `oauthArgs` (they are the command the
+  // terminal runs), so without this it would read as gate-passing here and
+  // offer a "Create new profile" flow the host refuses. Its own reason has to
+  // come first, because the generic copy names browser sign-in - which is
+  // exactly the thing this provider does not do. Ordering is safe against a
+  // null/absent capability because the helper answers false for both.
+  if (providerSupportsTerminalLogin(loginCapability)) {
+    return {
+      disabled: true,
+      reason: "This provider is signed in from a terminal, not the browser.",
+    };
+  }
   const oauthArgs = loginCapability?.oauthArgs ?? null;
   const disabled = !hostIsLocal || oauthArgs === null || oauthArgs.length === 0;
   return {

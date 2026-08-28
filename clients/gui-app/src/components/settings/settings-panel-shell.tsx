@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 
 interface SettingsPanelShellProps {
   title: string;
@@ -27,17 +28,32 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
     bodyClassName,
     children,
   } = props;
+  const compact = useSettingsDensity() === "compact";
   return (
     <section
       data-settings-panel-shell
       className={cn(
-        "mx-auto w-full max-w-5xl px-8 py-10",
+        "mx-auto w-full max-w-5xl",
+        // Phone gutters are tighter than the desktop panel's; the compact
+        // (modal) density has its own, narrower pair.
+        compact ? "px-5 py-5" : "px-4 py-6 sm:px-8 sm:py-10",
         fillHeight && "flex h-full flex-col",
       )}
     >
-      <header className="mb-8 flex items-start justify-between gap-4">
+      <header
+        className={cn(
+          // Wraps so a long title + trailing action don't overflow a phone.
+          "flex flex-wrap items-start justify-between gap-4",
+          compact ? "mb-4" : "mb-8",
+        )}
+      >
         <div className="min-w-0 space-y-2">
-          <h1 className="text-title-lg font-semibold text-foreground">
+          <h1
+            className={cn(
+              "font-semibold text-foreground",
+              compact ? "text-title-md" : "text-title-lg",
+            )}
+          >
             {title}
           </h1>
           {description ? (

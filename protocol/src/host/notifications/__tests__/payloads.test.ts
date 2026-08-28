@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveHostNotificationStoppedReason,
-  hostNotificationPayloadWithChatTitle,
   parseKnownHostNotificationPayload,
   parseKnownHostNotificationPayloadForKind,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -55,6 +54,24 @@ describe("parseKnownHostNotificationPayload", () => {
         outcome: "errored",
       }),
     ).toMatchObject({ kind: "agent_stalled", reason: "provider_buffering" });
+    expect(
+      parseKnownHostNotificationPayload({
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "setup",
+        title: "Workspace setup failed",
+        message: "Setup exited with code 1.",
+        setupExitCode: 1,
+        outcome: "errored",
+      }),
+    ).toMatchObject({
+      kind: "workspace_operation_failed",
+      operation: "setup",
+      setupExitCode: 1,
+    });
     expect(parseKnownHostNotificationPayload(APPROVAL)).toMatchObject({
       kind: "approval",
       approvalId: "approval-1",
@@ -72,9 +89,9 @@ describe("parseKnownHostNotificationPayload", () => {
   });
 
   // Forward compatibility: a payload written by a NEWER producer with extra
-  // fields must still parse - and the extras must survive the round trip so
-  // in-place patches (retitle) cannot strip data a newer reader relies on.
-  it("keeps unknown extra fields through parse and patch", () => {
+  // fields must still parse, and the extras must survive the round trip so
+  // an enrichment pass cannot strip data a newer reader relies on.
+  it("keeps unknown extra fields through parse", () => {
     const parsed = parseKnownHostNotificationPayload({
       ...CHAT_STOPPED,
       futureField: "future-value",
@@ -82,11 +99,6 @@ describe("parseKnownHostNotificationPayload", () => {
     expect(parsed).not.toBeNull();
     if (parsed === null) return;
     expect(parsed).toMatchObject({ futureField: "future-value" });
-    const patched = hostNotificationPayloadWithChatTitle(parsed, "New title");
-    expect(patched).toMatchObject({
-      agentName: "New title",
-      futureField: "future-value",
-    });
   });
 
   it("accepts additive stopped reason and provider attribution fields", () => {
@@ -166,6 +178,12 @@ describe("deriveHostNotificationStoppedReason", () => {
     ["overloaded", "provider_unavailable"],
     ["server_error", "provider_unavailable"],
     ["CLAUDE_CODE_TRANSPORT", "provider_connection_failed"],
+    ["connection_failed", "provider_connection_failed"],
+    ["CONNECTION_FAILED", "provider_connection_failed"],
+    ["context_window_exceeded", "context_exhausted"],
+    ["CONTEXT_WINDOW_EXCEEDED", "context_exhausted"],
+    ["invalid_request", "request_rejected"],
+    ["INVALID_REQUEST", "request_rejected"],
     ["TURN_START_TIMEOUT", "turn_start_timeout"],
     ["MISSING_TERMINAL_EVENT", "missing_terminal_event"],
     ["background_work_died", "background_work_failed"],
@@ -173,10 +191,13 @@ describe("deriveHostNotificationStoppedReason", () => {
     expect(deriveHostNotificationStoppedReason(code)).toBe(reason);
   });
 
+  // `policy_refusal` is stamped as a code for the chat error badge and the A2A
+  // errored detail, but deliberately carries NO taxonomy row: the meaningful
+  // part is the raw refusal prose, which never belongs in durable copy.
   it.each([
     null,
     "MISSING_API_KEY",
-    "invalid_request",
+    "policy_refusal",
     "refusal",
     "RUNTIME_THROWN",
     "TURN_FINALIZATION_FAILED",
@@ -204,6 +225,22 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
     expect(
       parseKnownHostNotificationPayloadForKind("approval.requested", APPROVAL),
     ).toMatchObject({ kind: "approval" });
+    expect(
+      parseKnownHostNotificationPayloadForKind("workspace.operation.failed", {
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "provision",
+        title: "Worktree creation failed",
+        message: "Couldn't create worktree.",
+        outcome: "errored",
+      }),
+    ).toMatchObject({
+      kind: "workspace_operation_failed",
+      operation: "provision",
+    });
   });
 
   // Cross-kind corruption: a valid payload shape under the WRONG notification
@@ -225,40 +262,11 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
     expect(
       parseKnownHostNotificationPayloadForKind("interview.requested", APPROVAL),
     ).toBeNull();
-  });
-});
-
-describe("hostNotificationPayloadWithChatTitle", () => {
-  it("routes the title to the kind-specific field", () => {
-    const chat = parseKnownHostNotificationPayload(CHAT_STOPPED);
-    const approval = parseKnownHostNotificationPayload(APPROVAL);
-    expect(chat).not.toBeNull();
-    expect(approval).not.toBeNull();
-    if (chat === null || approval === null) return;
-    expect(hostNotificationPayloadWithChatTitle(chat, "Renamed")).toMatchObject(
-      { kind: "chat", agentName: "Renamed" },
-    );
     expect(
-      hostNotificationPayloadWithChatTitle(approval, "Renamed"),
-    ).toMatchObject({ kind: "approval", chatTitle: "Renamed" });
-  });
-
-  it("returns null for same-title no-ops and for TUI epic payloads", () => {
-    const chat = parseKnownHostNotificationPayload(CHAT_STOPPED);
-    const epic = parseKnownHostNotificationPayload({
-      kind: "epic",
-      epicId: "epic-1",
-      tuiAgentId: "tui-1",
-      agentName: "Terminal agent",
-      taskTitle: "Checkout notifications",
-      outcome: "completed",
-    });
-    expect(chat).not.toBeNull();
-    expect(epic).not.toBeNull();
-    if (chat === null || epic === null) return;
-    expect(
-      hostNotificationPayloadWithChatTitle(chat, "Deploy checkout fix"),
+      parseKnownHostNotificationPayloadForKind(
+        "workspace.operation.failed",
+        APPROVAL,
+      ),
     ).toBeNull();
-    expect(hostNotificationPayloadWithChatTitle(epic, "Anything")).toBeNull();
   });
 });

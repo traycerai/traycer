@@ -1,16 +1,21 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import {
+  CancelledError,
   queryOptions,
   useQuery,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import {
   bumpRichSlotOwnershipEpoch,
   createRichSlotRequest,
@@ -18,18 +23,7 @@ import {
   richSlotOrderingKey,
 } from "@/lib/git/git-rich-slot-ordering";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
-
-/**
- * FALLBACK-ONLY bounded poll interval used while any submodule is dirty. In
- * the fallback ownership state (stream negotiated at minor 0 / unknown) the
- * parent stream is blind to inner-only submodule edits (they don't move the
- * gitlink's dirty flags once already dirty) and the parent fingerprint
- * deliberately doesn't fold `submodules[]`, so a dirty submodule needs a
- * timer to pick up further inner edits. Under STREAM ownership (minor >= 1)
- * the query is disabled entirely - rich frames carry the nested snapshot and
- * this timer never runs.
- */
-const SUBMODULE_BOUNDED_REFRESH_MS = 5000;
+import { useGitSubscriptionOwnsRichSlot } from "./use-git-list-changed-files-subscription";
 
 export interface GitListChangedFilesWithSubmodulesResult {
   readonly data: GitListChangedFilesResponseV11 | null;
@@ -215,27 +209,28 @@ function useRichSlotOwnershipTransitions(opts: {
 }
 
 /**
- * Reactive read of whether the `git.subscribeStatus` stream owns the rich
- * slot: negotiated minor >= 1 on major 1. `null`/unknown/minor-0 all mean the
- * unary+timer pair owns it (today's behavior verbatim). Tracked through
- * `subscribeMethodSupport` so a handshake settling (or a host swap changing
- * the negotiated version) re-renders consumers.
+ * Reactive read of whether the `git.subscribeStatus` stream owns the rich slot
+ * FOR THIS REPO: negotiated minor >= 1 on major 1. `null`/unknown/minor-0 all
+ * mean the unary+timer pair owns it (today's behavior verbatim).
+ *
+ * Scoped to this hook's `(hostId, runningDir, ignoreWhitespace)`. It used to
+ * read the client-wide negotiated version with no arguments at all, which
+ * answered for whichever repo's stream reconciliation reached first: repo A at
+ * >= 1.1 disabled repo B's unary query, and a repo B session still at 1.0 never
+ * wrote the rich slot either, leaving that panel with no writer.
  */
-function useStreamOwnsRichSlot(): boolean {
+function useStreamOwnsRichSlot(args: {
+  readonly hostId: string | null;
+  readonly runningDir: string | null;
+  readonly ignoreWhitespace: boolean;
+}): boolean {
   const wsStreamClient = useWsStreamClient();
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      wsStreamClient === null
-        ? () => undefined
-        : wsStreamClient.subscribeMethodSupport(onStoreChange),
-    [wsStreamClient],
-  );
-  const getSnapshot = useCallback(() => {
-    const version =
-      wsStreamClient?.getMethodSchemaVersion("git.subscribeStatus") ?? null;
-    return version !== null && version.major === 1 && version.minor >= 1;
-  }, [wsStreamClient]);
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useGitSubscriptionOwnsRichSlot({
+    wsStreamClient,
+    hostId: args.hostId,
+    runningDir: args.runningDir,
+    ignoreWhitespace: args.ignoreWhitespace,
+  });
 }
 
 /**
@@ -287,8 +282,14 @@ export function useGitListChangedFilesWithSubmodules(args: {
   const client = useHostClientFor(entry);
   const readiness = useReactiveHostReadiness(client);
   const queryClient = useQueryClient();
+  const conditionPollCoordinator =
+    getConditionPollEpisodeCoordinator(queryClient);
   const wsStreamClient = useWsStreamClient();
-  const streamOwnsRichSlot = useStreamOwnsRichSlot();
+  const streamOwnsRichSlot = useStreamOwnsRichSlot({
+    hostId: args.hostId,
+    runningDir: args.runningDir,
+    ignoreWhitespace: args.ignoreWhitespace,
+  });
 
   const hostId = args.hostId;
   const runningDir = args.runningDir;
@@ -311,14 +312,18 @@ export function useGitListChangedFilesWithSubmodules(args: {
   // the cache key: it is transport identity, not data identity. Wrapped in
   // the generation-aware rich-slot request: a response that raced a newer
   // stream write (ownership flipping mid-flight) is dropped, not written.
-  const request = createRichSlotRequest({
+  const richSlotRequest = createRichSlotRequest({
     queryClient,
     hostId,
     runningDir: runningDir ?? "",
     ignoreWhitespace,
     request: async (): Promise<GitListChangedFilesResponseV11> => {
       if (client === null || hostId === null || runningDir === null) {
-        return Promise.reject(new Error("Host client unavailable"));
+        // A `HostRpcError` (not a bare Error): consuming hooks publicly
+        // declare that error type and UI surfaces read `.code`.
+        return Promise.reject(
+          hostClientUnavailableError("git.listChangedFiles"),
+        );
       }
       return client.request("git.listChangedFiles", {
         hostId,
@@ -328,6 +333,16 @@ export function useGitListChangedFilesWithSubmodules(args: {
       });
     },
   });
+  // Boundary-wrapped: the rich-slot wrapper's own throws are already
+  // `HostRpcError`s, but the declared error generic must also survive bugs in
+  // the request/arbitration path itself. Stays a NAMED queryFn so `client`
+  // (transport identity, not data identity) remains out of the cache key.
+  const request = (context: {
+    readonly signal: AbortSignal;
+  }): Promise<GitListChangedFilesResponseV11> =>
+    withHostQueryErrorBoundary("git.listChangedFiles", () =>
+      richSlotRequest(context),
+    );
 
   const query = useQuery(
     queryOptions<
@@ -341,15 +356,17 @@ export function useGitListChangedFilesWithSubmodules(args: {
         ignoreWhitespace,
       ),
       queryFn: request,
+      meta: stampHostRpcMethod(undefined, "git.listChangedFiles"),
+      retry: false,
       enabled,
       staleTime: Infinity,
       refetchOnWindowFocus: false,
       // Fallback-only: inactive whenever the query is disabled (stream
-      // ownership), so the dirty timer runs only in the fallback state.
-      refetchInterval: (query) =>
-        hasDirtySubmodulesForRefresh(query.state.data)
-          ? SUBMODULE_BOUNDED_REFRESH_MS
-          : false,
+      // ownership), so the table-derived dirty-submodule timer runs only in
+      // the fallback state.
+      refetchInterval: conditionPollCoordinator.refetchIntervalFor(
+        "git.listChangedFiles",
+      ),
     }),
   );
 
@@ -369,6 +386,14 @@ export function useGitListChangedFilesWithSubmodules(args: {
     refetch,
     lastTokenRef,
   });
+
+  // TanStack's non-reverting cancellation publishes its internal
+  // `CancelledError` into the query state. That cancellation is expected
+  // control flow during the fallback -> stream ownership handoff, not a host
+  // failure: the first rich stream frame will fill this same slot. Keep the
+  // public result inside its `HostRpcError | null` contract and let consumers
+  // render their loading state while that frame is still in flight.
+  const error = query.error instanceof CancelledError ? null : query.error;
 
   // Refetch when the parent subscription reports a change (FALLBACK state
   // only - `enabled` is false under stream ownership). The ref stores the
@@ -423,9 +448,9 @@ export function useGitListChangedFilesWithSubmodules(args: {
       hostId,
       runningDir,
       hasData: query.data !== undefined,
-      hasError: query.error !== null,
+      hasError: error !== null,
     }),
-    error: query.error ?? null,
+    error,
   };
 }
 

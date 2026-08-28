@@ -20,6 +20,7 @@
 import {
   AMBIENT_PROFILE_ID_SENTINEL,
   type ConcreteProfileSelection,
+  type ForkAgentProfileSelection,
   type ProfileSelection,
 } from "@traycer/protocol/host/agent/shared";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -28,6 +29,22 @@ export function parseCreateProfileSelection(
   profile: string | null,
 ): ProfileSelection {
   if (profile === null) return { kind: "last_used" };
+  return parseConcreteProfileSelection(profile);
+}
+
+/**
+ * Parses `traycer agent fork`'s `--profile <ambient|id>` into
+ * `ForkAgentProfileSelection`. Deliberately separate from
+ * `parseCreateProfileSelection`: fork's omit-default is `inherit` (byte-for-byte
+ * continuation of the SOURCE agent's own profile), not `last_used` (a
+ * per-user/per-provider preference lookup for a freshly-minted agent) - see
+ * `forkAgentProfileSelectionSchema` in `host/agent/shared.ts` for why the two
+ * defaults must stay distinguishable on the wire.
+ */
+export function parseForkProfileSelection(
+  profile: string | null,
+): ForkAgentProfileSelection {
+  if (profile === null) return { kind: "inherit" };
   return parseConcreteProfileSelection(profile);
 }
 

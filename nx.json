@@ -19,19 +19,15 @@
         "{projectRoot}/**/*.js",
         "{projectRoot}/**/*.jsx",
         "{projectRoot}/.eslintrc*",
-        "{projectRoot}/eslint.config.*"
+        "{projectRoot}/eslint.config.*",
+        "{projectRoot}/.oxlintrc*",
+        "{projectRoot}/oxlint.config.*",
+        "{workspaceRoot}/eslint/*.mjs"
       ]
     },
     "test": {
       "cache": true,
-      "inputs": [
-        "{projectRoot}/**/*.ts",
-        "{projectRoot}/**/*.tsx",
-        "{projectRoot}/**/*.js",
-        "{projectRoot}/**/*.jsx",
-        "{projectRoot}/vitest.config.*",
-        "{projectRoot}/jest.config.*"
-      ]
+      "inputs": ["default", "^production", "sharedGlobals"]
     },
     "format": {
       "cache": true,
@@ -43,6 +39,21 @@
         "{projectRoot}/**/*.json",
         "{projectRoot}/.prettierrc",
         "{projectRoot}/.prettierrc.*",
+        "{projectRoot}/.oxfmtrc.json",
+        "{workspaceRoot}/.oxfmtrc.json",
+        "{projectRoot}/.prettierignore"
+      ]
+    },
+    "format:check": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.ts",
+        "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.js",
+        "{projectRoot}/**/*.jsx",
+        "{projectRoot}/**/*.json",
+        "{projectRoot}/.oxfmtrc.json",
+        "{workspaceRoot}/.oxfmtrc.json",
         "{projectRoot}/.prettierignore"
       ]
     }

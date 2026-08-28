@@ -18,9 +18,8 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@traycer-clients/shared/*": ["../shared/*"],
       "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
       "@traycer/protocol/*": ["../../protocol/src/*"]

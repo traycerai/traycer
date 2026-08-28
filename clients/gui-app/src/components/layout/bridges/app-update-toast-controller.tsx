@@ -14,7 +14,16 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   settleUpdateDownloadOutcome,
   trackUpdateDownloadStarted,
+  trackUpdateRestartRequested,
 } from "@/lib/app-update-analytics";
+import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
+import {
+  gateBlocksApp,
+  useHostReadinessController,
+  useSurfaceReadiness,
+  windowNarratorOwns,
+} from "@/components/layout/host-readiness-controller-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -27,9 +36,6 @@ const APP_UPDATE_REPORT_CONTEXT = createReportIssueContext({
 
 export function AppUpdateToastController(): null {
   const { bridge, snapshot } = useDesktopAppUpdates();
-  const openConfirmRestartUpdate = useDesktopDialogStore(
-    (state) => state.openConfirmRestartUpdate,
-  );
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
@@ -39,6 +45,37 @@ export function AppUpdateToastController(): null {
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
   );
+  // Whether the window narrator owns the frame - i.e. the full-screen host
+  // modal is up because this machine's host is still being set up.
+  //
+  // Read here, in place, rather than by moving this mount: the controller
+  // already renders inside `HostReadinessControllerProvider`, and it sits
+  // outside the router deliberately so root-route bridges survive setup.
+  //
+  // SUPPRESSED ONLY WHILE THE BLOCKING DIALOG CAN BE UP - narrator-owned
+  // readiness with the gate ALREADY OPEN, i.e. the ∅ dialog over a mounted
+  // app, where a toast is visible but computed `pointer-events: none`
+  // (measured). During the LAUNCH itself the narration is the startup CARD
+  // now: no overlay, no pointer trap, and a pending update is at its most
+  // actionable exactly there - a user staring at a slow first setup should be
+  // able to take the update that may well contain the fix. That is also the
+  // released behavior this restores; the old whole-launch suppression existed
+  // because the launch surface used to be a modal.
+  //
+  // Same predicate inputs as the narrator's own presentation split
+  // (`NarratingWindowHostModal`), so the two cannot disagree about whether a
+  // dialog exists for this toast to be dead behind.
+  const readiness = useSurfaceReadiness("default-host", null);
+  const { hasBeenDefaultHostReady } = useHostReadinessController();
+  const authStatus = useAuthStore((state) => state.status);
+  const narrated =
+    windowNarratorOwns(readiness) &&
+    !gateBlocksApp({
+      readiness,
+      hasBeenReady: hasBeenDefaultHostReady,
+      signedIn: authStatus === "signed-in",
+      bypassed: false,
+    });
   const handledSequenceRef = useRef(0);
   const handledReportCapabilityRef = useRef<boolean | null>(null);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(
@@ -59,6 +96,25 @@ export function AppUpdateToastController(): null {
     }
     if (bridge === null) return;
     if (snapshot.sequence === 0) return;
+    // SUPPRESS, DO NOT DROP. Ordered before the `handledSequenceRef` write
+    // below on purpose: that write consumes the sequence, and the dedupe guard
+    // beneath it would then treat this update as already handled for ever - the
+    // toast would be silently lost, not deferred, and the header button would be
+    // the only remaining route. An early return placed a few lines later reads
+    // identical and behaves completely differently.
+    //
+    // `narrated` is in this effect's dependency list for the same reason: the
+    // effect has to re-run when the narrator releases the frame, or the update
+    // is dropped by a second route with the ordering above still correct.
+    //
+    // Re-emit on release rather than unfreeze in place. The toast cannot be
+    // dismissed while the modal is up (measured: Radix's modal sets
+    // `pointer-events: none` on the body and nothing in the Sonner subtree
+    // re-enables it), and it carries `duration: Infinity`, so "leave it there"
+    // means handing the user a notification they were unable to clear for the
+    // whole of setup and that only becomes live afterwards. A fresh one arrives
+    // at a moment they chose to be in.
+    if (narrated) return;
     const capabilityChangedForCurrentError =
       snapshot.status === "error" &&
       handledSequenceRef.current === snapshot.sequence &&
@@ -87,7 +143,18 @@ export function AppUpdateToastController(): null {
         trackUpdateDownloadStarted("direct_ui");
         void bridge.downloadUpdate();
       },
-      onRestart: openConfirmRestartUpdate,
+      // "Restart" installs straight away UNLESS some epic holds work that can
+      // never sync. The old comment here read "the click is the confirmation,
+      // and the host keeps running agents across the app restart" - both
+      // clauses are still true and neither covers this: the click confirms a
+      // RESTART, not the discarding of editor work the user was never told
+      // about, and "agents keep running" is a promise about agents, not about a
+      // retained `Y.Doc` with no transport for the host to keep anything alive
+      // through.
+      onRestart: () => {
+        trackUpdateRestartRequested("direct_ui");
+        void requestAppUpdateInstall(bridge);
+      },
       onViewInstructions: () => {
         Analytics.getInstance().track(
           AnalyticsEvent.UpdateInstallGuidanceOpened,
@@ -102,7 +169,7 @@ export function AppUpdateToastController(): null {
   }, [
     bridge,
     snapshot,
-    openConfirmRestartUpdate,
+    narrated,
     openInstallGuidance,
     openReportIssueWithContext,
     reportIssueAvailable,
@@ -176,6 +243,20 @@ function showAppUpdateToast(
       });
       return;
     case "ready":
+      // The restart was already requested (here, from the header tick, or from
+      // another window) and the quit is draining. Replacing the action toast
+      // with progress is what tells the user the click landed - the install
+      // emits nothing further on success, it just ends the process - and it
+      // retires the second "Restart" button before it can fire a duplicate.
+      if (snapshot.installInFlight) {
+        progressToast("Restarting to install update…", {
+          id: APP_UPDATE_TOAST_ID,
+          description: "Traycer will reopen once the update is applied.",
+          duration: Infinity,
+          cancel: null,
+        });
+        return;
+      }
       // Linux deb/rpm where silent install can't/didn't work: the download
       // succeeded, but "Restart" would trigger the same doomed install
       // attempt. Point at the step-by-step dialog instead.

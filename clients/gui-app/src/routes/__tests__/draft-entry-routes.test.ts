@@ -7,16 +7,15 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useTabsStore } from "@/stores/tabs/store";
 
 const draftRouteMocks = vi.hoisted(() => ({
-  openNewEpicDraft: vi.fn(() => "draft-created"),
+  openNewEpicIntent: vi.fn(() => ({ kind: "new-draft", settings: null })),
   navigateToTabIntent: vi.fn(),
 }));
 
 vi.mock("@/lib/commands/actions/new-epic", () => ({
-  openNewEpicDraft: draftRouteMocks.openNewEpicDraft,
+  openNewEpicIntent: draftRouteMocks.openNewEpicIntent,
 }));
 
 vi.mock("@/lib/tab-navigation", () => ({
-  draftTabIntent: (draftId: string) => ({ kind: "draft", draftId }),
   navigateToTabIntent: draftRouteMocks.navigateToTabIntent,
 }));
 
@@ -92,17 +91,17 @@ describe("draft entry routes", () => {
     expect(invokeIndexBeforeLoad("signed-out")).toBeNull();
   });
 
-  it("/draft/new creates a draft and replaces itself with the real draft route", async () => {
+  it("/draft/new requests a controller-owned draft creation and replace", async () => {
     const { createDraftAndReplaceRoute } =
       await import("@/lib/draft-entry-route");
     const navigate = vi.fn();
 
     createDraftAndReplaceRoute(navigate);
 
-    expect(draftRouteMocks.openNewEpicDraft).toHaveBeenCalledTimes(1);
+    expect(draftRouteMocks.openNewEpicIntent).toHaveBeenCalledTimes(1);
     expect(draftRouteMocks.navigateToTabIntent).toHaveBeenCalledWith(
       navigate,
-      { kind: "draft", draftId: "draft-created" },
+      { kind: "new-draft", settings: null },
       { replace: true },
     );
   });

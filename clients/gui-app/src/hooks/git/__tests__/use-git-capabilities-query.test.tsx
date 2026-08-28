@@ -7,12 +7,24 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { GitGetCapabilitiesResponse } from "@traycer/protocol/host";
 import { useGitCapabilitiesQuery } from "../use-git-capabilities-query";
 
+const request = vi.fn();
 const mockHostClient = {
-  request: vi.fn(),
+  request,
+  requestWithSignal: request,
 };
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mockHostClient,
+}));
+// `useGitCapabilitiesQuery` resolves its client from the `hostId` it is HANDED,
+// not from the app-wide host - both callers are host-pinned surfaces. Mocked
+// here so this suite keeps driving one transport; the routing itself is
+// asserted against a real spine in
+// `hooks/host/__tests__/pinned-surface-unary-routing.test.tsx`.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mockHostClient,
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({

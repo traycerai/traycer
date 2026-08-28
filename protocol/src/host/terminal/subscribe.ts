@@ -61,11 +61,25 @@
  * `terminal.subscribe@1.4` (bottom of this file, alongside its own frame
  * schema): scope-bearing session info for the terminal major-2 unary
  * contracts. See the explicit compatibility deviation at that schema.
+ *
+ * `terminal.subscribe@1.5`: adds live `currentCwd` to the nested session
+ * metadata. The host initializes it to launch `cwd` and updates it only when
+ * the shell emits a supported current-directory OSC sequence.
+ *
+ * `terminal.subscribe@1.6`: adds open-request `viewer: "presentation" | "cache"`.
+ * Intent is open-frame-only — there is no client frame to restate it. A
+ * lease-state change reopens the stream. Absent ⇒ `presentation` (today's
+ * behavior: every attachment counts as a GUI viewer). `cache` is a
+ * warm-reattach attachment with no attention claim; only `presentation`
+ * attachments gate host reap (`viewersAbsentSince`). Degrade: a 1.5-or-older
+ * peer's open schema strips `viewer`, so an old host treats every subscriber
+ * as a presentation viewer — the compatible failure mode.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   canonicalTerminalSessionInfoSchema,
+  canonicalTerminalSessionInfoWithCurrentCwdSchema,
   terminalSessionInfoSchema,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -90,6 +104,23 @@ export const terminalSubscribeOpenRequestSchema = z.object({
 });
 export type TerminalSubscribeOpenRequest = z.infer<
   typeof terminalSubscribeOpenRequestSchema
+>;
+
+export const terminalSubscribeViewerSchema = z.enum(["presentation", "cache"]);
+export type TerminalSubscribeViewer = z.infer<
+  typeof terminalSubscribeViewerSchema
+>;
+
+/**
+ * `terminal.subscribe@1.6` open request. `viewer` defaults to `presentation`
+ * so a 1.6 parse of a 1.5-shaped open is byte-identical to today's attach.
+ */
+export const terminalSubscribeOpenRequestSchemaV16 =
+  terminalSubscribeOpenRequestSchema.extend({
+    viewer: terminalSubscribeViewerSchema.default("presentation"),
+  });
+export type TerminalSubscribeOpenRequestV16 = z.infer<
+  typeof terminalSubscribeOpenRequestSchemaV16
 >;
 
 export const terminalActionSchema = z.enum(["write", "resize"]);
@@ -309,6 +340,93 @@ export const terminalSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
 export type TerminalSubscribeServerFrameV14 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV14
 >;
+
+// `terminal.subscribe@1.5` is the current scope-bearing shape. The only wire
+// addition is required `currentCwd` inside the three variants that carry a
+// session. V1.4 remains frozen above; the host explicitly projects session
+// info for each negotiated minor.
+export const terminalSubscribeServerFrameSchemaV15 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
+      scrollback: z.string(),
+      ackCreditSupported: z.boolean().optional(),
+    }),
+    z.object({
+      kind: z.literal("data"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      chunk: z.string(),
+    }),
+    z.object({
+      kind: z.literal("resized"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    z.object({
+      kind: z.literal("exit"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      exitCode: z.number().int(),
+    }),
+    z.object({
+      kind: z.literal("actionAck"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      clientActionId: z.string(),
+      action: terminalActionSchema,
+      status: terminalActionAckStatusSchema,
+      reason: z.string().nullable(),
+      code: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("binarySnapshot"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
+    }),
+    z.object({
+      kind: z.literal("binaryData"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+    }),
+    z.object({
+      kind: z.literal("sessionUpdated"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoWithCurrentCwdSchema,
+    }),
+  ],
+);
+export type TerminalSubscribeServerFrameV15 = z.infer<
+  typeof terminalSubscribeServerFrameSchemaV15
+>;
+
+export const terminalSubscribeV16 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchemaV16,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV15,
+  clientFrameSchema: terminalSubscribeClientFrameSchema,
+});
+
+export const terminalSubscribeV15 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchema,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV15,
+  clientFrameSchema: terminalSubscribeClientFrameSchema,
+});
 
 export const terminalSubscribeV14 = defineStreamRpcContract({
   method: "terminal.subscribe",

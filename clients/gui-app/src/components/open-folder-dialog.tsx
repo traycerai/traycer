@@ -21,11 +21,16 @@ export function OpenFolderDialog() {
     }
 
     openingRef.current = true;
-    void pickAndPrepareFolders()
+    void pickAndPrepareFolders(true)
       .then((result) => {
         if (result === null) return;
+        // hostId is the dispatch-time identity from pickAndPrepareFolders —
+        // never re-read the mutable active host here.
         addResolvedFolders(
-          result.folders.map(preparedWorkspaceFolderToWorkspaceFolderInfo),
+          result.hostId,
+          result.folders.map((folder) =>
+            preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
+          ),
         );
       })
       .finally(() => {

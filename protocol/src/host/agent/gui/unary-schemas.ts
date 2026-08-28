@@ -4,7 +4,12 @@ import {
   guiHarnessIdSchemaV10,
   guiHarnessIdSchemaV20,
   guiHarnessIdSchemaV30,
+  guiHarnessIdSchemaV40,
+  guiHarnessIdSchemaV50,
+  guiHarnessIdSchemaV60,
+  guiHarnessIdSchemaV70,
 } from "@traycer/protocol/host/agent/shared";
+import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import {
   ALL_PERMISSION_MODES,
   permissionModeSchema,
@@ -23,8 +28,7 @@ import {
 // The surfaces a harness can run on. `"gui"` is the host-driven chat tab;
 // `"tui"` is the PTY terminal-agent tab. Each adapter declares the surfaces it
 // implements, and `listGuiHarnesses` reports them so the renderer can show the
-// terminal-agent launcher only for harnesses that actually support it (Cursor,
-// for instance, is GUI-only until its CLI reaches TUI parity).
+// terminal-agent launcher only for harnesses that actually support it.
 export const harnessSurfaceSchema = z.enum(["gui", "tui"]);
 export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 
@@ -58,11 +62,47 @@ export const guiHarnessOptionSchema = z.object({
     .default([...ALL_PERMISSION_MODES]),
   // True while the host's availability probe for this harness is still running
   // in the background (e.g. the cold interactive-shell PATH probe). The client
-  // re-fetches until it flips false. A pending row always carries
-  // `available: false` so an old app that doesn't understand this field errs on
-  // the side of hiding the harness and retrying via its normal unavailable
-  // backoff. `.catch(false)` tolerates old host builds that omit the field.
+  // re-fetches until it flips false.
+  //
+  // `available` carries the LAST SETTLED verdict while a probe re-runs, so a
+  // harness whose host-side availability cache merely lapsed stays
+  // `available: true` and the client keeps serving the catalog it already has -
+  // pending is a background refresh, not a reason to retire a known-good model
+  // list. A harness the host has never settled a verdict for reports
+  // `available: false`, so an old app that doesn't understand this field errs on
+  // the side of hiding an unproven harness and retrying via its normal
+  // unavailable backoff. `.catch(false)` tolerates old host builds that omit the
+  // field.
   availabilityPending: z.boolean().catch(false),
+  // The provider auth verdict for this harness, carried ON THE CATALOG ROW so
+  // the picker classifies a signed-out provider from the same fetch that
+  // renders it, instead of joining against a separately-timed `providers.list`
+  // query (which is why a re-auth-needed provider could render as a normal,
+  // sendable row for up to that query's staleness window).
+  //
+  // Reuses `providers.list`'s auth-status enum so both surfaces classify off
+  // one vocabulary. Consumers must keep the send gate's DEFINITIVE-only
+  // reading - only `unauthenticated` is a signed-out verdict; `unknown` /
+  // `unavailable` are read errors that fail OPEN, because dimming a working
+  // provider over a transient read error is the worse mistake.
+  //
+  // PRESENTATION ONLY. This field must never feed row VISIBILITY or the
+  // `enabled` flag: what the picker shows is the user's sticky choice, full
+  // stop. A verdict that lands a few seconds after first paint may DIM a row;
+  // it may never add or remove one, which is the mid-session movement this
+  // catalog is deliberately free of.
+  //
+  // `.optional()` rather than a default: an old host omits the key entirely
+  // and the client falls back to its `providers.list`-derived classification,
+  // so absent and "no verdict" stay distinguishable.
+  //
+  // `.catch(undefined)` is the separate guard for a value that is PRESENT but
+  // from a newer host's wider enum: without it one unrecognized member fails
+  // the entire `listHarnesses` response and the picker loses every harness,
+  // rather than this one field. Falling back to `undefined` puts the client on
+  // the old-host path it already supports. See the fuller note on the same pair
+  // in `provider-schemas.ts`.
+  authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
 });
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
 
@@ -92,6 +132,22 @@ export const agentServiceTierOptionSchema = z.object({
 });
 export type AgentServiceTierOption = z.infer<
   typeof agentServiceTierOptionSchema
+>;
+
+// Narrow, forward-compatible capabilities a model advertises beyond its core
+// text loop. Not a wire-schema change: `guiAgentModelOptionSchema.metadata`
+// stays the open `Record<string, unknown>` it always was, and this is a
+// zod shape consumers use to narrow `metadata.capabilities` through a shared
+// type instead of ad hoc casts. Do not reuse `supportsImages`/
+// `inputModalities`/`vision`/`supportsImageAttachments` for
+// `imageGeneration` - those describe image *input*, not generation.
+export const guiAgentModelCapabilitiesSchema = z.object({
+  // Absent/undefined means false - only Codex (via `parseCodexModel`) derives
+  // this today; every other bundled harness emits no `capabilities` at all.
+  imageGeneration: z.boolean().default(false),
+});
+export type GuiAgentModelCapabilities = z.infer<
+  typeof guiAgentModelCapabilitiesSchema
 >;
 
 export const guiAgentModelOptionSchema = z.object({
@@ -197,13 +253,41 @@ export const listGuiHarnessesResponseSchemaV20 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV20),
 });
 
+// ── Frozen catalog row BODY for every line from 2.1 through 7.0 ────────────
+//
+// Every one of those lines used to be spelled `guiHarnessOptionSchema.extend({
+// id: <pinned enum> })`, i.e. a pinned id over the LIVE body. That pins only
+// half a row: the id could not drift, but a field added to the live body
+// widened all six SHIPPED lines at once. `authStatus` was the first field to
+// actually test that, so the body is hand-frozen here and the released lines
+// below now differ from one another ONLY by their id enum - which is what
+// their comments always claimed.
+//
+// Byte-identical to the live body at the freeze cut, so the committed
+// `frozen-catalog-lines` snapshots for 2.1-6.0 are unchanged by the freeze.
+// Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
+// only v7.1 (the head line) binds.
+const guiHarnessOptionBaseShapeV70 = {
+  label: z.string(),
+  enabled: z.boolean().default(true),
+  available: z.boolean(),
+  error: z.string().nullable(),
+  modes: z.array(harnessSurfaceSchema),
+  requiresApiKey: z.boolean(),
+  supportedPermissionModes: z
+    .array(permissionModeSchema)
+    .default([...ALL_PERMISSION_MODES]),
+  availabilityPending: z.boolean().catch(false),
+};
+
 // ── Protocol-v2.1 catalog row + response ────────────────────────────────────
 // 2.1 is where `enabled` (#178) formally enters the major-2 line: the released
 // 2.0 shape above is frozen without it, and the 2.0→2.1 upgrade fills the
 // "old host never had this feature" default (`enabled: true` - a host that
 // predates the flag only lists harnesses it considers usable).
-export const guiHarnessOptionSchemaV21 = guiHarnessOptionSchema.extend({
+export const guiHarnessOptionSchemaV21 = z.object({
   id: guiHarnessIdSchemaV20,
+  ...guiHarnessOptionBaseShapeV70,
 });
 export const listGuiHarnessesResponseSchemaV21 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV21),
@@ -214,12 +298,122 @@ export const listGuiHarnessesResponseSchemaV21 = z.object({
 // Devin/Pi, and the v4→v3 downgrade bridge filters them out for already-
 // shipped v3.0 callers so their strict decode never sees a value it can't
 // parse.
-export const guiHarnessOptionSchemaV30 = guiHarnessOptionSchema.extend({
+export const guiHarnessOptionSchemaV30 = z.object({
   id: guiHarnessIdSchemaV30,
+  ...guiHarnessOptionBaseShapeV70,
 });
 export const listGuiHarnessesResponseSchemaV30 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV30),
 });
+
+// ── Frozen protocol-v4.0 catalog row + response (with Devin/Pi, before ──────
+// Hermes). v4.0 shipped with Devin/Pi; the v5.0 line of
+// `agent.gui.listHarnesses` adds Hermes, and the v5→v4 downgrade bridge
+// filters it out for already-shipped v4.0 callers so their strict decode
+// never sees a value it can't parse.
+export const guiHarnessOptionSchemaV40 = z.object({
+  id: guiHarnessIdSchemaV40,
+  ...guiHarnessOptionBaseShapeV70,
+});
+export const listGuiHarnessesResponseSchemaV40 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV40),
+});
+
+// ── Frozen protocol-v5.0 catalog row + response (with Hermes, before omp) ───
+// v5.0 shipped with Hermes in `cli-v1.1.8` / `host-v1.1.8` (both tagged
+// 2026-07-25); the v6.0 line of `agent.gui.listHarnesses` adds omp, and the
+// v6→v5 downgrade bridge filters it out for already-shipped v5.0 callers so
+// their strict decode never sees a value it can't parse.
+//
+// The row body is the hand-frozen `guiHarnessOptionBaseShapeV70` shared by
+// every line from 2.1 up: these lines differ only by the id enum - verified
+// against the `cli-v1.1.8` tree, where this whole file is byte-identical to
+// HEAD. It used to reuse the LIVE row, which pinned the id but left the body
+// tracking live; see that shape's comment.
+export const guiHarnessOptionSchemaV50 = z.object({
+  id: guiHarnessIdSchemaV50,
+  ...guiHarnessOptionBaseShapeV70,
+});
+export const listGuiHarnessesResponseSchemaV50 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV50),
+});
+
+// ── Frozen protocol-v6.0 catalog row + response (with omp, pre-Hugging Face) ─
+// v6.0 shipped with omp in `cli-v1.1.9` / `host-v1.1.9` (both tagged
+// 2026-07-29); the v7.0 line of `agent.gui.listHarnesses` adds Hugging Face,
+// and the v7→v6 downgrade bridge filters it out for already-shipped v6.0
+// callers so their strict decode never sees a value it can't parse.
+//
+// The row body is the hand-frozen `guiHarnessOptionBaseShapeV70` for the same
+// reason `guiHarnessOptionSchemaV50` uses it - the two lines differ only by
+// the id enum, verified against the `cli-v1.1.9` tree, where this whole file
+// is byte-identical to HEAD.
+export const guiHarnessOptionSchemaV60 = z.object({
+  id: guiHarnessIdSchemaV60,
+  ...guiHarnessOptionBaseShapeV70,
+});
+export const listGuiHarnessesResponseSchemaV60 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV60),
+});
+
+// ── Frozen protocol-v7.0 catalog row + response (pre-`authStatus`) ─────────
+// v7.0 shipped Hugging Face and, in `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1`
+// (both tagged 2026-08-19), shipped to real peers. v7.1 adds `authStatus` to
+// the live row, so v7.0 stops being the head line here and is frozen at what
+// those rc peers negotiate: a 7.0 caller receives the row without that key,
+// re-parsed through this shape by the contract.
+//
+// This freeze is why the new field rides a MINOR rather than widening 7.0 in
+// place, which is what `registry.ts`'s "an unreleased line widens in place"
+// note would otherwise license (rc tags are outside `support-floor.json`'s
+// protected set). Two different shapes under one version number are
+// undetectable by negotiation, and these schemas strict-parse - an rc peer at
+// 7.0 handed a 7.1 key can reject the response outright. Negotiating 7.1 and
+// letting the downgrade strip the key is the honest wire.
+export const guiHarnessOptionSchemaV70 = z.object({
+  id: guiHarnessIdSchemaV70,
+  ...guiHarnessOptionBaseShapeV70,
+});
+export const listGuiHarnessesResponseSchemaV70 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV70),
+});
+export type ListGuiHarnessesResponseV70 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV70
+>;
+
+// ── Frozen protocol-v7.1 catalog row + response (pre-Reasonix) ─────────────
+// 7.1 is where `authStatus` formally enters the major-7 line.
+// It is frozen here at the v7.0 ID SET even though no tag has shipped 7.1 yet,
+// which is the part worth stating: a minor may not GROW A RESPONSE ENUM over
+// its predecessor (`versioned-rpc.ts`'s projection-feasibility check refuses
+// it), and 7.0 IS released, so no minor of major 7 can ever carry a harness id
+// 7.0 does not. Reasonix therefore opens 8.0 rather than riding 7.1, exactly as
+// it would if 7.1 were released.
+//
+// That refusal is the whole safety property here. A 7.0 peer receives a 7.1
+// response through a within-major re-parse, which STRIPS unknown keys but
+// REJECTS an unknown enum value - so a Reasonix row on 7.1 would not degrade,
+// it would fail the entire `listHarnesses` response and empty that peer's
+// picker. Only a cross-major bridge can filter rows.
+//
+// Do NOT add fields or ids here; add fields to `guiHarnessOptionSchema` above,
+// which only v8.0 (the head line) binds.
+const guiHarnessOptionBaseShapeV71 = {
+  ...guiHarnessOptionBaseShapeV70,
+  authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+};
+
+export const guiHarnessOptionSchemaV71 = z.object({
+  id: guiHarnessIdSchemaV70,
+  ...guiHarnessOptionBaseShapeV71,
+});
+export const listGuiHarnessesResponseSchemaV71 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV71),
+});
+export type ListGuiHarnessesResponseV71 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV71
+>;
+
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema
 >;

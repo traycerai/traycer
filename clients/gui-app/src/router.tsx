@@ -5,8 +5,9 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { queryClient } from "@/lib/query-client";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import { isMobileApp } from "@/lib/mobile-app";
 import { RoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
@@ -19,7 +20,13 @@ import type { HostRpcRegistry } from "@/lib/host";
 export interface AppRouterContext {
   queryClient: QueryClient;
   getAuthSnapshot: () => AuthState;
-  getActiveHostId: () => string | null;
+  /**
+   * The app-wide host client, already pinned to the effective host. A loader
+   * that needs the host ID reads it off this client rather than from a second
+   * accessor: the pair used to be two independent reads of the active slot,
+   * which could disagree across a move mid-loader, and the ID half was the
+   * privileged identity P4.2 deleted.
+   */
   getHostClient: () => HostClient<HostRpcRegistry> | null;
 }
 
@@ -48,9 +55,7 @@ export function createAppRouter(
     context: {
       queryClient,
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () =>
-        getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
-      getHostClient: () => getHostBindingSnapshot()?.hostClient ?? null,
+      getHostClient: () => getAppHostClientSnapshot(),
     },
     ...(history === undefined ? {} : { history }),
   });
@@ -59,9 +64,32 @@ export function createAppRouter(
   return router;
 }
 
-export function bindAuthInvalidation(router: {
+export interface AuthInvalidationRouter {
+  readonly state: {
+    readonly status: "pending" | "idle";
+    /**
+     * Assigned once the first load's render is acknowledged (after its match
+     * set commits) and never cleared afterwards — `undefined` means no load
+     * has ever fully resolved, which conservatively includes the
+     * just-committed-but-unacknowledged instant. `matches` is NOT usable
+     * here: a cold load that outlives `defaultPendingMs` publishes
+     * provisional pending matches before anything commits.
+     */
+    readonly resolvedLocation?: unknown;
+  };
   invalidate: () => Promise<void> | void;
-}): () => void {
+  load: () => Promise<void> | void;
+}
+
+export function bindAuthInvalidation(
+  router: AuthInvalidationRouter,
+): () => void {
+  // At most one recovery load per uncommitted window, however many auth
+  // changes land inside it: `router.load()` on these router-core versions
+  // ABORTS its predecessor transaction rather than joining it, so issuing one
+  // per auth flip multiplies route passes (and each continuation's invalidate
+  // would fan out further).
+  let recovery: Promise<void> | null = null;
   return useAuthStore.subscribe((state, prevState) => {
     if (
       state.status === prevState.status &&
@@ -69,7 +97,38 @@ export function bindAuthInvalidation(router: {
     ) {
       return;
     }
-    void router.invalidate();
+    // On a cold launch the auth status flips (e.g. signed-out → signed-in as
+    // stored tokens validate) while the router's INITIAL load may still be in
+    // flight — no match set has ever committed. Invalidating in that window
+    // retires the in-flight load inside router-core's scheduler and nothing
+    // reschedules it: the router sits at `status: "pending"` forever and the
+    // app renders a permanently blank screen (no error, no pending component —
+    // there is no committed match to hang either on). A fresh mobile install
+    // hits this window on nearly every launch.
+    const uncommitted =
+      router.state.status === "pending" &&
+      router.state.resolvedLocation === undefined;
+    if (!uncommitted) {
+      void router.invalidate();
+      return;
+    }
+    if (recovery !== null) {
+      // The active recovery's post-settle invalidate re-runs route guards
+      // against the auth store's LATEST snapshot, so this later change is
+      // already covered.
+      return;
+    }
+    const invalidateAfterSettle = () => {
+      recovery = null;
+      // A rejected load still owes the auth change its recheck — invalidating
+      // on failure also gives the failed load a retry with the fresh auth
+      // snapshot.
+      void router.invalidate();
+    };
+    recovery = Promise.resolve(router.load()).then(
+      invalidateAfterSettle,
+      invalidateAfterSettle,
+    );
   });
 }
 
@@ -97,6 +156,23 @@ function createAppHistory(
   // work natively, and reload survives via the browser. A shell-injected
   // `initialRoute` still overrides via memory history below.
   if (!isElectronContext()) {
+    // The installed mobile app owns its back stack, because it is the one
+    // non-Electron shell whose ONLY history affordance is in-app: the phone has
+    // no URL bar, no back button, and no room in its header for the desktop's
+    // arrows - the edge swipe is the whole of back and forward there. TanStack's
+    // own history would leave that gesture reading a stack nothing in this app
+    // fills, which is a gesture that recognizes perfectly and then navigates
+    // nowhere.
+    //
+    // `windowId` is deliberately `null`, which is what makes the stack
+    // SESSION-scoped: both halves of the persistence layer no-op on a null
+    // window, so nothing is read at boot and nothing is written. A phone's
+    // process outlives every navigation the user makes inside one sitting, so
+    // the in-memory stack already survives everything a resume can do to it; a
+    // stack restored across a COLD launch would instead hand the first swipe
+    // after opening the app a surface from yesterday, which reads as the app
+    // going somewhere the user never was.
+    if (isMobileApp()) return createPersistentMemoryHistory(initialRoute, null);
     if (initialRoute === null) return undefined;
     return createMemoryHistory({
       initialEntries: [normalizeInitialRoute(initialRoute)],

@@ -4,6 +4,7 @@ import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
+import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
@@ -20,6 +21,7 @@ import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-te
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import type { ChatMessageForkAction } from "./chat-message";
+import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { ActivityGroupSegment } from "./segments/activity-group-segment";
 import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
@@ -66,8 +68,12 @@ interface AssistantBodyProps {
    * share `createdAt` (e.g. multiple turns following one user-send).
    */
   messageId: string;
-  /** Wall-clock turn start; `completedAt - createdAt` is the elapsed duration. */
-  createdAt: number;
+  /** Wall-clock turn start used only for elapsed-duration calculations. */
+  elapsedStartedAt: number;
+  /** Whether the complete turn contains only autonomous-resume dividers. */
+  turnHasOnlyAutonomousResumeSegments: boolean;
+  /** Whether this terminal row should render its elapsed completion footer. */
+  showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
   pausedDurationMs: number;
   /** Start of an open user-wait interval for this turn, if any. */
@@ -93,6 +99,7 @@ interface AssistantBodyProps {
   meta: AssistantTurnMeta | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
+  interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
 }
 
 export function AssistantMessageBody({
@@ -100,7 +107,9 @@ export function AssistantMessageBody({
   backgroundToolBlockIds,
   runState,
   messageId,
-  createdAt,
+  elapsedStartedAt,
+  turnHasOnlyAutonomousResumeSegments,
+  showCompletionFooter,
   pausedDurationMs,
   pausedSinceMs,
   completedAt,
@@ -108,6 +117,7 @@ export function AssistantMessageBody({
   meta,
   nextStepActions,
   forkAction,
+  interviewDeliveryRetry,
 }: AssistantBodyProps) {
   const activityTimelineTurnState = runState === null ? "complete" : "active";
   const timeline = useMemo(
@@ -127,10 +137,22 @@ export function AssistantMessageBody({
   const replyText = useMemo(
     () =>
       segments.length === 0 && stopped !== null && stopped.turnHadOutput
-        ? stopped.turnReplyText
+        ? collectAssistantReplyText(stopped.turnReplySegments)
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
+  // A completed turn whose only visible segment is the autonomous-resume
+  // divider genuinely woke the agent but produced no reply. Give that case
+  // explicit footer copy so it cannot be mistaken for the notification-only
+  // row that exists when the provider never resumed (that row suppresses its
+  // footer while retaining a terminal `completedAt`).
+  const silentAutonomousResume =
+    stopped === null && turnHasOnlyAutonomousResumeSegments;
+  const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
+  const showElapsedFooter =
+    !stoppedBeforeResponding &&
+    showCompletionFooter &&
+    shouldShowElapsedFooter(runState, completedAt, segments, stopped);
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -147,7 +169,7 @@ export function AssistantMessageBody({
       return (
         <AssistantRunIndicator
           runState={runState}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
           messageId={messageId}
@@ -156,42 +178,17 @@ export function AssistantMessageBody({
       );
     }
     if (stopped === null || !stopped.turnHadOutput) {
-      return stopped === null ? null : (
-        <div
-          role="status"
-          aria-label="Stopped before responding"
-          data-testid="assistant-stopped-before-responding"
-          className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
-        >
-          <StopBadge />
-          <span>Stopped before responding</span>
-        </div>
-      );
+      return stopped === null ? null : <StoppedBeforeResponding />;
     }
   }
   return (
-    <div className="flex w-full max-w-none flex-col gap-2 py-1 @container">
+    <div
+      className="flex w-full max-w-none flex-col gap-2 py-1 @container"
+      data-assistant-turn
+    >
       {timeline.map((item) => {
         if (item.kind === "activity_group") {
           return <ActivityGroupSegment key={item.id} group={item.group} />;
-        }
-        if (item.kind === "answered_questions") {
-          return (
-            <InterviewSegment
-              key={item.id}
-              blockId={item.segment.id}
-              findUnitId={chatFindSegmentUnitId(item.segment.id)}
-              status={item.segment.status}
-              toolName={item.segment.toolName}
-              title={item.segment.title}
-              description={item.segment.description}
-              questions={item.segment.questions}
-              answers={item.segment.answers}
-              error={item.segment.error}
-              forkedWithoutAnswer={item.segment.forkedWithoutAnswer}
-              forkAction={forkAction}
-            />
-          );
         }
         if (item.kind === "promoted_subagent") {
           return (
@@ -222,6 +219,7 @@ export function AssistantMessageBody({
             backgroundToolBlockIds={backgroundToolBlockIds}
             nextStepActions={nextStepActions}
             forkAction={forkAction}
+            interviewDeliveryRetry={interviewDeliveryRetry}
           />
         );
       })}
@@ -230,23 +228,25 @@ export function AssistantMessageBody({
       {runState !== null ? (
         <AssistantRunIndicator
           runState={runState}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
           messageId={messageId}
           meta={meta}
         />
       ) : null}
-      {shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
+      {stoppedBeforeResponding ? <StoppedBeforeResponding /> : null}
+      {showElapsedFooter ? (
         <AssistantElapsedFooter
           messageId={messageId}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           completedAt={completedAt}
           stopped={stopped}
           meta={meta}
           replyText={replyText}
           forkAction={forkAction}
+          silentAutonomousResume={silentAutonomousResume}
         />
       ) : null}
     </div>
@@ -295,6 +295,20 @@ function StopBadge() {
   );
 }
 
+function StoppedBeforeResponding() {
+  return (
+    <div
+      role="status"
+      aria-label="Stopped before responding"
+      data-testid="assistant-stopped-before-responding"
+      className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
+    >
+      <StopBadge />
+      <span>Stopped before responding</span>
+    </div>
+  );
+}
+
 /**
  * Leading glyph for the elapsed footer. A stopped turn always shows the
  * filled stop glyph, never the provider icon - natural footers keep the
@@ -324,6 +338,7 @@ function AssistantElapsedFooter({
   meta,
   replyText,
   forkAction,
+  silentAutonomousResume,
 }: {
   messageId: string;
   createdAt: number;
@@ -333,6 +348,7 @@ function AssistantElapsedFooter({
   meta: AssistantTurnMeta | null;
   replyText: string;
   forkAction: ChatMessageForkAction | null;
+  silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
   // Wind-down time counts toward the elapsed duration - a Stop doesn't get a
@@ -340,6 +356,9 @@ function AssistantElapsedFooter({
   // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
+  const nonStoppedElapsedLabel = silentAutonomousResume
+    ? `Resumed · no response · ${formatWorkedFor(elapsedMs)}`
+    : `${verb} for ${formatWorkedFor(elapsedMs)}`;
   const elapsedContent = (
     <>
       <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
@@ -349,7 +368,7 @@ function AssistantElapsedFooter({
           {` · ${formatWorkedFor(elapsedMs)}`}
         </span>
       ) : (
-        <span className="text-ui-sm leading-5">{`${verb} for ${formatWorkedFor(elapsedMs)}`}</span>
+        <span className="text-ui-sm leading-5">{nonStoppedElapsedLabel}</span>
       )}
     </>
   );
@@ -470,12 +489,12 @@ function AssistantForkButton({
 }
 
 /**
- * Hover content for the elapsed-footer info icon: provider, model, reasoning
- * effort, and fast mode (only when enabled), plus - for a user-stopped turn -
- * the stop time and reason from the `turn.stopped` event. Mirrors the
- * context-usage chip's label/value row layout so the two tooltips read
- * consistently. Either section is optional; `AssistantElapsedFooter` only
- * renders this tooltip at all when at least one is present.
+ * Hover content for the elapsed-footer info icon: provider, profile, model,
+ * reasoning effort, and fast mode (only when enabled), plus - for a
+ * user-stopped turn - the stop time and reason from the `turn.stopped` event.
+ * Mirrors the context-usage chip's label/value row layout so the two tooltips
+ * read consistently. Either section is optional; `AssistantElapsedFooter`
+ * only renders this tooltip at all when at least one is present.
  */
 function AssistantMetaTooltip({
   meta,
@@ -496,6 +515,9 @@ function AssistantMetaTooltip({
             Agent
           </div>
           <AssistantMetaRow label="Provider" value={meta.providerLabel} />
+          {meta.profileLabel === null ? null : (
+            <AssistantMetaRow label="Profile" value={meta.profileLabel} />
+          )}
           {meta.modelLabel === null ? null : (
             <AssistantMetaRow label="Model" value={meta.modelLabel} />
           )}
@@ -567,14 +589,6 @@ function AssistantMetaRow({ label, value }: { label: string; value: string }) {
       <span className="font-medium">{value}</span>
     </div>
   );
-}
-
-/**
- * Fast mode is on whenever the turn carried a non-default service tier (e.g.
- * Codex `"priority"`); an empty/null tier means the harness default.
- */
-function isFastModeEnabled(serviceTier: string | null): boolean {
-  return serviceTier !== null && serviceTier.trim().length > 0;
 }
 
 /**
@@ -745,6 +759,7 @@ interface AssistantSegmentProps {
   backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
+  interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
 }
 
 function ApprovalSegmentCard({
@@ -766,6 +781,7 @@ function ApprovalSegmentCard({
       decision={segment.decision}
       variant="card"
       headerFindUnitId={findUnitId}
+      initiallyOpen={false}
     />
   );
 }
@@ -779,6 +795,7 @@ function AssistantSegment({
   backgroundToolBlockIds,
   nextStepActions,
   forkAction,
+  interviewDeliveryRetry,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -789,15 +806,23 @@ function AssistantSegment({
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           nextStepActions={nextStepActions}
+          imageContext={segment.assistantImageContext}
         />
       );
     case "reasoning":
+      // Unreachable from the timeline - `isActivitySegment` admits reasoning
+      // unconditionally, so every reasoning block reaches the renderer through
+      // an activity group. Kept so the switch stays exhaustive over the segment
+      // taxonomy, and for direct renders in tests.
       return (
         <ReasoningSegment
           findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
+          bodyBoundedByParent={false}
+          headerless={false}
+          initiallyExpanded={false}
         />
       );
     case "tool": {
@@ -810,6 +835,7 @@ function AssistantSegment({
           inputDetail={segment.inputDetail}
           error={segment.error}
           agentMessageSend={segment.agentMessageSend}
+          managedCommand={segment.managedCommand}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}
@@ -818,6 +844,7 @@ function AssistantSegment({
           backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          imageResults={segment.imageResults}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null
@@ -831,6 +858,7 @@ function AssistantSegment({
           segment={segment}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
     case "file_change_group":
@@ -843,20 +871,27 @@ function AssistantSegment({
           findUnitId={findUnitId}
         />
       );
-    case "command":
+    case "command": {
+      // Same treatment as a promoted tool call: while the host still lists the
+      // command as running background work, the card keeps reading "running"
+      // even though the turn that spawned it already finalized its blocks.
+      const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <CommandSegment
           command={segment.command}
           cwd={segment.cwd}
           exitCode={segment.exitCode}
-          isStreaming={segment.isStreaming}
-          endState={segment.endState}
+          isStreaming={segment.isStreaming || isBackgroundRunning}
+          endState={isBackgroundRunning ? null : segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
+    }
     case "subagent":
       return (
         <SubagentSegment
@@ -898,6 +933,7 @@ function AssistantSegment({
         <ErrorSegment
           message={segment.message}
           code={segment.code}
+          recoverable={segment.recoverable}
           findUnitId={findUnitId}
         />
       );
@@ -931,16 +967,20 @@ function AssistantSegment({
       return (
         <InterviewSegment
           blockId={segment.id}
-          findUnitId={findUnitId}
           status={segment.status}
           toolName={segment.toolName}
           title={segment.title}
           description={segment.description}
           questions={segment.questions}
           answers={segment.answers}
+          draftAnswers={segment.draftAnswers}
+          outcome={segment.outcome}
+          settlement={segment.settlement}
           error={segment.error}
+          delivery={segment.delivery}
           forkedWithoutAnswer={segment.forkedWithoutAnswer}
           forkAction={forkAction}
+          interviewDeliveryRetry={interviewDeliveryRetry}
         />
       );
     case "setup-card":

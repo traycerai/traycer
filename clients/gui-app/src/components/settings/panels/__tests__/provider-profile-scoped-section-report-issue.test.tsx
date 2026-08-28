@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -20,6 +19,15 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
+// The stub above is not sufficient on its own: it replaces `@/lib/host`, but
+// the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
+// which that stub does not intercept - so the real hook throws its "must be
+// used inside a <HostRuntimeProvider>" error. The refresh button reaches that
+// chain via `useProviderRateLimitRefresh` -> `useRateLimitQueueScope`. Stub the
+// one resolution they share, the way the host-less panel suites already do.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   useRemoveProviderProfile: () => ({
     mutate: vi.fn(),
@@ -50,6 +58,7 @@ import { ProviderProfileScopedSection } from "@/components/settings/panels/provi
 function ambientProfile(): ProviderCliState["profiles"][number] {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -62,6 +71,7 @@ function ambientProfile(): ProviderCliState["profiles"][number] {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -91,6 +101,16 @@ function opencodeState(): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [ambientProfile()],
   };
 }
@@ -112,11 +132,17 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
+          startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}
           onDismissFailedAttempt={() => undefined}
           selectedProfileId={null}
           onSelectedProfileIdChange={() => undefined}
+          profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={() => undefined}
           {...overrides}
         />
       </TooltipProvider>

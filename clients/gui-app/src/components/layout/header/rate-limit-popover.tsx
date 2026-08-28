@@ -14,6 +14,7 @@ import {
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,11 +27,16 @@ import {
 } from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
-import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
+import {
+  profileDisplayLabel,
+  profileEligibilityToggleDisabledReason,
+  profileEnablementTooltipText,
+} from "@/components/providers/provider-profile-model";
 import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
+import { OpenModelProvidersButton } from "@/components/settings/panels/opencode-go-actions";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
@@ -43,7 +49,7 @@ import {
   mapResponseToProviderRateLimitEnvelope,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
 import type {
@@ -54,16 +60,23 @@ import {
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
-import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
+import {
+  useAnyRateLimitQueueTargetFetching,
+  useIsRateLimitReadFollowUpExhausted,
+  useRateLimitQueueTargetPhase,
+} from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import {
-  enqueueRateLimitFetch,
-  enqueueRateLimitFetchBatch,
-} from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { isRateLimitQueryFailure } from "@/lib/rate-limits/rate-limit-read-status";
+import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -71,6 +84,11 @@ import {
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  useProviderProfileEnablementPending,
+  useProvidersSetProfileEnabledForClient,
+} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -80,7 +98,9 @@ import { queryKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+  isRateLimitProfileFetchEligible,
   rateLimitFetchLane,
+  type RateLimitFetchEligibility,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 import { useRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
@@ -105,7 +125,11 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { cn } from "@/lib/utils";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
 /**
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
@@ -118,9 +142,175 @@ type RailTabDescriptor =
   | { readonly kind: "traycer" };
 
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
+  ambient: false,
+  managedProfiles: false,
+};
 
 const POPOVER_SURFACE_CLASS_NAME =
-  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
+  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
+
+type RateLimitPopoverResizeDirection =
+  | "n"
+  | "ne"
+  | "e"
+  | "se"
+  | "s"
+  | "sw"
+  | "w"
+  | "nw";
+
+interface RateLimitPopoverPositionLock {
+  readonly wrapperElement: HTMLElement;
+  offsetXPx: number;
+  offsetYPx: number;
+  readonly setOffset: (xPx: number, yPx: number) => void;
+  readonly restore: () => void;
+}
+
+interface RateLimitPopoverViewportBounds {
+  readonly rightPx: number;
+  readonly bottomPx: number;
+}
+
+interface RateLimitPopoverResizeDrag {
+  readonly pointerId: number;
+  readonly direction: RateLimitPopoverResizeDirection;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startLeftPx: number;
+  readonly startTopPx: number;
+  readonly startRightPx: number;
+  readonly startBottomPx: number;
+  readonly startWidthPx: number;
+  readonly startHeightPx: number;
+  readonly viewportRightPx: number;
+  readonly viewportBottomPx: number;
+  readonly positionLock: RateLimitPopoverPositionLock;
+  readonly restorePositionOnCancel: boolean;
+  readonly startPositionOffsetXPx: number;
+  readonly startPositionOffsetYPx: number;
+  readonly previousInlineWidth: string;
+  readonly previousInlineHeight: string;
+  latestWidthPx: number;
+  latestHeightPx: number;
+  moved: boolean;
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS = [
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+  "nw",
+] as const;
+
+function isRateLimitPopoverResizeDirection(
+  value: string | undefined,
+): value is RateLimitPopoverResizeDirection {
+  return RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.some(
+    (direction) => direction === value,
+  );
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES = {
+  n: "absolute inset-x-3 top-0 z-20 h-2 cursor-n-resize touch-none",
+  ne: "absolute top-0 right-0 z-30 size-3 cursor-ne-resize touch-none",
+  e: "absolute inset-y-3 right-0 z-20 w-2 cursor-e-resize touch-none",
+  se: "absolute right-0 bottom-0 z-30 size-3 cursor-se-resize touch-none",
+  s: "absolute inset-x-3 bottom-0 z-20 h-2 cursor-s-resize touch-none",
+  sw: "absolute bottom-0 left-0 z-30 size-3 cursor-sw-resize touch-none",
+  w: "absolute inset-y-3 left-0 z-20 w-2 cursor-w-resize touch-none",
+  nw: "absolute top-0 left-0 z-30 size-3 cursor-nw-resize touch-none",
+} satisfies Record<RateLimitPopoverResizeDirection, string>;
+
+const RATE_LIMIT_POPOVER_COLLISION_PADDING_PX = 12;
+
+// Radix owns the floating wrapper's transform and rewrites it whenever content
+// size changes. Lock that transform for the rest of this popover opening so a
+// resize can move the exact active edge without Radix re-anchoring underneath
+// the pointer. The observer only restores one expected transform; it never
+// derives another offset from the moved element, avoiding a feedback loop.
+function createRateLimitPopoverPositionLock(
+  wrapperElement: HTMLElement,
+): RateLimitPopoverPositionLock {
+  const originalTransform = wrapperElement.style.transform;
+  const originalTransformPriority =
+    wrapperElement.style.getPropertyPriority("transform");
+  let expectedTransform = originalTransform;
+  let restored = false;
+  const applyExpectedTransform = (): void => {
+    if (restored) return;
+    if (
+      wrapperElement.style.transform === expectedTransform &&
+      wrapperElement.style.getPropertyPriority("transform") === "important"
+    ) {
+      return;
+    }
+    wrapperElement.style.setProperty(
+      "transform",
+      expectedTransform,
+      "important",
+    );
+  };
+  const observer = new MutationObserver(applyExpectedTransform);
+  const positionLock: RateLimitPopoverPositionLock = {
+    wrapperElement,
+    offsetXPx: 0,
+    offsetYPx: 0,
+    setOffset: (xPx, yPx) => {
+      positionLock.offsetXPx = xPx;
+      positionLock.offsetYPx = yPx;
+      const offsetTransform = `translate(${xPx}px, ${yPx}px)`;
+      expectedTransform =
+        originalTransform === "" || originalTransform === "none"
+          ? offsetTransform
+          : `${originalTransform} ${offsetTransform}`;
+      applyExpectedTransform();
+    },
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      observer.disconnect();
+      if (originalTransform === "") {
+        wrapperElement.style.removeProperty("transform");
+        return;
+      }
+      wrapperElement.style.setProperty(
+        "transform",
+        originalTransform,
+        originalTransformPriority,
+      );
+    },
+  };
+  observer.observe(wrapperElement, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  applyExpectedTransform();
+  return positionLock;
+}
+
+function rateLimitPopoverViewportBounds(
+  surface: HTMLDivElement,
+  rect: DOMRect,
+): RateLimitPopoverViewportBounds {
+  const ownerDocument = surface.ownerDocument;
+  const win = ownerDocument.defaultView;
+  const viewportWidth =
+    ownerDocument.documentElement.clientWidth || win?.innerWidth || rect.right;
+  const viewportHeight =
+    ownerDocument.documentElement.clientHeight ||
+    win?.innerHeight ||
+    rect.bottom;
+  return {
+    rightPx: viewportWidth - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+    bottomPx: viewportHeight - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+  };
+}
 
 type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
@@ -199,20 +389,27 @@ function configuredProviderProfiles(
   return provider === undefined ? [] : provider.profiles;
 }
 
+function providerFetchEligibility(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+  providerId: RateLimitProviderId,
+): RateLimitFetchEligibility {
+  return (
+    providers.find((candidate) => candidate.providerId === providerId)
+      ?.fetchEligibility ?? NO_RATE_LIMIT_FETCH_ELIGIBILITY
+  );
+}
+
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length === 0) return [null];
+  if (provider.profiles.length === 0) {
+    return provider.fetchEligibility.ambient ? [null] : [];
+  }
   return provider.profiles
-    .filter(profileLoggedInForUsage)
+    .filter((profile) =>
+      isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+    )
     .map(rateLimitProfileId);
-}
-
-function profileLoggedInForUsage(profile: ProviderProfile): boolean {
-  return (
-    profile.auth.status === "authenticated" ||
-    profile.auth.status === "configured"
-  );
 }
 
 function rateLimitProfileId(profile: ProviderProfile): string | null {
@@ -230,16 +427,20 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
 export function RateLimitPopover({
   onClose,
   profileSelection,
+  scope,
+  hasExplicitPick,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
 }): ReactNode {
   return (
     <PopoverContent
       side="bottom"
       align="end"
       sideOffset={8}
-      collisionPadding={12}
+      collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
       className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
@@ -257,7 +458,13 @@ export function RateLimitPopover({
           target instanceof Element &&
           (target.closest('[data-testid="confirm-destructive-dialog"]') !==
             null ||
-            target.closest('[data-slot="dialog-overlay"]') !== null)
+            target.closest('[data-slot="dialog-overlay"]') !== null ||
+            // The host switcher's own list is a nested Radix popover, so it
+            // portals OUTSIDE this content and every click in it reads as an
+            // interaction outside. Without this, opening the picker closed the
+            // surface the picker exists to scope, and no host could ever be
+            // chosen. Shared with every other container that embeds it.
+            isHostSwitcherListInteraction(target))
         ) {
           event.preventDefault();
         }
@@ -266,15 +473,17 @@ export function RateLimitPopover({
       <RateLimitPopoverBody
         onClose={onClose}
         profileSelection={profileSelection}
+        scope={scope}
+        hasExplicitPick={hasExplicitPick}
       />
     </PopoverContent>
   );
 }
 
 /**
- * Viewport-bounded, two-axis CSS resize surface. The browser owns live drag
- * frames and writes the resulting inline dimensions; pointer release commits
- * that measured size once so subsequent opens restore it.
+ * Viewport-bounded resize surface with OS-style hit areas on every edge and
+ * corner. Drag frames mutate inline dimensions directly, while pointer release
+ * commits the final measured size once so subsequent opens restore it.
  */
 function RateLimitPopoverResizeSurface({
   variant,
@@ -285,54 +494,177 @@ function RateLimitPopoverResizeSurface({
 }): ReactNode {
   const size = useRateLimitPopoverStore((state) => state.size);
   const setSize = useRateLimitPopoverStore((state) => state.setSize);
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const commitResizedDimensions = (
-    event: ReactPointerEvent<HTMLDivElement>,
-  ): void => {
-    if (event.target !== event.currentTarget) return;
-    const { width, height } = event.currentTarget.getBoundingClientRect();
-    if (width <= 0 || height <= 0) return;
-    setSize({ widthPx: width, heightPx: height });
-  };
-  useEffect(() => {
-    const surface = surfaceRef.current;
-    if (surface === null) return;
-    const win = surface.ownerDocument.defaultView;
-    if (win === null) return;
+  const dragRef = useRef<RateLimitPopoverResizeDrag | null>(null);
+  const positionLockRef = useRef<RateLimitPopoverPositionLock | null>(null);
+  useEffect(
+    () => () => {
+      positionLockRef.current?.restore();
+    },
+    [],
+  );
 
-    let initialized = false;
-    let applyTimer: number | null = null;
-    const applyMeasuredSize = (): void => {
-      const { width, height } = surface.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
-      surface.style.width = `${width}px`;
-      surface.style.height = `${height}px`;
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || dragRef.current !== null) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const direction = target.dataset.resizeDirection;
+    if (!isRateLimitPopoverResizeDirection(direction)) return;
+
+    const surface = event.currentTarget;
+    const positionWrapper = surface.closest<HTMLElement>(
+      "[data-radix-popper-content-wrapper]",
+    );
+    if (positionWrapper === null) return;
+    const rect = surface.getBoundingClientRect();
+    const { width, height } = rect;
+    if (width <= 0 || height <= 0) return;
+    const viewportBounds = rateLimitPopoverViewportBounds(surface, rect);
+    event.preventDefault();
+    event.stopPropagation();
+    surface.setPointerCapture(event.pointerId);
+    const existingPositionLock = positionLockRef.current;
+    const restorePositionOnCancel =
+      existingPositionLock === null ||
+      existingPositionLock.wrapperElement !== positionWrapper;
+    if (
+      existingPositionLock !== null &&
+      existingPositionLock.wrapperElement !== positionWrapper
+    ) {
+      existingPositionLock.restore();
+    }
+    const positionLock = restorePositionOnCancel
+      ? createRateLimitPopoverPositionLock(positionWrapper)
+      : existingPositionLock;
+    positionLockRef.current = positionLock;
+    const drag: RateLimitPopoverResizeDrag = {
+      pointerId: event.pointerId,
+      direction,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeftPx: rect.left,
+      startTopPx: rect.top,
+      startRightPx: rect.right,
+      startBottomPx: rect.bottom,
+      startWidthPx: width,
+      startHeightPx: height,
+      viewportRightPx: viewportBounds.rightPx,
+      viewportBottomPx: viewportBounds.bottomPx,
+      positionLock,
+      restorePositionOnCancel,
+      startPositionOffsetXPx: positionLock.offsetXPx,
+      startPositionOffsetYPx: positionLock.offsetYPx,
+      previousInlineWidth: surface.style.width,
+      previousInlineHeight: surface.style.height,
+      latestWidthPx: width,
+      latestHeightPx: height,
+      moved: false,
     };
-    const observer = new ResizeObserver(() => {
-      if (!initialized) {
-        initialized = true;
-        return;
+    dragRef.current = drag;
+    // Freeze both axes at their computed dimensions before the first drag frame;
+    // otherwise a content reflow can change the untouched axis mid-drag.
+    surface.style.width = `${width}px`;
+    surface.style.height = `${height}px`;
+  };
+
+  const resizeDuringDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    const resizeFromLeft = drag.direction.includes("w");
+    const resizeFromRight = drag.direction.includes("e");
+    const resizeFromTop = drag.direction.includes("n");
+    const resizeFromBottom = drag.direction.includes("s");
+    let widthDelta = 0;
+    if (resizeFromLeft) widthDelta = -deltaX;
+    else if (resizeFromRight) widthDelta = deltaX;
+    let heightDelta = 0;
+    if (resizeFromTop) heightDelta = -deltaY;
+    else if (resizeFromBottom) heightDelta = deltaY;
+    let maxWidthPx = drag.startWidthPx;
+    if (resizeFromLeft) {
+      maxWidthPx = drag.startRightPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromRight) {
+      maxWidthPx = drag.viewportRightPx - drag.startLeftPx;
+    }
+    let maxHeightPx = drag.startHeightPx;
+    if (resizeFromTop) {
+      maxHeightPx =
+        drag.startBottomPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromBottom) {
+      maxHeightPx = drag.viewportBottomPx - drag.startTopPx;
+    }
+    drag.latestWidthPx = Math.min(
+      Math.max(1, maxWidthPx),
+      Math.max(1, drag.startWidthPx + widthDelta),
+    );
+    drag.latestHeightPx = Math.min(
+      Math.max(1, maxHeightPx),
+      Math.max(1, drag.startHeightPx + heightDelta),
+    );
+    event.currentTarget.style.width = `${drag.latestWidthPx}px`;
+    event.currentTarget.style.height = `${drag.latestHeightPx}px`;
+    const measured = event.currentTarget.getBoundingClientRect();
+    drag.moved =
+      measured.width !== drag.startWidthPx ||
+      measured.height !== drag.startHeightPx;
+    const offsetDeltaXPx = resizeFromLeft
+      ? drag.startWidthPx - measured.width
+      : 0;
+    const offsetDeltaYPx = resizeFromTop
+      ? drag.startHeightPx - measured.height
+      : 0;
+    drag.positionLock.setOffset(
+      drag.startPositionOffsetXPx + offsetDeltaXPx,
+      drag.startPositionOffsetYPx + offsetDeltaYPx,
+    );
+  };
+
+  const finishResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    commit: boolean,
+  ): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const surface = event.currentTarget;
+    if (surface.hasPointerCapture(event.pointerId)) {
+      surface.releasePointerCapture(event.pointerId);
+    }
+    if (!commit || !drag.moved) {
+      surface.style.width = drag.previousInlineWidth;
+      surface.style.height = drag.previousInlineHeight;
+      if (drag.restorePositionOnCancel) {
+        drag.positionLock.restore();
+        if (positionLockRef.current === drag.positionLock) {
+          positionLockRef.current = null;
+        }
+      } else {
+        drag.positionLock.setOffset(
+          drag.startPositionOffsetXPx,
+          drag.startPositionOffsetYPx,
+        );
       }
-      if (applyTimer !== null) win.clearTimeout(applyTimer);
-      applyTimer = win.setTimeout(applyMeasuredSize, 100);
-    });
-    observer.observe(surface);
-    return () => {
-      observer.disconnect();
-      if (applyTimer === null) return;
-      win.clearTimeout(applyTimer);
-      applyMeasuredSize();
-    };
-  }, []);
+      return;
+    }
+
+    const measured = surface.getBoundingClientRect();
+    const widthPx = measured.width > 0 ? measured.width : drag.latestWidthPx;
+    const heightPx =
+      measured.height > 0 ? measured.height : drag.latestHeightPx;
+    surface.style.width = `${widthPx}px`;
+    surface.style.height = `${heightPx}px`;
+    setSize({ widthPx, heightPx });
+  };
 
   return (
     <div
-      ref={surfaceRef}
       data-testid="rate-limit-popover-resize-surface"
       className={cn(
         POPOVER_SURFACE_CLASS_NAME,
         variant === "content"
-          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          ? "flex h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] flex-col"
           : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
       )}
       style={
@@ -340,9 +672,22 @@ function RateLimitPopoverResizeSurface({
           ? undefined
           : { width: size.widthPx, height: size.heightPx }
       }
-      onPointerUp={commitResizedDimensions}
+      onPointerDown={startResize}
+      onPointerMove={resizeDuringDrag}
+      onPointerUp={(event) => finishResize(event, true)}
+      onPointerCancel={(event) => finishResize(event, false)}
+      onLostPointerCapture={(event) => finishResize(event, false)}
     >
       {children}
+      {RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.map((direction) => (
+        <div
+          key={direction}
+          aria-hidden="true"
+          data-resize-direction={direction}
+          data-testid={`rate-limit-popover-resize-${direction}`}
+          className={RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES[direction]}
+        />
+      ))}
     </div>
   );
 }
@@ -350,9 +695,80 @@ function RateLimitPopoverResizeSurface({
 function RateLimitPopoverBody({
   onClose,
   profileSelection,
+  scope,
+  hasExplicitPick,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
+}): ReactNode {
+  // The picker earns its row once there is a choice to make. One host means
+  // one possible answer, and a control whose only outcome is the state you are
+  // already in is chrome. The `vanished` exception is not a choice but a way
+  // OUT: a pick that no longer resolves must never leave someone stranded on a
+  // notice with the only control that could clear it hidden.
+  const showHostPicker =
+    scope.hosts.length > 1 || scope.vanishedHostId !== null;
+  const header = showHostPicker ? (
+    <RateLimitHostPickerRow scope={scope} onClose={onClose} />
+  ) : null;
+
+  // Everything below reads through this subtree's host binding, and a PICK
+  // that is not `ready` did not produce one - so the providers, the rail and
+  // every block would silently describe the AMBIENT host under the name this
+  // header just printed. Say what happened instead.
+  //
+  // Gated on there being a pick at all, because without one the ambient host
+  // is not a substitution for anything: it is the host this surface has always
+  // reported, an `unreachable` blip on it is what the envelope's last-good
+  // retention exists to survive, and swapping that for a notice would take
+  // working usage away from every single-host user.
+  if (hasExplicitPick && !isHostScopeUsable(scope.status)) {
+    return (
+      <RateLimitPopoverResizeSurface variant="content">
+        {header}
+        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-y-auto p-3">
+          <RateLimitHostUnavailableNotice scope={scope} />
+          {/* The ACCOUNT-scoped half survives the host being down: Traycer
+              Inference usage comes through the AuthService with no host
+              binding involved, so only the host-RPC provider panes go with
+              the route. Hiding this too both took working data away and had
+              the notice claim more than is true. */}
+          <UnscopedTraycerUsage />
+        </div>
+      </RateLimitPopoverResizeSurface>
+    );
+  }
+
+  return (
+    <RateLimitPopoverScopedBody
+      onClose={onClose}
+      profileSelection={profileSelection}
+      header={header}
+      displayedHostId={scope.hostId}
+    />
+  );
+}
+
+/**
+ * The rail + detail body, mounted only once the surface is bound to the host
+ * it names. Split from `RateLimitPopoverBody` so the provider queries below
+ * are not mounted at all under an unusable scope - a hook that runs anyway and
+ * has its output hidden still fires against the ambient host and caches the
+ * answer under its key (`isHostScopeUsable`).
+ */
+function RateLimitPopoverScopedBody({
+  onClose,
+  profileSelection,
+  header,
+  displayedHostId,
+}: {
+  readonly onClose: () => void;
+  readonly profileSelection: RateLimitProfileSelection;
+  readonly header: ReactNode;
+  /** The host this popover is SHOWING - pinned or followed - for deep links. */
+  readonly displayedHostId: string | null;
 }): ReactNode {
   const displayProviders = useVisibleRateLimitProviders();
   // Rail order matches the app's standard provider order everywhere else.
@@ -373,13 +789,42 @@ function RateLimitPopoverBody({
   );
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
+  const { openSettings } = useSystemTabModalActions();
+  const openOpenCodeModelProviders = useCallback((): void => {
+    onClose();
+    const focus = useProvidersFocusStore.getState();
+    focus.setFocusHarnessId("opencode");
+    focus.setFocusTab("modelProviders");
+    carryViewedHostIntoSettingsScope(displayedHostId);
+    openSettings({ section: "providers", resetToGeneral: false });
+  }, [displayedHostId, onClose, openSettings]);
 
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
+    // The zero state keeps its own compact surface when nothing scopes it. With
+    // a host picker present the row has to stay reachable, or picking the one
+    // host with no providers configured would remove the only way to pick a
+    // different one.
+    if (header === null) {
+      return (
+        <RateLimitPopoverResizeSurface variant="empty">
+          <RateLimitZeroState
+            onClose={onClose}
+            displayedHostId={displayedHostId}
+          />
+        </RateLimitPopoverResizeSurface>
+      );
+    }
     return (
-      <RateLimitPopoverResizeSurface variant="empty">
-        <RateLimitZeroState onClose={onClose} />
+      <RateLimitPopoverResizeSurface variant="content">
+        {header}
+        <div className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto p-4">
+          <RateLimitZeroState
+            onClose={onClose}
+            displayedHostId={displayedHostId}
+          />
+        </div>
       </RateLimitPopoverResizeSurface>
     );
   }
@@ -403,36 +848,170 @@ function RateLimitPopoverBody({
   // own `min-h-0` + `overflow-y-auto` scrolling.
   return (
     <RateLimitPopoverResizeSurface variant="content">
-      <RateLimitRail
-        railTabs={railTabs}
-        providers={providers}
-        traycerRefreshTarget={{
-          enabled: traycerSubscription.eligible,
-          rateLimitAccountContexts:
-            traycerSubscription.rateLimitAccountContexts,
-          isFetching: traycerSubscription.query.isFetching,
-          refetch: traycerSubscription.query.refetch,
-        }}
-        activeTab={resolvedTab}
-        onSelect={setActiveTab}
-        onClose={onClose}
-      />
-      <div className="min-h-0 min-w-0 overflow-y-auto p-3">
-        {resolvedTab === "overview" ? (
-          <RateLimitOverview
-            railTabs={railTabs}
-            providers={providers}
-            profileSelection={profileSelection}
-          />
-        ) : (
-          <RateLimitDetailPane
-            tab={resolvedTab}
-            providers={providers}
-            profileSelection={profileSelection}
-          />
-        )}
+      {header}
+      {/* The rail/detail grid, now a row of the surface's flex column rather
+          than the surface itself, so the host picker can head both panes.
+          `minmax(0,1fr)` still pins this row to the surface's height and both
+          columns keep their own `min-h-0` + `overflow-y-auto` scrolling. */}
+      <div
+        data-testid="rate-limit-popover-panes"
+        className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+      >
+        <RateLimitRail
+          displayedHostId={displayedHostId}
+          railTabs={railTabs}
+          providers={providers}
+          traycerRefreshTarget={{
+            enabled: traycerSubscription.eligible,
+            rateLimitAccountContexts:
+              traycerSubscription.rateLimitAccountContexts,
+            isFetching: traycerSubscription.query.isFetching,
+            refetch: traycerSubscription.query.refetch,
+          }}
+          activeTab={resolvedTab}
+          onSelect={setActiveTab}
+          onClose={onClose}
+        />
+        <div className="min-h-0 min-w-0 overflow-y-auto p-3">
+          {resolvedTab === "overview" ? (
+            <RateLimitOverview
+              railTabs={railTabs}
+              providers={providers}
+              profileSelection={profileSelection}
+              openOpenCodeModelProviders={openOpenCodeModelProviders}
+            />
+          ) : (
+            <RateLimitDetailPane
+              tab={resolvedTab}
+              providers={providers}
+              profileSelection={profileSelection}
+              openOpenCodeModelProviders={openOpenCodeModelProviders}
+            />
+          )}
+        </div>
       </div>
     </RateLimitPopoverResizeSurface>
+  );
+}
+
+/**
+ * The host row above the rail: which machine's usage the whole surface is
+ * reporting. It heads the rail + detail grid rather than sitting inside either
+ * one, because it scopes BOTH - a picker in the detail pane would read as
+ * scoping only the provider whose tab happens to be open, and the 3rem rail
+ * has no room to say a host's name at all.
+ *
+ * `HostSwitcher` is Settings' picker, reused rather than re-skinned. The two
+ * surfaces answer different questions (administer vs. watch) but the rows
+ * answer the same one - which machine is this, can I reach it, which one is
+ * active - and a second picker over one concept is how two vocabularies for it
+ * start.
+ */
+function RateLimitHostPickerRow({
+  scope,
+  onClose,
+}: {
+  readonly scope: HostScope;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { openSettings } = useSystemTabModalActions();
+  // The registry list this picker renders is served by a NON-polling observer;
+  // the Settings sidebar is normally the surface that opts the window into the
+  // liveness poll. When this popover is the only host-list surface mounted, a
+  // row would otherwise keep an Online dot from the last registry DTO until
+  // something else happened to refetch - so this picker carries the same
+  // opt-in for exactly as long as it is on screen.
+  useRegisteredHostsPollLiveness();
+  return (
+    // Full-bleed on purpose: the strip's own edges ARE the card's, so the
+    // picker's list can drop from it at exactly the card's width. Padding here
+    // would inset the trigger, and with it the list anchored to the trigger,
+    // leaving a few pixels of card showing down both sides of the open list —
+    // the nested-panel look this row is meant to avoid.
+    <div
+      className="flex shrink-0 items-center border-b"
+      data-testid="rate-limit-host-picker-row"
+    >
+      <HostSwitcher
+        hosts={scope.hosts}
+        selected={scope.host}
+        activeHostId={scope.activeHostId}
+        onSelect={scope.setHostId}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        // Managing hosts — adding, renaming, updating, removing — is Settings'
+        // job, with its own dialogs and failure states; this popover reports
+        // usage. So the list ends in the same gear the model picker offers for
+        // provider settings: one link to where that work already lives, rather
+        // than a second copy of one verb from it.
+        action={{
+          kind: "manage-hosts",
+          onSelect: () => {
+            onClose();
+            // The displayed host travels with the jump - one rule, one
+            // implementation, shared with the provider CTAs.
+            carryViewedHostIntoSettingsScope(scope.hostId);
+            openSettings({ section: "host", resetToGeneral: false });
+          },
+        }}
+        surface="panel-header"
+        intent="view"
+        disabled={false}
+        isLoading={scope.isLoading}
+        listsFailed={scope.listsFailed}
+        onRetryLists={scope.retryLists}
+      />
+    </div>
+  );
+}
+
+/**
+ * Why this surface is showing nothing rather than showing the active host's
+ * numbers under another host's name. Each branch names the remedy it has,
+ * because the three states differ in exactly that: `vanished` needs the pick
+ * dropped, `unreachable` needs the machine back, `connecting` needs a moment.
+ */
+function RateLimitHostUnavailableNotice({
+  scope,
+}: {
+  readonly scope: HostScope;
+}): ReactNode {
+  if (scope.status === "connecting") {
+    return (
+      <span
+        className="flex items-center gap-2 text-ui-sm text-muted-foreground"
+        data-testid="rate-limit-host-connecting"
+      >
+        <MutedAgentSpinner />
+        Finding {scope.hostLabel}…
+      </span>
+    );
+  }
+  return (
+    <div
+      role="status"
+      className="flex max-w-[40ch] flex-col items-center gap-2 text-center"
+      data-testid="rate-limit-host-unavailable"
+    >
+      <p className="text-ui-sm font-medium text-foreground">
+        {scope.status === "vanished"
+          ? `${scope.hostLabel} is no longer connected`
+          : `Can't reach ${scope.hostLabel}`}
+      </p>
+      <p className="text-ui-sm text-muted-foreground">
+        {scope.status === "vanished"
+          ? "It was removed or signed out, so its usage limits can't be read."
+          : "Provider usage limits are read from the host itself, so they're unavailable while it's offline."}
+      </p>
+      <button
+        type="button"
+        onClick={scope.returnToActive}
+        className="rounded-md px-1 py-0.5 text-ui-sm text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        data-testid="rate-limit-host-return-to-active"
+      >
+        Show the active host
+      </button>
+    </div>
   );
 }
 
@@ -445,10 +1024,12 @@ function RateLimitDetailPane({
   tab,
   providers,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly tab: Exclude<RateLimitPopoverTab, "overview">;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   return tab === "traycer" ? (
     <TraycerRateLimitBlock variant="popover-detail" onReady={null} />
@@ -456,9 +1037,11 @@ function RateLimitDetailPane({
     <RateLimitProviderBlock
       providerId={tab}
       profiles={configuredProviderProfiles(providers, tab)}
+      fetchEligibility={providerFetchEligibility(providers, tab)}
       variant="popover-detail"
       onReady={null}
       profileSelection={profileSelection}
+      openOpenCodeModelProviders={openOpenCodeModelProviders}
     />
   );
 }
@@ -479,7 +1062,9 @@ function RateLimitRail({
   activeTab,
   onSelect,
   onClose,
+  displayedHostId,
 }: {
+  readonly displayedHostId: string | null;
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
@@ -490,10 +1075,11 @@ function RateLimitRail({
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
+    carryViewedHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex min-h-0 flex-col items-center border-r bg-muted/20 p-1.5">
+    <div className="flex min-h-0 flex-col items-center border-r bg-foreground/3 p-1.5">
       <div
         role="tablist"
         aria-label="Usage limit providers"
@@ -537,15 +1123,21 @@ function RateLimitRail({
         providers={providers}
         traycerRefreshTarget={traycerRefreshTarget}
       />
-      <button
-        type="button"
-        aria-label="Provider settings"
-        title="Provider settings"
-        onClick={openProviderSettings}
-        className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+      <TooltipWrapper
+        label="Provider settings"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <Settings className="size-4" />
-      </button>
+        <button
+          type="button"
+          aria-label="Provider settings"
+          onClick={openProviderSettings}
+          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Settings className="size-4" />
+        </button>
+      </TooltipWrapper>
     </div>
   );
 }
@@ -568,7 +1160,6 @@ function RailTab({
         role="tab"
         aria-selected={selected}
         aria-label={label}
-        title={label}
         onClick={onSelect}
         className={cn(
           "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -607,10 +1198,12 @@ function RateLimitOverview({
   railTabs,
   providers,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   const [readyKeys, setReadyKeys] = useState<ReadonlySet<string>>(new Set());
   const markReady = useCallback((key: string) => {
@@ -652,9 +1245,14 @@ function RateLimitOverview({
               <RateLimitProviderBlock
                 providerId={tab.providerId}
                 profiles={configuredProviderProfiles(providers, tab.providerId)}
+                fetchEligibility={providerFetchEligibility(
+                  providers,
+                  tab.providerId,
+                )}
                 variant="popover-overview"
                 onReady={onReady}
                 profileSelection={profileSelection}
+                openOpenCodeModelProviders={openOpenCodeModelProviders}
               />
             )}
           </div>
@@ -725,8 +1323,8 @@ function useTraycerRateLimitUsageState(
  * subscription query, and rate-limit based plans additionally invalidate the
  * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
  * bar.
- * `refreshing` combines all lanes' real query state - the queue's draining flag
- * for ephemeralProcess (which stays true until every profile in the batch has
+ * `refreshing` combines all lanes' real query state - this button's OWN
+ * ephemeral targets (which stay pending until every profile in the batch has
  * settled, even after one provider's own `isFetching` clears), each configured
  * httpFetch provider's own
  * `isFetching` (read via `useHostQueries` against the exact same query keys the
@@ -742,10 +1340,14 @@ function RateLimitRefreshAllButton({
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
 }): ReactNode {
-  const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const client = useHostClient();
+  // The ephemeral lane's app-shell default is configured to the app-wide host,
+  // so the unscoped `enqueueRateLimitFetchBatch` would refresh a machine this
+  // popover may not be showing. This scope is derived from the same context
+  // binding as `hostId` and `client` above, so all three name one host.
+  const queueScope = useRateLimitQueueScope();
   const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
     traycerRefreshTarget.rateLimitAccountContexts,
   );
@@ -780,8 +1382,11 @@ function RateLimitRefreshAllButton({
   const httpFetchOptions =
     httpFetchProviders.length === 0
       ? null
-      : providerRateLimitQueryOptions(httpFetchProviders[0].providerId, null)
-          .options;
+      : providerRateLimitQueryOptions(
+          httpFetchProviders[0].providerId,
+          null,
+          true,
+        ).options;
   const httpFetchQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
@@ -793,19 +1398,30 @@ function RateLimitRefreshAllButton({
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
         target.profileId,
+        true,
       );
       return { method, params };
     }),
     options: httpFetchOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
+  // The ephemeral half of "Refresh all" is scoped to the targets this button
+  // actually enqueues, not the whole lane, so a background sweep of a provider
+  // this popover isn't showing can no longer disable it.
+  const ephemeralProcessFetching = useAnyRateLimitQueueTargetFetching(
+    ephemeralProcessRequests,
+  );
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
     (traycerRefreshTarget.isFetching || traycerRateLimitUsageState.isFetching);
   const refreshing =
-    draining ||
+    ephemeralProcessFetching ||
     httpFetchQueries.some((query) => query.isFetching) ||
     traycerRefreshing;
+  const hasRefreshTarget =
+    httpFetchRequests.length > 0 ||
+    ephemeralProcessRequests.length > 0 ||
+    traycerRefreshTarget.enabled;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
   // direct invalidation, ephemeralProcess profiles fan out inside one queued
@@ -826,7 +1442,13 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    void enqueueRateLimitFetchBatch(ephemeralProcessRequests, { force: true });
+    void enqueueRateLimitFetchBatchForScope(
+      queueScope,
+      ephemeralProcessRequests,
+      {
+        force: true,
+      },
+    );
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -843,6 +1465,8 @@ function RateLimitRefreshAllButton({
     }
     return Promise.resolve();
   };
+
+  if (!hasRefreshTarget) return null;
 
   return (
     <RefreshIconButton
@@ -880,24 +1504,30 @@ type PopoverBlockVariant = "popover-detail" | "popover-overview";
 function RateLimitProviderBlock({
   providerId,
   profiles,
+  fetchEligibility,
   variant,
   onReady,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   if (profiles.length > 0) {
     return (
       <ProfileRateLimitProviderBlock
         providerId={providerId}
         profiles={profiles}
+        fetchEligibility={fetchEligibility}
         variant={variant}
         onReady={onReady}
         profileSelection={profileSelection}
+        openOpenCodeModelProviders={openOpenCodeModelProviders}
       />
     );
   }
@@ -905,58 +1535,98 @@ function RateLimitProviderBlock({
   return (
     <SingleProfileRateLimitProviderBlock
       providerId={providerId}
+      fetchEligible={fetchEligibility.ambient}
       variant={variant}
       onReady={onReady}
+      openOpenCodeModelProviders={openOpenCodeModelProviders}
     />
   );
 }
 
 function SingleProfileRateLimitProviderBlock({
   providerId,
+  fetchEligible,
   variant,
   onReady,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
+  readonly fetchEligible: boolean;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
-  const query = useHostProviderRateLimitsQuery(providerId, null);
+  const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
+  const targetPhase = useRateLimitQueueTargetPhase(providerId, null);
+  // Only this lane's reads are owned by the serial queue, so only they have a
+  // follow-up standing behind a read we stopped waiting for.
+  const queueOwned = rateLimitFetchLane(providerId) === "ephemeralProcess";
+  // ...and that follow-up is a single delayed attempt, so once it is spent this
+  // read has nothing left coming for it and must report rather than keep
+  // vouching for the cached reading.
+  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
+    providerId,
+    null,
+  );
+  const targetFetching = queueOwned
+    ? targetPhase === "fetching"
+    : query.isFetching;
   // Single source of truth for this provider's refresh action + spinner state
-  // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
+  // (fresh-on-open, queue routing, and this target's own queue-phase fold-in),
   // shared verbatim with the Settings card so they can't drift apart.
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId: null,
     usageUpdatedAt: null,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
+    fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
   });
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
-    isFetching: isRefreshing,
-    isError: query.isError,
+    isFetching: targetFetching,
+    isError: isRateLimitQueryFailure({
+      isError: query.isError,
+      error: query.error,
+      queueOwned,
+      followUpExhausted,
+    }),
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
+  const signedOutWithoutUsage = isSignedOutWithoutCachedUsage(
+    fetchEligible,
+    query.data,
+  );
   const updatedAt =
     state.kind === "ready"
       ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
       : query.dataUpdatedAt;
   useEffect(() => {
-    if (state.kind !== "cold" && onReady !== null) onReady();
-  }, [state.kind, onReady]);
+    // A disabled query with no cache stays pending forever by design: it is a
+    // passive observer for a signed-out provider, not a queue-owned cold
+    // read. Reveal that provider in Overview so its unavailable state cannot
+    // remain hidden behind the global loading indicator.
+    if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
+      onReady();
+    }
+  }, [fetchEligible, onReady, state.kind]);
 
   // Chip next to the name, single-provider tab only (Overview stays
   // condensed - same scoping the plan/tier line used before it moved into
   // this header). `null` for a provider that doesn't report a plan/tier
   // (`resolveProviderPlanLabel`), so no chip renders for e.g. OpenRouter.
-  const planLabel =
-    variant === "popover-detail" && state.kind === "ready"
-      ? resolveProviderPlanLabel(state.data)
-      : null;
+  const planLabel = resolveSingleProfilePlanLabel(variant, state);
 
   return (
-    <div className="flex flex-col gap-2">
+    // Ambient (profile-less) providers - grok, openrouter, kilocode - reuse the
+    // exact per-profile card container `RateLimitProviderProfileRow` gives
+    // codex/claude, so every provider's usage sits inside the same card in both
+    // popover tabs (the header+body flat block otherwise floated loose against
+    // the sibling cards - the design-language gap the user flagged). Overview
+    // keeps its between-provider dividers; this cards each block's own content.
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {/* Overview stacks every provider's block in one scrollable list with
@@ -979,7 +1649,8 @@ function SingleProfileRateLimitProviderBlock({
           <UsageLimitUpdatedLabel
             ready={state.kind === "ready"}
             updatedAt={updatedAt}
-            refreshing={isRefreshing}
+            refreshing={targetFetching}
+            queued={targetPhase === "queued"}
             degraded={state.kind === "ready" && state.degraded}
             degradedReason={
               state.kind === "ready" ? state.degradedReason : null
@@ -988,20 +1659,29 @@ function SingleProfileRateLimitProviderBlock({
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback:
               a per-provider icon there was redundant); only the single-provider
               detail tab keeps this one. */}
-          {variant === "popover-detail" ? (
+          {variant === "popover-detail" && fetchEligible ? (
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
               // `isRefreshing` (from useProviderRateLimitRefresh) already folds
-              // in the ephemeralProcess `draining` flag, so this button stays
-              // disabled for a "Refresh all" round's full duration, not just
-              // this provider's own fetch.
+              // in THIS target's own queue phase, so the button reflects its own
+              // pull from the moment it is enqueued - and stays live while an
+              // unrelated provider's sweep runs.
               refreshing={isRefreshing}
             />
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} profileId={null} />
+      {signedOutWithoutUsage ? (
+        <SignedOutRateLimitMessage />
+      ) : (
+        <RateLimitProviderBody
+          state={state}
+          variant={variant}
+          profileId={null}
+          openModelProvidersAction={openOpenCodeModelProviders}
+        />
+      )}
     </div>
   );
 }
@@ -1009,65 +1689,125 @@ function SingleProfileRateLimitProviderBlock({
 function ProfileRateLimitProviderBlock({
   providerId,
   profiles,
+  fetchEligibility,
   variant,
   onReady,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
-  const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
-  const hostId = useReactiveActiveHostId();
+  // Same reason as `RateLimitRefreshAllButton`'s: this provider's own refresh
+  // must reach the host whose numbers it is redrawing, not the app-wide one.
+  const queueScope = useRateLimitQueueScope();
+  const hostId = useAddressableHostId();
   const client = useHostClient();
+  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+    client,
+    providerId,
+  );
+  const profileEnablementPending = useProviderProfileEnablementPending(
+    client,
+    providerId,
+  );
+  const profileEnablementAvailable = profiles.some(
+    (profile) => profile.kind === "managed",
+  );
   const activeProfileId = resolveRateLimitProfileId(
     profileSelection,
     providerId,
     profiles,
   );
-  const rows = profiles.filter(profileLoggedInForUsage);
-  const targets = rows.map((profile) => ({
+  const targets = profiles.map((profile) => ({
     profile,
     profileId: rateLimitProfileId(profile),
+    fetchEligible: isRateLimitProfileFetchEligible(fetchEligibility, profile),
   }));
-  const queryOptions = providerRateLimitQueryOptions(providerId, null).options;
-  const queries = useHostQueriesWithResponseMap<
+  const refreshEligibleTargets = targets.filter(
+    (target) => target.fetchEligible,
+  );
+  const passiveTargets = targets.filter((target) => !target.fetchEligible);
+  const fetchEligibleQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
     ProviderRateLimitEnvelope
   >({
     client,
-    requests: targets.map((target) => {
+    requests: refreshEligibleTargets.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         providerId,
         target.profileId,
+        true,
       );
       return { method, params };
     }),
     cacheKeyIdentity: undefined,
-    options: queryOptions,
+    options: providerRateLimitQueryOptions(providerId, null, true).options,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
+  const passiveQueries = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
+    client,
+    requests: passiveTargets.map((target) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        providerId,
+        target.profileId,
+        false,
+      );
+      return { method, params };
+    }),
+    cacheKeyIdentity: undefined,
+    options: providerRateLimitQueryOptions(providerId, null, false).options,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const queries = targets.map((target) => {
+    const index = target.fetchEligible
+      ? refreshEligibleTargets.indexOf(target)
+      : passiveTargets.indexOf(target);
+    return target.fetchEligible
+      ? fetchEligibleQueries[index]
+      : passiveQueries[index];
+  });
   const lane = rateLimitFetchLane(providerId);
+  // This provider's OWN queue entries, never the lane-wide draining flag: the
+  // button both disables and no-ops on this value, so a lane-wide gate made an
+  // unrelated provider's background sweep turn this control off.
+  const anyOwnTargetFetching = useAnyRateLimitQueueTargetFetching(
+    refreshEligibleTargets.map((target) => ({
+      providerId,
+      profileId: target.profileId,
+    })),
+  );
   const isRefreshing =
     lane === "ephemeralProcess"
-      ? draining
-      : queries.some((query) => query.isFetching);
+      ? anyOwnTargetFetching ||
+        fetchEligibleQueries.some((query) => query.isFetching)
+      : fetchEligibleQueries.some((query) => query.isFetching);
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      targets.forEach((target) => {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: true,
+      void enqueueRateLimitFetchBatchForScope(
+        queueScope,
+        refreshEligibleTargets.map((target) => ({
+          providerId,
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId: target.profileId,
-        });
-      });
+        })),
+        { force: true },
+      );
       return Promise.resolve();
     }
-    targets.forEach((target) => {
+    refreshEligibleTargets.forEach((target) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
@@ -1087,23 +1827,6 @@ function ProfileRateLimitProviderBlock({
     if (onReady !== null) onReady();
   }, [onReady]);
 
-  if (rows.length === 0) {
-    return (
-      <div className="flex flex-col gap-2">
-        <ProviderGroupHeader
-          providerId={providerId}
-          variant={variant}
-          refresh={refresh}
-          isRefreshing={isRefreshing}
-        />
-        <RateLimitErrorMessage
-          message="No logged-in profiles."
-          reportContext={null}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-2">
       <ProviderGroupHeader
@@ -1111,6 +1834,7 @@ function ProfileRateLimitProviderBlock({
         variant={variant}
         refresh={refresh}
         isRefreshing={isRefreshing}
+        refreshEligible={refreshEligibleTargets.length > 0}
       />
       <div className="flex flex-col gap-2">
         {targets.map((target, index) => {
@@ -1120,9 +1844,27 @@ function ProfileRateLimitProviderBlock({
               providerId={providerId}
               profile={target.profile}
               profileId={target.profileId}
+              fetchEligible={target.fetchEligible}
               active={activeProfileId === target.profileId}
               variant={variant}
               query={queries[index]}
+              openOpenCodeModelProviders={openOpenCodeModelProviders}
+              profileEnablementAvailable={profileEnablementAvailable}
+              profileEnablementPending={profileEnablementPending(
+                target.profileId,
+              )}
+              profileEnablementDisabledReason={profileEligibilityToggleDisabledReason(
+                true,
+                target.profile,
+                profiles,
+              )}
+              onSetProfileEnabled={(enabled) =>
+                setProfileEnabled.mutate({
+                  providerId,
+                  profileId: target.profile.profileId,
+                  enabled,
+                })
+              }
             />
           );
         })}
@@ -1136,11 +1878,13 @@ function ProviderGroupHeader({
   variant,
   refresh,
   isRefreshing,
+  refreshEligible,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly variant: PopoverBlockVariant;
   readonly refresh: () => Promise<void>;
   readonly isRefreshing: boolean;
+  readonly refreshEligible: boolean;
 }): ReactNode {
   return (
     <div className="flex min-w-0 items-center justify-between gap-2">
@@ -1152,7 +1896,7 @@ function ProviderGroupHeader({
           {providerDisplayName(providerId)}
         </span>
       </div>
-      {variant === "popover-detail" ? (
+      {variant === "popover-detail" && refreshEligible ? (
         <RefreshIconButton
           onRefresh={refresh}
           label={`Refresh ${providerDisplayName(providerId)}`}
@@ -1163,93 +1907,260 @@ function ProviderGroupHeader({
   );
 }
 
+function RateLimitProviderProfileUsageMessage({
+  disabledWithoutUsage,
+  signedOutWithoutUsage,
+  state,
+  variant,
+  profileId,
+  openOpenCodeModelProviders,
+}: {
+  readonly disabledWithoutUsage: boolean;
+  readonly signedOutWithoutUsage: boolean;
+  readonly state: PopoverProviderRateLimitState;
+  readonly variant: PopoverBlockVariant;
+  readonly profileId: string | null;
+  readonly openOpenCodeModelProviders: () => void;
+}): ReactNode {
+  if (disabledWithoutUsage) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">
+        Refresh to check usage without enabling this profile.
+      </p>
+    );
+  }
+  if (signedOutWithoutUsage) return <SignedOutRateLimitMessage />;
+  return (
+    <RateLimitProviderBody
+      state={state}
+      variant={variant}
+      profileId={profileId}
+      openModelProvidersAction={openOpenCodeModelProviders}
+    />
+  );
+}
+
+function RateLimitProviderProfileActions({
+  profile,
+  refresh,
+  refreshing,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  profileEnablementDisabledReason,
+  onSetProfileEnabled,
+}: {
+  readonly profile: ProviderProfile;
+  readonly refresh: () => Promise<void>;
+  readonly refreshing: boolean;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: boolean;
+  readonly profileEnablementDisabledReason: string | null;
+  readonly onSetProfileEnabled: (enabled: boolean) => void;
+}): ReactNode {
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {!profile.enabled ? (
+        <RefreshIconButton
+          onRefresh={refresh}
+          label={`Refresh ${profileDisplayLabel(profile)} status and usage limits`}
+          refreshing={refreshing}
+          className="size-7"
+        />
+      ) : null}
+      {profileEnablementAvailable ? (
+        <TooltipWrapper
+          label={profileEnablementTooltipText(
+            profile.enabled,
+            profileEnablementDisabledReason,
+          )}
+          side="left"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span className="mt-0.5 inline-flex shrink-0">
+            <Switch
+              aria-label={`Allow agents to use ${profileDisplayLabel(profile)}`}
+              checked={profile.enabled}
+              disabled={profileEnablementPending}
+              aria-disabled={
+                profileEnablementDisabledReason !== null || undefined
+              }
+              className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
+              onCheckedChange={(enabled) => {
+                if (profileEnablementDisabledReason !== null) return;
+                onSetProfileEnabled(enabled);
+              }}
+            />
+          </span>
+        </TooltipWrapper>
+      ) : null}
+    </div>
+  );
+}
+
 function RateLimitProviderProfileRow({
   providerId,
   profile,
   profileId,
+  fetchEligible,
   active,
   variant,
   query,
+  openOpenCodeModelProviders,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  profileEnablementDisabledReason,
+  onSetProfileEnabled,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
+  readonly fetchEligible: boolean;
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
+  readonly openOpenCodeModelProviders: () => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: boolean;
+  readonly profileEnablementDisabledReason: string | null;
+  readonly onSetProfileEnabled: (enabled: boolean) => void;
   readonly query: {
     readonly isPending: boolean;
     readonly isFetching: boolean;
     readonly isError: boolean;
+    // Carried so this row can tell a real failure from a read we merely
+    // stopped waiting for (`isRateLimitQueryFailure`).
+    readonly error: unknown;
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
-  useRefreshProviderRateLimitsOnMount(
+  const client = useHostClient();
+  const refreshProfileStatus =
+    useProvidersRefreshProfileStatusForClient(client);
+  const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
+  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
     providerId,
     profileId,
-    profile.usageUpdatedAt,
   );
+  useRefreshProviderRateLimitsOnMount({
+    providerId,
+    profileId,
+    usageUpdatedAt: profile.usageUpdatedAt,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
+    fetchEligible,
+    refetch: null,
+  });
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,
-    isError: query.isError,
+    isError: isRateLimitQueryFailure({
+      isError: query.isError,
+      error: query.error,
+      queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+      followUpExhausted,
+    }),
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
-  const dataPlanLabel =
-    state.kind === "ready" ? resolveProviderPlanLabel(state.data) : null;
-  const profilePlanLabel =
-    profile.identity?.tier !== null && profile.identity?.tier !== undefined
-      ? profile.identity.tier
-      : null;
-  const planLabel =
-    profilePlanLabel !== null && profilePlanLabel.length > 0
-      ? profilePlanLabel
-      : dataPlanLabel;
+  const hasNoCachedUsage =
+    query.data === undefined || query.data.lastGood === null;
+  const signedOutWithoutUsage =
+    profile.auth.status === "unauthenticated" && hasNoCachedUsage;
+  const disabledWithoutUsage =
+    !profile.enabled && !signedOutWithoutUsage && hasNoCachedUsage;
+  const planLabel = resolveProfileRowPlanLabel(profile, state);
 
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2",
+        "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 transition-opacity duration-150",
         active && "border-primary/60 bg-primary/5",
+        !profile.enabled && "opacity-60",
       )}
       aria-current={active ? "true" : undefined}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <AccentDot
-              profileId={profile.profileId}
-              accentColor={profile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
-              {profileDisplayLabel(profile)}
-            </span>
-            {planLabel !== null ? (
-              <Badge variant="secondary" className="font-normal">
-                {planLabel}
-              </Badge>
-            ) : null}
-            {active ? (
-              <Badge variant="outline" className="font-normal">
-                Active
-              </Badge>
-            ) : null}
-          </div>
+          <RateLimitProviderProfileStatusBadges
+            profile={profile}
+            planLabel={planLabel}
+            active={active}
+          />
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={query.isFetching}
+            refreshing={
+              query.isFetching ||
+              targetPhase === "fetching" ||
+              refreshProfileStatus.isPending
+            }
+            queued={targetPhase === "queued"}
+            signedOut={signedOutWithoutUsage}
+            notChecked={disabledWithoutUsage}
           />
         </div>
+        <RateLimitProviderProfileActions
+          profile={profile}
+          refresh={async () => {
+            await refreshProfileStatus.mutateAsync({
+              providerId,
+              profileId: profile.profileId,
+            });
+          }}
+          refreshing={refreshProfileStatus.isPending}
+          profileEnablementAvailable={profileEnablementAvailable}
+          profileEnablementPending={profileEnablementPending}
+          profileEnablementDisabledReason={profileEnablementDisabledReason}
+          onSetProfileEnabled={onSetProfileEnabled}
+        />
       </div>
-      <RateLimitProviderBody
+      <RateLimitProviderProfileUsageMessage
+        disabledWithoutUsage={disabledWithoutUsage}
+        signedOutWithoutUsage={signedOutWithoutUsage}
         state={state}
         variant={variant}
         profileId={profileId}
+        openOpenCodeModelProviders={openOpenCodeModelProviders}
       />
+    </div>
+  );
+}
+
+function RateLimitProviderProfileStatusBadges({
+  profile,
+  planLabel,
+  active,
+}: {
+  readonly profile: ProviderProfile;
+  readonly planLabel: string | null;
+  readonly active: boolean;
+}): ReactNode {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <AccentDot
+        profileId={profile.profileId}
+        accentColor={profile.accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+        {profileDisplayLabel(profile)}
+      </span>
+      {planLabel !== null ? (
+        <Badge variant="secondary" className="font-normal">
+          {planLabel}
+        </Badge>
+      ) : null}
+      {active ? (
+        <Badge variant="outline" className="font-normal">
+          Active
+        </Badge>
+      ) : null}
+      {!profile.enabled ? (
+        <Badge variant="outline" className="font-normal">
+          Disabled
+        </Badge>
+      ) : null}
     </div>
   );
 }
@@ -1257,13 +2168,30 @@ function RateLimitProviderProfileRow({
 function ProfileUsageUpdatedLabel({
   updatedAt,
   refreshing,
+  queued,
+  signedOut,
+  notChecked,
 }: {
   readonly updatedAt: number | null;
   readonly refreshing: boolean;
+  readonly queued: boolean;
+  readonly signedOut: boolean;
+  readonly notChecked: boolean;
 }): ReactNode {
   const now = useSampledNow();
   const ago = useRelativeTimestamp(updatedAt ?? 0);
+  if (queued) {
+    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
+  }
   if (refreshing) return <RefreshingText />;
+  if (signedOut) {
+    return <span className="text-ui-xs text-muted-foreground">signed out</span>;
+  }
+  if (notChecked) {
+    return (
+      <span className="text-ui-xs text-muted-foreground">not checked</span>
+    );
+  }
   if (updatedAt === null) {
     return <span className="text-ui-xs text-muted-foreground">stale</span>;
   }
@@ -1286,15 +2214,20 @@ function UsageLimitUpdatedLabel({
   ready,
   updatedAt,
   refreshing,
+  queued,
   degraded,
   degradedReason,
 }: {
   readonly ready: boolean;
   readonly updatedAt: number;
   readonly refreshing: boolean;
+  readonly queued: boolean;
   readonly degraded: boolean;
   readonly degradedReason: RateLimitUnavailableReason | null;
 }): ReactNode {
+  if (queued) {
+    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
+  }
   if (!ready) return null;
   if (refreshing) return <RefreshingText />;
   if (updatedAt === 0) return null;
@@ -1360,10 +2293,12 @@ function RateLimitProviderBody({
   state,
   variant,
   profileId,
+  openModelProvidersAction,
 }: {
   readonly state: PopoverProviderRateLimitState;
   readonly variant: PopoverBlockVariant;
   readonly profileId: string | null;
+  readonly openModelProvidersAction: () => void;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
@@ -1382,15 +2317,21 @@ function RateLimitProviderBody({
       );
     case "unavailable":
       return (
-        <RateLimitErrorMessage
-          message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
-          reportContext={createReportIssueContext({
-            title: "Usage limits unavailable",
-            message: null,
-            code: null,
-            source: "Usage limits",
-          })}
-        />
+        <div className="flex flex-col items-start gap-1.5">
+          <RateLimitErrorMessage
+            message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
+            reportContext={createReportIssueContext({
+              title: "Usage limits unavailable",
+              message: null,
+              code: null,
+              source: "Usage limits",
+            })}
+          />
+          {state.provider === "opencode" &&
+          state.reason === "insufficient_permissions" ? (
+            <OpenModelProvidersButton onClick={openModelProvidersAction} />
+          ) : null}
+        </div>
       );
     case "ready":
       // Degraded (stale, latest poll failed): dim the reading in place rather
@@ -1411,6 +2352,47 @@ function RateLimitProviderBody({
   }
 }
 
+function isSignedOutWithoutCachedUsage(
+  fetchEligible: boolean,
+  envelope: ProviderRateLimitEnvelope | undefined,
+): boolean {
+  return (
+    !fetchEligible && (envelope === undefined || envelope.lastGood === null)
+  );
+}
+
+function resolveSingleProfilePlanLabel(
+  variant: PopoverBlockVariant,
+  state: PopoverProviderRateLimitState,
+): string | null {
+  return variant === "popover-detail" && state.kind === "ready"
+    ? resolveProviderPlanLabel(state.data)
+    : null;
+}
+
+function resolveProfileRowPlanLabel(
+  profile: ProviderProfile,
+  state: PopoverProviderRateLimitState,
+): string | null {
+  const profilePlanLabel =
+    profile.identity?.tier !== null && profile.identity?.tier !== undefined
+      ? profile.identity.tier
+      : null;
+  const dataPlanLabel =
+    state.kind === "ready" ? resolveProviderPlanLabel(state.data) : null;
+  return profilePlanLabel !== null && profilePlanLabel.length > 0
+    ? profilePlanLabel
+    : dataPlanLabel;
+}
+
+function SignedOutRateLimitMessage(): ReactNode {
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      Signed out — sign in to refresh usage.
+    </p>
+  );
+}
+
 /**
  * The synthetic "Traycer" block - the GUI-sourced analogue of
  * `RateLimitProviderBlock`. Its data is the signed-in user's subscription
@@ -1426,6 +2408,21 @@ function RateLimitProviderBody({
  * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
  * `null` on the single-provider detail tab.
  */
+/**
+ * The account-scoped Usage half for a popover whose host-scoped half cannot
+ * render: eligible Traycer Inference usage, framed like a pane. Returns null
+ * for ineligible accounts, so the caller mounts it unconditionally.
+ */
+function UnscopedTraycerUsage(): ReactNode {
+  const traycerSubscription = useTraycerSubscription();
+  if (!traycerSubscription.eligible) return null;
+  return (
+    <div className="w-full max-w-full rounded-md border border-border/60 bg-foreground/3 p-3">
+      <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
+    </div>
+  );
+}
+
 function TraycerRateLimitBlock({
   variant,
   onReady,
@@ -1436,7 +2433,7 @@ function TraycerRateLimitBlock({
   const traycerSubscription = useTraycerSubscription();
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
   const queryClient = useQueryClient();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const state = resolveTraycerSubscriptionState({
     isPending: traycerSubscription.query.isPending,
     isError: traycerSubscription.query.isError,
@@ -1598,6 +2595,9 @@ function TraycerAccountCards({
                   rateLimitUpdatedAtByAccount.get(account.key) ?? updatedAt
                 }
                 refreshing={refreshing}
+                queued={false}
+                signedOut={false}
+                notChecked={false}
               />
             </div>
             <TraycerSubscriptionView
@@ -1682,12 +2682,10 @@ function RateLimitErrorMessage({
  * the eventual window layout, not a spinner replacing the panel (Core Flows -
  * a deliberate difference from the Settings card's spinner).
  *
- * Each block overrides `Skeleton`'s default `bg-muted` fill with
- * `bg-foreground/15`, same reasoning as `MeterRow`'s track: several dark
- * theme presets set `--muted` equal to `--popover`, so a plain `bg-muted`
- * skeleton can end up the same color as the popover background and read as
- * an empty section instead of a loading one. An opacity overlay on
- * `--foreground` contrasts against any background without needing a border.
+ * The per-block `bg-foreground/15` overrides these carried are gone: the
+ * `Skeleton` primitive now defaults to a foreground-alpha fill for exactly
+ * the reason discovered here (see `ui/skeleton.tsx`), so the default is
+ * already correct on this popover.
  */
 function RateLimitDetailSkeleton(): ReactNode {
   return (
@@ -1698,10 +2696,10 @@ function RateLimitDetailSkeleton(): ReactNode {
       {[0, 1].map((row) => (
         <div key={row} className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <Skeleton className="h-3 w-16 bg-foreground/15" />
-            <Skeleton className="h-3 w-10 bg-foreground/15" />
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-10" />
           </div>
-          <Skeleton className="h-1.5 w-full rounded-full bg-foreground/15" />
+          <Skeleton className="h-1.5 w-full rounded-full" />
         </div>
       ))}
     </div>
@@ -1714,18 +2712,21 @@ function RateLimitDetailSkeleton(): ReactNode {
  */
 function RateLimitZeroState({
   onClose,
+  displayedHostId,
 }: {
   readonly onClose: () => void;
+  readonly displayedHostId: string | null;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
+    carryViewedHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
     <div className="flex h-full flex-col items-start gap-3">
       <p className="text-ui-sm text-muted-foreground">
-        Connect Claude Code or Codex to see usage here.
+        Connect a supported provider to see usage here.
       </p>
       <button
         type="button"

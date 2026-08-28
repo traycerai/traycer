@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { downgradeRequestAcrossMajors } from "@traycer/protocol/framework/index";
 import { agentListHarnessModelsDowngradeV2ToV1 } from "@traycer/protocol/host/agent/contracts";
 import {
+  guiHarnessIdSchema,
+  tuiHarnessIdSchema,
+} from "@traycer/protocol/host/agent/shared";
+import {
   agentSelectionGuideResponseSchema,
   createAgentRequestSchema,
   hostRpcRegistry,
@@ -16,6 +20,17 @@ import {
 } from "@traycer/protocol/host/index";
 
 describe("agent host schemas", () => {
+  it("retains Cursor in the TUI wire schema as a compatibility value", () => {
+    expect(guiHarnessIdSchema.safeParse("cursor").success).toBe(true);
+    expect(tuiHarnessIdSchema.safeParse("cursor").success).toBe(true);
+    expect(tuiHarnessIdSchema.options).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+      "cursor",
+    ]);
+  });
+
   it("accepts the agent.gui.listCommands request and response shapes", () => {
     expect(
       listGuiAgentCommandsRequestSchema.parse({
@@ -301,6 +316,68 @@ describe("agent host schemas", () => {
       caller: { agentId: "agent-1" },
       agents: [{ id: "agent-1", surface: "gui", isLocal: true }],
     });
+  });
+
+  it("accepts the live agent.list v7 runConfig shape", () => {
+    const response = listAgentsResponseSchema.parse({
+      caller: { agentId: "agent-1", canSendMessages: true },
+      scope: "user",
+      agents: [
+        {
+          id: "agent-1",
+          parentId: null,
+          hostId: "host-1",
+          isLocal: true,
+          surface: "gui",
+          harnessId: "codex",
+          isSelf: true,
+          title: null,
+          capabilities: { readTranscript: true, sendMessage: true },
+          active: false,
+          folderPaths: [],
+          isWorktree: false,
+          runConfig: {
+            model: { kind: "concrete", slug: "gpt-5.6-codex" },
+            reasoningEffort: "high",
+            fastMode: true,
+            profileSelection: { kind: "profile", profileId: "secret" },
+            provenance: { model: "explicit" },
+          },
+        },
+      ],
+    });
+
+    expect(response.agents[0].runConfig).toEqual({
+      model: { kind: "concrete", slug: "gpt-5.6-codex" },
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+  });
+
+  it("default-fills runConfig to null for a v7 host row without the field", () => {
+    const response = listAgentsResponseSchema.parse({
+      caller: { agentId: "agent-1", canSendMessages: true },
+      scope: "user",
+      agents: [
+        {
+          id: "agent-1",
+          parentId: null,
+          hostId: "host-1",
+          isLocal: true,
+          surface: "gui",
+          harnessId: "codex",
+          isSelf: true,
+          title: null,
+          capabilities: { readTranscript: true, sendMessage: true },
+          active: false,
+          folderPaths: [],
+          isWorktree: false,
+        },
+      ],
+    });
+
+    expect(response.agents[0].runConfig).toBeNull();
+    expect(response.agents[0]).toHaveProperty("runConfig", null);
   });
 
   it("accepts the agent selection/config response shapes", () => {

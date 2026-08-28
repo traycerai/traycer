@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -98,6 +97,10 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
 }));
 
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // `EpicSessionProvider` opens its own durable transport via this factory, but
 // the coordinator under test installs an `__setEpicStreamClientFactoryForTests`
 // override that short-circuits before `openTransport` runs - so a stable stub
@@ -114,8 +117,15 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST_ID,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => HOST_ID,
+}));
+
+// The Epic session resolves its host through the selection authority's derived
+// pointer (selection model §1), not the active-host projection above - seed the
+// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => HOST_ID,
 }));
 
 function CoordinatorOnly(props: {
@@ -167,6 +177,16 @@ function makeMeta(permissionRole: PermissionRole | null): SnapshotMetaEpic {
 }
 
 function registerPendingHandoff(): void {
+  registerPendingHandoffCreatedAt(Date.now());
+}
+
+/**
+ * `createdAt` is load-bearing: the coordinator gives up on a chat that never
+ * projects at `createdAt + CHAT_PROJECTION_DEADLINE_MS`. A live handoff is
+ * registered "now" so that deadline stays far outside every test below; the
+ * give-up path is exercised by registering one whose deadline already passed.
+ */
+function registerPendingHandoffCreatedAt(createdAt: number): void {
   useInitialChatHandoffStore.getState().register({
     ...HANDOFF_SCOPE,
     chatId: CHAT_ID,
@@ -176,7 +196,7 @@ function registerPendingHandoff(): void {
     placement: { kind: "active-tile" },
     messageId: "msg-test",
     clientActionId: "cai-test",
-    createdAt: 1,
+    createdAt,
   });
 }
 
@@ -311,8 +331,8 @@ describe("initial chat handoff route coordinator", () => {
           id: CHAT_ID,
           type: "chat",
           // No chat projected yet (projectedChatTitle null) → the node opens
-          // with the "Untitled chat" render fallback, never "New chat".
-          name: "Untitled chat",
+          // with the "Untitled agent" render fallback, never "New chat".
+          name: "Untitled agent",
           hostId: HOST_ID,
         }),
       );
@@ -449,6 +469,209 @@ describe("initial chat handoff route coordinator", () => {
       1,
     );
 
+    queryClient.clear();
+  });
+
+  it("stamps the seeded chat's tile with the host the handoff RECORD names, not the window's host", async () => {
+    // Codex #1243 T-46: the handoff's lookup key already ignores the host
+    // (`initialChatHandoffKey`), but the tile it opens is stamped with a
+    // separately-read host id and carries that binding for life. Read
+    // app-wide it stamped a chat created on the landing composer's PLACEMENT
+    // host (B, pinned) with whichever host the window had moved to (A). The
+    // record's `hostId` is where `epic.create` actually ran, so it wins.
+    //
+    // Discriminating fixture: every app-wide/effective read in this suite
+    // answers HOST_ID; only the record says "host-placement". A hook that
+    // stamps from any of those reads turns this red at the hostId assertion.
+    useInitialChatHandoffStore.getState().register({
+      ...HANDOFF_SCOPE,
+      hostId: "host-placement",
+      chatId: CHAT_ID,
+      content: HANDOFF_CONTENT,
+      settings: HANDOFF_SETTINGS,
+      worktreeIntent: null,
+      placement: { kind: "active-tile" },
+      messageId: "msg-test",
+      clientActionId: "cai-test",
+      createdAt: Date.now(),
+    });
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+        1,
+      );
+    });
+    const opened = canvasChatTabs().find((tab) => tab.id === CHAT_ID);
+    expect(opened?.hostId).toBe("host-placement");
+    expect(opened?.hostId).not.toBe(HOST_ID);
+
+    queryClient.clear();
+  });
+
+  it("gives up on a folded chat that never projects and releases its pending-create mark", async () => {
+    // A create that produced NO chat (a host that dropped the folded seed, or
+    // a create that failed after the tab was already eager-opened) leaves this
+    // tab around a chat id that exists on no host and in no cloud row. The
+    // pending-create mark is what exempts it from the record-liveness sweep in
+    // `use-epic-route-synchronization`, so without a deadline that tab is
+    // permanent - blank forever, with nothing to load into it.
+    registerPendingHandoffCreatedAt(Date.now() - 120_000);
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    // Owner snapshot, live connection, and NO chat in the projection: the
+    // epic is ready and the chat still is not there.
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null);
+      epicCallbacks.onSnapshot(
+        makeMeta("owner"),
+        Y.encodeStateAsUpdate(new Y.Doc()),
+      );
+    });
+
+    await waitFor(() => {
+      expect(handoffStatus()).toBe("failed");
+    });
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(false);
+    });
+    // The hook does not close tabs - releasing the mark is what hands the
+    // orphan back to the record-liveness sweep.
+    expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+      1,
+    );
+    expect(testState.request).not.toHaveBeenCalledWith(
+      "epic.createChat",
+      expect.anything(),
+    );
+    queryClient.clear();
+  });
+
+  it("does not fail a handoff that REPLACED the one whose deadline expired", async () => {
+    // A second create can re-register under the same {host,user,epic} scope in
+    // the gap between the store write and the deadline effect's cleanup - the
+    // timer callback is a macrotask, React's effect cleanup lands on commit.
+    // The scope-keyed `markFailed` would then kill the replacement's fresh,
+    // still-pending handoff. To pin that interleaving deterministically the
+    // epic mounts under REAL timers with the connection still closed (the
+    // deadline effect gates on `epicReady`, so nothing is armed yet), then the
+    // open transition arms the already-expired deadline under FAKE timers, and
+    // the replacement lands and the original deadline fires inside one act
+    // block - before any effect cleanup can run.
+    registerPendingHandoffCreatedAt(Date.now() - 120_000);
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    // Snapshot only - the connection stays closed so `epicReady` holds the
+    // deadline back while the session gate settles on real timers. The
+    // eager-open of the canvas tab has no readiness gate, so it doubles as the
+    // "coordinator is mounted and its effects ran" signal.
+    act(() => {
+      epicCallbacks.onSnapshot(
+        makeMeta("owner"),
+        Y.encodeStateAsUpdate(new Y.Doc()),
+      );
+    });
+    await waitFor(() => {
+      expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+        1,
+      );
+    });
+    expect(handoffStatus()).toBe("pending");
+
+    // Arm the expired deadline under fake timers: the open transition re-runs
+    // the deadline effect, which sees an already-passed deadline and arms a
+    // 0ms timer this test now controls.
+    vi.useFakeTimers();
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null);
+    });
+
+    act(() => {
+      useInitialChatHandoffStore.getState().register({
+        ...HANDOFF_SCOPE,
+        chatId: "host-chat-replacement",
+        content: HANDOFF_CONTENT,
+        settings: HANDOFF_SETTINGS,
+        worktreeIntent: null,
+        placement: { kind: "active-tile" },
+        messageId: "msg-replacement",
+        clientActionId: "cai-replacement",
+        createdAt: Date.now(),
+      });
+      // The original deadline fires AFTER the replacement landed but BEFORE
+      // React tore the stale effect down (cleanup flushes when act exits).
+      vi.runOnlyPendingTimers();
+    });
+
+    expect(
+      Object.values(useInitialChatHandoffStore.getState().handoffs).at(0),
+    ).toMatchObject({ status: "pending", chatId: "host-chat-replacement" });
+    queryClient.clear();
+  });
+
+  it("releases the pending-create mark when the handoff leaves this scope", async () => {
+    // The handoff can vanish from {host,user,epic} without ever going
+    // terminal - consumed elsewhere, signed-out user, active-host swap. The
+    // mark is this hook's to release; nobody else knows the tile is still
+    // exempt from the sweep.
+    registerPendingHandoff();
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null);
+      epicCallbacks.onSnapshot(
+        makeMeta("owner"),
+        Y.encodeStateAsUpdate(new Y.Doc()),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(true);
+    });
+
+    act(() => {
+      useInitialChatHandoffStore.getState().consume(HANDOFF_SCOPE);
+    });
+
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(false);
+    });
     queryClient.clear();
   });
 

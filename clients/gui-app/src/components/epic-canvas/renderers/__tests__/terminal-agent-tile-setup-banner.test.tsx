@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -28,7 +27,7 @@ vi.mock("@/lib/host", () => {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:1/rpc",
     version: null,
-    status: "available",
+    transportDialability: "dialable",
   };
   return {
     useHostBinding: () => null,
@@ -102,9 +101,17 @@ vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
   useAgentStartTerminalSession: () => mockPrepare,
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>

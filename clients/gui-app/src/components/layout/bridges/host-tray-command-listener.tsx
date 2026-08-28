@@ -1,37 +1,59 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
-  HostInstallResult,
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  BusyContinuation,
   HostTrayCommand,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
-import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { runnerQueryKeys } from "@/lib/query-keys";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
+import { activateTabIntent } from "@/lib/tab-navigation";
+import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
+import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
+import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
+import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
 import {
   Analytics,
   AnalyticsEvent,
   hostUpdateAnalyticsCallbacks,
 } from "@/lib/analytics";
 
+type TrayUpdateIntent = "apply" | "activate";
+
+interface TrayBusyState {
+  readonly intent: TrayUpdateIntent;
+  readonly continuation: BusyContinuation;
+  readonly message: string;
+}
+
 /**
  * NP-6: listens for host-scoped tray commands forwarded from the
  * Electron main process and dispatches them against the renderer:
  *   - openSettingsHost → navigate to /settings/host.
- *   - restartHost      → confirm with the user, then invoke
- *                          hostManagement.restartHost() and surface
- *                          success/error via toast.
+ *   - restartHost      → hand off to `LocalHostRestartFlow`: confirm, then
+ *                          attempt the claim-gated cooperative restart, and
+ *                          only offer the forced bridge respawn when the
+ *                          host refuses (busy) or cannot answer.
  *   - openLogs           → navigate to /settings/host (logs surface lives
  *                          inside the host panel) and open the legacy logs
  *                          dialog as a redundant entry point.
  *   - installUpdate      → confirm with the user (preview the version that
- *                          will be installed), then invoke
- *                          hostManagement.installHost() against the
- *                          registry-known version with toast feedback.
+ *                          will be installed), then submit `applyStaged` (a
+ *                          ready update) or `activateInstalled` (activation
+ *                          debt only) - whichever the canonical two-lane
+ *                          status is currently offering (update-over-debt
+ *                          priority) - with toast feedback. A busy outcome
+ *                          opens the shared Force/Defer dialog; any other
+ *                          non-`"ok"` outcome (incl. exhausted lock-retry) is
+ *                          this surface's own deferred-lock notification.
  *
  * Shells without a tray expose `hostTray: null` and this listener
  * is a no-op.
@@ -42,20 +64,17 @@ export function HostTrayCommandListener() {
   const openLogs = useDesktopDialogStore((state) => state.openLogs);
   const queryClient = useQueryClient();
   const management = runnerHost.hostManagement;
-  const service = runnerHost.service;
+  const { data: status, refetch: refetchStatus } =
+    useRunnerHostControllerStatusQuery();
   const [pendingRestart, setPendingRestart] = useState<boolean>(false);
   const [pendingInstallVersion, setPendingInstallVersion] = useState<
     string | null
   >(null);
+  const [busy, setBusy] = useState<TrayBusyState | null>(null);
   const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("system_tray");
 
   const invalidate = (): void => {
     if (management === null) return;
-    if (service !== null) {
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.serviceStatus(service),
-      });
-    }
     void queryClient.invalidateQueries({
       queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
     });
@@ -67,58 +86,72 @@ export function HostTrayCommandListener() {
     });
   };
 
-  const restartMutation = useMutation<void>({
-    mutationKey: runnerMutationKeys.hostRestart(),
-    mutationFn: () => {
-      if (management === null) {
-        return Promise.reject(new Error("Host management unavailable"));
-      }
-      return management.restartHost();
-    },
-    onSuccess: () => {
-      toast.success("Host restart requested");
-      setPendingRestart(false);
-      if (management !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostInstalledRecord(management),
-        });
-      }
-      invalidate();
-    },
-    onError: (err) => {
-      setPendingRestart(false);
-      toastFromRunnerError(err, "Couldn't restart host");
-    },
-  });
+  const applyStagedMutation = useRunnerApplyStaged();
+  const activateInstalledMutation = useRunnerActivateInstalled();
 
-  const installMutation = useMutation<HostInstallResult, Error, string>({
-    mutationKey: runnerMutationKeys.hostInstall(),
-    mutationFn: (version) => {
-      if (management === null) {
-        return Promise.reject(new Error("Host management unavailable"));
-      }
-      return management.installHost({ version, onProgress: null });
-    },
-    onMutate: () => {
-      hostUpdateAnalytics.onStarted();
-    },
-    onSuccess: (data) => {
+  const handleApplyOutcome = (
+    outcome: MutationOutcome<ApplyStagedOk>,
+  ): void => {
+    setPendingInstallVersion(null);
+    if (outcome.kind === "ok") {
       hostUpdateAnalytics.onSucceeded();
-      toast.success(`Installed host v${data.version}`);
-      setPendingInstallVersion(null);
-      if (management !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostInstalledRecord(management),
-        });
-      }
+      toast.success(`Updated host to v${outcome.value.appliedVersion}`);
+      setBusy(null);
       invalidate();
-    },
-    onError: (err) => {
-      hostUpdateAnalytics.onFailed(err);
-      setPendingInstallVersion(null);
-      toastFromRunnerError(err, "Couldn't install host update");
-    },
-  });
+      return;
+    }
+    if (outcome.kind === "busy") {
+      setBusy({
+        intent: "apply",
+        continuation: outcome.continuation,
+        message: outcome.message,
+      });
+      return;
+    }
+    hostUpdateAnalytics.onFailed(new Error(outcome.message));
+    setBusy(null);
+    toast.error(outcome.message);
+  };
+
+  const handleActivateOutcome = (
+    outcome: MutationOutcome<ActivateInstalledOk>,
+  ): void => {
+    setPendingInstallVersion(null);
+    if (outcome.kind === "ok") {
+      hostUpdateAnalytics.onSucceeded();
+      toast.success("Host activated");
+      setBusy(null);
+      invalidate();
+      return;
+    }
+    if (outcome.kind === "busy") {
+      setBusy({
+        intent: "activate",
+        continuation: outcome.continuation,
+        message: outcome.message,
+      });
+      return;
+    }
+    hostUpdateAnalytics.onFailed(new Error(outcome.message));
+    setBusy(null);
+    toast.error(outcome.message);
+  };
+
+  const runApply = (force: boolean): void => {
+    hostUpdateAnalytics.onStarted();
+    applyStagedMutation.mutate(
+      { trigger: "manual", force },
+      { onSuccess: handleApplyOutcome },
+    );
+  };
+
+  const runActivate = (force: boolean): void => {
+    hostUpdateAnalytics.onStarted();
+    activateInstalledMutation.mutate(
+      { force },
+      { onSuccess: handleActivateOutcome },
+    );
+  };
 
   useEffect(() => {
     const tray = runnerHost.hostTray;
@@ -132,15 +165,23 @@ export function HostTrayCommandListener() {
             source: "system_tray",
             command: "open_settings",
           });
-          void navigate({ to: "/settings/host" });
+          activateTabIntent(
+            navigate,
+            resolveSettingsTabIntent({
+              subSection: "host",
+              resetToGeneral: false,
+            }),
+            undefined,
+          );
           return;
         case "restartHost":
           Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
             source: "system_tray",
             command: "restart_host",
           });
-          // Destructive: restart kills PTYs and in-flight RPC sessions.
-          // Surface the confirmation modal before executing.
+          // Potentially destructive: hand off to the shared restart flow,
+          // which confirms, tries the cooperative claim-gated restart, and
+          // reserves the forced respawn for an explicit choice.
           setPendingRestart(true);
           return;
         case "openLogs":
@@ -151,7 +192,14 @@ export function HostTrayCommandListener() {
           // Logs surface lives inside Settings → Host; navigate there and
           // also open the legacy logs dialog so the user gets the fastest
           // path to the tail regardless of which surface they prefer.
-          void navigate({ to: "/settings/host" });
+          activateTabIntent(
+            navigate,
+            resolveSettingsTabIntent({
+              subSection: "host",
+              resetToGeneral: false,
+            }),
+            undefined,
+          );
           openLogs();
           return;
         case "installUpdate":
@@ -173,13 +221,9 @@ export function HostTrayCommandListener() {
 
   return (
     <>
-      <RestartHostConfirmDialog
-        open={pendingRestart}
-        onOpenChange={(open) => {
-          if (!open) setPendingRestart(false);
-        }}
-        isPending={restartMutation.isPending}
-        onConfirm={() => restartMutation.mutate()}
+      <LocalHostRestartFlow
+        requested={pendingRestart}
+        onClose={() => setPendingRestart(false)}
       />
       <ConfirmDestructiveDialog
         open={pendingInstallVersion !== null}
@@ -194,11 +238,49 @@ export function HostTrayCommandListener() {
         }
         cascadeSummary={null}
         actionLabel="Install update"
-        isPending={installMutation.isPending}
+        isPending={
+          applyStagedMutation.isPending || activateInstalledMutation.isPending
+        }
         onConfirm={() => {
-          if (pendingInstallVersion !== null) {
-            installMutation.mutate(pendingInstallVersion);
+          // Update-over-debt priority: the same live status the banner/menu
+          // derive their "Update to X" affordance from decides which intent
+          // this confirm submits.
+          if (status?.updateReady === true) {
+            runApply(false);
+          } else if (
+            status?.activation === "pendingActivation" ||
+            status?.activation === "activationUnknown"
+          ) {
+            runActivate(false);
+          } else {
+            setPendingInstallVersion(null);
+            void refetchStatus({ cancelRefetch: true });
           }
+        }}
+      />
+      <HostBusyForceDeferDialog
+        open={busy !== null}
+        message={busy?.message ?? ""}
+        isForcing={
+          applyStagedMutation.isPending || activateInstalledMutation.isPending
+        }
+        forceLabel={
+          busy?.continuation === "activate" ? "Force restart" : "Force update"
+        }
+        onForce={() => {
+          if (busy === null) return;
+          if (busy.continuation === "activate") {
+            runActivate(true);
+            return;
+          }
+          if (busy.intent === "apply") {
+            runApply(true);
+          } else {
+            runActivate(true);
+          }
+        }}
+        onDefer={() => {
+          setBusy(null);
         }}
       />
     </>

@@ -5,12 +5,19 @@ import {
   createTurnContentState,
 } from "../agent-runtime-accumulator";
 import {
+  interviewResolvedEventSchema,
   steerSubmittedEventSchema,
   toolCallCompletedEventSchema,
   toolCallErroredEventSchema,
   toolCallStartedEventSchema,
 } from "../agent-runtime";
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ContentBlock,
+  InterviewAnswer,
+  ToolCallManagedCommandRestarted,
+} from "@traycer/protocol/persistence/epic/schemas";
+import { interviewBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { applyInterviewSettlement } from "../interview-settlement";
 
 function makeBlocks(): ContentBlock[] {
   return [];
@@ -35,6 +42,17 @@ function expectPlanBlock(block: ContentBlock | undefined): PlanBlock {
     throw new Error("Expected a plan block");
   }
   return block;
+}
+
+function expectInterviewBlock(block: ContentBlock | undefined): InterviewBlock {
+  if (block?.type !== "interview") {
+    throw new Error("Expected an interview block");
+  }
+  return block;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 describe("accumulateEvent", () => {
@@ -275,6 +293,7 @@ describe("accumulateEvent", () => {
       timestamp: 3,
       toolName: "Bash",
       agentMessageSend: null,
+      imageResults: [],
     });
     expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
   });
@@ -332,6 +351,7 @@ describe("accumulateEvent", () => {
       timestamp: 2,
       toolName: "read_file",
       agentMessageSend: null,
+      imageResults: [],
     });
 
     expect(blocks).toHaveLength(1);
@@ -342,6 +362,55 @@ describe("accumulateEvent", () => {
     expect(blocks[0].timestamp).toBe(2);
     expect((blocks[0] as ToolCallBlock).startedAt).toBe(1);
     expect((blocks[0] as ToolCallBlock).endedAt).toBe(2);
+  });
+
+  it("tool_call.completed stamps a managedCommand payload onto the block, and a later re-completion without it keeps the identity", () => {
+    // The shell id is minted once, inside the call, and only comes back on
+    // the successful RESULT - so completion is the only place this can land.
+    // A re-completion (e.g. a retried terminal event) that omits the field
+    // must not erase what the first one established, exactly like
+    // `agentMessageSend` beside it.
+    const restarted: ToolCallManagedCommandRestarted = {
+      event: "restarted",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      effectiveCommand: "tail -f deploy.log --since 1h",
+      effectiveCwd: "/work/repo",
+      commandChanged: true,
+      cwdChanged: false,
+      outcome: { state: "running", pid: 4410, startedAtMs: 10 },
+    };
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "traycer_restart_shell",
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 2,
+      toolName: "traycer_restart_shell",
+      agentMessageSend: null,
+      managedCommand: restarted,
+      imageResults: [],
+    });
+
+    expect((blocks[0] as ToolCallBlock).managedCommand).toEqual(restarted);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 3,
+      toolName: "traycer_restart_shell",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect((blocks[0] as ToolCallBlock).managedCommand).toEqual(restarted);
   });
 
   it("tool_call events preserve detached background task timing", () => {
@@ -364,6 +433,7 @@ describe("accumulateEvent", () => {
       backgroundOutput: { stdout: "", stderr: "", truncated: false },
       backgroundStartedAt: 5_000,
       backgroundTask: true,
+      imageResults: [],
     });
 
     expect(blocks).toHaveLength(1);
@@ -404,6 +474,7 @@ describe("accumulateEvent", () => {
       backgroundOutput: { stdout: "", stderr: "", truncated: false },
       backgroundStartedAt: 5_000,
       backgroundTask: true,
+      imageResults: [],
     });
 
     expect(blocks[0].status).toBe("completed");
@@ -566,6 +637,7 @@ describe("accumulateEvent", () => {
       timestamp: 3,
       toolName: "read_file",
       agentMessageSend: null,
+      imageResults: [],
     });
 
     // another text delta with new blockId
@@ -686,6 +758,7 @@ describe("accumulateEvent", () => {
       timestamp: 4,
       toolName: "read_file",
       agentMessageSend: null,
+      imageResults: [],
     });
     blocks = accumulateEvent(blocks, {
       type: "approval.requested",
@@ -1506,6 +1579,85 @@ describe("accumulateEvent", () => {
     expect((blocks[0] as CompactionBlock).postTokens).toBe(400);
   });
 
+  // A compaction cut short (user hit Stop, harness died) never reports a
+  // boundary, so it folded nothing. Finalizing it as "completed" would render
+  // the success bar - "Compacted" with no error line to contradict it - and
+  // persist that claim to the transcript, while the context chip still reads
+  // full. It must finalize as a failure instead.
+  it("turn.interrupted finalizes an in-flight compaction as errored, not completed", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "compaction.started",
+      blockId: "compact-cut-short",
+      timestamp: 1,
+      trigger: "manual",
+      preTokens: 120000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.interrupted",
+      blockId: "turn",
+      timestamp: 5,
+      turnId: "turn",
+      reason: "Stopped by the user.",
+      code: "USER_STOP",
+      recoverable: true,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("errored");
+    expect((blocks[0] as CompactionBlock).error).toBe(
+      "Compaction did not finish",
+    );
+  });
+
+  it("turn.completed finalizes an in-flight compaction as errored", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "compaction.started",
+      blockId: "compact-orphaned",
+      timestamp: 1,
+      trigger: "auto",
+      preTokens: 120000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn",
+      timestamp: 5,
+      turnId: "turn",
+    });
+
+    expect(blocks[0].status).toBe("errored");
+  });
+
+  // Only the in-flight case is a failure: a compaction that already reported its
+  // boundary keeps the result it earned when the turn later ends.
+  it("turn end leaves an already-completed compaction alone", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "compaction.started",
+      blockId: "compact-done",
+      timestamp: 1,
+      trigger: "manual",
+      preTokens: 1000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "compaction.completed",
+      blockId: "compact-done",
+      timestamp: 2,
+      postTokens: 400,
+      durationMs: 50,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn",
+      timestamp: 5,
+      turnId: "turn",
+    });
+
+    expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as CompactionBlock).error).toBeNull();
+  });
+
   // ── interview events ─────────────────────────────────────────
 
   it("interview events create and complete InterviewBlock", () => {
@@ -1536,6 +1688,7 @@ describe("accumulateEvent", () => {
           question: "Which library?",
           values: ["date-fns"],
           notes: null,
+          selection: null,
         },
       ],
     });
@@ -1550,8 +1703,56 @@ describe("accumulateEvent", () => {
         question: "Which library?",
         values: ["date-fns"],
         notes: null,
+        selection: null,
       },
     ]);
+  });
+
+  it("stores explicit null selection when interview.resolved answers omit the key", () => {
+    // Adapters emit production-shaped answers without `selection`. The
+    // accumulator is the boundary that must coerce that absence so the
+    // reducer's `changed` detection does not treat a later normalized
+    // replay as a new write.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    const productionAnswer: Record<string, unknown> = {
+      questionId: "q1",
+      question: "Which library?",
+      values: ["date-fns"],
+      notes: null,
+    };
+    expect(Object.hasOwn(productionAnswer, "selection")).toBe(false);
+    const resolved = interviewResolvedEventSchema.parse({
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [productionAnswer],
+    });
+    blocks = accumulateEvent(blocks, resolved);
+
+    const interview = blocks[0];
+    if (interview === undefined || interview.type !== "interview") {
+      throw new Error("expected interview block");
+    }
+    expect(interview.answers).toHaveLength(1);
+    expect(Object.hasOwn(interview.answers[0], "selection")).toBe(true);
+    expect(interview.answers[0].selection).toBeNull();
+    expect(interview.answers[0].values).toEqual(["date-fns"]);
   });
 
   it("a later empty interview.resolved does not erase recorded answers", () => {
@@ -1586,6 +1787,7 @@ describe("accumulateEvent", () => {
           question: "Where should the game live?",
           values: ["gui-app"],
           notes: null,
+          selection: null,
         },
       ],
     });
@@ -1604,6 +1806,7 @@ describe("accumulateEvent", () => {
         question: "Where should the game live?",
         values: ["gui-app"],
         notes: null,
+        selection: null,
       },
     ]);
   });
@@ -1654,6 +1857,604 @@ describe("accumulateEvent", () => {
     ]);
     // Interview blocks no longer persist raw input; the questions/answers above
     // are the rendered surface.
+  });
+
+  it("interview.requested after a settled block is ignored", () => {
+    // A late request must not reopen an interview whose answer or Skip may
+    // already have reached a provider. Only the pending-fork transform may
+    // clear terminal facts.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Original",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+    const settled = blocks;
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 3,
+      toolName: "AskUserQuestion",
+      title: "Reopened",
+      questions: [
+        {
+          questionId: null,
+          question: "Pick again?",
+          header: "Retry",
+          options: [{ label: "yes", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    expect(blocks).toBe(settled);
+    expect((blocks[0] as InterviewBlock).title).toBe("Original");
+    expect((blocks[0] as InterviewBlock).outcome).toBe("answered");
+  });
+
+  it("backfills framing when interview.resolved arrives before interview.requested", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+    const terminal = blocks[0] as InterviewBlock;
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Library choice",
+      description: "Choose the dependency",
+      metadata: { provider: "test" },
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [
+            { label: "date-fns", description: "Small", preview: "Preview" },
+          ],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    const enriched = blocks[0] as InterviewBlock;
+    expect(enriched).toMatchObject({
+      status: terminal.status,
+      timestamp: terminal.timestamp,
+      outcome: terminal.outcome,
+      answers: terminal.answers,
+      settlement: terminal.settlement,
+      toolName: "AskUserQuestion",
+      title: "Library choice",
+      description: "Choose the dependency",
+      metadata: { provider: "test" },
+    });
+    expect(enriched.questions).toHaveLength(1);
+  });
+
+  it("backfills framing when interview.errored arrives before interview.requested", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 2,
+      error: "Provider stopped",
+    });
+    const terminal = blocks[0] as InterviewBlock;
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Original prompt",
+      questions: [
+        {
+          questionId: "q1",
+          question: "Continue?",
+          header: null,
+          options: [{ label: "Yes", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    const enriched = blocks[0] as InterviewBlock;
+    expect(enriched).toMatchObject({
+      status: terminal.status,
+      timestamp: terminal.timestamp,
+      outcome: terminal.outcome,
+      error: terminal.error,
+      settlement: terminal.settlement,
+      diagnostics: terminal.diagnostics,
+      toolName: "AskUserQuestion",
+      title: "Original prompt",
+    });
+    expect(enriched.questions).toHaveLength(1);
+  });
+
+  it("interview.requested while streaming still updates the pending card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "First",
+      questions: [],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 2,
+      toolName: "AskUserQuestion",
+      title: "Updated",
+      questions: [
+        {
+          questionId: null,
+          question: "Proceed?",
+          header: "Approval",
+          options: [{ label: "Yes", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as InterviewBlock).status).toBe("streaming");
+    expect((blocks[0] as InterviewBlock).title).toBe("Updated");
+    expect((blocks[0] as InterviewBlock).questions).toHaveLength(1);
+  });
+
+  it("runtime interview.errored after a GUI-authored skipped block keeps outcome skipped", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    const pending = blocks[0];
+    if (pending === undefined || pending.type !== "interview") {
+      throw new Error("expected interview block");
+    }
+    const { patch } = applyInterviewSettlement(pending, {
+      settlementId: "gui-skip",
+      outcome: "skipped",
+      answers: [],
+      draftAnswers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      reason: "Not now",
+      source: "gui",
+      diagnostic: null,
+      delivery: null,
+      timestamp: 2,
+    });
+    blocks = [{ ...pending, ...patch }];
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "adapter cleanup",
+    });
+
+    const skipped = blocks[0];
+    if (skipped === undefined || skipped.type !== "interview") {
+      throw new Error("expected interview block");
+    }
+    expect(skipped.outcome).toBe("skipped");
+    expect(skipped.error).toBe("Not now");
+    expect(skipped.status).toBe("errored");
+    expect(skipped.draftAnswers).toHaveLength(1);
+    expect(skipped.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("keeps a schema-degraded skipped outcome payload-authoritative through later runtime events", () => {
+    // A future/malformed settlement.source .catch(null)s while outcome
+    // survives. Feeding that parsed block through the accumulator must not
+    // treat the missing provenance as "unowned" and let a runtime event
+    // replace the skip.
+    const draft = {
+      questionId: null,
+      question: "Which library?",
+      values: ["date-fns"],
+      notes: "saved, not sent",
+      selection: null,
+    };
+    const parsed = interviewBlockSchema.parse({
+      blockId: "interview1",
+      status: "errored",
+      timestamp: 2,
+      parentBlockId: null,
+      type: "interview",
+      toolName: "AskUserQuestion",
+      title: "Question",
+      description: "Pick one",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+      answers: [],
+      error: "Not now",
+      metadata: null,
+      outcome: "skipped",
+      draftAnswers: [draft],
+      settlement: { settlementId: "s", source: "orchestrator" },
+      diagnostics: [],
+      delivery: null,
+      settlementExtensions: {},
+    });
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.outcome).toBe("skipped");
+    expect(parsed.draftAnswers).toHaveLength(1);
+
+    let blocks: ContentBlock[] = [parsed];
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "adapter cleanup",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 4,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["lodash"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+
+    const skipped = expectInterviewBlock(blocks[0]);
+    expect(skipped.outcome).toBe("skipped");
+    expect(skipped.answers).toEqual([]);
+    expect(skipped.draftAnswers).toEqual([draft]);
+    expect(skipped.error).toBe("Not now");
+    expect(skipped.settlement).toBeNull();
+    expect(skipped.delivery).toBeNull();
+    expect(skipped.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("keeps a schema-degraded answered outcome payload-authoritative through later runtime events", () => {
+    const submitted = {
+      questionId: "q1",
+      question: "Which library?",
+      values: ["date-fns"],
+      notes: null,
+      selection: null,
+    };
+    const parsed = interviewBlockSchema.parse({
+      blockId: "interview1",
+      status: "completed",
+      timestamp: 2,
+      parentBlockId: null,
+      type: "interview",
+      toolName: "AskUserQuestion",
+      title: "Question",
+      description: "Pick one",
+      questions: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+      answers: [submitted],
+      error: null,
+      metadata: null,
+      outcome: "answered",
+      draftAnswers: [],
+      settlement: { settlementId: "s", source: "orchestrator" },
+      diagnostics: [],
+      delivery: null,
+      settlementExtensions: {},
+    });
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.outcome).toBe("answered");
+
+    let blocks: ContentBlock[] = [parsed];
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "adapter cleanup",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 4,
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          values: ["lodash"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+
+    const answered = expectInterviewBlock(blocks[0]);
+    expect(answered.outcome).toBe("answered");
+    expect(answered.answers).toEqual([submitted]);
+    expect(answered.draftAnswers).toEqual([]);
+    expect(answered.error).toBeNull();
+    expect(answered.settlement).toBeNull();
+    expect(answered.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("lets a runtime settlement repair a genuinely ambiguous legacy terminal block", () => {
+    // outcome null + settlement null + legacy terminal status is the
+    // unowned reading: a crash before projection, or a pre-1.7 row.
+    // A runtime resolution MUST be allowed to fill that hole.
+    const parsed = interviewBlockSchema.parse({
+      blockId: "interview1",
+      status: "errored",
+      timestamp: 2,
+      parentBlockId: null,
+      type: "interview",
+      toolName: "AskUserQuestion",
+      title: "Question",
+      description: "Pick one",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+      answers: [],
+      error: "legacy error",
+      metadata: null,
+    });
+    expect(parsed.outcome).toBeNull();
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.status).toBe("errored");
+
+    const answers = [
+      {
+        questionId: null,
+        question: "Which library?",
+        values: ["date-fns"],
+        notes: null,
+        selection: null,
+      },
+    ];
+    const blocks = accumulateEvent([parsed], {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 3,
+      answers,
+    });
+
+    const repaired = expectInterviewBlock(blocks[0]);
+    expect(repaired.outcome).toBe("answered");
+    expect(repaired.answers).toEqual(answers);
+    expect(repaired.settlement).toEqual({
+      settlementId: "runtime:interview.resolved:interview1:3",
+      source: "runtime",
+    });
+    expect(repaired.status).toBe("completed");
+    expect(repaired.error).toBeNull();
+  });
+
+  it("treats two same-type runtime events at the same blockId and timestamp as a replay", () => {
+    // Runtime events have no event id. The derived settlement id collides
+    // when type, blockId and timestamp match, so the second reads as a
+    // replay of the first. Containment: it cannot install its own
+    // answers/outcome/drafts/delivery, and a colliding diagnostic does
+    // not multiply.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+    const afterFirst = expectInterviewBlock(blocks[0]);
+    const firstAnswers = afterFirst.answers;
+    const firstOutcome = afterFirst.outcome;
+    const firstDrafts = afterFirst.draftAnswers;
+    const firstDelivery = afterFirst.delivery;
+    const firstDiagnostics = afterFirst.diagnostics;
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["lodash"],
+          notes: "different payload",
+          selection: null,
+        },
+      ],
+    });
+    const afterCollision = expectInterviewBlock(blocks[0]);
+    expect(afterCollision.answers).toEqual(firstAnswers);
+    expect(afterCollision.outcome).toBe(firstOutcome);
+    expect(afterCollision.draftAnswers).toEqual(firstDrafts);
+    expect(afterCollision.delivery).toBe(firstDelivery);
+    expect(afterCollision.diagnostics).toBe(firstDiagnostics);
+    expect(afterCollision.answers[0]?.values).toEqual(["date-fns"]);
+  });
+
+  it("dedupes a colliding errored diagnostic and records one at a distinct timestamp", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 2,
+      error: "first failure",
+    });
+    const afterFirst = expectInterviewBlock(blocks[0]);
+    expect(afterFirst.outcome).toBe("failed");
+    expect(afterFirst.error).toBe("first failure");
+    expect(afterFirst.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:2",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 2,
+      error: "colliding different payload",
+    });
+    const afterCollision = expectInterviewBlock(blocks[0]);
+    expect(afterCollision.error).toBe("first failure");
+    expect(afterCollision.outcome).toBe("failed");
+    expect(afterCollision.draftAnswers).toEqual([]);
+    expect(afterCollision.delivery).toBeNull();
+    expect(afterCollision.diagnostics).toHaveLength(1);
+    expect(afterCollision.diagnostics).toEqual(afterFirst.diagnostics);
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "later distinct failure",
+    });
+    const afterDistinct = expectInterviewBlock(blocks[0]);
+    // Distinct identity, losing path: outcome/reason stay, the new
+    // diagnostic is recorded because its id is not the colliding one.
+    expect(afterDistinct.outcome).toBe("failed");
+    expect(afterDistinct.error).toBe("first failure");
+    expect(afterDistinct.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:2",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
   });
 
   // ── file change events ───────────────────────────────────────
@@ -1799,6 +2600,85 @@ describe("accumulateEvent", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].status).toBe("completed");
     expect((blocks[0] as CommandBlock).exitCode).toBe(0);
+    expect((blocks[0] as CommandBlock).stopped).toBe(false);
+  });
+
+  it("a promotion re-emit marks the open command block instead of duplicating it", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "cmd1",
+      timestamp: 1,
+      command: "npm test",
+      cwd: "/workspace",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "cmd1",
+      timestamp: 9,
+      command: "npm test",
+      cwd: "/workspace",
+      backgroundTask: true,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as CommandBlock).backgroundTask).toBe(true);
+    // The elapsed anchor is the FIRST sighting - the promotion is bookkeeping,
+    // not a restart.
+    expect(blocks[0].timestamp).toBe(1);
+    expect(blocks[0].status).toBe("streaming");
+  });
+
+  it("a host-initiated stop settles the command as stopped, not failed", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "cmd1",
+      timestamp: 1,
+      command: "sleep 600",
+      cwd: "/workspace",
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.completed",
+      blockId: "cmd1",
+      timestamp: 2,
+      command: "sleep 600",
+      exitCode: -1,
+      terminationReason: "stopped",
+    });
+
+    expect((blocks[0] as CommandBlock).stopped).toBe(true);
+    expect((blocks[0] as CommandBlock).backgroundTask).toBe(true);
+  });
+
+  it("turn.completed keeps a backgrounded command streaming", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "bg",
+      timestamp: 1,
+      command: "npm run dev",
+      cwd: "/workspace",
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "fg",
+      timestamp: 1,
+      command: "npm test",
+      cwd: "/workspace",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn1",
+      timestamp: 3,
+      turnId: "turn1",
+    });
+
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("bg")?.status).toBe("streaming");
+    expect(byId.get("fg")?.status).toBe("completed");
   });
 
   // ── sub-agent events ─────────────────────────────────────────
@@ -2061,6 +2941,140 @@ describe("accumulateEvent", () => {
     expect(block.status).toBe("completed");
     expect(block.timestamp).toBe(2000);
     expect(block.startedAt).toBe(1000);
+  });
+
+  // ── T8: new-run discriminator (differing non-null spawn ids) ──
+
+  it("subagent.started with a differing non-null spawnToolCallId reopens a terminal card as a new run", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1000,
+      name: "explorer",
+      agentType: "explore",
+      task: "Investigate the auth flow",
+      spawnToolCallId: "toolu_run1",
+      parentBlockId: "sa-parent",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 1500,
+      update: "rg --files",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2000,
+      outcome: "stopped",
+      result: "stopped by idle",
+    });
+
+    // Continuation restart: same blockId, new spawn tool id (SendMessage tool_use_id).
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 3000,
+      name: "explorer-restarted",
+      agentType: "explore",
+      task: "Continue from where you left off",
+      spawnToolCallId: "toolu_run2",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("streaming");
+    expect(block.stopped).toBe(false);
+    expect(block.result).toBeNull();
+    expect(block.progressUpdates).toEqual([]);
+    expect(block.task).toBe("Continue from where you left off");
+    expect(block.spawnToolCallId).toBe("toolu_run2");
+    expect(block.timestamp).toBe(3000);
+    expect(block.startedAt).toBe(3000);
+    expect(block.workflowMeta).toBeNull();
+    // Identity fields carry over from the prior generation; the restart event
+    // does not rewrite them when the new-run discriminator fires.
+    expect(block.name).toBe("explorer");
+    expect(block.agentType).toBe("explore");
+    expect(block.parentBlockId).toBe("sa-parent");
+  });
+
+  it("subagent.started with the same spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1000,
+      name: "Subagent",
+      task: "Investigate",
+      spawnToolCallId: "toolu_same",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "done",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 6000,
+      name: "Godel (explorer)",
+      task: "Investigate",
+      spawnToolCallId: "toolu_same",
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("done");
+    expect(block.spawnToolCallId).toBe("toolu_same");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("Godel (explorer)");
+  });
+
+  it("subagent.started with no spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1000,
+      name: "Subagent",
+      task: "Investigate",
+      spawnToolCallId: "toolu_9",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 1500,
+      update: "rg --files",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "done",
+    });
+    // Codex-style nickname re-emit after completion: no spawn tool id of its own.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 6000,
+      name: "Godel (explorer)",
+      task: "Investigate",
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("done");
+    expect(block.progressUpdates).toEqual(["rg --files"]);
+    expect(block.spawnToolCallId).toBe("toolu_9");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("Godel (explorer)");
   });
 
   it("subagent.started(parentBlockId=A) followed by progress/completed persists parentBlockId=A", () => {
@@ -2355,6 +3369,151 @@ describe("accumulateEvent", () => {
     // A null re-emit intent does not clobber the previously known intent.
     expect(block.task).toBe("Review the diff");
     expect(block.workflowMeta?.intent).toBe("Review the diff");
+  });
+
+  // ── T8: workflow.started new-run discriminator (mirrors subagent) ──
+
+  it("workflow.started with a differing non-null spawnToolCallId reopens a terminal workflow card as a new run", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_run1",
+      parentBlockId: "parent-block",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 1500,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 3,
+      totalTokens: 120000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2000,
+      outcome: "stopped",
+      result: "stopped by idle",
+    });
+
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 3000,
+      name: "review-restarted",
+      intent: "Continue the review fleet",
+      spawnToolCallId: "toolu_wf_run2",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("streaming");
+    expect(block.stopped).toBe(false);
+    expect(block.result).toBeNull();
+    expect(block.progressUpdates).toEqual([]);
+    expect(block.task).toBe("Continue the review fleet");
+    expect(block.spawnToolCallId).toBe("toolu_wf_run2");
+    expect(block.timestamp).toBe(3000);
+    expect(block.startedAt).toBe(3000);
+    // Prior-generation identity carries; run-scoped workflow counters reset.
+    expect(block.name).toBe("review");
+    expect(block.parentBlockId).toBe("parent-block");
+    expect(block.workflowMeta).toEqual({
+      name: "review",
+      intent: "Continue the review fleet",
+      activity: [],
+      agentsStarted: null,
+      agentsFinished: null,
+      totalTokens: null,
+    });
+  });
+
+  it("workflow.started with the same spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_same",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "3 findings",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 6000,
+      name: "review (refreshed)",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_same",
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("3 findings");
+    expect(block.spawnToolCallId).toBe("toolu_wf_same");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("review (refreshed)");
+  });
+
+  it("workflow.started with no spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_9",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 1500,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "3 findings",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 6000,
+      name: "review (named)",
+      intent: null,
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("3 findings");
+    expect(block.progressUpdates).toEqual(["Find"]);
+    expect(block.spawnToolCallId).toBe("toolu_wf_9");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("review (named)");
+    // Null re-emit intent preserves the previously known intent.
+    expect(block.task).toBe("Review the diff");
+    expect(block.workflowMeta?.intent).toBe("Review the diff");
+    expect(block.workflowMeta?.agentsStarted).toBe(16);
   });
 });
 
@@ -3035,5 +4194,133 @@ describe("accumulateEvent - provider_notice.upsert", () => {
 
     expect(parsed.sender).toBeNull();
     expect((blocks[0] as SteerBlock).sender).toBeNull();
+  });
+
+  // ── image generation (chat.subscribe@1.6) ──────────────────
+
+  it("tool_call.completed stamps imageResults onto an existing block", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc-img",
+      timestamp: 1,
+      toolName: "image_gen",
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc-img",
+      timestamp: 2,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [
+        {
+          attachmentHash: "sha256-a",
+          mediaType: "image/png",
+          byteLength: 100,
+          width: 10,
+          height: 10,
+          alt: null,
+          revisedPrompt: null,
+          filePath: null,
+        },
+      ],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      {
+        attachmentHash: "sha256-a",
+        mediaType: "image/png",
+        byteLength: 100,
+        width: 10,
+        height: 10,
+        alt: null,
+        revisedPrompt: null,
+        filePath: null,
+      },
+    ]);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc-img",
+      timestamp: 3,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      expect.objectContaining({ attachmentHash: "sha256-a" }),
+    ]);
+  });
+
+  it("tool_call.completed creates a completed block with imageResults when no prior started event exists", () => {
+    const blocks = accumulateEvent(makeBlocks(), {
+      type: "tool_call.completed",
+      blockId: "tc-img-only",
+      timestamp: 3,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [
+        {
+          attachmentHash: "sha256-b",
+          mediaType: "image/jpeg",
+          byteLength: 200,
+          width: null,
+          height: null,
+          alt: "photo",
+          revisedPrompt: null,
+          filePath: "/tmp/b.jpg",
+        },
+      ],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("tool_call");
+    expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      {
+        attachmentHash: "sha256-b",
+        mediaType: "image/jpeg",
+        byteLength: 200,
+        width: null,
+        height: null,
+        alt: "photo",
+        revisedPrompt: null,
+        filePath: "/tmp/b.jpg",
+      },
+    ]);
+  });
+
+  it("image_resolution.updated is a no-op on the block list", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "read_file",
+      agentMessageSend: null,
+    });
+    const before = blocks;
+    const after = accumulateEvent(blocks, {
+      type: "image_resolution.updated",
+      blockId: "assistant-1",
+      timestamp: 2,
+      turnId: "turn-1",
+      messageId: "assistant-1",
+      entry: {
+        source: "https://example.com/a.png",
+        canonicalSource: "https://example.com/a.png",
+        attachmentHash: null,
+        mediaType: null,
+        width: null,
+        height: null,
+        state: "consent-required",
+      },
+    });
+
+    expect(after).toBe(before);
+    expect(after).toHaveLength(1);
+    expect(after[0].type).toBe("tool_call");
   });
 });

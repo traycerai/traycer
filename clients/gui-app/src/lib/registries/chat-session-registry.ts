@@ -10,10 +10,14 @@ import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-st
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { authenticatedHostStreamKey } from "@/hooks/host/use-host-stream-client-for";
+import {
+  authenticatedHostStreamKey,
+  authenticatedOwnerIdentityKey,
+} from "@/hooks/host/use-host-stream-client-for";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createChatSessionStore,
@@ -111,6 +115,17 @@ export function useChatSessionHandle(
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
+  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
+  // remote host's public key (dialability, not identity), so a same-host
+  // remote public-key rotation would otherwise leave this session pinned to
+  // a `ChatStreamClient` built against the stale key. Folded into the scope
+  // key alongside `transportKey`, not in place of it, so every existing
+  // rebuild trigger (host swap, user switch, endpoint dialability) is
+  // preserved unchanged.
+  const ownerIdentityKey =
+    streamClientFactoryOverride !== null
+      ? "test-stream-client-factory"
+      : authenticatedOwnerIdentityKey(globalClient, hostEntry);
 
   const [handle, setHandle] = useReducer(
     (
@@ -135,7 +150,10 @@ export function useChatSessionHandle(
     }
     // `transportKey` is null until there is an authenticated request context and
     // a dialable host endpoint (or "test-..." when the factory is overridden).
-    if (transportKey === null) {
+    // `ownerIdentityKey` is null under that same gate (both derive from the
+    // same `globalClient` + `hostEntry`), so this never masks a ready session
+    // behind a not-yet-known identity.
+    if (transportKey === null || ownerIdentityKey === null) {
       setHandle(null);
       return;
     }
@@ -145,6 +163,7 @@ export function useChatSessionHandle(
       userId,
       hostId,
       transportKey,
+      ownerIdentityKey,
     });
 
     // The session OWNS its transport: the factory builds it (socket + auth +
@@ -183,6 +202,10 @@ export function useChatSessionHandle(
       return {
         sendAction: (frame) => result.client.sendAction(frame),
         close: result.close,
+        sameTurnSteeringProtocolSupported: () =>
+          result.client.sameTurnSteeringProtocolSupported(),
+        interviewSettlementActionsProtocolSupported: () =>
+          result.client.interviewSettlementActionsProtocolSupported(),
       };
     };
 
@@ -202,11 +225,10 @@ export function useChatSessionHandle(
     };
 
     const next = registry.acquire(
-      epicId,
-      chatId,
-      scopeKey,
+      { epicId, chatId, hostId, scopeKey },
       (factoryEpicId, factoryChatId) =>
         createChatSessionStore({
+          hostId,
           epicId: factoryEpicId,
           chatId: factoryChatId,
           userId,
@@ -220,18 +242,21 @@ export function useChatSessionHandle(
     setHandle(next);
 
     return () => {
-      registry.releaseHandle(epicId, chatId, next);
+      registry.releaseHandle(epicId, chatId, hostId, next);
     };
     // `openTransport` is referentially stable and reads its deps (auth, runner
     // host, credential source, directory) live, so the recovery wiring is never
     // a stale-capture risk and does not belong in this array. `transportKey`
-    // already encodes user + host + endpoint identity. `queryClient` is the
-    // stable TanStack client used by the provider-reauth invalidation.
+    // already encodes user + host + endpoint identity; `ownerIdentityKey`
+    // additionally discriminates a remote host's public-key rotation (R-1).
+    // `queryClient` is the stable TanStack client used by the
+    // provider-reauth invalidation.
   }, [
     chatId,
     hostId,
     epicId,
     transportKey,
+    ownerIdentityKey,
     userId,
     enabled,
     openTransport,
@@ -241,17 +266,60 @@ export function useChatSessionHandle(
   return handle;
 }
 
+/**
+ * Peek an already-open session WITHOUT taking a lease.
+ *
+ * `hostId` is part of the session's identity (see `ChatSessionRegistry`), so
+ * every caller has to name the host it means rather than inheriting whichever
+ * host happens to be active: a tab-scoped surface passes its bound
+ * `useTabHostId()`, a row-scoped surface passes the row's own owner host.
+ * `null` means "this surface has no host for that chat yet" (an epic-projection
+ * row that predates the field, or an id that resolves to nothing) and reads as
+ * no session - never as "look it up on some other host", which is exactly the
+ * substitution that would hand back a different machine's transcript.
+ */
 export function useExistingChatSessionHandle(
   epicId: string,
   chatId: string,
+  hostId: string | null,
 ): ChatSessionStoreHandle | null {
   const subscribe = useCallback(
     (listener: () => void) => registry.subscribe(listener),
     [],
   );
   const getSnapshot = useCallback(
-    () => registry.peek(epicId, chatId),
-    [chatId, epicId],
+    () => (hostId === null ? null : registry.peek(epicId, chatId, hostId)),
+    [chatId, epicId, hostId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}
+
+/**
+ * Peeks an already-open session's `fatalClose`, for a caller (the canvas-
+ * altitude published-copy fallback, `tab-group-view.tsx`) that is NOT itself
+ * the one holding the handle - `chat-tile.tsx`'s own `useChatSessionHandle`
+ * is. Composed from `useExistingChatSessionHandle` (registry-membership
+ * reactivity: re-renders when a session for this pair is created/destroyed)
+ * plus a second `useSyncExternalStore` over the handle's own store (state-
+ * reactivity: re-renders when `fatalClose` itself flips within an existing
+ * session) - the registry's own subscription does not fire on that inner
+ * state change, only on membership changes, so one subscription alone would
+ * miss the transition this hook exists to observe.
+ */
+export function useExistingChatSessionFatalClose(
+  epicId: string,
+  chatId: string,
+  hostId: string,
+): FatalErrorDetails | null {
+  const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      handle === null ? () => undefined : handle.store.subscribe(listener),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    () => handle?.store.getState().fatalClose ?? null,
+    [handle],
   );
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }
@@ -262,6 +330,7 @@ function chatSessionScopeKey(input: {
   readonly userId: string | null;
   readonly hostId: string;
   readonly transportKey: string;
+  readonly ownerIdentityKey: string;
 }): string {
   return [
     input.epicId,
@@ -269,5 +338,6 @@ function chatSessionScopeKey(input: {
     input.userId ?? "anonymous",
     input.hostId,
     input.transportKey,
+    input.ownerIdentityKey,
   ].join(CHAT_SESSION_SCOPE_SEPARATOR);
 }

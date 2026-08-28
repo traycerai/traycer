@@ -6,13 +6,17 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import type Fuse from "fuse.js";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { ChevronDown, Search, TriangleAlert, X } from "lucide-react";
+import {
+  ChevronDown,
+  GitBranch,
+  GitCommitHorizontal,
+  TriangleAlert,
+} from "lucide-react";
 import type {
   GitChangedFile,
   GitChangedFileV11,
@@ -33,17 +37,12 @@ import {
   createGitChangedFileSearchIndex,
   filterGitChangedFiles,
 } from "@/lib/git/git-changed-file-search";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { FileList } from "./file-list";
 import { RepoStateBanner } from "./repo-state-banner";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
@@ -159,42 +158,82 @@ function moduleSectionCollapseKey(
 function parentReferenceLabel(module: GitModuleGroup): string | null {
   const reference = module.parentReference;
   if (reference === null) return null;
-  if (reference.status === "differs") return "pinned commit out of date";
-  if (reference.status === "conflicted") return "reference conflict";
-  if (reference.status === "unavailable") return "details unavailable";
-  return "working tree dirty";
+  if (reference.status === "differs") {
+    return "Checkout differs from parent reference";
+  }
+  if (reference.status === "conflicted") return "Submodule reference conflict";
+  if (reference.status === "unavailable") {
+    return "Submodule details unavailable";
+  }
+  return "Submodule working tree has changes";
 }
 
 function moduleHeaderPath(module: GitModuleGroup): string | null {
-  if (module.repoRoot !== null) return module.repoRoot;
-  return module.parentPath;
+  return module.repoRoot;
 }
 
-function moduleHeaderTooltip(args: {
+function moduleHeadLabel(module: GitModuleGroup): string {
+  if (module.headKind === "branch") return "Branch";
+  if (module.headKind === "reference") return "Reference";
+  return "Checkout";
+}
+
+interface ModuleHeaderPreviewRow {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+function moduleHeaderPreviewRows(args: {
   readonly module: GitModuleGroup;
   readonly countLabel: string;
   readonly parentLabel: string | null;
-}): string {
+}): ReadonlyArray<ModuleHeaderPreviewRow> {
   const { module, countLabel, parentLabel } = args;
   const path = moduleHeaderPath(module);
   return [
-    module.kind === "submodule"
-      ? `Submodule: ${module.label}`
-      : `Workspace module: ${module.label}`,
-    path === null ? null : `Path: ${path}`,
-    module.parentPath === null ? null : `Parent path: ${module.parentPath}`,
-    `Head: ${module.headLabel}`,
-    `Changed files: ${countLabel}`,
-    parentLabel === null ? null : `Status: ${parentLabel}`,
+    path === null
+      ? null
+      : { key: "path", label: "Repository location", value: path },
+    module.parentPath === null
+      ? null
+      : {
+          key: "parent-path",
+          label: "Location in workspace",
+          value: module.parentPath,
+        },
+    {
+      key: "head",
+      label: moduleHeadLabel(module),
+      value: module.headLabel,
+    },
+    {
+      key: "changed-files",
+      label: "Working tree changes",
+      value: countLabel,
+    },
+    parentLabel === null
+      ? null
+      : {
+          key: "parent-status",
+          label: "Parent reference",
+          value: parentLabel,
+        },
     module.parentReference?.summary === undefined
       ? null
-      : `Details: ${module.parentReference.summary}`,
+      : {
+          key: "details",
+          label: "Commits",
+          value: module.parentReference.summary,
+        },
     module.unavailable && module.parentReference?.status !== "unavailable"
-      ? "Status: unavailable"
+      ? {
+          key: "availability-status",
+          label: "Status",
+          value: "unavailable",
+        }
       : null,
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+  ].filter((row): row is ModuleHeaderPreviewRow => row !== null);
 }
 
 function moduleHeaderAccessibleName(args: {
@@ -287,11 +326,37 @@ function gitSectionStickyStyle(top: string): GitSectionStickyStyle {
   return { "--git-section-sticky-top": top };
 }
 
-function ModuleHeaderTooltipContent(props: { readonly text: string }) {
+function ModuleHeaderPreviewContent(props: {
+  readonly module: GitModuleGroup;
+  readonly countLabel: string;
+  readonly parentLabel: string | null;
+}) {
+  const rows = moduleHeaderPreviewRows(props);
   return (
-    <span className="block whitespace-pre-line text-left leading-5">
-      {props.text}
-    </span>
+    <div
+      className="w-[min(80vw,28rem)] min-w-0 px-3 py-2 text-left"
+      data-testid="git-module-header-preview-content"
+    >
+      <p className="min-w-0 truncate text-ui-sm font-semibold text-popover-foreground">
+        {props.module.kind === "submodule" ? "Submodule" : "Workspace module"}:{" "}
+        {props.module.label}
+      </p>
+      <dl className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-ui-xs">
+        {rows.map((row) => (
+          <div key={row.key} className="contents">
+            <dt className="font-medium text-popover-foreground/85">
+              {row.label}:{" "}
+            </dt>
+            <dd
+              className="m-0 min-w-0 break-words text-muted-foreground"
+              data-testid={`git-module-header-preview-${row.key}`}
+            >
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -331,7 +396,7 @@ function GitModuleGroupsEmptyContent(props: {
   readonly trimmedQuery: string;
   readonly placeholder: string;
   readonly ariaLabel: string;
-  readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  readonly onSearchQueryChange: (value: string) => void;
   readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onClearSearch: () => void;
 }): ReactNode {
@@ -356,7 +421,7 @@ function GitModuleGroupsEmptyContent(props: {
           searchQuery={props.searchQuery}
           placeholder={props.placeholder}
           ariaLabel={props.ariaLabel}
-          onSearchChange={props.onSearchChange}
+          onSearchQueryChange={props.onSearchQueryChange}
           onSearchKeyDown={props.onSearchKeyDown}
           onClearSearch={props.onClearSearch}
         />
@@ -486,8 +551,7 @@ function GitModuleGroupsView(props: {
   }, []);
 
   const handleSearchChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const next = event.target.value;
+    (next: string) => {
       setSearchQuery(next);
       clearPendingDebounce();
       debounceTimerRef.current = window.setTimeout(() => {
@@ -654,7 +718,7 @@ function GitModuleGroupsView(props: {
         trimmedQuery={trimmedQuery}
         placeholder={searchCopy.placeholder}
         ariaLabel={searchCopy.ariaLabel}
-        onSearchChange={handleSearchChange}
+        onSearchQueryChange={handleSearchChange}
         onSearchKeyDown={handleSearchKeyDown}
         onClearSearch={handleClearSearch}
       />
@@ -671,7 +735,7 @@ function GitModuleGroupsView(props: {
           searchQuery={searchQuery}
           placeholder={searchCopy.placeholder}
           ariaLabel={searchCopy.ariaLabel}
-          onSearchChange={handleSearchChange}
+          onSearchQueryChange={handleSearchChange}
           onSearchKeyDown={handleSearchKeyDown}
           onClearSearch={handleClearSearch}
         />
@@ -784,37 +848,27 @@ function GitModuleSearch(props: {
   readonly searchQuery: string;
   readonly placeholder: string;
   readonly ariaLabel: string;
-  readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  readonly onSearchQueryChange: (value: string) => void;
   readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onClearSearch: () => void;
 }): ReactNode {
   return (
     <div className="shrink-0 bg-background/50 px-2 py-1.5">
-      <InputGroup className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35">
-        <InputGroupAddon align="inline-start">
-          <Search className="size-3.5" aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="text"
-          value={props.searchQuery}
-          onChange={props.onSearchChange}
-          onKeyDown={props.onSearchKeyDown}
-          placeholder={props.placeholder}
-          aria-label={props.ariaLabel}
-          className="text-ui-sm"
-        />
-        {props.searchQuery.length > 0 ? (
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton
-              size="icon-xs"
-              onClick={props.onClearSearch}
-              aria-label="Clear filter"
-            >
-              <X className="size-3.5" aria-hidden />
-            </InputGroupButton>
-          </InputGroupAddon>
-        ) : null}
-      </InputGroup>
+      <PanelSearchField
+        value={props.searchQuery}
+        onValueChange={props.onSearchQueryChange}
+        onClear={props.onClearSearch}
+        onClose={null}
+        onKeyDown={props.onSearchKeyDown}
+        ref={null}
+        combobox={null}
+        placeholder={props.placeholder}
+        label={props.ariaLabel}
+        clearLabel="Clear filter"
+        closeLabel=""
+        testIdPrefix="git-selected-repo-filter"
+        className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35"
+      />
     </div>
   );
 }
@@ -937,7 +991,7 @@ function GitModuleGroupView(props: {
       {props.expanded ? (
         <div
           className={cn(
-            "bg-background/55",
+            "ml-3 bg-foreground/[0.03]",
             expandedFileBody && "overflow-visible",
           )}
           style={gitSectionStickyStyle(sectionStickyTop)}
@@ -979,8 +1033,6 @@ function GitModuleHeader(props: {
     module.files.length === 1 ? "file" : "files"
   }`;
   const showCount = !props.expanded || module.files.length === 0;
-  const tooltip = moduleHeaderTooltip({ module, countLabel, parentLabel });
-  const path = moduleHeaderPath(module);
   const showStatusIcon = moduleHeaderStatusVisible(
     parentReferenceStatus,
     module.unavailable,
@@ -992,11 +1044,19 @@ function GitModuleHeader(props: {
     [moduleKey, onHeaderRef],
   );
   return (
-    <TooltipWrapper
-      label={<ModuleHeaderTooltipContent text={tooltip} />}
+    <HoverPreviewCard
+      content={
+        <ModuleHeaderPreviewContent
+          module={module}
+          countLabel={countLabel}
+          parentLabel={parentLabel}
+        />
+      }
       side="right"
       sideOffset={8}
       align="start"
+      open={undefined}
+      onOpenChange={undefined}
     >
       <button
         ref={setHeaderRef}
@@ -1024,17 +1084,20 @@ function GitModuleHeader(props: {
         />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate text-ui-sm font-semibold text-foreground/90">
+            <span className="min-w-0 flex-1 truncate text-ui-sm font-semibold text-foreground/90">
               {module.label}
             </span>
-            {path === null ? null : (
-              <StartTruncatedText className="ml-auto hidden min-w-0 max-w-[45%] shrink text-ui-xs text-muted-foreground @min-[20rem]:block">
-                {path}
-              </StartTruncatedText>
-            )}
+            {module.kind === "submodule" ? (
+              <span
+                className="shrink-0 rounded-sm bg-foreground/6 px-1.5 py-0.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground"
+                data-testid={`git-module-kind-${moduleIdentifier(module)}`}
+              >
+                Submodule
+              </span>
+            ) : null}
             {showCount ? (
               <span
-                className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
+                className="ml-auto shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
                 data-testid={`git-module-count-${moduleIdentifier(module)}`}
               >
                 {countLabel}
@@ -1049,12 +1112,17 @@ function GitModuleHeader(props: {
             )}
           </span>
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-            {module.kind === "submodule" ? (
-              <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 font-medium">
-                submodule
-              </span>
-            ) : null}
-            <span className="min-w-0 truncate">{module.headLabel}</span>
+            <Badge
+              variant="outline"
+              className="min-w-0 max-w-full shrink rounded-full px-1.5 font-normal text-muted-foreground"
+            >
+              {module.headKind === "branch" ? (
+                <GitBranch data-icon="inline-start" aria-hidden />
+              ) : (
+                <GitCommitHorizontal data-icon="inline-start" aria-hidden />
+              )}
+              <span className="truncate">{module.headLabel}</span>
+            </Badge>
             {showStatusIcon ? (
               <span
                 className={parentReferenceStatusClassName(
@@ -1063,13 +1131,26 @@ function GitModuleHeader(props: {
                 )}
                 data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
               >
-                <TriangleAlert className="size-3 shrink-0" aria-hidden />
+                {parentReferenceStatus === "differs" ? (
+                  <>
+                    <GitCommitHorizontal
+                      className="size-3 shrink-0"
+                      aria-hidden
+                    />
+                    <span className="truncate">Differs from parent</span>
+                  </>
+                ) : (
+                  <>
+                    <TriangleAlert className="size-3 shrink-0" aria-hidden />
+                    <span className="truncate">{parentLabel}</span>
+                  </>
+                )}
               </span>
             ) : null}
           </span>
         </span>
       </button>
-    </TooltipWrapper>
+    </HoverPreviewCard>
   );
 }
 
@@ -1078,11 +1159,9 @@ function parentReferenceStatusClassName(
   unavailable: boolean,
 ): string {
   return cn(
-    "flex min-w-0 items-center gap-1",
-    (unavailable ||
-      status === "differs" ||
-      status === "conflicted" ||
-      status === "unavailable") &&
+    "ml-auto flex min-w-0 shrink items-center gap-1",
+    status === "differs" && "font-medium text-muted-foreground",
+    (unavailable || status === "conflicted" || status === "unavailable") &&
       "font-medium text-warning",
   );
 }

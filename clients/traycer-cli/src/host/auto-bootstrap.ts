@@ -7,7 +7,11 @@ import { CliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import { createServiceController, serviceLabelFor } from "../service";
-import { provisionHost, type HostProvisionResult } from "./provision";
+import {
+  provisionHost,
+  type HostProvisionResult,
+  type HostSatisfactionPolicy,
+} from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 
@@ -42,7 +46,11 @@ export type AutoBootstrapReason =
   | "service-registration-warning";
 
 export type AutoBootstrapStatus =
-  "skipped" | "ready" | "installed" | "service-registered" | "failed";
+  | "skipped"
+  | "ready"
+  | "installed"
+  | "service-registered"
+  | "failed";
 
 export interface AutoBootstrapDecision {
   readonly status: AutoBootstrapStatus;
@@ -232,7 +240,7 @@ export async function maybeAutoBootstrap(
     decision.status !== "service-registered" &&
     decision.status !== "installed"
   ) {
-    // "skipped" or "ready" - nothing to do.
+    // "skipped" or "ready" - no provisioning to do.
     opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
@@ -256,21 +264,25 @@ export async function maybeAutoBootstrap(
       ...installSourceLogFields(source),
     });
     const isOwnBuild = source.kind === "local-file";
-    const targetVersion =
-      source.kind === "registry" && source.versionRequest !== "latest"
-        ? source.versionRequest
-        : null;
-    const installTargetVersion = isServiceOnly
-      ? null
-      : isOwnBuild
-        ? config.version
-        : targetVersion;
+    const sourceSatisfaction: HostSatisfactionPolicy = isOwnBuild
+      ? { kind: "exact", version: config.version }
+      : source.kind === "registry" && source.versionRequest !== "latest"
+        ? {
+            kind: "implicit-registry-minimum",
+            version: source.versionRequest,
+          }
+        : { kind: "presence" };
+    // A service-only bootstrap repairs registration for existing bytes. It
+    // must never replace those bytes just because its source policy differs.
+    const satisfaction: HostSatisfactionPolicy = isServiceOnly
+      ? { kind: "presence" }
+      : sourceSatisfaction;
     const recordVersionOverride =
       isServiceOnly || !isOwnBuild ? null : config.version;
     const result = await provisionHost({
       runtime: opts.runtime,
       resolveInstallSource: () => Promise.resolve(source),
-      targetVersion: installTargetVersion,
+      satisfaction,
       recordVersionOverride,
       enableLinger: true,
       // First-run via standalone CLI: the SEA binary is the running
@@ -286,6 +298,11 @@ export async function maybeAutoBootstrap(
       // be a no-op anyway.
       force: false,
       onProgress: opts.onProgress,
+      // Auto-bootstrap is implicit (it runs off another command), so there
+      // is no operator waiting on it to answer a sign-in prompt - the
+      // pre-flight belongs to the explicit `host install` / `host ensure` /
+      // `host service install` commands.
+      beforeMutate: null,
     });
     const projected = projectProvisionResult(result);
     opts.runtime.logger.info("Auto-bootstrap provisioning completed", {

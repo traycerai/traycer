@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import {
@@ -25,9 +24,11 @@ function makeEditor(): Editor {
     element: el,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "t",
+      getPlaceholder: () => "t",
       onSubmit: { current: () => {} },
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

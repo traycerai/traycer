@@ -24,23 +24,77 @@ export type ProviderRateLimitViewState =
   | { readonly kind: "loading" }
   | { readonly kind: "error" }
   | { readonly kind: "empty" }
-  | { readonly kind: "data"; readonly data: ProviderRateLimits };
+  | {
+      readonly kind: "data";
+      readonly data: ProviderRateLimits;
+      /**
+       * True when `data` is a retained last-known-good reading shown after the
+       * latest poll failed - a transient envelope reason
+       * (`usage_fetch_failed`/`timeout`/`connection_failed` retaining a
+       * `lastGood`) or a thrown query-level refetch over good data - rather
+       * than a fresh reading. The Settings card dims it in place and surfaces a
+       * failed-refresh note, the same degraded treatment the header popover
+       * gives this state. Always `false` for a fresh reading, and for an
+       * authoritative `available: false` reason (which replaces the picture).
+       */
+      readonly degraded: boolean;
+      /**
+       * The specific transient reason driving `degraded` when the envelope
+       * itself is the cause, so the caller can show that plain-language copy
+       * instead of the generic "refresh failed". `null` when not degraded, or
+       * degraded only because the query's own last fetch threw (no specific
+       * wire reason to report), mirroring
+       * `PopoverProviderRateLimitState.degradedReason`.
+       */
+      readonly degradedReason: RateLimitUnavailableReason | null;
+      /**
+       * Epoch-ms time of the reading being shown - the ORIGINAL `lastGoodAt`,
+       * never the failed attempt's time, so a dimmed reading's "Updated Xm ago"
+       * can't read as fresh. `null` only for an authoritative unavailable arm
+       * (nothing dated to show).
+       */
+      readonly lastGoodAt: number | null;
+    };
 
 export function resolveProviderRateLimitViewState(
   props: ProviderRateLimitQueryState,
 ): ProviderRateLimitViewState {
   if (props.isPending && props.isFetching) return { kind: "loading" };
-  if (props.isError) return { kind: "error" };
+  const envelope = props.envelope ?? null;
   // Retention through a transient failure (`usage_fetch_failed`, `timeout`,
-  // `connection_failed`) resolves to the envelope's `lastGood` reading here,
-  // same as the popover - this surface just has no dimmed treatment of its
-  // own to layer on top (Settings card has no "degraded" concept today), so a
-  // retained reading renders exactly like a fresh one. An authoritative
-  // reason (`rate_limits_not_available` and friends) replaces the picture
-  // entirely, same as before.
-  const data = resolveRetainedProviderRateLimits(props.envelope ?? null);
-  if (data === null) return { kind: "empty" };
-  return { kind: "data", data };
+  // `connection_failed`) or a thrown query-level refresh failure resolves to
+  // the envelope's last usable reading here, same as the popover. TanStack
+  // keeps successful `data` when a background refetch throws, so `isError`
+  // must only win when there is no cached snapshot to render. An authoritative
+  // reason (`rate_limits_not_available` and friends) still replaces the
+  // picture entirely, same as before.
+  const data = resolveRetainedProviderRateLimits(envelope);
+  if (data !== null) {
+    // Degradation and the retained timestamp only apply to an *available*
+    // reading. An authoritative `available: false` reason replaces the picture
+    // outright (`resolveRetainedProviderRateLimits` already decided nothing is
+    // shown dimmed), so it carries no stale treatment and no timestamp.
+    const degradedReason = data.available
+      ? envelopeDegradedReason(envelope)
+      : null;
+    return {
+      kind: "data",
+      data,
+      degraded: data.available && (props.isError || degradedReason !== null),
+      degradedReason,
+      lastGoodAt: data.available ? (envelope?.lastGoodAt ?? null) : null,
+    };
+  }
+  if (props.isError) return { kind: "error" };
+  // No reading and no failure to report, but work is in flight - which now
+  // includes a read whose failure was SUPPRESSED because the queue scheduled a
+  // delayed collection for it (callers fold that window into `isFetching`).
+  // Without this the section fell through to `empty` and rendered a blank card
+  // for the whole recovery window, then popped to data - the silent half of
+  // the visible-failure-then-silent-success pair. `empty` still covers the
+  // genuinely-nothing case, where nothing is fetching.
+  if (props.isFetching) return { kind: "loading" };
+  return { kind: "empty" };
 }
 
 /**
@@ -73,9 +127,9 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
 > = {
   cli_not_found: "the CLI isn't installed",
   unsupported_provider: "this provider isn't supported",
-  invalid_response: "the CLI returned an unexpected response",
+  invalid_response: "the provider returned an unexpected response",
   timeout: "the request timed out",
-  connection_failed: "couldn't connect to the CLI",
+  connection_failed: "couldn't connect to the provider",
   sdk_incompatible: "this SDK version doesn't support usage limits",
   rate_limits_not_available: "not available for this account",
   insufficient_permissions:
@@ -114,6 +168,7 @@ export type PopoverProviderRateLimitState =
   | { readonly kind: "error" }
   | {
       readonly kind: "unavailable";
+      readonly provider: ProviderRateLimits["provider"];
       readonly reason: RateLimitUnavailableReason;
     }
   | {
@@ -144,7 +199,17 @@ export function resolvePopoverProviderRateLimitState(
     // Once a queued fetch actually fails, TanStack moves the observer out of
     // `isPending` and into `isError`, revealing retryable error content instead
     // of staying hidden in Overview.
-    return props.isFetching || props.isPending
+    //
+    // `isError` is consulted rather than inferred from "idle with no data".
+    // Callers pass the SUPPRESSED value (`isRateLimitQueryFailure`), which is
+    // false while a read we stopped waiting for still has its delayed
+    // collection coming. On a COLD read there is no envelope to fall back on,
+    // so inferring the failure from idleness reported one anyway - and then
+    // silently succeeded when the collection landed, which is the exact
+    // visible-failure-then-silent-success transition the suppression exists to
+    // remove. A read that genuinely failed still arrives here with `isError`
+    // true (including once the follow-up budget is spent) and still reports.
+    return props.isFetching || props.isPending || !props.isError
       ? { kind: "cold" }
       : { kind: "error" };
   }
@@ -162,7 +227,11 @@ export function resolvePopoverProviderRateLimitState(
     // friends), or a transient reason with no retained `lastGood` yet -
     // either way `resolveRetainedProviderRateLimits` already decided there's
     // nothing to show dimmed, so this replaces the picture entirely.
-    return { kind: "unavailable", reason: data.reason };
+    return {
+      kind: "unavailable",
+      provider: data.provider,
+      reason: data.reason,
+    };
   }
   // A last-known-good snapshot is present, either fresh (`data` came straight
   // from `envelope.latest`) or retained across a transient failure (`data`
@@ -204,9 +273,10 @@ export function titleCaseFromToken(value: string): string {
 /**
  * A provider's plan/tier label, where one is fetched - the header popover
  * shows this as a chip next to the provider name (Core Flows: "where the
- * provider reports one"). Only Codex (`planType`) and Claude Code
- * (`subscriptionType`) currently report a plan/tier; OpenRouter and Kilo Code
- * have no analogous field, so they always resolve to `null` and render no chip.
+ * provider reports one"). Codex (`planType`), Claude Code (`subscriptionType`),
+ * and Grok (`subscriptionTier`) report a plan/tier; OpenRouter, Kilo Code,
+ * Hugging Face and Cursor have no analogous field, so they always resolve to
+ * `null` and render no chip.
  */
 export function resolveProviderPlanLabel(
   data: AvailableProviderRateLimits,
@@ -218,8 +288,22 @@ export function resolveProviderPlanLabel(
       return data.subscriptionType !== null
         ? titleCaseFromToken(data.subscriptionType)
         : null;
+    // Grok reports a branded, display-ready tier token ("SuperGrok",
+    // "SuperGrok Heavy"), not a SNAKE_CASE enum - so it's shown verbatim
+    // rather than through `titleCaseFromToken`, which would lower-case the
+    // intra-word capital ("Supergrok").
+    case "grok":
+      return data.subscriptionTier;
+    case "opencode":
+      return "Go";
+    // None of the credit providers report a tier - Hugging Face's billing-usage
+    // endpoint carries no plan field either, and Cursor's current-period usage
+    // reports the plan's SIZE (an included-credit allowance) but never its
+    // NAME - so all four render no chip.
     case "openrouter":
     case "kilocode":
+    case "huggingface":
+    case "cursor":
       return null;
   }
 }

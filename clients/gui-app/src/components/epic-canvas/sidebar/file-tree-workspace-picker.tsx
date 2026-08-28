@@ -1,9 +1,8 @@
 /**
  * Workspace picker for the file-tree panel. Its popover shares the same
  * building blocks as the git diff and terminal pickers - an editable
- * `WorktreePickerHostSection` (selecting a host swaps the app-wide
- * default host, which is this panel's scope, so the `[epicId, hostId]`
- * selection and folder query re-resolve automatically) above the flat
+ * `WorktreePickerHostSection` (selecting a host writes this panel's
+ * surface pin; folder queries resolve through that host) above the flat
  * searchable `WorktreeFolderList`.
  *
  * Data comes from the epic binding list so the file tree shows the same
@@ -15,12 +14,14 @@
  * `[epicId, hostId]` so multi-host users keep distinct selections.
  */
 import { useMemo, useState } from "react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
-import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useSurfaceHostClient } from "@/hooks/host/use-surface-host-pin";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { CompactWorkspaceSwitcher } from "@/components/epic-canvas/sidebar/compact-workspace-switcher";
 
 export interface FileTreeWorkspacePickerProps {
@@ -28,6 +29,7 @@ export interface FileTreeWorkspacePickerProps {
   readonly hostId: string | null;
   readonly selectedPath: string | null;
   readonly onSelectPath: (path: string) => void;
+  readonly surfaceKey: string;
 }
 
 export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
@@ -36,13 +38,24 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
   // selection - the first click on a tree row then only dismisses the
   // popover instead of opening the file.
   const [open, setOpen] = useState(false);
-  const listQuery = useWorktreeListBindingsForEpic({
+  const client = useSurfaceHostClient(props.hostId);
+  const listQuery = useWorktreeListBindingsForEpicForClient({
+    client,
     epicId: props.epicId,
     enabled: props.hostId !== null,
   });
+  // Host-proven-missing rows are hidden (nothing to browse); the current
+  // selection is exempt so a just-deleted selected root keeps its labeled row
+  // until the user picks a live one.
   const rows = useMemo(
-    () => listQuery.data?.rows ?? [],
-    [listQuery.data?.rows],
+    () =>
+      withoutResolvedMissingRows(
+        listQuery.data?.rows ?? [],
+        props.hostId === null || props.selectedPath === null
+          ? null
+          : { hostId: props.hostId, runningDir: props.selectedPath },
+      ),
+    [listQuery.data?.rows, props.hostId, props.selectedPath],
   );
   const selectedRow =
     rows.find((row) => row.runningDir === props.selectedPath) ?? null;
@@ -66,7 +79,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
       contentClassName="w-[min(90vw,28rem)] gap-0 p-0"
       contentTestId="file-tree-workspace-picker-popover"
     >
-      <WorktreePickerHostSection />
+      <WorktreePickerHostSection surfaceKey={props.surfaceKey} />
       <WorktreeFolderListBody
         isPending={listQuery.isPending}
         isError={listQuery.isError}
@@ -80,6 +93,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
           setOpen(false);
         }}
         autoFocusSearch={false}
+        emptyMessage="No worktrees found."
       />
     </CompactWorkspaceSwitcher>
   );
@@ -90,7 +104,7 @@ interface SelectedWorkspaceRoot {
 }
 
 function selectedWorkspaceRoot(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
   selectedPath: string | null,
 ): SelectedWorkspaceRoot | null {
   if (selectedPath === null) return null;

@@ -1,5 +1,5 @@
-import "../../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
 import {
   applyLandingDraftDesktopProjection,
   emptyLandingDraftWorkspaceSnapshot,
@@ -12,6 +12,7 @@ import {
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import * as landingImageGc from "@/lib/composer/landing-image-gc";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -60,6 +61,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
+  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
@@ -71,6 +73,18 @@ import type {
 } from "@/lib/windows/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+// `readCurrentLandingDraftWorkspaceSnapshot` resolves the app-wide host
+// imperatively via `activeHostIdOrNull()` (see landing-draft-store.ts), which
+// reads the selection authority's projection. No provider is mounted in this
+// suite, so the store is SEEDED below rather than the reader stubbed: the
+// spine accessor this used to mock now answers `null` for every host by
+// design (P4.2/D17 deleted the active slot), so a stub of it would have gone
+// on passing while the production read resolved nothing. Seeding what the
+// reader actually asks about keeps this suite able to catch that.
+
+const HOST_A = "host-a";
 
 const HAIKU_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -95,27 +109,27 @@ const WORKSPACE_A = {
   path: "/tmp/workspace-a",
   name: "workspace-a",
   repoIdentifier: { owner: "traycerai", repo: "workspace-a" },
+  hostId: null,
 };
 const WORKSPACE_B = {
   path: "/tmp/workspace-b",
   name: "workspace-b",
   repoIdentifier: { owner: "traycerai", repo: "workspace-b" },
+  hostId: null,
 };
 const WORKSPACE_C = {
   path: "/tmp/workspace-c",
   name: "workspace-c",
   repoIdentifier: { owner: "traycerai", repo: "workspace-c" },
+  hostId: null,
 };
 function resetStore(): void {
+  setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
   });
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useSettingsStore.setState({
     composerMode: "chat",
   });
@@ -165,6 +179,7 @@ function numberedWorkspace(index: number) {
     path: `/tmp/workspace-${index}`,
     name: `workspace-${index}`,
     repoIdentifier: null,
+    hostId: null,
   };
 }
 
@@ -231,6 +246,7 @@ describe("removeLandingDraftWorkspaceFolder / setLandingDraftWorkspacePrimary (p
       path: "/tmp/non-git",
       name: "non-git",
       repoIdentifier: null,
+      hostId: null,
     };
     const workspace = workspaceOf([WORKSPACE_A, nonGitFolder]);
     const switched = setLandingDraftWorkspacePrimary(
@@ -245,6 +261,12 @@ describe("useLandingDraftStore", () => {
   beforeEach(() => {
     window.localStorage.clear();
     resetStore();
+    // The app-wide host every draft snapshot buckets against (see the note at
+    // the top of this file).
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: HOST_A,
+    });
   });
 
   afterEach(() => {
@@ -429,6 +451,18 @@ describe("useLandingDraftStore", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
   });
 
+  it("createDraftWithId uses a pre-minted id verbatim", () => {
+    const { createDraftWithId } = useLandingDraftStore.getState();
+    const preMintedId = "pre-minted-id-123";
+
+    const id = createDraftWithId(preMintedId, null);
+
+    expect(id).toBe(preMintedId);
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(preMintedId);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].id).toBe(preMintedId);
+  });
+
   it("setDraftContent stores content on the target draft and bails on no-op writes", () => {
     const { createDraft, setDraftContent } = useLandingDraftStore.getState();
 
@@ -496,14 +530,24 @@ describe("useLandingDraftStore", () => {
 
   it("keeps workspace snapshots independent per draft", () => {
     useWorkspaceFoldersStore.setState({
-      folders: [WORKSPACE_A.path],
-      folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
+      byHost: {
+        [HOST_A]: {
+          folders: [WORKSPACE_A.path],
+          folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
+          primaryPath: WORKSPACE_A.path,
+        },
+      },
     });
     const draftA = useLandingDraftStore.getState().createDraft(null);
 
     useWorkspaceFoldersStore.setState({
-      folders: [WORKSPACE_B.path],
-      folderInfoByPath: { [WORKSPACE_B.path]: WORKSPACE_B },
+      byHost: {
+        [HOST_A]: {
+          folders: [WORKSPACE_B.path],
+          folderInfoByPath: { [WORKSPACE_B.path]: WORKSPACE_B },
+          primaryPath: WORKSPACE_B.path,
+        },
+      },
     });
     const draftB = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore
@@ -628,7 +672,10 @@ describe("useLandingDraftStore", () => {
     expect(draftWorkspace.primaryPath).toBe(WORKSPACE_B.path);
     // The global store was never touched by a draft-scoped mutation - it
     // has no folders at all in this test, so its primary stays null.
-    expect(useWorkspaceFoldersStore.getState().primaryPath).toBeNull();
+    expect(
+      selectWorkspaceFoldersBucket(useWorkspaceFoldersStore.getState(), HOST_A)
+        .primaryPath,
+    ).toBeNull();
   });
 
   it("a folder outside the draft's workspace is not settable as primary (no-op)", () => {
@@ -1103,5 +1150,343 @@ describe("useLandingDraftStore", () => {
       textContent("survives reload"),
     );
     expect(parsed.state?.drafts?.[0]?.settings).toBeNull();
+  });
+
+  // Mechanism A (round 5): the strip lives at the two SERIALIZATION seams — the
+  // localStorage `partialize` and the desktop projection — NOT in
+  // `setDraftContent`. The in-memory draft is canonical and keeps a paste's
+  // still-pending b64 node so a keyed remount / in-session navigate-back can
+  // re-ingest it; only the serialized forms are guaranteed base64-free.
+  describe("base64 image nodes strip only at the serialization seams", () => {
+    const mixedPendingContent: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "A" },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "pending-b64",
+                fileName: "pending.png",
+                b64content: "YWJj",
+                mimeType: "image/png",
+                size: 3,
+              },
+            },
+            { type: "text", text: "B" },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "stored-hash",
+                fileName: "stored.png",
+                hash: "a".repeat(64),
+                mimeType: "image/png",
+                size: 10,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const strippedContent: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "A" },
+            { type: "text", text: "B" },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "stored-hash",
+                fileName: "stored.png",
+                hash: "a".repeat(64),
+                mimeType: "image/png",
+                size: 10,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    it("setDraftContent keeps the pending b64 node in the canonical in-memory draft", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      useLandingDraftStore
+        .getState()
+        .setDraftContent(id, mixedPendingContent, null);
+      // Verbatim — this is the content the keyed remount reads back and the
+      // mount-time re-entry re-ingests.
+      expect(
+        useLandingDraftStore.getState().drafts.find((d) => d.id === id)
+          ?.content,
+      ).toEqual(mixedPendingContent);
+    });
+
+    it("the desktop projection strips the pending b64 node (keeping text + hash)", () => {
+      const patches: DesktopPerWindowStatePatch[] = [];
+      setLandingDraftDesktopProjectionBridge({
+        update: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+        flush: () => Promise.resolve(),
+        dispose: () => undefined,
+      });
+      try {
+        const id = useLandingDraftStore.getState().createDraft(null);
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(id, mixedPendingContent, null);
+        const outbound = patches.at(-1)?.landingDrafts;
+        expect(outbound).toHaveLength(1);
+        expect(outbound?.[0].content).toEqual(strippedContent);
+      } finally {
+        setLandingDraftDesktopProjectionBridge(null);
+      }
+    });
+
+    it("the localStorage partialize strips the pending b64 node (keeping text + hash)", async () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      useLandingDraftStore
+        .getState()
+        .setDraftContent(id, mixedPendingContent, null);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw ?? "{}") as {
+        state?: { drafts?: Array<{ id: string; content: JsonContent }> };
+      };
+      expect(parsed.state?.drafts?.[0]?.content).toEqual(strippedContent);
+    });
+
+    it("drops an attachmentGroup left empty after stripping its only b64 child from the serialized form", () => {
+      const onlyPending: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "attachmentGroup",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "only-pending",
+                  fileName: "x.png",
+                  b64content: "eA==",
+                  mimeType: "image/png",
+                  size: 1,
+                },
+              },
+            ],
+          },
+        ],
+      };
+      const patches: DesktopPerWindowStatePatch[] = [];
+      setLandingDraftDesktopProjectionBridge({
+        update: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+        flush: () => Promise.resolve(),
+        dispose: () => undefined,
+      });
+      try {
+        const id = useLandingDraftStore.getState().createDraft(null);
+        useLandingDraftStore.getState().setDraftContent(id, onlyPending, null);
+        // In-memory keeps the pending group verbatim...
+        expect(
+          useLandingDraftStore.getState().drafts.find((d) => d.id === id)
+            ?.content,
+        ).toEqual(onlyPending);
+        // ...but the projected form drops the now-empty attachmentGroup (strip
+        // returns the doc node, not null, once its children are gone).
+        expect(patches.at(-1)?.landingDrafts?.[0].content).toEqual({
+          type: "doc",
+          content: [],
+        });
+      } finally {
+        setLandingDraftDesktopProjectionBridge(null);
+      }
+    });
+  });
+
+  describe("[B1] empty-inbound clobber guard", () => {
+    it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
+      // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
+      // and the assertion is about whether the guard fires them, not the sweep.
+      // [B1-P2] mount→readiness is covered with the real GC in
+      // landing-image-gc.test.ts `[B1+B2]` (spyOn cannot intercept same-module
+      // internal calls from markLandingEditorMounted → markLandingDraftsReady).
+      const markReady = vi
+        .spyOn(landingImageGc, "markLandingDraftsReady")
+        .mockImplementation(() => undefined);
+      const markAuthoritative = vi
+        .spyOn(landingImageGc, "markLandingDraftsAuthoritativeNonEmpty")
+        .mockImplementation(() => undefined);
+      const patches: DesktopPerWindowStatePatch[] = [];
+      setLandingDraftDesktopProjectionBridge({
+        update: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+        flush: () => Promise.resolve(),
+        dispose: () => undefined,
+      });
+
+      try {
+        // The first host-owned snapshot is authoritative even when empty. Only
+        // later empty updates may be rejected as spurious live-window churn.
+        applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
+        const id = useLandingDraftStore.getState().createDraft(null);
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(id, textContent("alive draft"), null);
+        const inMemoryBefore = useLandingDraftStore.getState().drafts;
+        expect(inMemoryBefore).toHaveLength(1);
+        patches.length = 0;
+        markReady.mockClear();
+        markAuthoritative.mockClear();
+
+        // Spurious empty projection (registry churn / stale cold-start read).
+        applyLandingDraftDesktopProjection(
+          emptyWindowSnapshot({
+            landingDrafts: [],
+            activeLandingDraftId: null,
+          }),
+        );
+
+        // In-memory truth is preserved.
+        expect(useLandingDraftStore.getState().drafts).toEqual(inMemoryBefore);
+        expect(useLandingDraftStore.getState().activeDraftId).toBe(id);
+        // Guard re-projects outbound so disk reconverges to the live draft.
+        expect(patches).toHaveLength(1);
+        expect(patches[0].landingDrafts).toHaveLength(1);
+        expect(patches[0].landingDrafts?.[0]?.id).toBe(id);
+        expect(patches[0].activeLandingDraftId).toBe(id);
+        // Ready/authoritative gates must NOT flip on a bad empty inbound -
+        // that is the exact path that would fire a reaping reconcile.
+        expect(markReady).not.toHaveBeenCalled();
+        expect(markAuthoritative).not.toHaveBeenCalled();
+      } finally {
+        setLandingDraftDesktopProjectionBridge(null);
+        markReady.mockRestore();
+        markAuthoritative.mockRestore();
+      }
+    });
+
+    it("applies the first empty desktop hydrate over stale local drafts", () => {
+      const markReady = vi
+        .spyOn(landingImageGc, "markLandingDraftsReady")
+        .mockImplementation(() => undefined);
+      const patches: DesktopPerWindowStatePatch[] = [];
+      setLandingDraftDesktopProjectionBridge({
+        update: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+        flush: () => Promise.resolve(),
+        dispose: () => undefined,
+      });
+
+      try {
+        const staleId = useLandingDraftStore.getState().createDraft(null);
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(staleId, textContent("stale local draft"), null);
+        patches.length = 0;
+        markReady.mockClear();
+
+        applyLandingDraftDesktopProjection(
+          emptyWindowSnapshot({
+            landingDrafts: [],
+            activeLandingDraftId: null,
+          }),
+        );
+
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+        expect(patches).toEqual([]);
+        expect(markReady).toHaveBeenCalledOnce();
+      } finally {
+        setLandingDraftDesktopProjectionBridge(null);
+        markReady.mockRestore();
+      }
+    });
+
+    it("applies an empty inbound normally when in-memory drafts are already empty", () => {
+      const markReady = vi
+        .spyOn(landingImageGc, "markLandingDraftsReady")
+        .mockImplementation(() => undefined);
+      markReady.mockClear();
+
+      try {
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+
+        applyLandingDraftDesktopProjection(
+          emptyWindowSnapshot({
+            landingDrafts: [],
+            activeLandingDraftId: null,
+          }),
+        );
+
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+        // Empty+empty is a legitimate first projection: ready gate may fire.
+        expect(markReady).toHaveBeenCalled();
+      } finally {
+        markReady.mockRestore();
+      }
+    });
+  });
+
+  describe("mobile app draft model", () => {
+    afterEach(() => {
+      // Module-level product flag - must not leak across tests.
+      setMobileApp(false);
+    });
+
+    it("never mints a second draft in the mobile app, even over real content", () => {
+      setMobileApp(true);
+      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
+      const first = createDraft(null);
+      setDraftContent(first, textContent("half-typed task"), null);
+      // The phone's one stable composer: New task lands back on it.
+      const again = createDraft(null);
+      expect(again).toBe(first);
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(first);
+    });
+
+    it("returns the newest draft on a lastTouchedAt tie (later entry wins)", () => {
+      setMobileApp(true);
+      const { createDraft, createDraftWithId } =
+        useLandingDraftStore.getState();
+      // Restore paths can stamp several drafts within one millisecond;
+      // drafts are append-ordered, so the later entry is the newer one.
+      createDraftWithId("restored-older", null);
+      createDraftWithId("restored-newer", null);
+      const sameStamp = useLandingDraftStore
+        .getState()
+        .drafts.map((draft) => ({ ...draft, lastTouchedAt: 1_000 }));
+      useLandingDraftStore.setState({ drafts: sameStamp });
+      const reused = createDraft(null);
+      expect(reused).toBe("restored-newer");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
+    });
+
+    it("still honors explicit restore ids in the mobile app", () => {
+      setMobileApp(true);
+      const { createDraft, createDraftWithId } =
+        useLandingDraftStore.getState();
+      createDraft(null);
+      const restored = createDraftWithId("restored-draft", null);
+      expect(restored).toBe("restored-draft");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
+    });
   });
 });

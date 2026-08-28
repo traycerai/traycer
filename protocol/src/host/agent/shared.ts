@@ -6,6 +6,7 @@ import {
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -31,12 +32,15 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // `TuiHarnessId extends HarnessId` are both true at the type level, so a
 // surface-narrow value passes everywhere a `HarnessId` is expected.
 //
-// Cursor supports BOTH surfaces at the schema level: the GUI chat tab drives
-// the `@cursor/sdk` agent runtime in local mode, and the TUI tab can launch the
-// `cursor-agent` CLI in a PTY. It is therefore listed in `harnessIdSchema` and
-// in BOTH `guiHarnessIdSchema` and `tuiHarnessIdSchema`. The TUI surface is
-// hidden in the renderer for now (the adapter advertises only the GUI mode via
-// `listGuiHarnesses`'s `modes` field) until the CLI reaches feature parity.
+// Cursor is GUI-only in the product today: the GUI chat tab drives the
+// `@cursor/sdk` agent runtime in local mode. It is listed in `harnessIdSchema`
+// and `guiHarnessIdSchema`, and it stays in `tuiHarnessIdSchema` as a RESERVED
+// compatibility value only - a stable reserved id so existing persisted Cursor
+// Terminal-interface records keep parsing - NOT because a Cursor Terminal
+// launch path exists. There is none today: the host
+// adapter does not implement the TUI surface, the runtime TUI catalog omits
+// Cursor, and `epic.createTuiAgent` / `agent.create` reject `harnessId: "cursor"`
+// on the Terminal interface.
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
@@ -61,8 +65,52 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "amp",
   "devin",
   "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
+
+/**
+ * Frozen harness id set as the released `chat.subscribe@1.0–1.6` lines shipped
+ * it - i.e. everything before Reasonix, which first rides `1.7`. (`1.6` looked
+ * unreleased and is not: the committed released-baseline surface advertises it
+ * with exactly these nineteen ids.) Bound by the wire-freeze copies of every released server-frame schema
+ * that carries a harness id (runtime session/plan events, the active turn); a
+ * newer host must not project an id an installed older client's strict enum
+ * cannot decode.
+ *
+ * Deliberately NOT aliased to `guiHarnessIdSchemaV70`, even though the two sets
+ * coincide today: that one pins the `agent.*` RPC **major/minor** axis, this one
+ * pins the `chat.subscribe` **minor** axis. They are independent, and a future
+ * harness admitted to one line but frozen off the other would silently break
+ * whichever schema borrowed the wrong copy. Do NOT add new harnesses here.
+ */
+export const guiHarnessIdSchemaPreReasonix = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+export type GuiHarnessIdPreReasonix = z.infer<
+  typeof guiHarnessIdSchemaPreReasonix
+>;
 
 /**
  * Frozen harness id set as shipped in protocol v1.0. Used only by the frozen
@@ -108,10 +156,9 @@ export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
 /**
  * Frozen harness id set as shipped in protocol v3.0 (with Amp, before Devin/Pi).
  * Used only by the frozen v3.0 response schema of `agent.gui.listHarnesses` so
- * already-shipped v3.0 clients never receive post-v3.0 ids; the v4.0 line adds
- * them and v4→v3 / v4→v2 / v4→v1 bridges filter them for older callers. Do NOT
- * add new harnesses here - extend the latest `guiHarnessIdSchema` and use the
- * existing v4 bridge instead.
+ * already-shipped v3.0 clients never receive post-v3.0 ids. Do NOT add new
+ * harnesses here - extend the latest `guiHarnessIdSchema` and use the
+ * existing version bridges instead.
  */
 export const guiHarnessIdSchemaV30 = harnessIdSchema.extract([
   "claude",
@@ -131,6 +178,129 @@ export const guiHarnessIdSchemaV30 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
 
+/**
+ * Frozen harness id set as shipped in protocol v4.0 (with Devin/Pi, before
+ * Hermes/omp). Used only by the frozen v4.0 response schema of
+ * `agent.gui.listHarnesses` so already-shipped v4.0 clients never receive
+ * post-v4.0 ids. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing bridges instead.
+ */
+export const guiHarnessIdSchemaV40 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+]);
+export type GuiHarnessIdV40 = z.infer<typeof guiHarnessIdSchemaV40>;
+
+/**
+ * Frozen harness id set as shipped in protocol v5.0 (with Hermes, before omp).
+ *
+ * This line IS released - `cli-v1.1.8` (tagged 2026-07-25) shipped v5.0, so a
+ * client in the field strict-decodes exactly these 17 ids. omp therefore could
+ * not join v5.0 and opened v6.0 instead, with v6→v5 … v6→v1 bridges that drop
+ * post-v5.0 ids. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v6 bridge instead.
+ */
+export const guiHarnessIdSchemaV50 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+]);
+export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
+
+/**
+ * Frozen harness id set as shipped in protocol v6.0 (with omp, before
+ * Hugging Face).
+ *
+ * This line IS released - `cli-v1.1.9` (tagged 2026-07-29) shipped v6.0, so a
+ * client in the field strict-decodes exactly these 18 ids. `huggingface`
+ * therefore could not join v6.0 and opened v7.0 instead, with v7→v6 … v7→v1
+ * bridges that drop post-v6.0 ids. Do NOT add new harnesses here - extend the
+ * latest `guiHarnessIdSchema` and use the existing v7 bridge instead.
+ */
+export const guiHarnessIdSchemaV60 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+]);
+export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
+
+/**
+ * Frozen harness id set as shipped in protocol v7.0 (with Hugging Face).
+ *
+ * Taken when v7.1 opened for the catalog row's `authStatus`: v7.0 stops being
+ * the head line there, so it can no longer track the live enum. Identical to
+ * `guiHarnessIdSchema` at
+ * the freeze cut - the freeze pins the SET, so a future harness cannot widen a
+ * line v1.2.0-rc.1 peers already negotiate. Do NOT add new harnesses here -
+ * extend the latest `guiHarnessIdSchema`; a v8.0 bridge drops post-v7.0 ids
+ * for older callers.
+ */
+export const guiHarnessIdSchemaV70 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",
@@ -139,27 +309,82 @@ export const tuiHarnessIdSchema = harnessIdSchema.extract([
 ]);
 export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
-/**
- * Agent-to-agent participation gate — the single source of truth for which
- * agents can take part in A2A messaging:
- *
- *   - every GUI agent (A2A is provider-native via the MCP bridge), and
- *   - Claude Code TUI agents (the only TUI with monitor-backed inbox/reply).
- *
- * Other TUI harnesses (codex, opencode, cursor) have no inbox transport. Use
- * this for create/send gates; read-only discovery/transcript paths can still
- * show them.
- *
- * Note: this is purely the A2A gate. It is intentionally NOT the gate for
- * epic activity tracking — every agent (including codex/opencode TUI) still
- * contributes activity for the YJS-warmth signal.
- */
-export function canParticipateInA2A(target: {
+export type A2ACapabilityTarget = {
   readonly surface: "gui" | "tui";
   readonly harnessId: string | null;
-}): boolean {
+};
+
+/**
+ * A2A participation is TWO capabilities, not one, because the host owns two
+ * independent transports and they do not cover the same harnesses:
+ *
+ *   1. OUTBOUND TOOLS ({@link canUseA2ATools}) — the agent is handed the
+ *      host-owned `traycer_a2a` catalog at launch, so it can create, send,
+ *      inspect, and hold roles. Delivered over each provider's native MCP
+ *      path (GUI turns, Claude/Codex terminal launches) or the loopback HTTP
+ *      tool bridge (OpenCode).
+ *   2. INBOUND DELIVERY ({@link canReceiveA2AMessages}) — something can WAKE
+ *      the agent and hand it a message it never asked for. GUI agents get a
+ *      turn injected; a Claude Code terminal agent gets it through the
+ *      bundled `traycer monitor` background command (and can be spawned
+ *      headless for it). No other terminal harness has an inbox transport.
+ *
+ * Conflating the two is what the split exists to prevent: gating tool access
+ * on inbox capability starves Codex/OpenCode terminal agents of the shared
+ * catalog, while gating delivery on tool access accepts durable inbox rows
+ * that nothing will ever drain.
+ *
+ * Cursor is absent from both arms deliberately: `CursorAdapter` declares
+ * `surfaces: ["gui"]` and implements no `ITuiHarnessAdapter`, so a Cursor
+ * terminal agent cannot be launched at all, let alone handed a catalog.
+ *
+ * Note: neither predicate gates epic activity tracking — every agent
+ * (including codex/opencode TUI) still contributes activity for the
+ * YJS-warmth signal.
+ */
+export function canUseA2ATools(target: A2ACapabilityTarget): boolean {
+  if (target.surface === "gui") return true;
+  return (
+    target.harnessId === "claude" ||
+    target.harnessId === "codex" ||
+    target.harnessId === "opencode"
+  );
+}
+
+/**
+ * Can this agent be the RECEIVER of an A2A message — i.e. is there a
+ * transport that will wake it and hand the message over? See
+ * {@link canUseA2ATools} for why this is a separate question.
+ *
+ * Use this for send/create-target admission, role-awareness routing, and any
+ * "can I message this agent" capability the client renders. A tool-capable
+ * agent that fails this check can still send; it just cannot be sent to, so
+ * it must never be promised a reply.
+ */
+export function canReceiveA2AMessages(target: A2ACapabilityTarget): boolean {
   if (target.surface === "gui") return true;
   return target.harnessId === "claude";
+}
+
+// ─── Shared A2A message-size gate ──────────────────────────────────────────
+//
+// One accepted message is either stored in full or the send is rejected
+// before delivery/capture - truncation is never a recovery strategy. The
+// ceiling is shared (not host-domain-private) so every surface that
+// composes an A2A send body - today's host domain, and any future
+// pre-flight client check - agrees on the exact same byte count.
+
+/** Shared UTF-8 byte ceiling for a single A2A message body. */
+export const A2A_MESSAGE_MAX_UTF8_BYTES = 16 * 1024 * 1024;
+
+const UTF8_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of `value`. Uses `TextEncoder` (not `Buffer`) so this
+ * stays callable from browser-hosted surfaces, not just Node.
+ */
+export function utf8ByteLength(value: string): number {
+  return UTF8_ENCODER.encode(value).length;
 }
 
 // ─── Agent-to-agent unary surface (`agent.create` / `agent.list` /
@@ -193,6 +418,10 @@ export const AGENT_FACING_HARNESS_IDS = [
   "amp",
   "devin",
   "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -308,7 +537,8 @@ export type ConcreteProfileSelection = z.infer<
  * `model`, `agentMode`, `reasoningEffort`, and `fastMode` are explicit
  * nullable overrides. `null` means "not requested"; the resolver fills
  * defaults and returns warnings for currently unsupported combinations instead
- * of rejecting the whole create.
+ * of rejecting the whole create. `permissionMode` arrives in v3 below; v1 and
+ * v2 remain frozen to their released request shapes.
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
@@ -345,7 +575,7 @@ export const createAgentResponseSchema = z.object({
 export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 
 /**
- * `agent.create@2.0` request - identical to v1.0 except the nullable
+ * Frozen `agent.create@2.0` request - identical to v1.0 except the nullable
  * `profileId` override is replaced by an explicit `profileSelection` (see
  * `ProfileSelection` above). Removing `profileId` is why this ships as a new
  * major rather than an additive minor: v1.0 stays frozen and reachable
@@ -368,6 +598,27 @@ export const createAgentRequestSchemaV20 = z.object({
 });
 export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
 
+/**
+ * `agent.create@3.0` adds the required permission-mode choice. `null` is a
+ * compatibility-only sentinel emitted by the v2->v3 upgrade path so released
+ * callers retain their legacy sender-inheritance behavior; current tool/CLI
+ * callers always send a concrete mode. Making the field required keeps the
+ * released v2.0 wire immutable.
+ */
+/**
+ * `agentMode` is RETAINED here even though Epic Mode was removed from the
+ * product. v3.0 is itself released (it shipped in the v1.1.8 tags), so a
+ * current client and a v1.1.8 host both negotiate 3.0 and NO bridge runs
+ * between them - dropping the key would simply be rejected by that host, which
+ * still requires it. Callers state the one remaining mode; the field goes when
+ * the released client/host floor passes this version, together with the
+ * equally-blocked `prepareTuiLaunch` / `createTuiAgent` request shapes.
+ */
+export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
+  permissionMode: permissionModeSchema.nullable(),
+});
+export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
+
 export const agentSelectionGuideRequestSchema = z.object({
   epicId: z.string(),
   senderAgentId: z.string(),
@@ -376,13 +627,10 @@ export type AgentSelectionGuideRequest = z.infer<
   typeof agentSelectionGuideRequestSchema
 >;
 
-// A single contributing guide file. The host resolves every non-empty guide
-// and hands the formatter everything it needs to render without parsing:
-//   - `workspacePath` (workspace scope only) is the workspace root the guide
-//     governs, used for the section header — no path stripping at render time.
-//   - `priority` orders the layered output (higher = more specific; wins on
-//     conflict), so the formatter never relies on array order.
-//   - `path` is the absolute guide file, kept for attribution.
+// A single contributing guide file. Hosts emit workspace sources before the
+// global source, with higher priority values for more specific workspaces.
+// Clients sort by priority and layer workspace instructions over the global
+// guide. The paths are kept for attribution in the rendered instructions.
 export const agentSelectionGuideSourceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),
@@ -420,10 +668,10 @@ export type AgentSelectionGuideResponse = z.infer<
 >;
 
 // Settings/onboarding surface for the global guide file (~/.traycer/...).
-// Distinct from `agent.selectionGuide`, which resolves the full
-// workspace+global hierarchy for an agent. These are default-host scoped and
-// carry no epic. Provider choices are already host state, so the host computes
-// the generated default from its current provider configuration.
+// Distinct from `agent.selectionGuide`, which serves the guide to an agent.
+// These are default-host scoped and carry no epic. Provider choices are
+// already host state, so the host computes the generated default from its
+// current provider configuration.
 export const agentSelectionGuideGlobalGetRequestSchema = z.object({});
 export type AgentSelectionGuideGlobalGetRequest = z.infer<
   typeof agentSelectionGuideGlobalGetRequestSchema
@@ -520,15 +768,15 @@ export type ListHarnessModelsResponse = z.infer<
  * uuid-keyed map) so the wire shape lines up with `listEpicCollaborators`
  * and the rest of the `list*` family in this registry.
  *
- * `surface` lets a caller route to the right per-agent UI (e.g. fetch a
- * GUI chat transcript vs a TUI scrollback) without a second round-trip.
+ * `surface` lets a caller route to the right per-agent UI (e.g. a GUI chat
+ * interface vs a TUI terminal interface) without a second round-trip.
  * `isLocal` is the host's authoritative answer to "did I mint this
  * session?" - `hostId` equals the responding host's id. Cross-host
  * entries are returned for read-only enumeration; mutating RPCs
  * (`agent.sendMessage`) reject them with `RECEIVER_NOT_LOCAL` until the
  * relay/mailbox transport lands.
  */
-export const agentSummarySchema = z.object({
+const releasedAgentSummarySchema = z.object({
   id: z.string(),
   parentId: z.string().nullable(),
   hostId: z.string(),
@@ -570,6 +818,20 @@ export const agentSummarySchema = z.object({
    */
   isWorktree: z.boolean(),
 });
+
+export const agentRunConfigSchema = z.object({
+  model: z.union([
+    z.object({ kind: z.literal("concrete"), slug: z.string() }),
+    z.object({ kind: z.literal("provider-default") }),
+  ]),
+  reasoningEffort: z.string().nullable(),
+  fastMode: z.boolean().nullable(),
+});
+export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
+
+export const agentSummarySchema = releasedAgentSummarySchema.extend({
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 
 export const listAgentsScopeSchema = z.enum(["user", "all"]);
@@ -598,7 +860,7 @@ export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 // build time, so an old CLI would hit a strict enum on those rows. v1.0 is
 // frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
 // callers. Do not add new harnesses here - use the existing v2 bridge.
-export const agentSummarySchemaV10 = agentSummarySchema.extend({
+export const agentSummarySchemaV10 = releasedAgentSummarySchema.extend({
   harnessId: harnessIdSchema
     .extract(["claude", "codex", "opencode", "traycer", "cursor"])
     .nullable(),
@@ -614,7 +876,7 @@ export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 // predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
 // actually shipped (before Amp). Do not add new harnesses here - use the
 // existing version bridges.
-export const agentSummarySchemaV20 = agentSummarySchema.extend({
+export const agentSummarySchemaV20 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV20.nullable(),
 });
 export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
@@ -626,16 +888,85 @@ export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 // `agent.list` enumerates every agent in the epic - including Devin/Pi GUI
 // harness chats a newer client created - so an already-shipped v3.0 client
 // would hit a strict enum on those rows. v3.0 is frozen here as actually
-// shipped (with Amp); the v4.0 line carries Devin/Pi rows and v4→v3 / v4→v2 /
-// v4→v1 bridges drop them for older callers. Do not add new harnesses here -
-// use the existing v4 bridge.
-export const agentSummarySchemaV30 = agentSummarySchema.extend({
+// shipped (with Amp). Do not add new harnesses here - use the existing
+// version bridges.
+export const agentSummarySchemaV30 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV30.nullable(),
 });
 export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV30),
 });
 export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
+
+// ── Frozen protocol-v4.0 agent.list response (with Devin/Pi, pre-Hermes/omp) ─
+// `agent.list` enumerates every agent in the epic - including Hermes/omp GUI
+// harness chats a newer client created - so an already-shipped v4.0 client
+// would hit a strict enum on those rows. v4.0 is frozen here as actually
+// shipped (with Devin/Pi); the v5.0 line carries Hermes/omp rows and v5→v4 /
+// v5→v3 / v5→v2 / v5→v1 bridges drop them for older callers. Do not add new
+// harnesses here - use the existing v5 bridge.
+export const agentSummarySchemaV40 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV40.nullable(),
+});
+export const listAgentsResponseSchemaV40 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV40),
+});
+export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
+
+// ── Frozen protocol-v5.0 agent.list response (with Hermes, before omp) ──────
+// `agent.list` enumerates every agent in the epic - including omp GUI harness
+// chats a newer client created - so an already-shipped v5.0 client would hit a
+// strict enum on those rows. This line IS released (`cli-v1.1.8` /
+// `host-v1.1.8`, both tagged 2026-07-25), so it is frozen here as actually
+// shipped; the v6.0 line carries omp rows and v6→v5 … v6→v1 bridges drop them
+// for older callers. Do not add new harnesses here - use the existing v6
+// bridge.
+export const agentSummarySchemaV50 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV50.nullable(),
+});
+export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV50),
+});
+export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
+
+// ── Frozen protocol-v6.0 agent.list response (with omp, pre-Hugging Face) ───
+// `agent.list` enumerates every agent in the epic - including Hugging Face GUI
+// harness chats a newer client created - so an already-shipped v6.0 client
+// would hit a strict enum on those rows. This line IS released (`cli-v1.1.9` /
+// `host-v1.1.9`, both tagged 2026-07-29), so it is frozen here as actually
+// shipped; the v7.0 line carries Hugging Face rows and v7→v6 … v7→v1 bridges
+// drop them for older callers. Do not add new harnesses here - use the
+// existing v7 bridge.
+export const agentSummarySchemaV60 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV60.nullable(),
+});
+export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV60),
+});
+export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
+
+// ── Frozen protocol-v7.0 agent.list response (with Hugging Face, pre-Reasonix)
+// `agent.list` enumerates every agent in the epic - including Reasonix GUI
+// harness chats a newer client created - so an already-shipped v7.0 client
+// would hit a strict enum on those rows. This line IS released (`cli-v1.2.0` /
+// `host-v1.2.0`, both tagged 2026-08-24), so it is frozen here as actually
+// shipped; the v8.0 line carries Reasonix rows and v8→v7 … v8→v1 bridges drop
+// them for older callers. Do not add new harnesses here - use the existing v8
+// bridge.
+//
+// The row body is hand-frozen off `releasedAgentSummarySchema` plus the
+// `runConfig` field v7.0 shipped, rather than `agentSummarySchema.extend(...)`:
+// pinning only the id over a LIVE body is the half-freeze
+// `guiHarnessOptionBaseShapeV70` had to correct in `gui/unary-schemas.ts`. A
+// field added to `agentSummarySchema` must not widen this released line.
+export const agentSummarySchemaV70 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV70.nullable(),
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
+export const listAgentsResponseSchemaV70 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV70),
+});
+export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
@@ -689,10 +1020,11 @@ export type SendAgentMessageResponse = z.infer<
  * XML-tagged string so a sibling agent can read it without re-implementing
  * the discriminated `messageSchema` shape. For GUI agents the host
  * serializes the persisted `messageSchema` array (`<user>` / `<assistant>`
- * blocks); for TUI agents the host best-effort returns whatever
- * scrollback its PTY buffer holds. TUI scrollback is not persisted, so the
- * resolver errors when the target TUI session is not local and currently
- * present in this host's PTY manager.
+ * blocks); for supported TUI agents the host reads structured conversation
+ * history through the harness provider SDK. Provider history survives the PTY
+ * closing; there is deliberately no raw scrollback fallback. TUI transcript
+ * reads remain local to the agent's bound host because its provider session
+ * store and credentials are host-local.
  */
 export const getAgentTranscriptRequestSchema = z.object({
   epicId: z.string(),
@@ -744,3 +1076,87 @@ export const stopAgentResponseSchema = z.object({
   stoppedAgentIds: z.array(z.string()),
 });
 export type StopAgentResponse = z.infer<typeof stopAgentResponseSchema>;
+
+/**
+ * `agent.fork`'s omit-default profile override. Deliberately NOT
+ * `profileSelectionSchema` above: that union's omit-default is `last_used`
+ * (a preference lookup for a freshly-minted agent) and it also carries the
+ * version-bridge-only `inherit_sender` arm, neither of which fits a fork -
+ * there is no "sender" being inherited (the source is an arbitrary existing
+ * agent, not the caller), and a fork's natural default is byte-for-byte
+ * continuation of whatever profile the SOURCE is already running under.
+ * Mirrors `AgentForkProfileSelection`
+ * (`traycer-host/src/domain/agent/agent-fork-service.ts`) field-for-field:
+ *
+ *   - `inherit` - omit-default. Keep running under the source's own profile.
+ *   - `ambient` - explicitly use the provider's ambient CLI login.
+ *   - `profile` - pin to a specific managed profile by id.
+ *
+ * Shares `managedProfileIdSchema`'s reserved-`"ambient"`-sentinel rejection:
+ * a `profile` arm can never name the literal ambient sentinel as a managed
+ * profile id - that intent is expressed exclusively through `{ kind:
+ * "ambient" }`.
+ */
+export const forkAgentProfileSelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("inherit") }),
+  z.object({ kind: z.literal("ambient") }),
+  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
+]);
+export type ForkAgentProfileSelection = z.infer<
+  typeof forkAgentProfileSelectionSchema
+>;
+
+/**
+ * `agent.fork@1.0` - clone an existing local agent (GUI chat or Claude Code
+ * terminal session) into a NEW agent seeded from the source's latest
+ * available checkpoint. Wraps the same core `forkAgentFromRequest` service
+ * (`traycer-host/src/domain/agent/agent-fork-service.ts`) the
+ * `traycer_fork_agent` A2A tool calls, so a wire caller (the CLI, or any
+ * future client) gets the transactional latest-checkpoint fork without
+ * recomposing the GUI's client-side orchestration
+ * (`validateForkProfile` → `prepareLaunch` → `createTuiAgent`, or
+ * `createChat` + `forkSource`).
+ *
+ *   - `senderAgentId` - the calling agent; the fork is parented to it (same
+ *     convention as `agent.create`). The service additionally asserts the
+ *     caller owns this agent (`assertAuthorizedSenderAgent`) - it just
+ *     names the fork's parent, so any agent the caller owns is fine here.
+ *   - `agentId` - the source to fork; may equal `senderAgentId`. Accepts an
+ *     unambiguous id PREFIX (`resolveAgentIdPrefix`), like the rest of the
+ *     A2A id-addressed surface.
+ *   - `permissionMode` - GUI forks only; a fork does NOT inherit the
+ *     source's mode. Terminal forks ignore it (no Traycer permission mode
+ *     exists on that surface).
+ *   - `workspace` - `null` inherits the SOURCE agent's binding (the fork
+ *     continues in the same directories); explicit entries bind the fork
+ *     elsewhere.
+ *   - `profileSelection` - see `forkAgentProfileSelectionSchema` above.
+ *
+ * Latest-checkpoint only, like the MCP tool: there is no boundary-selection
+ * parameter (a client-chosen fork point stays a GUI `createChat` +
+ * `forkSource` feature). Terminal forks stay Claude-only; other harnesses
+ * are refused for lacking a native session fork.
+ */
+export const forkAgentRequestSchema = z.object({
+  epicId: z.string(),
+  senderAgentId: z.string(),
+  agentId: z.string(),
+  name: z.string().min(1).nullable().default(null),
+  permissionMode: permissionModeSchema,
+  workspace: createAgentWorkspaceSchema,
+  profileSelection: forkAgentProfileSelectionSchema,
+});
+export type ForkAgentRequest = z.infer<typeof forkAgentRequestSchema>;
+
+/**
+ * Mirrors `AgentForkResponse` (`agent-fork-service.ts`) field-for-field.
+ */
+export const forkAgentResponseSchema = z.object({
+  agentId: z.string(),
+  sourceAgentId: z.string(),
+  forkedFromMessageId: z.string().nullable(),
+  warnings: z.array(z.string()),
+  effectiveProfileId: z.string().nullable(),
+  profileOverrideApplied: z.boolean(),
+});
+export type ForkAgentResponse = z.infer<typeof forkAgentResponseSchema>;

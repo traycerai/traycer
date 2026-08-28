@@ -132,6 +132,7 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
           segment={file}
           variant="row"
           headerFindUnitId={null}
+          initiallyOpen={false}
         />
       ))}
       {artifacts.map((artifact) => (
@@ -239,7 +240,7 @@ function undoBlockedTooltip(
 ): string | null {
   if (restore === null) return "Restore unavailable.";
   if (restore.accessRole !== "owner") {
-    return "Only the chat owner can restore files.";
+    return "Only the agent owner can restore files.";
   }
   if (restore.activeHostId !== manifest.capturingHostId) {
     return "Undo unavailable on this device.";

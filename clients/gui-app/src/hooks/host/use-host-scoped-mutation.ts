@@ -37,6 +37,27 @@ interface UseHostScopedMutationArgs<
    * mutation affects; an empty list means "no automatic invalidation."
    */
   readonly invalidateMethods: ReadonlyArray<keyof HostRpcRegistry & string>;
+  /**
+   * Success work that must land even if the caller unmounted mid-flight.
+   *
+   * TanStack skips the per-`mutate` callbacks once the observer has no
+   * listeners, while the mutation's own options still run from
+   * `Mutation.execute`. Anything whose omission would leave the HOST and the
+   * UI disagreeing - a resource the host created that nothing else will ever
+   * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
+   * site.
+   */
+  readonly onSuccess?:
+    | ((
+        data: ResponseOfMethod<HostRpcRegistry, Method>,
+        variables: RequestOfMethod<HostRpcRegistry, Method>,
+      ) => void)
+    | undefined;
+  /**
+   * Codes the caller handles inline (a confirm dialog). The default toast is
+   * skipped so the user is not told to "stop the run" AND asked to confirm.
+   */
+  readonly silentCodes?: readonly HostRpcError["code"][];
 }
 
 /**
@@ -77,8 +98,11 @@ export function useHostScopedMutationForClient<
     options: {
       mutationKey: args.mutationKey,
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_data, variables, ctx) => {
+      onSuccess: (data, variables, ctx) => {
         trackScopedMutationSuccess(args.mutationKey, variables);
+        // Before the host-id gate: this work is the caller's, and a null host
+        // id is a reason to skip invalidation, not to skip the caller.
+        args.onSuccess?.(data, variables);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
           void queryClient.invalidateQueries({
@@ -87,6 +111,7 @@ export function useHostScopedMutationForClient<
         }
       },
       onError: (error) => {
+        if (args.silentCodes?.includes(error.code) === true) return;
         toastFromHostError(error, args.errorMessage);
       },
     },

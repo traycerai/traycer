@@ -16,6 +16,7 @@ import {
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useEpicSendQueuedInvites } from "@/hooks/epic/use-epic-send-queued-invites-mutation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import type { InviteCardProps } from "./invite-card";
 import type { TeamsAccessProps, PeopleWithAccessProps } from "./access-lists";
 import type {
@@ -80,7 +81,7 @@ type SharingPanelAction =
 
 const INITIAL_SHARING_PANEL_STATE: SharingPanelState = {
   inviteInput: "",
-  selectedRole: "viewer",
+  selectedRole: "editor",
   queuedInvites: [],
   teamRolesById: {},
   revokeTarget: null,
@@ -115,8 +116,16 @@ export function useEpicSharingPanelController(
   const canInvitePeople = currentRole === "owner" || currentRole === "editor";
   const shareableTeams = useEpicShareableTeams();
 
+  // The Epic SESSION's client, and the mutations below moved with it: the
+  // list must agree with the host the grant/revoke/role writes land on, and
+  // both now name the host projecting this panel's Epic. This used to be the
+  // app-wide client, with a note that rebinding "would have to move the
+  // mutation hooks" - it did, and they are moved
+  // (`use-epic-collaborator-mutations.ts`, `use-epic-send-queued-invites`).
+  const collaboratorsHostClient = useEpicSessionHostClient();
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
-    refetchInterval: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+    client: collaboratorsHostClient,
+    poll: true,
     staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   });
   const lastFetchedAt =
@@ -194,7 +203,11 @@ export function useEpicSharingPanelController(
     });
 
     if (result.succeededNewInvites.length > 0) {
-      toast.success(`Invited ${result.succeededNewInvites.length} people`);
+      const invitedNoun =
+        result.succeededNewInvites.length === 1 ? "person" : "people";
+      toast.success(
+        `Invited ${result.succeededNewInvites.length} ${invitedNoun}`,
+      );
     }
 
     result.succeededReInvites.forEach((invite) => {
@@ -275,7 +288,7 @@ export function useEpicSharingPanelController(
   const handleShareTeam = (team: TeamRow) => {
     if (!isOwner) return;
     if (team.kind !== "unshared") return;
-    const role = state.teamRolesById[team.teamId] ?? "viewer";
+    const role = state.teamRolesById[team.teamId] ?? "editor";
     dispatch({
       type: "set-pending-action",
       pendingAction: {

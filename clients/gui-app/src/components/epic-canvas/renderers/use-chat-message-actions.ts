@@ -6,26 +6,32 @@ import type {
   ChatForkMode,
   ChatMessageActions,
 } from "@/components/chat/chat-message";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   buildAbForkWorkspaceSeed,
   buildForkWorkspaceSeed,
 } from "@/lib/worktree/fork-workspace-seed";
 import {
-  pendingForkChatStagingKey,
   readStagedWorktreeIntent,
-  useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  InterviewDeliveryRetryIdentity,
+} from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { ChatSurfaceNode } from "./chat-tile-types";
 import {
   hasUndoableFileEditsFromMessage,
   scopedArtifactCountFromMessage,
 } from "@/lib/chat/file-edits-below-message";
-import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  buildSubmittedChatJSONContent,
+  type SlashCommandCatalog,
+} from "@/lib/composer/tiptap-json-content";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   chatMessageEditingForInlineEdit,
@@ -47,23 +53,40 @@ export interface ChatMessageActionsInput {
   readonly activeInlineEdit: InlineEditState | null;
   readonly canModifyMessages: boolean;
   readonly canAct: boolean;
+  readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
+  /**
+   * The tile's loaded command catalog, or null when it has not loaded. An edit
+   * resubmit re-runs `buildSubmittedChatJSONContent`, so it needs the same
+   * catalog the original send used - otherwise a `$skill` the user retyped
+   * after deleting its chip would silently stay prose.
+   */
+  readonly slashCatalog: SlashCommandCatalog | null;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
-  readonly node: EpicNodeRef;
+  readonly node: ChatSurfaceNode;
   readonly chatTitle: string | null;
   readonly chatParentId: string | null;
   readonly messages: ChatSessionState["messages"];
   readonly events: ChatSessionState["events"];
   readonly profile: AuthProfile | null;
   readonly chatActions: ChatActions;
+  readonly pendingActions: ChatSessionState["pendingActions"];
+  readonly acceptedActions: ChatSessionState["acceptedActions"];
   readonly confirmingDeleteMessageId: string | null;
   readonly setForkTarget: (target: ChatForkDialogTarget | null) => void;
   // The source chat's live binding, used to seed the fork dialog's workspace
   // picker so a fork starts from the same folders / worktree modes.
   readonly worktreeBinding: WorktreeBinding | null;
   readonly revertOnEditOpen: boolean;
+  /**
+   * Items currently parked in the message queue. They survive a history edit
+   * untouched and send after the replacement turn; the revert-on-edit dialog
+   * surfaces the count so that isn't a surprise.
+   */
+  readonly queuedCount: number;
 }
 
 export interface ChatMessageActionsResult {
@@ -78,11 +101,16 @@ export interface ChatMessageActionsResult {
    * carried questions re-opened as answerable). Used by pending and resolved
    * interview actions; the per-message fork buttons route through the same
    * seed.
+   *
+   * `initialHostId` preselects the dialog's host picker — the host-switch
+   * gesture passes the host the user picked there; every per-message entry
+   * point passes `null` (open on the source chat's own host).
    */
   readonly forkAtAssistantMessage: (
     assistantMessageId: string,
     mode: ChatForkMode,
     interviewBlockId: string | null,
+    initialHostId: string | null,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
@@ -90,6 +118,7 @@ export interface ChatMessageActionsResult {
     readonly onRevert: (revertArtifacts: boolean) => void;
     readonly onDontRevert: () => void;
     readonly artifactCount: number;
+    readonly queuedCount: number;
   };
 }
 
@@ -103,14 +132,20 @@ export interface ChatMessageActionsResult {
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
 ): ChatMessageActionsResult {
+  // The chat is bound to this tab's host for life, so both its own staged
+  // slot and the fork scratch slot it seeds belong to that host.
+  const tabHostId = useTabHostId();
   const {
     dispatchUi,
     activeInlineEdit,
     canModifyMessages,
     canAct,
+    interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
+    slashCatalog,
     mentionRoots,
+    fallbackToGlobalMentionRoots,
     currentEpicId,
     node,
     chatTitle,
@@ -119,6 +154,8 @@ export function useChatMessageActions(
     events,
     profile,
     chatActions,
+    pendingActions,
+    acceptedActions,
     confirmingDeleteMessageId,
     setForkTarget,
     worktreeBinding,
@@ -167,7 +204,10 @@ export function useChatMessageActions(
       if (sender === null) return;
       const sent = chatActions.editUserMessage({
         targetMessageId: activeInlineEdit.targetMessageId,
-        content: buildSubmittedChatJSONContent(activeInlineEdit.currentContent),
+        content: buildSubmittedChatJSONContent(
+          activeInlineEdit.currentContent,
+          slashCatalog,
+        ),
         sender,
         settings: editSettings,
         revertFileChanges,
@@ -192,6 +232,7 @@ export function useChatMessageActions(
       dispatchUi,
       editSettings,
       profile,
+      slashCatalog,
     ],
   );
 
@@ -250,9 +291,11 @@ export function useChatMessageActions(
       assistantMessageId: string,
       mode: ChatForkMode,
       interviewBlockId: string | null,
+      initialHostId: string | null,
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
+        hostId: tabHostId,
         epicId: currentEpicId,
         ownerKind: "chat",
         ownerId: node.id,
@@ -264,16 +307,21 @@ export function useChatMessageActions(
       const workspaceSeed =
         mode === "ab-worktree"
           ? buildAbForkWorkspaceSeed(seedInput)
-          : buildForkWorkspaceSeed(seedInput);
+          : buildForkWorkspaceSeed({
+              ...seedInput,
+              hostId: tabHostId,
+            });
       // Seed the fork dialog's picker from the source chat's currently visible
       // workspace (its binding overlaid with any unsent staged choices) so it
       // opens exactly where the source chat's composer is. The dialog applies
       // this through the shared seedIntent -> seedEntryForFolder path the
       // terminal-agent launcher also uses; only the source owner differs (here,
       // the chat being forked).
-      useWorktreeIntentStagingStore
-        .getState()
-        .clear(pendingForkChatStagingKey(currentEpicId));
+      // Every host's slot, not just this tab's: the dialog can retarget while
+      // it is open, so a previous fork that moved to another machine before
+      // closing would otherwise leave that machine's folders staged for the
+      // next open.
+      clearChatForkWorkspacesForEpic(currentEpicId);
       setForkTarget({
         sourceChatId: node.id,
         sourceChatTitle: chatTitle ?? node.name,
@@ -289,11 +337,13 @@ export function useChatMessageActions(
         // plain fork of a completed message — no streaming interview to carry.
         carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
+        initialHostId,
       });
     },
     [
       chatParentId,
       chatTitle,
+      tabHostId,
       currentComposerSettings,
       currentEpicId,
       node.id,
@@ -305,6 +355,28 @@ export function useChatMessageActions(
 
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
+      const interviewDeliveryRetry =
+        canAct && interviewDeliveryRetryProtocolSupported
+          ? {
+              isPending: (identity: InterviewDeliveryRetryIdentity): boolean =>
+                [
+                  ...Object.values(pendingActions),
+                  ...Object.values(acceptedActions),
+                ].some((action) => {
+                  const pendingIdentity = action.interviewDeliveryRetry;
+                  return (
+                    pendingIdentity !== null &&
+                    pendingIdentity.blockId === identity.blockId &&
+                    pendingIdentity.settlementId === identity.settlementId &&
+                    pendingIdentity.deliveryId === identity.deliveryId &&
+                    pendingIdentity.generation === identity.generation
+                  );
+                }),
+              onRetry: (identity: InterviewDeliveryRetryIdentity): void => {
+                chatActions.interviewDeliveryRetry(identity);
+              },
+            }
+          : null;
       // A completed assistant message exposes the plain footer fork. A stable
       // message with a resolved interview also exposes its Q&A fork icons while
       // the rest of that assistant turn may still be running.
@@ -331,8 +403,17 @@ export function useChatMessageActions(
                 assistantMessageId,
                 mode,
                 interviewBlockId,
+                null,
               ),
           },
+          interviewDeliveryRetry,
+        };
+      }
+      if (message.role === "assistant" && interviewDeliveryRetry !== null) {
+        return {
+          type: "assistant",
+          fork: null,
+          interviewDeliveryRetry,
         };
       }
       const persistentMessageId = editablePersistentMessageId(message);
@@ -359,6 +440,7 @@ export function useChatMessageActions(
           canModifyMessages,
           editSettings,
           mentionRoots,
+          fallbackToGlobalMentionRoots,
           currentEpicId,
           onSnapshot: updateInlineEdit,
           onSubmit: submitInlineEdit,
@@ -396,8 +478,13 @@ export function useChatMessageActions(
       deleteMessageSuffix,
       dispatchUi,
       editSettings,
+      fallbackToGlobalMentionRoots,
       forkAtAssistantMessage,
+      interviewDeliveryRetryProtocolSupported,
       mentionRoots,
+      pendingActions,
+      acceptedActions,
+      chatActions,
       submitInlineEdit,
       updateInlineEdit,
     ],
@@ -432,6 +519,7 @@ export function useChatMessageActions(
         performEditSubmit(true, revertArtifacts),
       onDontRevert: () => performEditSubmit(false, true),
       artifactCount: revertOnEditArtifactCount,
+      queuedCount: input.queuedCount,
     },
   };
 }

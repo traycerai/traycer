@@ -1,11 +1,13 @@
 {
   "name": "@traycer-clients/shared",
+  "private": true,
   "license": "MIT",
   "type": "module",
-  "private": true,
   "scripts": {
-    "lint": "eslint . --cache --fix --max-warnings 0",
-    "format": "bun x prettier --write .",
+    "compile": "tsgo --noEmit",
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "test": "vitest run"
   },
   "dependencies": {
@@ -15,6 +17,7 @@
     "@typescript-eslint/eslint-plugin": "catalog:",
     "@typescript-eslint/parser": "catalog:",
     "eslint": "catalog:",
-    "prettier": "catalog:"
+    "prettier": "catalog:",
+    "yaml": "catalog:"
   }
 }

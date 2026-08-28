@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeEach,
@@ -8,7 +7,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { UseTerminalSessionHandleArgs } from "@/lib/registries/terminal-session-registry";
@@ -51,7 +50,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
     kind: "local",
     websocketUrl: "ws://127.0.0.1:1/rpc",
     version: null,
-    status: "available",
+    transportDialability: "dialable",
   }),
 }));
 
@@ -74,12 +73,20 @@ vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
 
 // Capture the args the bootstrap feeds the session handle so the tests can
 // assert on the `enabled` / `reattachMode` the registry would act on.
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: (args: UseTerminalSessionHandleArgs) => {
-    handleCalls.push(args);
-    return null;
-  },
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: (args: UseTerminalSessionHandleArgs) => {
+      handleCalls.push(args);
+      return null;
+    },
+  }),
+);
 
 import { useTerminalTileBootstrap } from "../use-terminal-tile-bootstrap";
 
@@ -151,7 +158,12 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
   });
 
   it("keeps the handle enabled (live) while terminal.list is refetching", async () => {
-    const { rerender } = runBootstrap();
+    const { result, rerender } = runBootstrap();
+    // Measure-before-subscribe: the handle enable is held until the probe
+    // reports the container's grid.
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+    });
     await waitFor(() => {
       expect(lastHandleArgs().enabled).toBe(true);
     });
@@ -169,7 +181,10 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
   });
 
   it("releases the handle when a SETTLED list shows the session exited", async () => {
-    const { rerender } = runBootstrap();
+    const { result, rerender } = runBootstrap();
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+    });
     await waitFor(() => {
       expect(lastHandleArgs().enabled).toBe(true);
     });
@@ -192,5 +207,55 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
     runBootstrap();
 
     expect(lastHandleArgs().enabled).toBe(false);
+  });
+
+  it("clears a retained retry error when the refetch finds the session running", async () => {
+    mockList.data = { sessions: [] };
+    mockCreate.isError = true;
+    mockCreate.isIdle = false;
+    mockCreate.error = new Error("response lost");
+    mockCreate.reset = () => {
+      mockCreate.isError = false;
+      mockCreate.isIdle = true;
+      mockCreate.error = null;
+    };
+    let resolveRefetch:
+      | ((result: {
+          readonly data: {
+            readonly sessions: ReadonlyArray<Record<string, unknown>>;
+          };
+        }) => void)
+      | null = null;
+    mockList.refetch = () => {
+      mockList.isFetching = true;
+      return new Promise((resolve) => {
+        resolveRefetch = resolve;
+      });
+    };
+    const { result, rerender } = runBootstrap();
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+      result.current.retry();
+    });
+    expect(result.current.createRetryIsPending).toBe(true);
+
+    const runningListData = {
+      sessions: [
+        { sessionId: "term-1", sessionKind: "terminal", status: "running" },
+      ],
+    };
+    mockList.data = runningListData;
+    mockList.isFetching = false;
+    await act(() => {
+      resolveRefetch?.({ data: runningListData });
+      return Promise.resolve();
+    });
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.createRetryIsPending).toBe(false);
+      expect(lastHandleArgs().enabled).toBe(true);
+    });
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
   });
 });

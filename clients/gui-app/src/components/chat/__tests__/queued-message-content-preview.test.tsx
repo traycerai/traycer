@@ -1,18 +1,54 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { QueuedMessageContentPreview } from "@/components/chat/queued-message-content-preview";
+import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 function renderPreview(content: JsonContent) {
   return render(
     <TooltipProvider delayDuration={0}>
-      <QueuedMessageContentPreview content={content} />
+      <ComposerContentPreview
+        content={content}
+        emptyLabel="Queued message"
+        testId="queued-message-content-preview"
+        className={undefined}
+      />
     </TooltipProvider>,
   );
 }
 
-describe("QueuedMessageContentPreview", () => {
+describe("ComposerContentPreview", () => {
+  it("preserves a non-one ordered-list start", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "orderedList",
+          attrs: { start: 2 },
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Second" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    renderPreview(content);
+
+    const orderedList = screen.getByRole("list");
+    if (!(orderedList instanceof HTMLOListElement)) {
+      throw new Error("expected an ordered list");
+    }
+    expect(orderedList.start).toBe(2);
+  });
+
   it("renders mention chips inline instead of summary badges", () => {
     const content: JsonContent = {
       type: "doc",

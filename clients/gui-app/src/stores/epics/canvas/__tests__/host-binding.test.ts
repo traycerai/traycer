@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import "../../../../../__tests__/test-browser-apis";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -28,11 +28,7 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 
 const directoryEntries = vi.hoisted(() => ({
-  current: [] as ReadonlyArray<{
-    hostId: string;
-    label: string;
-    status: "available" | "unavailable";
-  }>,
+  current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -176,7 +172,10 @@ describe("host binding survives restart", () => {
       {
         hostId: REPLACEMENT_HOST,
         label: "Replacement",
-        status: "available",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5002/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
       },
     ];
 
@@ -186,19 +185,55 @@ describe("host binding survives restart", () => {
     expect(result.current.hostLabel).toBe(SOURCE_HOST);
   });
 
-  it("useHostReachability reports `unreachable` when the source host is in the list but offline", () => {
+  it("useHostReachability reports `host-starting` for this machine's not-yet-published local row", () => {
+    // This exact shape - `kind: "local"` with no `websocketUrl` - is produced
+    // by one thing only: `HostDirectoryService.snapshot()` standing the
+    // registry's twin of THIS machine in for a local snapshot that has not
+    // arrived. It used to assert `unreachable`, and int #48 is why that had to
+    // change: the substitution fires for boot, for a restart, and for a host
+    // merely busy enough to lose a probe, so a verdict of "dead" locked every
+    // chat on a demonstrably healthy machine to its published copy.
+    //
+    // `host-starting` is the same answer the empty-directory arm has given
+    // since 2026-07-14 for the same unknowable state; the twin just makes the
+    // directory non-empty so that arm cannot see it. This does not weaken the
+    // 2026-08-08 protection either - with no `websocketUrl` there is nothing
+    // to dial, so no tile can spin against a corpse.
     directoryEntries.current = [
       {
         hostId: SOURCE_HOST,
         label: "Local",
-        status: "unavailable",
+        kind: "local",
+        websocketUrl: null,
+        version: "1.0.0",
+        transportDialability: "not-dialable",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("host-starting");
+    expect(result.current.hostLabel).toBe("Local");
+  });
+
+  it("useHostReachability still reports `unreachable` for a routable host marked not-dialable", () => {
+    // The 2026-08-08 guard proper: a host the directory can still describe -
+    // it has an endpoint - and explicitly marks not-dialable is
+    // high-confidence evidence of death, and must keep locking.
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Local",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5001/rpc",
+        version: "1.0.0",
+        transportDialability: "not-dialable",
       },
     ];
 
     const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
 
     expect(result.current.status).toBe("unreachable");
-    expect(result.current.hostLabel).toBe("Local");
   });
 
   it("useHostReachability reports `reachable` when the bound host is back online", () => {
@@ -206,7 +241,10 @@ describe("host binding survives restart", () => {
       {
         hostId: SOURCE_HOST,
         label: "Local",
-        status: "available",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5001/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
       },
     ];
 
@@ -214,5 +252,53 @@ describe("host binding survives restart", () => {
 
     expect(result.current.status).toBe("reachable");
     expect(result.current.hostLabel).toBe("Local");
+  });
+
+  it("answers a remote entry from its directory status (unavailable => unreachable)", () => {
+    // SUPERSEDES the earlier pin ("does not treat a remote presence-lease
+    // status as tab reachability"). That rule predates the unified sidebar
+    // handing this hook LOCK-BADGE and LIVE-VS-COPY ROUTING duties: with
+    // remote entries hardwired "reachable", an unavailable owner's rows
+    // carried no lock, routed to a LIVE tab, and dialed a dead host forever
+    // (two-slot live check, 2026-08-08). A populated directory explicitly
+    // marking a host unavailable is high-confidence evidence, and every
+    // consumer of "unreachable" degrades recoverably - the badge and
+    // routing flip back on the next directory refresh, and the dead-tile
+    // banner is reactive, never a tab kill. The 2026-07-14 incident's
+    // protection lives in the EMPTY-directory arm ("host-starting"),
+    // which is untouched.
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Remote",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "1.0.0",
+        transportDialability: "not-dialable",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("unreachable");
+    expect(result.current.hostLabel).toBe("Remote");
+  });
+
+  it("answers reachable for an AVAILABLE remote entry", () => {
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Remote",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "1.0.0",
+        transportDialability: "dialable",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("reachable");
+    expect(result.current.hostLabel).toBe("Remote");
   });
 });

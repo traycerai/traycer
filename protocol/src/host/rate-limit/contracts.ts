@@ -7,20 +7,68 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
+  providersRefreshProfileStatusRequestSchema,
+  providersRefreshProfileStatusResponseSchema,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
+  rateLimitUsageRequestSchemaV40,
   rateLimitUsageResponseSchema,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
+  rateLimitUsageResponseSchemaV30,
+  rateLimitUsageResponseSchemaV40,
+  mapCursorAvailableToUnavailable,
+  mapGrokAvailableToUnavailable,
+  mapHuggingFaceAvailableToUnavailable,
+  mapOpenCodeAvailableToUnavailable,
+  type ProviderRateLimits,
+  type RateLimitUsageRequestV12,
+  type RateLimitUsageRequestV40,
 } from "@traycer/protocol/host/rate-limit/schemas";
+
+// Drops the v4.0-only `force` opt-out when a request travels down to a released
+// major. Those lines never carried the key, and their hosts always force, so
+// there is nothing to express there - stripping it keeps the wire payload
+// exactly the shape the released peer's own schema describes rather than
+// relying on its parse to discard an unrecognized key.
+function dropForce(
+  request: RateLimitUsageRequestV40,
+): RateLimitUsageRequestV12 {
+  const { force, ...released } = request;
+  return released;
+}
+
+// The v2-only `usage_fetch_failed` reason maps to `rate_limits_not_available`
+// so a v1.2 client's frozen 8-value reason enum keeps parsing. Every other
+// reason and every `available: true` arm is already a valid v1.2 shape. Shared
+// by the 2.1 -> 1.2 and 3.0 -> 1.2 downgrade bridges.
+function mapUsageFetchFailedToNotAvailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available === false &&
+    providerRateLimits.reason === "usage_fetch_failed"
+  ) {
+    return { ...providerRateLimits, reason: "rate_limits_not_available" };
+  }
+  return providerRateLimits;
+}
 
 export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
   method: "providers.consumeRateLimitResetCredit",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersConsumeRateLimitResetCreditRequestSchema,
   responseSchema: providersConsumeRateLimitResetCreditResponseSchema,
+});
+
+export const providersRefreshProfileStatusV10 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
+  responseSchema: providersRefreshProfileStatusResponseSchema,
 });
 
 export const hostGetRateLimitUsageV10 = defineRpcContract({
@@ -150,15 +198,206 @@ export const hostGetRateLimitUsageDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: rateLimitUsageResponseSchemaV12.parse({
       ...response,
-      providerRateLimits:
-        response.providerRateLimits !== null &&
-        response.providerRateLimits.available === false &&
-        response.providerRateLimits.reason === "usage_fetch_failed"
-          ? {
-              ...response.providerRateLimits,
-              reason: "rate_limits_not_available",
-            }
-          : response.providerRateLimits,
+      providerRateLimits: mapUsageFetchFailedToNotAvailable(
+        response.providerRateLimits,
+      ),
+    }),
+  }),
+});
+
+// v3.0 adds the grok available arm to the provider-account snapshot. Shipped as
+// a major (not a minor within major 2) because a new available union arm isn't
+// strippable by the within-major skew handler the way an extra object key is -
+// an old peer's frozen union has no grok arm - so it travels with the
+// downgrade bridges below. The request shape is unchanged from v1.2/v2.x, so
+// this reuses `rateLimitUsageRequestSchemaV12` directly.
+export const hostGetRateLimitUsageV30 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV12,
+  responseSchema: rateLimitUsageResponseSchemaV30,
+});
+
+// A v2.1 request and a v3.0 request are identical shapes (both use
+// `rateLimitUsageRequestSchemaV12`), so the request upgrade is the identity. A
+// v2.1 response only ever carries the frozen v2.1 union arms, every one of
+// which is a valid v3.0 arm (the v3.0 union is a strict superset), so the
+// response upgrade is the identity too - no re-parse needed.
+export const hostGetRateLimitUsageUpgradeV21ToV30 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV21,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV21.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Downgrade bridge 3.0 -> 2.1: request is identity. A grok-available snapshot
+// degrades to the unavailable `unsupported_provider` shape (grok has no arm in
+// the frozen v2.1 union); every other arm is already valid v2.1 and passes
+// through the re-parse unchanged.
+export const hostGetRateLimitUsageDowngradeV3ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV30,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV30.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV21.parse({
+      ...response,
+      providerRateLimits: mapGrokAvailableToUnavailable(
+        response.providerRateLimits,
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 3.0 -> 1.2: request is identity. Composes both frozen-line
+// maps before the v1.2 re-parse - a grok-available snapshot degrades to
+// `unsupported_provider`, and the v2-only `usage_fetch_failed` reason degrades
+// to `rate_limits_not_available` - so a v1.2 client's frozen union and 8-value
+// reason enum both keep parsing. The v1.2 parse also strips v2.1 reset-credit
+// detail. Grok is applied first so a genuinely grok-available snapshot never
+// lands on the usage-fetch-failed branch.
+export const hostGetRateLimitUsageDowngradeV3ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV30,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV30.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV12.parse({
+      ...response,
+      providerRateLimits: mapUsageFetchFailedToNotAvailable(
+        mapGrokAvailableToUnavailable(response.providerRateLimits),
+      ),
+    }),
+  }),
+});
+
+// v4.0 adds the Hugging Face AND OpenCode Go available arms to the
+// provider-account snapshot. Shipped as a major for the same reason v3.0 was: a
+// new available union arm is not strippable by the within-major skew handler,
+// so it needs explicit bridges that degrade it. The request shape is unchanged
+// from v1.2/v2.x/v3.0, so this reuses `rateLimitUsageRequestSchemaV12`
+// directly.
+//
+// Both arms ride ONE major because neither has shipped: the newest released
+// baseline (`host-v1.1.11`, commit c785d864) tops out at `host.getRateLimitUsage`
+// major `3`, so no peer in the field has ever negotiated `4`, and a second
+// major bought nothing but an extra hop in every downgrade fan below.
+//
+// The request shape is NO LONGER `rateLimitUsageRequestSchemaV12`: this line
+// carries the optional `force` opt-out (see `rateLimitUsageRequestSchemaV40`).
+// It rides major 4 for the same "nobody has negotiated it" reason the response
+// arms do - every released version keeps the v1.2 request byte-for-byte.
+export const hostGetRateLimitUsageV40 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV40,
+  responseSchema: rateLimitUsageResponseSchemaV40,
+});
+
+// A v3.0 request upgrades unchanged: `force` is optional on the v4.0 line and
+// its ABSENCE means force, which is exactly what a v3.0 caller gets from a
+// host that has always passed `force: true`. Every frozen v3.0 response arm is
+// a valid v4.0 arm (the v4.0 union is a strict superset), so that upgrade is
+// the identity too.
+export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV30,
+  typeof hostGetRateLimitUsageV40
+>({
+  from: hostGetRateLimitUsageV30.schemaVersion,
+  to: hostGetRateLimitUsageV40.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Downgrade bridge 4.0 -> 3.0: the request drops `force` (see `dropForce`), so
+// a v3.0 host keeps its always-fresh read. The Hugging-Face-, OpenCode- and
+// Cursor-available snapshots each degrade to the unavailable
+// `unsupported_provider` shape - none has an arm in the frozen v3.0 union, and
+// all three ride 4.0 (the release collapsed Hugging Face and OpenCode onto one
+// major, and 4.0 is still unreleased, so Cursor joins them rather than opening
+// a 5.0). Every other arm - grok included, since v3.0 is where grok landed - is
+// already valid v3.0 and passes through the re-parse unchanged.
+export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV30.parse({
+      ...response,
+      providerRateLimits: mapCursorAvailableToUnavailable(
+        mapHuggingFaceAvailableToUnavailable(
+          mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+        ),
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 4.0 -> 2.1: the request drops `force` (see `dropForce`).
+// The response composes all four available-arm maps before the v2.1 re-parse,
+// because the frozen v2.1 union has none of the grok, Hugging Face, OpenCode,
+// or Cursor arms.
+export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV21.parse({
+      ...response,
+      providerRateLimits: mapGrokAvailableToUnavailable(
+        mapCursorAvailableToUnavailable(
+          mapHuggingFaceAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+          ),
+        ),
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 4.0 -> 1.2: the request drops `force` (see `dropForce`).
+// The response composes all five frozen-line maps. The four available-arm
+// degrades run before the reason degrade, so a genuinely Hugging-Face-,
+// OpenCode-, Cursor- or grok-available snapshot never lands on the
+// usage-fetch-failed branch. The v1.2 parse also strips v2.1 reset-credit
+// detail.
+export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV12.parse({
+      ...response,
+      providerRateLimits: mapUsageFetchFailedToNotAvailable(
+        mapGrokAvailableToUnavailable(
+          mapCursorAvailableToUnavailable(
+            mapHuggingFaceAvailableToUnavailable(
+              mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+            ),
+          ),
+        ),
+      ),
     }),
   }),
 });

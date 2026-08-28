@@ -1,3 +1,33 @@
+/**
+ * Whether the dock's Background section has anything to show. It lives here
+ * rather than in the dock because the answer sizes the scroll region below and
+ * the composer's top spacing too: the dock's frame is drawn flush against what
+ * follows it, so a surface that disagrees leaves an open-bottomed box.
+ *
+ * Managed commands count even when the harness session reports no background
+ * work of its own - they reach the section by a client-side join on the epic's
+ * command list.
+ *
+ * Held shells are a THIRD input rather than part of the running count, and the
+ * distinction is load-bearing rather than tidy. The two sets do overlap - a
+ * still-running shell keeps its hold until it next prints - but the hold that
+ * only a human can clear is the one on a shell that has FINISHED, and that is
+ * precisely the case the Deliver button exists for. There, both other counts
+ * are zero: gating on them alone hid the whole section, taking the only
+ * affordance that clears a hold off screen while the hold survived restarts.
+ */
+export function chatBackgroundSectionVisible(input: {
+  readonly backgroundItemCount: number;
+  readonly runningManagedCommandCount: number;
+  readonly heldManagedCommandCount: number;
+}): boolean {
+  return (
+    input.backgroundItemCount > 0 ||
+    input.runningManagedCommandCount > 0 ||
+    input.heldManagedCommandCount > 0
+  );
+}
+
 export interface LowerScrollBudgetInput {
   readonly pinnedStackVisible: boolean;
   readonly queueVisible: boolean;

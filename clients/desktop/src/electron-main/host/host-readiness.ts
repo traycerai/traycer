@@ -4,6 +4,11 @@ import {
   isCurrentHostWebsocketUrl,
   sleep,
 } from "./host-lifecycle";
+import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import { TraycerCliError } from "../cli/traycer-cli";
 
 // Host-readiness + CLI-error helpers used by the post-auth host-ensure
@@ -20,12 +25,21 @@ import { TraycerCliError } from "../cli/traycer-cli";
 export const HOST_READY_TIMEOUT_MS = 60_000;
 export const HOST_READY_POLL_MS = 250;
 
-export interface HostReadinessResult {
-  readonly ready: boolean;
-  readonly version: string | null;
-  readonly pid: number | null;
-  readonly reason: string;
-}
+export type HostReadinessResult =
+  | {
+      readonly ready: true;
+      readonly version: string;
+      readonly pid: number;
+      readonly startedAt: string;
+      readonly reason: "ready";
+    }
+  | {
+      readonly ready: false;
+      readonly version: null;
+      readonly pid: null;
+      readonly startedAt: null;
+      readonly reason: string;
+    };
 
 // Poll the environment-scoped pid metadata file until the host publishes a
 // well-formed, reachable websocket URL or the timeout elapses. `pidPath`
@@ -56,19 +70,33 @@ export async function waitForHostReady(
       lastReason = `old host pid ${skipPid} still bound; waiting for replacement`;
     } else if (!isCurrentHostWebsocketUrl(snapshot.websocketUrl)) {
       lastReason = `websocket URL ${snapshot.websocketUrl} does not match the committed host WS shape`;
-    } else if (!(await canReachHostWebsocketUrl(snapshot.websocketUrl))) {
-      lastReason = `websocket URL ${snapshot.websocketUrl} is not yet reachable`;
+    } else if (
+      !(await isPublishedHostEndpointReachable(
+        snapshot.websocketUrl,
+        snapshot.pid,
+        snapshot.startIdentity,
+        canReachHostWebsocketUrl,
+      ))
+    ) {
+      lastReason = `websocket URL ${snapshot.websocketUrl} is not yet reachable as the published host process`;
     } else {
       return {
         ready: true,
         version: snapshot.version,
         pid: snapshot.pid,
+        startedAt: snapshot.startedAt,
         reason: "ready",
       };
     }
     await sleep(pollIntervalMs);
   }
-  return { ready: false, version: null, pid: null, reason: lastReason };
+  return {
+    ready: false,
+    version: null,
+    pid: null,
+    startedAt: null,
+    reason: lastReason,
+  };
 }
 
 // Distinct from host-lifecycle's `readPidMetadata`: readiness does not
@@ -79,6 +107,8 @@ async function readPidMetadataForReady(path: string): Promise<{
   readonly version: string;
   readonly pid: number;
   readonly websocketUrl: string;
+  readonly startedAt: string;
+  readonly startIdentity: ProcessStartIdentity | null;
 } | null> {
   let raw: string;
   try {
@@ -97,11 +127,20 @@ async function readPidMetadataForReady(path: string): Promise<{
   if (
     typeof obj.version !== "string" ||
     typeof obj.pid !== "number" ||
-    typeof obj.websocketUrl !== "string"
+    typeof obj.websocketUrl !== "string" ||
+    typeof obj.startedAt !== "string"
   ) {
     return null;
   }
-  return { version: obj.version, pid: obj.pid, websocketUrl: obj.websocketUrl };
+  return {
+    version: obj.version,
+    pid: obj.pid,
+    websocketUrl: obj.websocketUrl,
+    startedAt: obj.startedAt,
+    startIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
+  };
 }
 
 // Shape of the `traycer host install`/`ensure` terminal payload we

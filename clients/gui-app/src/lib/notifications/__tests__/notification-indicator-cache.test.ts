@@ -55,9 +55,11 @@ function createIndicatorClient(
   queryClient: QueryClient,
   requests: Array<Deferred<HostNotificationsIndicatorStateResponse>>,
 ): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "request-1",
@@ -71,11 +73,10 @@ function createIndicatorClient(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  return client;
+  return spine.createRequester(mockLocalHostEntry);
 }
 
 describe("notification indicator cache invalidation", () => {
@@ -103,9 +104,12 @@ describe("notification indicator cache invalidation", () => {
     queryClient.setQueryData(other, { epics: {}, chats: {} });
     queryClient.setQueryData(epicOnly, { epics: {}, chats: {} });
 
-    invalidateNotificationIndicatorsForEntities(queryClient, "host-a", [
-      { epicId: "epic-a", chatId: "chat-a" },
-    ]);
+    invalidateNotificationIndicatorsForEntities(
+      queryClient,
+      "host-a",
+      [{ epicId: "epic-a", chatId: "chat-a" }],
+      null,
+    );
 
     expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(epicOnly)?.isInvalidated).toBe(true);
@@ -177,6 +181,7 @@ describe("notification indicator cache invalidation", () => {
         queryClient,
         mockLocalHostEntry.hostId,
         [{ epicId: "epic-a", chatId: "chat-a" }],
+        client,
       );
     });
 
@@ -187,6 +192,7 @@ describe("notification indicator cache invalidation", () => {
         epics: {
           "epic-a": {
             unreadFailure: false,
+            pendingFork: false,
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
@@ -198,6 +204,7 @@ describe("notification indicator cache invalidation", () => {
         epics: {
           "epic-a": {
             unreadFailure: true,
+            pendingFork: false,
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
@@ -212,6 +219,7 @@ describe("notification indicator cache invalidation", () => {
         epics: {
           "epic-a": {
             unreadFailure: true,
+            pendingFork: false,
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,

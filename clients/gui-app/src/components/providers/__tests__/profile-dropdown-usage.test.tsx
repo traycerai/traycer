@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -32,9 +31,11 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
       readonly children: ReactNode;
       readonly onSelect: (() => void) | undefined;
       readonly onFocus:
-        ((event: React.FocusEvent<HTMLButtonElement>) => void) | undefined;
+        | ((event: React.FocusEvent<HTMLButtonElement>) => void)
+        | undefined;
       readonly onPointerMove:
-        ((event: React.PointerEvent<HTMLButtonElement>) => void) | undefined;
+        | ((event: React.PointerEvent<HTMLButtonElement>) => void)
+        | undefined;
       readonly "aria-label": string | undefined;
       readonly "aria-keyshortcuts": string | undefined;
       readonly "aria-current": "true" | undefined;
@@ -67,7 +68,8 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly onKeyDown:
-        ((event: React.KeyboardEvent<HTMLDivElement>) => void) | undefined;
+        | ((event: React.KeyboardEvent<HTMLDivElement>) => void)
+        | undefined;
     }): ReactNode => (
       <div
         role="menu"
@@ -100,6 +102,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -112,6 +115,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -124,11 +128,14 @@ const WORK = profile("work", "managed", "Work profile with a very long label");
 function detailEntry(
   profileId: string | null,
   refresh: () => Promise<void>,
+  fetchEligible: boolean,
 ): ProfileDropdownUsageEntry {
   return {
     profileId,
+    fetchEligible,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "detail",
       severity: "running_low",
@@ -186,11 +193,14 @@ function detailEntry(
 
 function semanticEntry(
   refresh: () => Promise<void>,
+  fetchEligible: boolean,
 ): ProfileDropdownUsageEntry {
   return {
     profileId: null,
+    fetchEligible,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "semantic_only",
       severity: "limited",
@@ -219,9 +229,12 @@ function renderDropdown(
         digit: String(index + 1),
         label: `Hint ${index + 1}`,
       })}
+      profileEnablementPending={null}
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
+      eligibilityControls={null}
+      admissionByProfileId={null}
     />,
   );
 }
@@ -258,12 +271,19 @@ describe("ProfileDropdown picker usage opt-in", () => {
     const usagePresentation = {
       isHostReady: true,
       entries: new Map([
-        [null, semanticEntry(vi.fn(() => Promise.resolve()))],
+        [
+          null,
+          semanticEntry(
+            vi.fn(() => Promise.resolve()),
+            true,
+          ),
+        ],
         [
           "work",
           detailEntry(
             "work",
             vi.fn(() => Promise.resolve()),
+            true,
           ),
         ],
       ]),
@@ -299,12 +319,19 @@ describe("ProfileDropdown picker usage opt-in", () => {
     const usagePresentation = {
       isHostReady: true,
       entries: new Map([
-        [null, semanticEntry(vi.fn(() => Promise.resolve()))],
+        [
+          null,
+          semanticEntry(
+            vi.fn(() => Promise.resolve()),
+            true,
+          ),
+        ],
         [
           "work",
           detailEntry(
             "work",
             vi.fn(() => Promise.resolve()),
+            true,
           ),
         ],
       ]),
@@ -341,8 +368,8 @@ describe("ProfileDropdown picker usage opt-in", () => {
     const usagePresentation = {
       isHostReady: true,
       entries: new Map([
-        [null, semanticEntry(refreshAmbient)],
-        ["work", detailEntry("work", refreshWork)],
+        [null, semanticEntry(refreshAmbient, true)],
+        ["work", detailEntry("work", refreshWork, true)],
       ]),
     } satisfies ProfileDropdownUsagePresentation;
     renderDropdown(usagePresentation, onSelect);
@@ -371,5 +398,36 @@ describe("ProfileDropdown picker usage opt-in", () => {
         name: "Usage details for Terminal account",
       }),
     ).toBeDefined();
+  });
+
+  it("does not advertise the refresh shortcut for ineligible usage rows", async () => {
+    const usagePresentation = {
+      isHostReady: true,
+      entries: new Map([
+        [
+          null,
+          semanticEntry(
+            vi.fn(() => Promise.resolve()),
+            false,
+          ),
+        ],
+        [
+          "work",
+          detailEntry(
+            "work",
+            vi.fn(() => Promise.resolve()),
+            false,
+          ),
+        ],
+      ]),
+    } satisfies ProfileDropdownUsagePresentation;
+    renderDropdown(usagePresentation, vi.fn());
+
+    const ambient = await screen.findByRole("menuitem", {
+      name: /Terminal account/,
+    });
+    const work = screen.getByRole("menuitem", { name: /Work profile/ });
+    expect(ambient.getAttribute("aria-keyshortcuts")).toBeNull();
+    expect(work.getAttribute("aria-keyshortcuts")).toBeNull();
   });
 });

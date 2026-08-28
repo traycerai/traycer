@@ -21,6 +21,11 @@ export type HostNotificationPresenceFrame = Extract<
   { readonly kind: "presence" }
 >;
 
+export interface FocusedHostNotificationPresence {
+  readonly originHostId: string | null;
+  readonly entity: HostNotificationsPresenceEntity;
+}
+
 export function readHostNotificationPresenceFrame(
   input: HostNotificationPresenceInput,
 ): HostNotificationPresenceFrame {
@@ -67,15 +72,32 @@ export function subscribeHostNotificationPresence(
  * presence frame that happened to be sent.
  */
 export function readFocusedHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
-  if (!isDocumentFocused()) return null;
-  return readActiveHostNotificationPresenceEntity();
+  return readFocusedHostNotificationPresence()?.entity ?? null;
 }
 
-function isDocumentFocused(): boolean {
+/**
+ * The focused entity together with the host-bound tile that owns it. Epic-only
+ * surfaces have no unambiguous host and therefore return a `null` origin.
+ */
+export function readFocusedHostNotificationPresence(): FocusedHostNotificationPresence | null {
+  if (!isDocumentFocused()) return null;
+  const active = readActiveHostNotificationPresence();
+  if (active === null) return null;
+  return {
+    originHostId: active.originHostId,
+    entity: active.entity,
+  };
+}
+
+export function isDocumentFocused(): boolean {
   return typeof document !== "undefined" && document.hasFocus();
 }
 
 function readActiveHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
+  return readActiveHostNotificationPresence()?.entity ?? null;
+}
+
+function readActiveHostNotificationPresence(): FocusedHostNotificationPresence | null {
   const state = useEpicCanvasStore.getState();
   const activeTab =
     state.activeTabId === null ? null : state.tabsById[state.activeTabId];
@@ -87,9 +109,15 @@ function readActiveHostNotificationPresenceEntity(): HostNotificationsPresenceEn
     active?.type === "terminal" ||
     active?.type === "terminal-agent"
   ) {
-    return { epicId: activeTab.epicId, chatId: active.id };
+    return {
+      originHostId: active.hostId,
+      entity: { epicId: activeTab.epicId, chatId: active.id },
+    };
   }
-  return { epicId: activeTab.epicId };
+  return {
+    originHostId: null,
+    entity: { epicId: activeTab.epicId },
+  };
 }
 
 function activeCanvasTile(canvas: EpicCanvasState) {

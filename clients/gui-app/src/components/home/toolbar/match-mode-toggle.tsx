@@ -12,20 +12,20 @@ export function MatchModeToggle(props: MatchModeToggleProps) {
   return (
     <div className="inline-flex rounded-md border border-border/60 bg-background/60 p-0.5 font-mono text-code-xs font-medium">
       <PillToggleButton
+        tooltip={`Match any selected ${selectedLabel}`}
         active={value === "any"}
         onClick={() => {
           onChange("any");
         }}
-        title={`Match any selected ${selectedLabel}`}
       >
         OR
       </PillToggleButton>
       <PillToggleButton
+        tooltip={`Match all selected ${selectedLabel}`}
         active={value === "all"}
         onClick={() => {
           onChange("all");
         }}
-        title={`Match all selected ${selectedLabel}`}
       >
         AND
       </PillToggleButton>

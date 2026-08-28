@@ -4,6 +4,8 @@
  */
 
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
@@ -93,10 +95,51 @@ export function anyMutationPending(values: ReadonlyArray<boolean>): boolean {
   return values.some(Boolean);
 }
 
-export function nodePadRightClass(canEdit: boolean, showAdd: boolean): string {
+/**
+ * Per-type icon color customization for a sidebar row's leading glyph, read
+ * here rather than threaded from the tree root so the leading icon stays a
+ * leaf concern. `ChatProgressIcon` already subscribes to exactly these two
+ * settings internally for chat rows; every OTHER sidebar row glyph (terminal
+ * agents, cloud rows, static node icons) mirrors it through this hook so one
+ * row kind cannot drift muted while another picks up "color by type" in the
+ * same column - a chat glyph's tint must depend on the user's icon-color
+ * setting, never on which list the row arrived from.
+ */
+export function useNodeIconDisplay(artifactType: EpicNodeKind): {
+  readonly className: string;
+  readonly style: { color: string | undefined } | undefined;
+} {
+  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
+  const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
+  return {
+    className: cn(
+      "size-3.5 shrink-0",
+      colorMode === "none" && "text-muted-foreground/70",
+    ),
+    style: colorMode === "byType" ? { color } : undefined,
+  };
+}
+
+/**
+ * Right padding a row reserves for its hover-revealed controls.
+ *
+ * `revealed` is for a surface whose controls never wait for hover (touch has no
+ * hover to wait for): the row must then hold the wider pad at rest, because the
+ * controls are already sitting in it. A `pointer-coarse:` variant would say the
+ * same thing less reliably - it would have to out-order the `group-hover`
+ * rules rather than replace them - so the branch is taken here, in the one
+ * place the string is built.
+ */
+export function nodePadRightClass(
+  canEdit: boolean,
+  showAdd: boolean,
+  revealed: boolean,
+): string {
   if (!canEdit) return "pr-2";
   if (showAdd) {
+    if (revealed) return "pr-14";
     return "pr-2 group-hover/tree-item:pr-14 group-focus-within/tree-item:pr-14 group-has-[[data-state=open]]/tree-item:pr-14";
   }
+  if (revealed) return "pr-8";
   return "pr-2 group-hover/tree-item:pr-8 group-focus-within/tree-item:pr-8 group-has-[[data-state=open]]/tree-item:pr-8";
 }

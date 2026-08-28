@@ -15,6 +15,7 @@ import {
 } from "@floating-ui/dom";
 import type { MentionCollaborator } from "@/hooks/comments/use-mention-collaborators";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import { cn } from "@/lib/utils";
 import { deriveInitials } from "./mention-utils";
 
@@ -76,6 +77,10 @@ function MentionSuggestionListContent({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // Render into the pane's portal host (not `document.body`), so a mention
+  // list opened inside a background split pane's comment composer is hidden +
+  // inert with that pane instead of escaping over the focused partner.
+  const paneContainer = usePanePortalContainer();
 
   useImperativeHandle(
     ref,
@@ -127,13 +132,16 @@ function MentionSuggestionListContent({
     reposition();
     const cleanup = autoUpdate(virtualReference, floating, reposition);
     return cleanup;
-  }, [getReferenceClientRect, items.length]);
+    // `paneContainer` dep: the portal remounts into the live node once the host
+    // ref settles, so re-bind `autoUpdate` to it rather than the first node.
+  }, [getReferenceClientRect, items.length, paneContainer]);
 
   useLayoutEffect(() => {
-    const node = itemRefs.current[selectedIndex];
+    if (items.length === 0) return;
+    const node = itemRefs.current[selectedIndex] ?? null;
     if (node === null) return;
     node.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+  }, [items.length, selectedIndex]);
 
   if (typeof document === "undefined") return null;
 
@@ -165,9 +173,18 @@ function MentionSuggestionListContent({
               aria-selected={isSelected}
               data-selected={isSelected ? "true" : undefined}
               className={cn(
-                "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none",
-                "data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
-                "hover:bg-muted/70",
+                // `border-transparent` in the base so the selected border
+                // below does not shift the row.
+                "flex w-full items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-left outline-none",
+                // The ACTIVE option (keyboard navigation) takes the same
+                // treatment `ui/command.tsx` gives its selected item, rather
+                // than a heavier foreground alpha: `--primary` never
+                // collapses into a surface token in any theme, and a
+                // selection this list drives with ArrowUp/Down has to be
+                // unmistakable next to the plain hover tint below - which a
+                // foreground alpha one step up from it would not be.
+                "data-[selected=true]:border-primary/35 data-[selected=true]:bg-primary/12 data-[selected=true]:text-foreground data-[selected=true]:shadow-sm",
+                "hover:bg-foreground/6",
               )}
               onMouseEnter={() => setSelectedIndex(index)}
               onMouseDown={(event) => {
@@ -195,7 +212,7 @@ function MentionSuggestionListContent({
         })
       )}
     </div>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }
 

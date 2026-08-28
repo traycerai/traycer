@@ -7,7 +7,7 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import type { ZoomPercent } from "../../ipc-contracts/zoom-types";
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   QuitDecision,
   UnsyncedEditsSnapshot,
@@ -20,29 +20,52 @@ import type {
   OwnershipEntry,
   PerWindowLandingDraft,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
+  SupportBuildPublicDraftResult,
+  SupportFingerprintOccurrence,
+  SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
+  SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
   SupportSubmitReportRequest,
   SupportSubmitReportResult,
   WindowSummary,
 } from "../../ipc-contracts/window-types";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+} from "@traycer-clients/shared/platform/runner-host";
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
+  PER_WINDOW_STATE_CAPABILITIES,
   type PerWindowStateChange,
 } from "../windows/per-window-state";
 import {
   isMruFallbackMenuCommand,
-  readEpicId,
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import {
   uniqueLandingDrafts,
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
+import {
+  findWindowIdForOpenArtifact,
+  findWindowIdForOpenChat,
+  findWindowIdForOpenTab,
+  parseNotificationClickTarget,
+  type NotificationClickTarget,
+} from "./notification-target";
 import { registerAuthIpc } from "./auth-ipc";
 import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
@@ -51,20 +74,39 @@ import { registerOwnershipIpc } from "./ownership-ipc";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
-import { registerHostEnsureIpc } from "./host-ensure-ipc";
+import { registerHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
+import { registerSelectionAuthorityIpc } from "./selection-authority-ipc";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
 import { registerPlatformIpc } from "./platform-ipc";
 import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
+import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { registerMenuIpc } from "./menu-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
 import {
   aggregateUnsyncedSnapshots,
   registerLifecycleIpc,
 } from "./lifecycle-ipc";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  GuardedMutationOutcome,
+  HostControllerStatus,
+  LifecycleAdmissionBlock,
+  InstallVersionOk,
+  MutationOutcome,
+  MutationProgress,
+  RemoveTraycerOk,
+  LocalHostMutationIntent,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../host/host-controller-types";
 
 /**
  * Minimal window surface the bridge needs. Declaring it structurally lets
@@ -125,7 +167,14 @@ export interface IpcEpicWindowOwnership {
 
 export interface IpcPerWindowState {
   get(windowId: string): PerWindowSnapshot;
-  update(windowId: string, patch: PerWindowStatePatch): void;
+  capabilities(): PerWindowStateCapabilities;
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ):
+    | PerWindowStateUpdateAcknowledgement
+    | void
+    | Promise<PerWindowStateUpdateAcknowledgement | void>;
   clear(windowId: string): void;
   on(event: "change", listener: (change: PerWindowStateChange) => void): void;
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
@@ -152,6 +201,31 @@ export interface IpcDesktopAuthSession {
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
 
+/**
+ * Minimal main-process token-store surface the auth IPC drives (tech plan §3).
+ * The concrete `FileTokenStore` structurally satisfies it. `subscribe` returns
+ * an unsubscribe thunk (registered on `disposeFns`); `dispose` tears down the
+ * underlying credentials mutation store.
+ */
+export interface IpcAuthTokenStore {
+  get(): Promise<StoredCredentials | null>;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<void>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
+  delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
+  subscribe(listener: (change: TokenStoreChange) => void): () => void;
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
+  dispose(): void;
+}
+
 export interface IpcZoomController {
   getZoomPercent(): ZoomPercent;
   zoomIn(): Promise<ZoomPercent>;
@@ -162,18 +236,45 @@ export interface IpcZoomController {
 }
 
 export interface IpcSupportService {
-  getSnapshot(): SupportSnapshot;
+  getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
+  // `frozenEvidenceKey` is composed in the IPC layer (support-ipc.ts) from
+  // the sender's webContents id + the renderer-local draftId - a draftId
+  // alone is only unique within one renderer realm, and this service is one
+  // process-wide map shared by every window.
   submitReport(
     form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult>;
   tailLog(input: {
     readonly target: SupportLogTarget;
     readonly tailLines: number;
   }): Promise<SupportLogTailResult>;
+  freezeEvidence(
+    frozenEvidenceKey: string,
+    fingerprint: string | null,
+  ): Promise<SupportFreezeEvidenceResult>;
+  discardFrozenEvidence(frozenEvidenceKey: string): void;
+  readFrozenLogTail(
+    frozenEvidenceKey: string,
+    target: SupportLogTarget,
+  ): Promise<SupportLogTailResult>;
+  saveDiagnosticBundle(
+    form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
+  ): Promise<SupportSaveDiagnosticBundleResult>;
+  getFingerprintOccurrence(
+    fingerprint: string,
+  ): Promise<SupportFingerprintOccurrence | null>;
+  buildPublicDraft(
+    form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult>;
 }
 
-type HostChangeListener = (snapshot: DesktopLocalHostSnapshot | null) => void;
+type HostChangeListener = (
+  snapshot: DesktopPublishedHostSnapshot | null,
+) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
 
@@ -195,16 +296,14 @@ export interface QuitDecisionWaiter {
  * status read and the log tail used by Doctor/support remain.
  */
 export interface IpcHostLifecycle {
-  getSnapshot(): DesktopLocalHostSnapshot | null;
+  getSnapshot(): DesktopPublishedHostSnapshot | null;
   on(event: "change", listener: HostChangeListener): void;
   off(event: "change", listener: HostChangeListener): void;
-  respawn(): Promise<void>;
   /**
-   * Used by the macOS host-owned-login-item respawn path
-   * (`app/host-respawn.ts:respawnViaLoginItem`) to mark the host
-   * as "down" from the renderer's perspective before driving the
-   * SMAppService re-register cycle itself, without re-entering
-   * `respawn()`'s CLI-restart codepath.
+   * Used by `HostController`'s packaged-macOS activation cycle to mark the
+   * host as "down" from the renderer's perspective before driving the
+   * SMAppService re-register cycle, without going through a full mutation
+   * round-trip first.
    */
   notifyRespawning(): void;
   /**
@@ -213,6 +312,12 @@ export interface IpcHostLifecycle {
    * source of truth.
    */
   readonly pidMetadataFile: string;
+  /**
+   * The host's durable enrollment record. `pid.json` is unlinked on graceful
+   * shutdown, so this is the only path that still identifies this machine's
+   * host while it is stopped.
+   */
+  readonly identityEnrollmentFile: string;
   /**
    * Whether the lifecycle has been torn down. The respawn handler reads
    * this between awaits so it doesn't drive SMAppService mutations
@@ -224,33 +329,100 @@ export interface IpcHostLifecycle {
    * handler calls this after `waitForHostReady` resolves so the
    * renderer's host snapshot is guaranteed populated on return -
    * fs.watch coalescing on macOS occasionally drops the create event
-   * after a pid.json replacement. Returns the snapshot THIS read derived
-   * (null when no reachable, compatible host is on disk), so the
-   * host-busy surfacing can judge off the reload's own result rather than a
-   * `getSnapshot()` a concurrent reload may not have assigned yet.
+   * after a pid.json replacement. Returns the snapshot THIS read derived, so
+   * the host-busy surfacing can judge off the reload's own result rather than
+   * a `getSnapshot()` a concurrent reload may not have assigned yet. `null`
+   * means no compatible host metadata is on disk (or the host it names is
+   * confirmed dead) - NOT that the host is unreachable: a live-but-silent
+   * host still answers non-null, with a `busy` availability and its real
+   * endpoint intact (see `HostLifecycle.toPublishedSnapshot`).
    */
-  reloadSnapshotFromDisk(): Promise<DesktopLocalHostSnapshot | null>;
+  reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null>;
+  /**
+   * Out-of-band evidence that the published endpoint just answered a probe
+   * this lifecycle did not run. Repairs a degraded (`busy`) verdict without
+   * waiting for the retry ladder; a no-op once the verdict is `available`.
+   * See `HostLifecycle.noteEndpointAnswered`.
+   */
+  noteEndpointAnswered(): void;
   /**
    * Idempotent (re-)install of the pid-metadata watcher. The respawn
    * handler calls this to recover from a watcher that was silently
    * torn down by an FSEvents stream reset earlier in the session.
    */
   ensureWatcherInstalled(): void;
-  getServiceStatus(): Promise<{
-    state: "running" | "stopped" | "not-installed";
-    version: string | null;
-    listenUrl: string | null;
-    pid: number | null;
-  }>;
   getRecentLogTail(maxLines: number): Promise<string | null>;
+}
+
+/**
+ * Structural surface of `HostController` (Host Update Layer Redesign Tech
+ * Plan, "Desktop main: HostController") that IPC handlers and background
+ * monitors depend on. Declared here - not imported from `host-controller.ts`
+ * - so tests can pass a lightweight double instead of constructing the real
+ * class, the same pattern `IpcHostLifecycle` already uses for `HostLifecycle`.
+ * The real `HostController` satisfies this structurally; no explicit
+ * `implements` needed.
+ */
+export interface IpcHostController {
+  /**
+   * The lifecycle admission verdict sampled synchronously, for a handler that
+   * must test it and submit in one stretch. `getStatus()` carries the lane
+   * half but only after awaiting disk reads, which is already too late to
+   * decide whether submitting would QUEUE behind a running intent — and it
+   * cannot see the pending-login-item revision cycle at all, which this
+   * includes. Deliberately the ONLY admission surface exposed here.
+   */
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
+  getStatus(): Promise<HostControllerStatus>;
+  convergeReady(
+    force: boolean,
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
+  stageLatest(): Promise<void>;
+  applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>>;
+  activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>>;
+  registerService(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
+  deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
+  recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  >;
+  freePortAndRestart(
+    pid: number | null,
+    port: number | null,
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
+  uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
+  removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
+  isPendingRevisionRefreshQuarantined(): boolean;
+  onMutationProgress(
+    listener: (progress: MutationProgress) => void,
+  ): () => void;
 }
 
 export interface RunnerIpcOptions {
   readonly host: IpcHostLifecycle;
+  readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   // Dev loopback redirect_uri; null when the build uses the custom-scheme
   // deep link (staging/prod). Snapshotted by the renderer to compose sign-in.
   readonly authRedirectUri: string | null;
+  // Absent in tests / the single-window shell: defaults to a null store. The
+  // real desktop startup always injects a `FileTokenStore`.
+  readonly authTokenStore: IpcAuthTokenStore | undefined;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
   readonly zoomController: IpcZoomController | undefined;
@@ -258,8 +430,10 @@ export interface RunnerIpcOptions {
 
 export interface RunnerIpcRegistryOptions {
   readonly host: IpcHostLifecycle;
+  readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   readonly authRedirectUri: string | null;
+  readonly authTokenStore: IpcAuthTokenStore | undefined;
   readonly tray: DesktopTrayController | null;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
@@ -271,11 +445,20 @@ export interface RunnerIpcRegistryOptions {
 }
 
 export type RunnerIpcBridgeOptions =
-  RunnerIpcOptions | RunnerIpcRegistryOptions;
+  | RunnerIpcOptions
+  | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;
   readonly resolve: (snapshot: UnsyncedEditsSnapshot) => void;
+  /**
+   * Settles the same promise as "did not answer" - the shape
+   * `requestFreshUnsyncedSnapshotForWindow`'s own timeout branch produces
+   * (cached ambient snapshot, `fresh: false`). `resolve` above always means
+   * the renderer actually replied, so dispose()/`pruneClosedWindowState()`
+   * cannot reuse it without lying about freshness; they call this instead.
+   */
+  readonly resolveStale: () => void;
 }
 
 /**
@@ -290,6 +473,7 @@ export class RunnerIpcBridge {
   readonly ownership: IpcEpicWindowOwnership;
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
+  readonly authTokenStore: IpcAuthTokenStore;
   readonly support: IpcSupportService;
   readonly zoomController: IpcZoomController;
   readonly quitState: IpcShellQuitState;
@@ -298,7 +482,6 @@ export class RunnerIpcBridge {
     channel: string;
     listener: (event: IpcMainEvent, ...args: unknown[]) => void;
   }> = [];
-  private hostPickerOpen = false;
   // Set when a browser-return deep link arrives before any renderer window
   // exists; drained to the MRU window once one registers. Coalesced to a single
   // flag - the signal is a payload-free nudge, so repeated arrivals collapse.
@@ -320,6 +503,7 @@ export class RunnerIpcBridge {
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
+    this.authTokenStore = options.authTokenStore ?? new NullAuthTokenStore();
     if ("windowRegistry" in options) {
       this.windowRegistry = options.windowRegistry;
       this.ownership = options.ownership;
@@ -350,7 +534,11 @@ export class RunnerIpcBridge {
     registerSupportIpc(this);
     registerHostIpc(this);
     registerHostManagementIpc(this);
-    registerHostEnsureIpc(this);
+    registerHostControllerStatusBroadcast(this);
+    // After the status broadcast: the selection authority's local
+    // expected-outage signal subscribes to the tick source that module owns
+    // rather than standing up a second poll loop.
+    registerSelectionAuthorityIpc(this);
     registerMigrationIpc(this);
     registerTraycerCliIpc(this);
     // Platform IPC (recent docs, window effects, diagnostics, etc.) is wired
@@ -358,7 +546,9 @@ export class RunnerIpcBridge {
     // `disposeFns` / `ipcMain.removeHandler` sweep.
     registerPlatformIpc(this);
     registerAppUpdateIpc(this);
+    registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
+    registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
     registerPowerIpc(this);
@@ -397,12 +587,94 @@ export class RunnerIpcBridge {
     );
   }
 
+  /**
+   * Resolves the live window already holding a notification click's exact
+   * target - chat/terminal-agent/terminal tile (`chatId`), terminal tab
+   * (`tabId`), or artifact tile (`artifactId`) - or null when there is no
+   * epicId or no such target is open anywhere.
+   */
+  private resolveNotificationOpenWindowId(
+    target: NotificationClickTarget,
+  ): string | null {
+    if (target.epicId === null) return null;
+    if (target.chatId !== null) {
+      return findWindowIdForOpenChat(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.chatId,
+        target.originHostId,
+      );
+    }
+    if (target.tabId !== null) {
+      return findWindowIdForOpenTab(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.tabId,
+      );
+    }
+    if (target.artifactId !== null) {
+      return findWindowIdForOpenArtifact(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.artifactId,
+        target.originHostId,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Routes a native-notification click. When the click carries a chat/
+   * terminal-agent target, a terminal-route tab target, or an artifact
+   * target, that is already open in some live window, focuses that exact
+   * window - `NotificationFocusBridge` there brings the tile to the
+   * foreground itself. Otherwise falls back to owned-or-MRU delivery, as for
+   * any other epic-scoped event.
+   */
   deliverNotificationClick(payload: unknown): void {
+    const target = parseNotificationClickTarget(payload);
+    const openWindowId = this.resolveNotificationOpenWindowId(target);
+    if (openWindowId !== null) {
+      this.focusAndDeliver(
+        openWindowId,
+        RunnerHostEvent.notificationClick,
+        payload,
+      );
+      return;
+    }
     this.deliverToOwnedOrMru(
-      readEpicId(payload),
+      target.epicId,
       RunnerHostEvent.notificationClick,
       payload,
     );
+  }
+
+  /**
+   * Relays a renderer-owned notification to the focused renderer when the
+   * emitter lives in another window. The originating renderer already drew
+   * its own toast, so same-window focus needs no duplicate delivery.
+   */
+  deliverForegroundNotificationDisplay(
+    senderWebContentsId: number | null,
+    display: DesktopNotificationForegroundDisplay,
+  ): boolean {
+    const focused = this.findFocusedLiveRecord();
+    if (focused === null) return false;
+    if (focused.webContentsId === senderWebContentsId) return true;
+    const delivered = this.safeSendToWindow(
+      focused.windowId,
+      RunnerHostEvent.notificationForegroundDisplay,
+      display,
+    );
+    if (!delivered) {
+      log.warn("[runner-ipc] foreground notification relay failed", {
+        windowId: focused.windowId,
+      });
+    }
+    return delivered;
   }
 
   /**
@@ -469,10 +741,51 @@ export class RunnerIpcBridge {
   requestFreshUnsyncedSnapshot(
     timeoutMs: number,
   ): Promise<UnsyncedEditsSnapshot> {
-    const requests = this.windowRegistry.records().map((record) => {
-      return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
-    });
-    return Promise.all(requests).then(() => this.getUnsyncedEditsSnapshot());
+    return this.requestFreshUnsyncedSnapshotWithFidelity(timeoutMs).then(
+      (result) => result.snapshot,
+    );
+  }
+
+  /**
+   * `requestFreshUnsyncedSnapshot` plus the one fact it discards: whether
+   * EVERY window actually answered.
+   *
+   * The fan-out above resolves a non-answering window with its cached ambient
+   * row, which is the right default for the quit path - that path is racing an
+   * OS shutdown and a stale row is strictly better than blocking on a wedged
+   * renderer. It is the wrong default for a caller that has to decide whether
+   * destroying work is authorized, because a silent fallback is
+   * indistinguishable from a window that genuinely holds nothing, and the two
+   * lead to opposite decisions.
+   *
+   * So the fallback is reported rather than hidden, and the caller decides
+   * what it means. `installUpdate()` treats it as unknown-and-therefore-ask;
+   * see `unsyncableWorkAcrossWindows`.
+   */
+  requestFreshUnsyncedSnapshotWithFidelity(timeoutMs: number): Promise<{
+    readonly snapshot: UnsyncedEditsSnapshot;
+    readonly anyWindowStale: boolean;
+  }> {
+    // Only windows that have MOUNTED the lifecycle bridge are asked - the same
+    // gate `requestQuitDecision` applies. A window that never pushed a
+    // snapshot (the readiness gate is blocking it, or it is on the sign-in
+    // route) has no `AppShell`, so no Epic canvas and no session to hold
+    // unsynced work; asking it anyway made it time out on EVERY install click
+    // for the rest of the session and report `otherWindowsUnknown` for a
+    // window that structurally could not hold anything - fail-closed in the
+    // wrong direction. Once ready, a window stays in the set until it closes,
+    // so a window that mounted and later blanks is still asked (and times
+    // out honestly).
+    const requests = this.windowRegistry
+      .records()
+      .filter((record) => this.appLifecycleReadyWindowIds.has(record.windowId))
+      .map((record) => {
+        return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
+      });
+    return Promise.all(requests).then((results) => ({
+      snapshot: this.getUnsyncedEditsSnapshot(),
+      anyWindowStale: results.some((result) => !result.fresh),
+    }));
   }
 
   /**
@@ -558,18 +871,11 @@ export class RunnerIpcBridge {
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
     );
-  }
-
-  getHostPickerOpen(): boolean {
-    return this.hostPickerOpen;
-  }
-
-  setHostPickerOpen(next: boolean): void {
-    if (this.hostPickerOpen === next) {
-      return;
-    }
-    this.hostPickerOpen = next;
-    this.fanOut(RunnerHostEvent.hostPickerChange, next);
+    // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
+    // armed past dispose() would either fire its setTimeout against a bridge
+    // that no longer owns any IPC handlers, or hang the awaiting caller
+    // forever if the timer is cleared without settling the promise.
+    this.settleFreshSnapshotWaitersAsStale(() => true);
   }
 
   handleInvoke(
@@ -664,12 +970,27 @@ export class RunnerIpcBridge {
     return records.length === 1 ? records[0].windowId : null;
   }
 
+  /**
+   * `fresh` distinguishes "this window answered" from "this window did not,
+   * and the cached ambient row stood in for it". Both resolve with a usable
+   * snapshot; only the first is evidence about the window's CURRENT state.
+   */
   requestFreshUnsyncedSnapshotForWindow(
     record: IpcWindowRecord,
     timeoutMs: number,
-  ): Promise<UnsyncedEditsSnapshot> {
+  ): Promise<{
+    readonly snapshot: UnsyncedEditsSnapshot;
+    readonly fresh: boolean;
+  }> {
     const requestId = randomUUID();
-    return new Promise<UnsyncedEditsSnapshot>((resolve) => {
+    const cachedFallback = (): {
+      readonly snapshot: UnsyncedEditsSnapshot;
+      readonly fresh: boolean;
+    } => ({
+      snapshot: this.unsyncedEditsSnapshots.get(record.windowId) ?? [],
+      fresh: false,
+    });
+    return new Promise((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
@@ -681,7 +1002,7 @@ export class RunnerIpcBridge {
           fallbackCount:
             this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
         });
-        resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
+        resolve(cachedFallback());
       }, timeoutMs);
       this.freshSnapshotWaiters.set(requestId, {
         windowId: record.windowId,
@@ -689,7 +1010,14 @@ export class RunnerIpcBridge {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolve(snapshot);
+          resolve({ snapshot, fresh: true });
+        },
+        resolveStale: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.freshSnapshotWaiters.delete(requestId);
+          resolve(cachedFallback());
         },
       });
       if (
@@ -710,7 +1038,7 @@ export class RunnerIpcBridge {
           fallbackCount:
             this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
         });
-        resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
+        resolve(cachedFallback());
       }
     });
   }
@@ -819,11 +1147,19 @@ export class RunnerIpcBridge {
       });
       return;
     }
-    this.windowRegistry.focusById(target.windowId);
-    if (!this.safeSendToWindow(target.windowId, channel, payload)) {
+    this.focusAndDeliver(target.windowId, channel, payload);
+  }
+
+  private focusAndDeliver(
+    windowId: string,
+    channel: string,
+    payload: unknown,
+  ): void {
+    this.windowRegistry.focusById(windowId);
+    if (!this.safeSendToWindow(windowId, channel, payload)) {
       log.warn("[runner-ipc] renderer event delivery failed", {
         channel,
-        windowId: target.windowId,
+        windowId,
       });
     }
   }
@@ -831,18 +1167,24 @@ export class RunnerIpcBridge {
   private resolveRendererHostedCommandTarget(
     command: MenuCommandId,
   ): IpcWindowRecord | null {
-    const focused = this.windowRegistry
-      .records()
-      .find(
-        (record) => record.window.isFocused() && !record.window.isDestroyed(),
-      );
-    if (focused !== undefined) {
+    const focused = this.findFocusedLiveRecord();
+    if (focused !== null) {
       return focused;
     }
     if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;
+  }
+
+  private findFocusedLiveRecord(): IpcWindowRecord | null {
+    return (
+      this.windowRegistry
+        .records()
+        .find(
+          (record) => !record.window.isDestroyed() && record.window.isFocused(),
+        ) ?? null
+    );
   }
 
   pruneClosedWindowState(): void {
@@ -862,6 +1204,13 @@ export class RunnerIpcBridge {
     this.rejectQuitDecisionWaiters(
       (waiter) => !liveWindowIds.has(waiter.windowId),
       new Error("Quit interception window closed before resolving"),
+    );
+    // A fresh-snapshot request targets one window; if that window closed
+    // before answering, no reply is ever coming and the waiter would
+    // otherwise sit armed until its own timeout - same gap the line above
+    // closes for quit-decision waiters.
+    this.settleFreshSnapshotWaitersAsStale(
+      (waiter) => !liveWindowIds.has(waiter.windowId),
     );
   }
 
@@ -906,6 +1255,25 @@ export class RunnerIpcBridge {
     }
     this.quitDecisionWaiters.length = 0;
     this.quitDecisionWaiters.push(...retained);
+  }
+
+  /**
+   * `rejectQuitDecisionWaiters`'s counterpart for fresh-snapshot requests.
+   * `resolveStale()` (not `reject`) because a fresh-snapshot request has a
+   * well-defined "did not answer" value - the cached ambient snapshot - so
+   * there is no error to propagate, only a freshness fact to report.
+   * Snapshotted to an array first since `resolveStale()` deletes its own
+   * entry from `freshSnapshotWaiters`, which would otherwise mutate the Map
+   * mid-iteration.
+   */
+  private settleFreshSnapshotWaitersAsStale(
+    predicate: (waiter: FreshSnapshotWaiter) => boolean,
+  ): void {
+    for (const waiter of Array.from(this.freshSnapshotWaiters.values())) {
+      if (predicate(waiter)) {
+        waiter.resolveStale();
+      }
+    }
   }
 }
 
@@ -996,6 +1364,43 @@ class NeverQuittingShellState implements IpcShellQuitState {
   }
 }
 
+// Default token store for the single-window `window:` bridge variant and any
+// caller (tests) that omits `authTokenStore`: signed-out, writes no-op. The real
+// desktop startup always injects a `FileTokenStore`.
+class NullAuthTokenStore implements IpcAuthTokenStore {
+  get(): Promise<StoredCredentials | null> {
+    return Promise.resolve(null);
+  }
+
+  signIn(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  rotate(): Promise<TokenRotateResult> {
+    return Promise.resolve({ outcome: "deleted", pair: null });
+  }
+
+  delete(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteIfToken(): Promise<"deleted" | "kept"> {
+    return Promise.resolve("kept");
+  }
+
+  subscribe(): () => void {
+    return () => undefined;
+  }
+
+  migrateLegacyCredentials(): Promise<CredentialsMigrationOutcome> {
+    // No file backing (test caller omitted a store): there is nothing to
+    // migrate onto, so decline — the caller wipes the legacy remnant.
+    return Promise.resolve("identity-unknown");
+  }
+
+  dispose(): void {}
+}
+
 class NullEpicWindowOwnership implements IpcEpicWindowOwnership {
   getOwner(_tabId: string): string | null {
     return null;
@@ -1039,7 +1444,16 @@ class NullPerWindowState implements IpcPerWindowState {
     return this.snapshots.get(windowId) ?? createEmptyPerWindowSnapshot();
   }
 
-  update(windowId: string, patch: PerWindowStatePatch): void {
+  capabilities(): PerWindowStateCapabilities {
+    // Shared with the real store: the renderer handshake must not see a
+    // different feature set depending on which implementation backs the bridge.
+    return PER_WINDOW_STATE_CAPABILITIES;
+  }
+
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ): PerWindowStateUpdateAcknowledgement {
     const current = this.get(windowId);
     const landingDrafts =
       "landingDrafts" in patch
@@ -1049,7 +1463,8 @@ class NullPerWindowState implements IpcPerWindowState {
       "activeLandingDraftId" in patch
         ? (patch.activeLandingDraftId ?? null)
         : current.activeLandingDraftId;
-    this.snapshots.set(windowId, {
+    const next: PerWindowSnapshot = {
+      revision: (current.revision ?? 0) + 1,
       epicTabs:
         "epicTabs" in patch
           ? uniquePerWindowTabs(patch.epicTabs ?? [])
@@ -1064,7 +1479,17 @@ class NullPerWindowState implements IpcPerWindowState {
           : current.canvasByTabId,
       landingDrafts,
       activeLandingDraftId,
-    });
+      tabStripLayout:
+        "tabStripLayout" in patch
+          ? (patch.tabStripLayout ?? null)
+          : current.tabStripLayout,
+      activeRoute:
+        "activeRoute" in patch
+          ? (patch.activeRoute ?? null)
+          : current.activeRoute,
+    };
+    this.snapshots.set(windowId, next);
+    return { capabilities: this.capabilities(), revision: next.revision ?? 0 };
   }
 
   clear(windowId: string): void {
@@ -1083,8 +1508,8 @@ class NullPerWindowState implements IpcPerWindowState {
 }
 
 class NullSupportService implements IpcSupportService {
-  getSnapshot(): SupportSnapshot {
-    return {
+  getSnapshot(): Promise<SupportSnapshot> {
+    return Promise.resolve({
       appName: "Traycer",
       appVersion: "0.0.0",
       platform: process.platform,
@@ -1104,11 +1529,13 @@ class NullSupportService implements IpcSupportService {
         version: null,
         pid: null,
         hostId: null,
+        layer0: null,
       },
       logs: [],
       links: [],
       supportEmail: "",
-    };
+      privateDeliveryAvailable: false,
+    });
   }
 
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult> {
@@ -1117,8 +1544,9 @@ class NullSupportService implements IpcSupportService {
 
   submitReport(
     _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult> {
-    return Promise.resolve({ reportId: "" });
+    return Promise.resolve({ status: "unavailable" });
   }
 
   tailLog(input: {
@@ -1129,6 +1557,58 @@ class NullSupportService implements IpcSupportService {
       target: input.target,
       path: "",
       lines: [],
+      truncated: false,
+    });
+  }
+
+  freezeEvidence(
+    _frozenEvidenceKey: string,
+    _fingerprint: string | null,
+  ): Promise<SupportFreezeEvidenceResult> {
+    return Promise.reject(new Error("Support evidence is unavailable"));
+  }
+
+  discardFrozenEvidence(_frozenEvidenceKey: string): void {}
+
+  readFrozenLogTail(
+    _frozenEvidenceKey: string,
+    target: SupportLogTarget,
+  ): Promise<SupportLogTailResult> {
+    return Promise.resolve({
+      target,
+      path: "",
+      lines: [],
+      truncated: false,
+    });
+  }
+
+  saveDiagnosticBundle(
+    _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
+  ): Promise<SupportSaveDiagnosticBundleResult> {
+    return Promise.resolve({ path: "" });
+  }
+
+  getFingerprintOccurrence(
+    _fingerprint: string,
+  ): Promise<SupportFingerprintOccurrence | null> {
+    return Promise.resolve(null);
+  }
+
+  buildPublicDraft(
+    _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult> {
+    return Promise.resolve({
+      template: "bug_report.yml",
+      title: "",
+      fields: {
+        "what-happened": "",
+        version: "",
+        os: "",
+        component: "",
+        repro: "",
+      },
       truncated: false,
     });
   }

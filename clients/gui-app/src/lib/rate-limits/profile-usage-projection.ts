@@ -2,8 +2,10 @@ import {
   classifyProviderRateLimits,
   classifyProviderRateLimitWindow,
   isProviderRateLimitWindowLive,
+  isOpenCodeGoRateLimitWindowLimited,
   providerRateLimitWindows,
   type LiveProviderRateLimitSeverity,
+  type OpenCodeGoRateLimitWindow,
   type ProviderRateLimits,
   type ProviderRateLimitSeverity,
   type ProviderRateLimitWindow,
@@ -19,7 +21,8 @@ import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
 
 export type ProfileUsageWindowRole = "primary" | "secondary" | "extra";
 export type ProfileUsageFailureReason =
-  RateLimitUnavailableReason | "fetch_failed";
+  | RateLimitUnavailableReason
+  | "fetch_failed";
 type AvailableProviderRateLimits = Extract<
   ProviderRateLimits,
   { available: true }
@@ -66,7 +69,10 @@ export type ProfileUsageProjection =
       readonly kind: "unavailable";
       readonly severity: "unknown";
       readonly reason:
-        ProfileUsageFailureReason | "expired" | "missing_windows" | "unknown";
+        | ProfileUsageFailureReason
+        | "expired"
+        | "missing_windows"
+        | "unknown";
     });
 
 export interface ProfileUsageProjectionInput {
@@ -165,6 +171,20 @@ function windowProjection(
   };
 }
 
+function openCodeWindowProjection(input: {
+  readonly id: string;
+  readonly role: ProfileUsageWindowRole;
+  readonly name: string;
+  readonly window: OpenCodeGoRateLimitWindow;
+  readonly now: number;
+}): ProfileUsageWindow | null {
+  const projected = windowProjection(input);
+  return projected === null ||
+    !isOpenCodeGoRateLimitWindowLimited(input.window, input.now)
+    ? projected
+    : { ...projected, severity: "limited" };
+}
+
 function openRouterCreditProjection(
   rateLimits: Extract<
     ProviderRateLimits,
@@ -189,6 +209,39 @@ function openRouterCreditProjection(
     id: "credits",
     role: "primary",
     name: "Credits",
+    window,
+    severity: creditUsageSeverity(usedPercent),
+  };
+}
+
+// Hugging Face's only computable percentage is against the included
+// allowance - the same pair the settings credit bar renders - so an account
+// without one projects no window at all rather than a fabricated zero. `used`
+// can exceed the allowance once an account spends past it, so the consumed
+// figure is clamped to keep the projected percentage inside 0-100.
+function huggingFaceCreditProjection(
+  rateLimits: Extract<
+    ProviderRateLimits,
+    { provider: "huggingface"; available: true }
+  >,
+): ProfileUsageWindow | null {
+  if (rateLimits.includedUsd === null || rateLimits.includedUsd <= 0) {
+    return null;
+  }
+  const consumed = Math.min(
+    Math.max(0, rateLimits.usedUsd),
+    rateLimits.includedUsd,
+  );
+  const usedPercent = (consumed / rateLimits.includedUsd) * 100;
+  const window = {
+    usedPercent,
+    durationMinutes: null,
+    resetsAt: null,
+  };
+  return {
+    id: "credits",
+    role: "primary",
+    name: "Included credits",
     window,
     severity: creditUsageSeverity(usedPercent),
   };
@@ -277,6 +330,77 @@ function projectedLiveWindows(
       const credits = openRouterCreditProjection(rateLimits);
       return credits === null ? [] : [credits];
     }
+    case "grok":
+      // Grok rides the shared window path via its synthesized billing-period
+      // window - not the OpenRouter-style credit projection - so its severity
+      // and compact bar come straight from `classifyProviderRateLimits` with
+      // no special-casing. A period-less snapshot (tier + dates only) carries
+      // no window.
+      return [
+        windowProjection({
+          id: "period",
+          role: "primary",
+          name: null,
+          window: rateLimits.period,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
+    case "opencode":
+      return [
+        openCodeWindowProjection({
+          id: "five-hour",
+          role: "primary",
+          name: "5-hour",
+          window: rateLimits.fiveHour,
+          now,
+        }),
+        openCodeWindowProjection({
+          id: "weekly",
+          role: "secondary",
+          name: "Weekly",
+          window: rateLimits.weekly,
+          now,
+        }),
+        openCodeWindowProjection({
+          id: "monthly",
+          role: "extra",
+          name: "Monthly",
+          window: rateLimits.monthly,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
+    case "huggingface": {
+      const credits = huggingFaceCreditProjection(rateLimits);
+      return credits === null ? [] : [credits];
+    }
+    case "cursor":
+      // Cursor rides the shared window path via its synthesized billing-cycle
+      // bucket windows, exactly like grok - NOT the credit projection its
+      // money-shaped fields might suggest - so severity and the compact bar
+      // come straight from `classifyProviderRateLimits`. This is also why
+      // cursor is absent from the credit-provider severity exception below:
+      // that exception exists for providers whose `providerRateLimitWindows`
+      // is empty by design, and cursor's is not.
+      //
+      // The two windows mirror Cursor's Spending page buckets; the compact
+      // bar picks the most consumed of the two via `mostConstrainedWindow`,
+      // so the headline number always matches one of the dashboard's bars.
+      return [
+        windowProjection({
+          id: "cursor-models",
+          role: "primary",
+          name: "Cursor Models",
+          window: rateLimits.cursorModels,
+          now,
+        }),
+        windowProjection({
+          id: "other-models",
+          role: "secondary",
+          name: "Other Models",
+          window: rateLimits.otherModels,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
     case "kilocode":
       return [];
   }
@@ -308,6 +432,39 @@ function emptyDetailProjection(
   input: ProfileUsageProjectionInput,
 ): ProfileUsageProjection {
   const checkedAt = envelope.lastGoodAt ?? input.usageUpdatedAt;
+  // Grok's zero-usage snapshot is `available` with tier + billing-period bounds
+  // but no usage percentage, so it synthesizes no `period` window. That is
+  // "unmeasured", not "unavailable": the account is reachable and healthy, it
+  // just reports nothing to meter this period (the same snapshot the Settings
+  // card renders as tier + billing period, no severity). Project it as the
+  // percentage-free unmeasured state so its severity stays `unknown` -
+  // consistent with protocol `classifyProviderRateLimits` and the (parallel)
+  // host-gauge fix - instead of the alarming unavailable/`missing_windows`
+  // framing, which reads as a fetch/account failure. A grok snapshot whose
+  // period merely rolled (window present but expired) still falls through to
+  // `expired` below, the correct stale framing.
+  //
+  // Cursor is the same case for the same reason: its bucket windows are
+  // synthesized only when the payload reports the bucket percentages, and
+  // proto3 JSON omits zero-valued fields, so a reachable account can
+  // legitimately arrive with both windows null. Without this arm that account
+  // renders as unavailable (`missing_windows`) purely because Cursor reported
+  // nothing to meter. A cursor snapshot whose cycle merely rolled still falls
+  // through to `expired`, exactly as grok's does.
+  if (
+    (rateLimits.provider === "grok" && rateLimits.period === null) ||
+    (rateLimits.provider === "cursor" &&
+      rateLimits.cursorModels === null &&
+      rateLimits.otherModels === null)
+  ) {
+    return {
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
+    };
+  }
   const severity = classifyProviderRateLimits(rateLimits, input.now);
   if (severity === "limited") {
     return {
@@ -382,8 +539,12 @@ export function projectProfileUsage(
     return emptyDetailProjection(retained, envelope, input);
   }
 
+  // The credit providers derive severity from the PROJECTED window, not from
+  // `classifyProviderRateLimits`: that helper reads `providerRateLimitWindows`,
+  // which is empty for a credit provider by design, so it answers "unknown" and
+  // the branch below would discard the credit bar we just projected.
   const severity =
-    retained.provider === "openrouter"
+    retained.provider === "openrouter" || retained.provider === "huggingface"
       ? compactWindow.severity
       : classifyProviderRateLimits(retained, input.now);
   if (severity === "unknown") {

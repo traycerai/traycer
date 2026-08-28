@@ -1,11 +1,12 @@
 import {
+  Fragment,
   useLayoutEffect,
   useState,
   type ReactElement,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { Folder } from "lucide-react";
+import { Folder, TriangleAlertIcon } from "lucide-react";
 import {
   autoUpdate,
   computePosition,
@@ -42,6 +43,12 @@ export interface MentionPreviewPanelProps {
   readonly listRef: RefObject<HTMLDivElement | null>;
   readonly activeIndex: number;
   readonly preview: MentionPreview | null;
+  /**
+   * Why the highlighted row cannot be committed, or null when it can be.
+   * Rendered above the preview body and separated from it, so the reason
+   * reads first rather than as a footnote to the description.
+   */
+  readonly disabledReason: string | null;
 }
 
 /**
@@ -53,7 +60,7 @@ export interface MentionPreviewPanelProps {
  * than letting it render past the viewport edge or overlap the list.
  */
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
-  const { panelRef, listRef, activeIndex, preview } = props;
+  const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
   const [fits, setFits] = useState(false);
 
   useLayoutEffect(() => {
@@ -87,6 +94,17 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     };
 
     const reposition = (): void => {
+      // A zero rect means there is no active row to anchor to (the row is
+      // not rendered yet, or the query missed). Anchoring to it would make
+      // floating-ui measure availability from the viewport ORIGIN - a point
+      // has a whole viewport of room beside it, so the fit gate passes and
+      // the panel paints over whatever occupies the corner. No anchor, no
+      // panel.
+      const anchorRect = activeRowRect();
+      if (anchorRect.width === 0 && anchorRect.height === 0) {
+        setFits(false);
+        return;
+      }
       void computePosition(virtualReference, panel, {
         placement: "right-start",
         middleware: [
@@ -140,6 +158,20 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
         data-slot="mention-preview-panel-scroll-area"
         className={cn("max-h-[min(50vh,16rem)]", HOVER_PREVIEW_SCROLL_CLASS)}
       >
+        {disabledReason === null ? null : (
+          <div
+            data-slot="mention-preview-panel-disabled"
+            className="mb-2 flex items-start gap-1.5 border-b border-border/60 pb-2 text-ui-xs text-foreground"
+          >
+            <TriangleAlertIcon
+              className="mt-px size-3.5 shrink-0 text-amber-500"
+              aria-hidden
+            />
+            <span className="min-w-0">
+              <span className="font-semibold">Disabled</span> - {disabledReason}
+            </span>
+          </div>
+        )}
         <PreviewBody preview={preview} />
       </div>
     </div>,
@@ -184,6 +216,31 @@ function PreviewBody(props: {
               {preview.footer.text}
             </div>
           ) : null}
+        </>
+      );
+    case "card":
+      return (
+        <>
+          <div className="min-w-0 text-ui-sm text-foreground">
+            {preview.title}
+          </div>
+          <div className="mt-0.5 min-w-0 font-mono text-ui-xs wrap-anywhere text-muted-foreground/70">
+            {preview.subtitle}
+          </div>
+          {preview.facts.length === 0 ? null : (
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border/60 pt-2">
+              {preview.facts.map((fact) => (
+                <Fragment key={fact.label}>
+                  <dt className="text-ui-xs text-muted-foreground/70">
+                    {fact.label}
+                  </dt>
+                  <dd className="min-w-0 text-ui-xs wrap-anywhere text-foreground">
+                    {fact.value}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
+          )}
         </>
       );
   }

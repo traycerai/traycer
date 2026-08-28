@@ -56,7 +56,13 @@ export interface OnboardingAgentGuideState {
 }
 
 type NodeKind =
-  "chat" | "terminal-agent" | "spec" | "ticket" | "review" | "file" | "diff";
+  | "chat"
+  | "terminal-agent"
+  | "spec"
+  | "ticket"
+  | "review"
+  | "file"
+  | "diff";
 
 type SceneId =
   | "task-tabs"
@@ -292,7 +298,7 @@ const SIDEBAR_PANEL_RAIL_ITEMS: ReadonlyArray<{
   readonly icon: LucideIcon;
   readonly active: boolean;
 }> = [
-  { label: "Chats", icon: MessagesSquare, active: true },
+  { label: "Agents", icon: MessagesSquare, active: true },
   { label: "Git Diff", icon: GitBranch, active: false },
   { label: "Artifacts", icon: Files, active: false },
   { label: "Sharing", icon: UserPlus, active: false },
@@ -305,7 +311,7 @@ function taskSceneFor(index: number): TaskScene {
 const PALETTE_ROWS = [
   { label: "New task", hint: "Cmd N" },
   { label: "New terminal agent", hint: "Cmd T" },
-  { label: "Chats", hint: "" },
+  { label: "Agents", hint: "" },
   { label: "Artifacts", hint: "" },
   { label: "Files", hint: "Cmd P" },
   { label: "View diff", hint: "" },
@@ -609,7 +615,7 @@ function TaskSidebar(props: {
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <SidebarGroup
-          title="Chats"
+          title="Agents"
           activeKind={activeKind}
           className=""
           rows={[
@@ -1136,6 +1142,8 @@ function ChatPane(props: {
         <div className="ml-auto max-w-[88%] rounded-lg rounded-br-sm bg-primary px-2.5 py-1.5 text-ui-xs text-primary-foreground">
           {userCopy}
         </div>
+        {/* muted-fill-ok: decorative diorama bubble on a literal bg-canvas
+            pane; --canvas never equals --muted */}
         <div className="mr-auto flex w-[82%] max-w-[88%] flex-col gap-1.5 rounded-lg rounded-bl-sm bg-muted px-2.5 py-2">
           <span className="h-1.5 w-full rounded-full bg-foreground/15" />
           <span className="h-1.5 w-4/5 rounded-full bg-foreground/15" />
@@ -1314,6 +1322,7 @@ function GuiMessage(props: {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease: EASE }}
+      // muted-fill-ok: decorative diorama bubble on a literal bg-canvas pane; --canvas never equals --muted
       className="mr-auto flex max-w-[92%] flex-col gap-1 rounded-lg rounded-bl-sm bg-muted px-2.5 py-1.5 text-ui-xs"
     >
       <span className="flex items-center gap-1 text-overline uppercase tracking-wider text-muted-foreground">
@@ -1606,7 +1615,7 @@ function CommandPalette(props: { readonly reducedMotion: boolean }) {
         <span className="text-ui-sm text-muted-foreground">
           Type a command...
         </span>
-        <kbd className="ml-auto rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-overline text-muted-foreground">
+        <kbd className="ml-auto rounded border border-border bg-foreground/8 px-1.5 py-0.5 font-mono text-overline text-muted-foreground">
           Cmd K
         </kbd>
       </div>

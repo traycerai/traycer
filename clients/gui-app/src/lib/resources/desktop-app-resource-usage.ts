@@ -29,13 +29,21 @@ export interface DesktopDiagnosticsBridge {
   readonly getMetrics: () => Promise<DesktopProcessMetricsSnapshot>;
 }
 
+export interface DesktopHeapSnapshotBridge {
+  readonly takeHeapSnapshot: () => Promise<string | null>;
+}
+
 interface RunnerHostWindowShape {
   readonly platform:
     | {
         readonly diagnostics:
           | {
               readonly getMetrics:
-                (() => Promise<DesktopProcessMetricsSnapshot>) | undefined;
+                | (() => Promise<DesktopProcessMetricsSnapshot>)
+                | undefined;
+              readonly takeHeapSnapshot:
+                | (() => Promise<string | null>)
+                | undefined;
             }
           | undefined;
       }
@@ -53,6 +61,18 @@ export function getDesktopDiagnosticsBridge(): DesktopDiagnosticsBridge | null {
     .runnerHost;
   const getMetrics = host?.platform?.diagnostics?.getMetrics;
   return getMetrics === undefined ? null : { getMetrics };
+}
+
+/**
+ * Separate resolver from `getDesktopDiagnosticsBridge` because the two are
+ * independently available: metrics are cheap and polled, while a heap snapshot
+ * is an explicit, expensive, user-initiated capture.
+ */
+export function getDesktopHeapSnapshotBridge(): DesktopHeapSnapshotBridge | null {
+  const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
+    .runnerHost;
+  const takeHeapSnapshot = host?.platform?.diagnostics?.takeHeapSnapshot;
+  return takeHeapSnapshot === undefined ? null : { takeHeapSnapshot };
 }
 
 export function desktopAppResourceUsageFromMetrics(

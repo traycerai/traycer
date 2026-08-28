@@ -109,6 +109,44 @@ export type CanonicalTerminalSessionInfo = z.infer<
   typeof canonicalTerminalSessionInfoSchema
 >;
 
+// Latest canonical session-info shape. `cwd` remains the immutable launch
+// directory; `currentCwd` tracks the shell's live working directory when the
+// terminal reports it via a supported OSC sequence. Current hosts initialize
+// it to `cwd`, so it is also the explicit fallback when live discovery is
+// absent. The wire schema accepts an empty compatibility value because the
+// frozen v2.1 `cwd` field did; clients treat it as unavailable.
+//
+// This is a parallel schema rather than an in-place edit of
+// `canonicalTerminalSessionInfoSchema`: the latter already shipped in
+// `terminal.list@2.0`/`@2.1`, `terminal.create@2.0`, and
+// `terminal.subscribe@1.4` and must remain frozen.
+export const canonicalTerminalSessionInfoWithCurrentCwdSchema =
+  canonicalTerminalSessionInfoSchema.extend({
+    currentCwd: z.string(),
+  });
+export type CanonicalTerminalSessionInfoWithCurrentCwd = z.infer<
+  typeof canonicalTerminalSessionInfoWithCurrentCwdSchema
+>;
+
+// Who owns the session's lifetime. `registry` is a persistent plain-terminal
+// record (a `terminal.list` shadow of `terminal.plain.*`); `manager` is a
+// TerminalSessionManager session such as setup or provider-login. Updated
+// hosts tag every `terminal.list@2.3` row from the actual list composition,
+// not from title, cwd, or session kind. This is a parallel schema: the v2.2
+// currentCwd shape already shipped and stays frozen.
+export const terminalLifecycleOwnerSchema = z.enum(["registry", "manager"]);
+export type TerminalLifecycleOwner = z.infer<
+  typeof terminalLifecycleOwnerSchema
+>;
+
+export const canonicalTerminalSessionInfoWithLifecycleOwnerSchema =
+  canonicalTerminalSessionInfoWithCurrentCwdSchema.extend({
+    lifecycleOwner: terminalLifecycleOwnerSchema,
+  });
+export type CanonicalTerminalSessionInfoWithLifecycleOwner = z.infer<
+  typeof canonicalTerminalSessionInfoWithLifecycleOwnerSchema
+>;
+
 // `terminal.create@1.0` - spawns a new PTY-backed session for the given epic.
 // `sessionKind` distinguishes user terminal tabs from terminal-agent backing
 // PTYs so UI surfaces can list only the sessions they own. `cwd` is the
@@ -172,6 +210,39 @@ export type CreateTerminalResponseV20 = z.infer<
   typeof createTerminalResponseSchemaV20
 >;
 
+// Spawning client's resolved terminal appearance, carried on
+// `terminal.create@2.1` so the host can answer a TUI's OSC 10/11
+// foreground/background queries (which otherwise time out - no client is
+// subscribed yet when a TUI probes at startup, and the snapshot emulator
+// deliberately never records queries). The hint is a HEURISTIC, not a truth:
+// a session outlives and outspans any single viewer, so the host answers
+// with the spawner's theme and a cross-theme second viewer sees a
+// mismatched-but-readable TUI (the renderer's minimumContrastRatio carries
+// readability). Colors are strict lowercase-or-uppercase `#rrggbb` because
+// the host interpolates them into an escape sequence written to the PTY -
+// nothing wider than a hex literal may cross this boundary.
+export const terminalThemeHintColorSchema = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/);
+export const terminalThemeHintSchema = z.object({
+  appearance: z.enum(["light", "dark"]),
+  foreground: terminalThemeHintColorSchema,
+  background: terminalThemeHintColorSchema,
+});
+export type TerminalThemeHint = z.infer<typeof terminalThemeHintSchema>;
+
+// `terminal.create@2.1` - additive request-side `themeHint`. `null` - the
+// v2.0-upgraded default - means "no spawner theme known" and the host falls
+// back to a fixed dark answer (what a TUI assumes on query timeout anyway).
+// The response is unchanged from `@2.0`.
+export const createTerminalRequestSchemaV21 =
+  createTerminalRequestSchemaV20.extend({
+    themeHint: terminalThemeHintSchema.nullable().default(null),
+  });
+export type CreateTerminalRequestV21 = z.infer<
+  typeof createTerminalRequestSchemaV21
+>;
+
 // `terminal.kill@1.0` - terminates a session and evicts it from the host's
 // in-memory map. Returns `killed: false` only if the session was already
 // missing or had completed its grace period.
@@ -216,10 +287,83 @@ export type ListTerminalsResponseV20 = z.infer<
   typeof listTerminalsResponseSchemaV20
 >;
 
-// `terminal.rename@1.0` - overrides the session's display title. Title
-// lives on the in-memory session record only; it does not persist across
-// host restarts (PTYs themselves don't either). `updated: false` means
-// the session was missing or already had the requested title.
+// `terminal.list@2.1` - additive `homeCwd` on the response. A current host
+// returns the process-account home directory (non-empty string). `null` is
+// reserved for compatibility: the v2.0 → v2.1 response upgrade supplies
+// `homeCwd: null` because an older host cannot authoritatively provide it.
+// Request shape is unchanged from `@2.0`.
+export const listTerminalsResponseSchemaV21 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoSchema),
+  homeCwd: z.string().min(1).nullable(),
+});
+export type ListTerminalsResponseV21 = z.infer<
+  typeof listTerminalsResponseSchemaV21
+>;
+
+// `terminal.list@2.2` - additive live `currentCwd` on every session. An older
+// host upgraded from v2.1 fills it from the immutable launch `cwd`. That frozen
+// field allowed an empty compatibility value, which current clients interpret
+// as "directory unavailable" rather than inventing a path.
+export const listTerminalsResponseSchemaV22 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoWithCurrentCwdSchema),
+  homeCwd: z.string().min(1).nullable(),
+});
+export type ListTerminalsResponseV22 = z.infer<
+  typeof listTerminalsResponseSchemaV22
+>;
+
+// `terminal.list@2.3` - additive lifetime-owner discriminator on every
+// session. A v2.2 host upgraded to v2.3 fills `lifecycleOwner: "registry"`
+// so a capable client fail-closes missing origin as a durable shadow rather
+// than promoting it. Genuinely older hosts remain full `terminal.list`
+// after positive legacy negotiation and do not consult the field.
+export const listTerminalsResponseSchemaV23 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoWithLifecycleOwnerSchema),
+  homeCwd: z.string().min(1).nullable(),
+});
+export type ListTerminalsResponseV23 = z.infer<
+  typeof listTerminalsResponseSchemaV23
+>;
+
+// `terminal.readOutput@1.0` - read-only access to one session's output for a
+// caller that is an AGENT rather than a renderer. The host materializes the
+// session's scrollback, current screen and a short metadata header to a file
+// and returns that path; the caller reads or greps the file with its own
+// tools. A path rather than the text itself because a terminal's scrollback
+// is far larger than an RPC response should carry, and the reader is already
+// on this host - the same shape the managed-command log directory takes.
+//
+// The file is a regenerable projection of live emulator state, rewritten on
+// every call, so a path is never worth caching past the read that returned
+// it. Only plain `terminal` sessions are readable; a `terminal-agent`
+// session's conversation is `agent.getTranscript`'s job.
+//
+// Addressed to an epic like `agent.getTranscript` is, and for the same
+// reason: the host resolves `sessionId` among that epic's terminals only, so
+// what an agent can read is exactly what `terminal.list` shows it for the
+// same epic. A session in another epic is not readable here even for its
+// owner.
+export const readTerminalOutputRequestSchema = z.object({
+  epicId: z.string(),
+  // An unambiguous session-id prefix of at least 4 characters is accepted,
+  // matching the abbreviation rule the agent-facing id surfaces share.
+  sessionId: z.string().min(1),
+});
+export type ReadTerminalOutputRequest = z.infer<
+  typeof readTerminalOutputRequestSchema
+>;
+
+export const readTerminalOutputResponseSchema = z.object({
+  path: z.string().min(1),
+});
+export type ReadTerminalOutputResponse = z.infer<
+  typeof readTerminalOutputResponseSchema
+>;
+
+// `terminal.rename@1.0` - overrides the session's display title. New hosts may
+// durably persist it for registry-owned plain terminals; manager-owned legacy
+// sessions retain the released in-memory lifetime. The wire schema and
+// `updated` response semantics remain frozen.
 export const renameTerminalRequestSchema = z.object({
   sessionId: z.string(),
   title: z.string(),

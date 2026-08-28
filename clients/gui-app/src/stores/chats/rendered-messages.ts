@@ -3,6 +3,7 @@ import type {
   AgentSender,
   AssistantMessage,
   ChatEvent,
+  ChatSessionAnchor,
   Message,
   UserMessage,
   UserMessageSender,
@@ -13,6 +14,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -21,15 +23,19 @@ import {
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import { AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
-import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import {
+  isTransientLiveAssistantMessageId,
+  transientLiveAssistantMessageId,
+} from "@/lib/chat/transient-live-assistant-message-id";
 import type {
   AssistantTurnMeta,
+  AssistantMarkdownImageResolution,
+  AssistantMarkdownImageTarget,
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
@@ -57,7 +63,7 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
-import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
+import { chatTranscriptEventRowId } from "@/stores/chats/chat-transcript-jump-store";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -89,7 +95,9 @@ export interface RenderedMessagesDisplayContext {
     sender: AgentSender,
     reasoningEffort: string | null,
   ) => string | null;
-  readonly contentBlocksText: (blocks: ReadonlyArray<ContentBlock>) => string;
+  readonly contentBlocksPreview: (
+    blocks: ReadonlyArray<ContentBlock>,
+  ) => string;
 }
 
 export interface RenderedMessagesInput {
@@ -354,7 +362,11 @@ function steeredMessageIdsFromEvents(
         if (queueItemHasActiveInterruptRestartSteer(item)) {
           continue;
         }
-        steeredMessageIds.delete(item.messageId);
+        // Only prompt items map back to a rendered user message; a
+        // managed-command item has no message to un-badge.
+        if (item.kind === "prompt") {
+          steeredMessageIds.delete(item.messageId);
+        }
         steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
       }
     }
@@ -367,6 +379,8 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
   const requestedItems = queueItemsFromEventMetadata(event.metadata);
   for (const item of requestedItems) {
     if (item.queueItemId !== event.queueItemId) continue;
+    // Managed-command items are never steered, so they never carry a request.
+    if (item.kind !== "prompt") return false;
     return item.steerRequest?.mode === "interrupt_restart";
   }
   return false;
@@ -375,6 +389,7 @@ function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
 function queueItemHasActiveInterruptRestartSteer(
   item: ChatQueuedItem,
 ): boolean {
+  if (item.kind !== "prompt") return false;
   return (
     (item.status === "steer_requested" || item.status === "steering") &&
     item.steerRequest !== null &&
@@ -434,6 +449,73 @@ function turnStoppedInfoFromEvents(
   return out;
 }
 
+interface TurnLifecycleTiming {
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
+}
+
+/**
+ * Durable evidence and timing for provider turns, keyed by `turnId`.
+ *
+ * An autonomous-resume block can be persisted before the provider resumes: it
+ * first serves as the visible background-completion notification and is only
+ * later adopted if the adapter emits autonomous activity. A lifecycle entry
+ * proves the row crossed the provider-turn boundary; its timestamps keep a
+ * silent resume's elapsed interval separate from the earlier notification.
+ *
+ * The entry is the turn's LATEST attempt window, not a min/max collapse:
+ * safe-point steering continuations legitimately reuse a turnId, so a later
+ * `turn.started` opens a fresh window — retaining the earliest start would
+ * stretch a silent resume's elapsed interval across the pre-steer attempt. A
+ * terminal event closes the open window; a duplicate terminal after a closed
+ * window is ignored (the host's terminal latch makes that defensive only).
+ */
+function turnLifecycleTimingFromEvents(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyMap<string, TurnLifecycleTiming> {
+  const out = new Map<string, TurnLifecycleTiming>();
+  for (const event of events) {
+    if (event.turnId === null) continue;
+    switch (event.type) {
+      case "turn.started":
+        out.set(event.turnId, { startedAt: event.timestamp, endedAt: null });
+        break;
+      case "turn.completed":
+      case "turn.stopped":
+      case "turn.interrupted": {
+        const current = out.get(event.turnId) ?? {
+          startedAt: null,
+          endedAt: null,
+        };
+        if (current.endedAt === null) {
+          out.set(event.turnId, {
+            startedAt: current.startedAt,
+            endedAt: event.timestamp,
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether the turn's latest attempt window is provably finished: both the
+ * matching `turn.started` and a terminal event exist. A start alone is not
+ * completion evidence — a fatal connection close clears the active turn
+ * while the provider may still be running, and fabricating a completion
+ * there would render a zero-length "Resumed" footer for a turn that never
+ * ended.
+ */
+function hasCompletedProviderTurn(timing: TurnLifecycleTiming | null): boolean {
+  return (
+    timing !== null && timing.startedAt !== null && timing.endedAt !== null
+  );
+}
+
 function nestedSteeredUsersSignature(
   blocks: ReadonlyArray<ContentBlock>,
   userMessagesById: ReadonlyMap<string, UserMessage>,
@@ -462,6 +544,10 @@ function completedSteerBadge(
 // Identity-stable empties for the head/tail partition's no-merge fast path.
 const NO_MESSAGES: ReadonlyArray<Message> = [];
 const NO_RENDERED_MESSAGES: ReadonlyArray<ChatMessageModel> = [];
+const NO_DEDUPLICATED_IMAGE_TARGETS: ReadonlyMap<
+  string,
+  AssistantMarkdownImageTarget
+> = new Map();
 const NO_STEERED_IDS: ReadonlySet<string> = new Set();
 const NO_PENDING_APPROVALS: ReadonlyArray<ChatApprovalState> = [];
 const NO_PENDING_FILE_EDIT_APPROVALS: ReadonlyArray<ChatFileEditApprovalState> =
@@ -471,6 +557,8 @@ const NO_PENDING_INTERVIEWS: ReadonlyArray<ChatPendingInterviewState> = [];
 interface TurnPauseAccounting {
   readonly pausedDurationMs: number;
   readonly pausedSinceMs: number | null;
+  /** Merged, start-sorted user-wait intervals backing the totals above. */
+  readonly intervals: ReadonlyArray<PauseInterval>;
 }
 
 interface PauseInterval {
@@ -486,6 +574,7 @@ interface PendingPauseRequest {
 interface PendingTurnMetaInput {
   readonly harnessId: AgentSender["harnessId"] | null;
   readonly model: string | null;
+  readonly profileLabel: string | null;
   readonly reasoningEffort: string | null;
   readonly serviceTier: string | null;
 }
@@ -498,11 +587,13 @@ interface ActiveTurnProjection {
 const NO_TURN_PAUSE: TurnPauseAccounting = {
   pausedDurationMs: 0,
   pausedSinceMs: null,
+  intervals: [],
 };
 
 const NO_PENDING_TURN_META_INPUT: PendingTurnMetaInput = {
   harnessId: null,
   model: null,
+  profileLabel: null,
   reasoningEffort: null,
   serviceTier: null,
 };
@@ -515,6 +606,64 @@ function stoppedSignature(stopped: TurnStoppedEventInfo | null): string {
   return stopped === null
     ? "stopped:none"
     : `stopped:${stopped.stoppedAt}:${stopped.reason ?? ""}`;
+}
+
+function profileLabelFromSessionAnchor(
+  sessionAnchor: ChatSessionAnchor,
+): string {
+  if (sessionAnchor.labelSnapshot !== null) {
+    return sessionAnchor.labelSnapshot;
+  }
+  return sessionAnchor.profileId === null ? "Terminal account" : "profile";
+}
+
+/**
+ * Associate the immutable profile label on each provider-session anchor with
+ * every assistant turn that follows it. Continuation messages do not carry a
+ * new anchor, so the last anchor remains in effect until the host mints the
+ * next one. The active turn needs an explicit mapping before its first
+ * assistant record exists; its `userMessageId` identifies the initiating row.
+ */
+function profileLabelsByTurnKeyFromMessages(input: {
+  readonly messages: ReadonlyArray<Message>;
+  readonly activeTurnId: string | null;
+  readonly activeTurnUserMessageId: string | null;
+  readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
+  readonly activeTurnProfileId: string | null;
+}): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  let currentAnchor: ChatSessionAnchor | null = null;
+  let activeTurnAnchor: ChatSessionAnchor | null = null;
+
+  for (const message of input.messages) {
+    if (message.role === "user") {
+      if (message.sessionAnchor !== null) {
+        currentAnchor = message.sessionAnchor;
+      }
+      if (message.messageId === input.activeTurnUserMessageId) {
+        activeTurnAnchor = currentAnchor;
+      }
+      continue;
+    }
+    if (currentAnchor?.harnessId === message.sender.harnessId) {
+      labels.set(
+        assistantTurnKey(message),
+        profileLabelFromSessionAnchor(currentAnchor),
+      );
+    }
+  }
+
+  if (
+    input.activeTurnId !== null &&
+    activeTurnAnchor?.harnessId === input.activeTurnHarnessId &&
+    activeTurnAnchor.profileId === input.activeTurnProfileId
+  ) {
+    labels.set(
+      input.activeTurnId,
+      profileLabelFromSessionAnchor(activeTurnAnchor),
+    );
+  }
+  return labels;
 }
 
 function buildTurnPauseAccounting(input: {
@@ -654,45 +803,66 @@ function mergePauseIntervals(
         interval.endedAt === null || interval.endedAt > interval.startedAt,
     )
     .sort((a, b) => a.startedAt - b.startedAt);
-  let pausedDurationMs = 0;
-  let openStart: number | null = null;
-  let current: PauseInterval | null = null;
-
-  const flushCurrent = (): void => {
-    if (current === null) return;
-    if (current.endedAt === null) {
-      openStart = current.startedAt;
-    } else {
-      pausedDurationMs += current.endedAt - current.startedAt;
-    }
-    current = null;
-  };
-
+  const merged: PauseInterval[] = [];
   for (const interval of sorted) {
-    if (current === null) {
-      current = interval;
+    const last = merged.at(-1);
+    if (last === undefined) {
+      merged.push(interval);
       continue;
     }
-    if (current.endedAt === null) continue;
-    if (interval.startedAt > current.endedAt) {
-      flushCurrent();
-      current = interval;
+    // An open interval absorbs everything after it.
+    if (last.endedAt === null) continue;
+    if (interval.startedAt > last.endedAt) {
+      merged.push(interval);
       continue;
     }
-    current = {
-      startedAt: current.startedAt,
+    merged[merged.length - 1] = {
+      startedAt: last.startedAt,
       endedAt:
         interval.endedAt === null
           ? null
-          : Math.max(current.endedAt, interval.endedAt),
+          : Math.max(last.endedAt, interval.endedAt),
     };
   }
-  flushCurrent();
+  return pauseAccountingFromMergedIntervals(merged);
+}
 
-  return {
-    pausedDurationMs,
-    pausedSinceMs: openStart,
-  };
+function pauseAccountingFromMergedIntervals(
+  merged: ReadonlyArray<PauseInterval>,
+): TurnPauseAccounting {
+  let pausedDurationMs = 0;
+  let pausedSinceMs: number | null = null;
+  for (const interval of merged) {
+    if (interval.endedAt === null) {
+      pausedSinceMs = interval.startedAt;
+    } else {
+      pausedDurationMs += interval.endedAt - interval.startedAt;
+    }
+  }
+  return { pausedDurationMs, pausedSinceMs, intervals: merged };
+}
+
+/**
+ * Clip whole-turn pause accounting to the displayed lifecycle window. Pause
+ * intervals accumulate per turnId across every attempt, but a row rendered
+ * from its latest attempt window (an adopted autonomous resume) measures only
+ * that window - subtracting an earlier attempt's user-wait would under-report
+ * the resumed attempt's duration. The persisted-timing path passes `null` and
+ * keeps whole-turn accounting.
+ */
+function pauseScopedToWindow(
+  pause: TurnPauseAccounting,
+  windowStartedAt: number | null,
+): TurnPauseAccounting {
+  if (windowStartedAt === null || pause.intervals.length === 0) return pause;
+  const clipped = pause.intervals.flatMap((interval) => {
+    if (interval.endedAt !== null && interval.endedAt <= windowStartedAt) {
+      return [];
+    }
+    if (interval.startedAt >= windowStartedAt) return [interval];
+    return [{ startedAt: windowStartedAt, endedAt: interval.endedAt }];
+  });
+  return pauseAccountingFromMergedIntervals(clipped);
 }
 
 function addPauseInterval(
@@ -738,8 +908,31 @@ export function useRenderedMessages(
   // on its stable primitive fields (not the object identity) to avoid busting
   // this memo each frame. These are all set at turn-start and never rewritten
   // per delta, so they make safe, churn-free deps.
-  const activeTurnProjection = projectActiveTurn(input.activeTurn);
-  const activeTurnId = activeTurnProjection.turnId;
+  const activeTurnId = input.activeTurn?.turnId ?? null;
+  const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
+  const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
+  const activeTurnProfileId = input.activeTurn?.profileId ?? null;
+  const profileLabelsByTurnKey = useMemo(
+    () =>
+      profileLabelsByTurnKeyFromMessages({
+        messages: input.messages,
+        activeTurnId,
+        activeTurnUserMessageId,
+        activeTurnHarnessId,
+        activeTurnProfileId,
+      }),
+    [
+      input.messages,
+      activeTurnId,
+      activeTurnUserMessageId,
+      activeTurnHarnessId,
+      activeTurnProfileId,
+    ],
+  );
+  const activeTurnProjection = projectActiveTurn(
+    input.activeTurn,
+    profileLabelsByTurnKey,
+  );
   const activeTurnMetaInput = activeTurnProjection.metaInput;
   const runStatus = input.runStatus;
   // The run-state indicator belongs to the single active turn; `idle`
@@ -782,6 +975,10 @@ export function useRenderedMessages(
     () => turnStoppedInfoFromEvents(input.events),
     [input.events],
   );
+  const turnLifecycleTimingByTurnKey = useMemo(
+    () => turnLifecycleTimingFromEvents(input.events),
+    [input.events],
+  );
   // The setup card row(s) are derived from the same event log, keyed on events
   // plus the (stable) binding identity, so a streamed delta doesn't re-scan or
   // re-partition the setup lifecycle windows.
@@ -808,6 +1005,10 @@ export function useRenderedMessages(
   const forkedChatLinkMessages = useMemo(
     () => buildForkedChatLinkMessages(input.events, viewTabId),
     [input.events, viewTabId],
+  );
+  const notificationAnchorMessages = useMemo(
+    () => buildNotificationAnchorMessages(input.events),
+    [input.events],
   );
 
   // The live row's blocks merge INTO a persisted turn only when a persisted
@@ -908,6 +1109,7 @@ export function useRenderedMessages(
     return renderPersistedMessages({
       messages: partition.settled,
       userMessagesById,
+      profileLabelsByTurnKey,
       liveAssistant: null,
       externallyNestedSteeredMessageIds: activeTurnSteeredMessageIds,
       checkpointViews,
@@ -916,12 +1118,16 @@ export function useRenderedMessages(
       turnPauseAccounting,
       steeredMessageIds,
       turnStoppedByTurnKey,
+      turnLifecycleTimingByTurnKey,
       sweepRetainedTurnKeys: retainedTurnKeys,
       ctx: displayContext,
+      epicId,
+      chatId: ownerId,
     });
   }, [
     partition,
     userMessagesById,
+    profileLabelsByTurnKey,
     activeTurnSteeredMessageIds,
     retainedTurnKeys,
     checkpointViews,
@@ -930,7 +1136,10 @@ export function useRenderedMessages(
     turnPauseAccounting,
     steeredMessageIds,
     turnStoppedByTurnKey,
+    turnLifecycleTimingByTurnKey,
     displayContext,
+    epicId,
+    ownerId,
   ]);
 
   // The tail: re-derives per streamed delta, but walks only the active turn's
@@ -944,6 +1153,7 @@ export function useRenderedMessages(
         : renderPersistedMessages({
             messages: partition.activeTurn,
             userMessagesById,
+            profileLabelsByTurnKey,
             liveAssistant,
             externallyNestedSteeredMessageIds: NO_STEERED_IDS,
             checkpointViews,
@@ -952,14 +1162,18 @@ export function useRenderedMessages(
             turnPauseAccounting,
             steeredMessageIds,
             turnStoppedByTurnKey,
+            turnLifecycleTimingByTurnKey,
             // The tail walk runs per streamed delta; only the settled-head
             // walk (once per snapshot) sweeps the turn cache.
             sweepRetainedTurnKeys: null,
             ctx: displayContext,
+            epicId,
+            chatId: ownerId,
           }),
     [
       partition,
       userMessagesById,
+      profileLabelsByTurnKey,
       liveAssistant,
       checkpointViews,
       activeTurnId,
@@ -967,7 +1181,10 @@ export function useRenderedMessages(
       turnPauseAccounting,
       steeredMessageIds,
       turnStoppedByTurnKey,
+      turnLifecycleTimingByTurnKey,
       displayContext,
+      epicId,
+      ownerId,
     ],
   );
 
@@ -984,20 +1201,26 @@ export function useRenderedMessages(
       renderLiveAssistant({
         liveAssistant,
         userMessagesById,
+        profileLabelsByTurnKey,
         mergesIntoPersisted: liveMergesIntoPersisted,
         checkpointViews,
         activeRunState,
         turnPauseAccounting,
         ctx: displayContext,
+        epicId,
+        chatId: ownerId,
       }),
     [
       liveAssistant,
       userMessagesById,
+      profileLabelsByTurnKey,
       liveMergesIntoPersisted,
       checkpointViews,
       activeRunState,
       turnPauseAccounting,
       displayContext,
+      epicId,
+      ownerId,
     ],
   );
 
@@ -1064,6 +1287,7 @@ export function useRenderedMessages(
       ...live,
       ...stoppedWithoutAssistantRecords,
       ...forkedChatLinkMessages,
+      ...notificationAnchorMessages,
       ...trailing,
     ];
 
@@ -1138,6 +1362,7 @@ export function useRenderedMessages(
     live,
     stoppedWithoutAssistantRecords,
     forkedChatLinkMessages,
+    notificationAnchorMessages,
     setupCardRows,
     setupCardEntries,
     activeRunState,
@@ -1150,6 +1375,7 @@ export function useRenderedMessages(
 
 function projectActiveTurn(
   activeTurn: ChatActiveTurn | null,
+  profileLabelsByTurnKey: ReadonlyMap<string, string>,
 ): ActiveTurnProjection {
   if (activeTurn === null) {
     return { turnId: null, metaInput: NO_PENDING_TURN_META_INPUT };
@@ -1159,6 +1385,7 @@ function projectActiveTurn(
     metaInput: {
       harnessId: activeTurn.harnessId,
       model: activeTurn.model,
+      profileLabel: profileLabelsByTurnKey.get(activeTurn.turnId) ?? null,
       reasoningEffort: activeTurn.reasoningEffort,
       serviceTier: activeTurn.serviceTier,
     },
@@ -1193,6 +1420,11 @@ function buildSetupCardMessage(
         kind: "setup-card",
         model: row.model,
         viewTabId,
+        // Ticket 13 (decision #28): same predicate the merge below uses for
+        // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
+        // window 0 can ever be genesis-pinned, so this is exact, not a guess.
+        anchorMessageId: row.triggeringMessageId,
+        isGenesisPin: windowIndex === 0 && !row.hasCreatingEvent,
       },
     ],
     structuredContent: null,
@@ -1227,7 +1459,7 @@ function buildForkedChatLinkMessages(
       return [];
     }
     const sourceChatTitle =
-      metadataString(metadata, "sourceChatTitle") ?? "Untitled chat";
+      metadataString(metadata, "sourceChatTitle") ?? "Untitled agent";
     const id = `forked-chat-link:${event.eventId}`;
     return [
       {
@@ -1242,6 +1474,58 @@ function buildForkedChatLinkMessages(
             sourceChatId,
             sourceChatTitle,
             sourceHostId,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Some failures happen before a queued message is accepted, so no message row
+ * can own the error. The durable `send.failed` event is still part of chat
+ * history; project only explicitly marked occurrences into an assistant error
+ * row so notification activation has an exact, stable transcript destination.
+ */
+function buildNotificationAnchorMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    if (
+      event.type !== "send.failed" ||
+      event.message === null ||
+      event.metadata?.notificationAnchor !== true
+    ) {
+      return [];
+    }
+    const id = chatTranscriptEventRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "assistant",
+        content: event.message,
+        segments: [
+          {
+            id: `${id}:error`,
+            kind: "error",
+            message: event.message,
+            recoverable: false,
+            code: metadataString(event.metadata, "code"),
           },
         ],
         structuredContent: null,
@@ -1296,6 +1580,7 @@ function pendingTurnMeta(
   return {
     provider: turn.harnessId,
     providerLabel: display.providerLabel,
+    profileLabel: turn.profileLabel,
     modelLabel: display.modelLabel,
     reasoningEffort: turn.reasoningEffort,
     reasoningEffortLabel: ctx.resolveAgentReasoningLabel(
@@ -1327,7 +1612,22 @@ interface AssistantTurnAccumulator {
    */
   timestamp: number;
   blocks: ContentBlock[];
-  blocksVersion: number | null;
+  /**
+   * False while `blocks` still ALIASES a contributing record's own array.
+   * Every mutation goes through `ownedTurnBlocks` first, so the common
+   * single-record turn never pays an array copy on a render pass - which it
+   * used to, once per turn, making each pass O(blocks in the transcript).
+   */
+  blocksOwned: boolean;
+  /**
+   * One signature fragment per contributing record (plus one for appended
+   * live blocks). Each fragment is derived per record and memoized on that
+   * record's object identity, so a settled turn costs nothing to re-sign and
+   * the pass is O(records in the turn) rather than O(blocks in the turn).
+   */
+  signatureParts: string[];
+  /** Profile label captured on the user message that initiated this turn. */
+  profileLabel: string | null;
   /**
    * Per-turn run metadata mirrored from the contributing `AssistantMessage`
    * records (identical across records of one turn). Drives the elapsed
@@ -1338,6 +1638,11 @@ interface AssistantTurnAccumulator {
   serviceTier: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
+  imageResolutionsByBlockId: Map<
+    string,
+    ReadonlyArray<AssistantMarkdownImageResolution>
+  >;
+  generatedImageBlockIdByHash: Map<string, string>;
 }
 
 interface PersistedMessagesRenderInput {
@@ -1348,6 +1653,8 @@ interface PersistedMessagesRenderInput {
    * turns that may live in the other partition).
    */
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  /** Immutable profile-label snapshots keyed by assistant turn identity. */
+  readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
   readonly liveAssistant: LiveAssistantMessage | null;
   /**
    * Steered user ids nested inside turns OUTSIDE this partition; their user
@@ -1361,6 +1668,11 @@ interface PersistedMessagesRenderInput {
   readonly steeredMessageIds: ReadonlySet<string>;
   /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoFromEvents`. */
   readonly turnStoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>;
+  /** Provider-turn lifecycle evidence and timing by `turnId`. */
+  readonly turnLifecycleTimingByTurnKey: ReadonlyMap<
+    string,
+    TurnLifecycleTiming
+  >;
   /**
    * Turn keys to retain in the per-context assistant-turn cache; entries for
    * any other turn are evicted after the walk. Non-null only on the
@@ -1369,12 +1681,16 @@ interface PersistedMessagesRenderInput {
    */
   readonly sweepRetainedTurnKeys: ReadonlySet<string> | null;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 interface RenderLiveAssistantInput {
   readonly liveAssistant: LiveAssistantMessage | null;
   /** Snapshot-wide user lookup for steer rows nested in the live turn. */
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  /** Immutable profile-label snapshots keyed by assistant turn identity. */
+  readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
   // Whether a persisted assistant message already shares the live turnId; the
   // hook derives this once from the head/tail partition and threads it in so
   // we don't re-scan the snapshot for the same predicate every streamed frame.
@@ -1383,6 +1699,8 @@ interface RenderLiveAssistantInput {
   readonly activeRunState: ChatMessageRunState | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 function renderPersistedMessages(
@@ -1393,7 +1711,11 @@ function renderPersistedMessages(
   const turnAccumulator = new Map<string, AssistantTurnAccumulator>();
   for (const message of input.messages) {
     if (message.role !== "assistant") continue;
-    addAssistantMessageToAccumulator(turnAccumulator, message);
+    addAssistantMessageToAccumulator(
+      turnAccumulator,
+      message,
+      input.profileLabelsByTurnKey.get(assistantTurnKey(message)) ?? null,
+    );
   }
   appendLiveAssistantBlocks(turnAccumulator, input.liveAssistant);
   const userMessagesById = input.userMessagesById;
@@ -1550,6 +1872,154 @@ function assistantTurnKey(message: AssistantMessage): string {
   return message.turnId ?? `ts:${message.timestamp}`;
 }
 
+function hasOnlyAutonomousResumeAssistantBlocks(
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  let foundAutonomousResume = false;
+  for (const block of blocks) {
+    if (block.type === "steer") continue;
+    if (block.type !== "autonomous_resume") return false;
+    foundAutonomousResume = true;
+  }
+  return foundAutonomousResume;
+}
+
+/**
+ * Whether the turn began as an autonomous resume: its first non-steer block
+ * is the resume divider. Unlike `hasOnlyAutonomousResumeAssistantBlocks` this
+ * stays true after the resumed provider turn produces response blocks, so an
+ * adopted resume keeps measuring from its provider start instead of jumping
+ * back to the pre-resume persisted timestamp once output arrives.
+ */
+function turnInitiatedByAutonomousResume(
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  return autonomousResumeNotifiedAt(blocks) !== null;
+}
+
+/**
+ * Timestamp of the resume divider (the first non-steer block, when it is an
+ * `autonomous_resume`), or `null` for a turn not initiated by one.
+ */
+function autonomousResumeNotifiedAt(
+  blocks: ReadonlyArray<ContentBlock>,
+): number | null {
+  for (const block of blocks) {
+    if (block.type === "steer") continue;
+    return block.type === "autonomous_resume" ? block.timestamp : null;
+  }
+  return null;
+}
+
+/**
+ * The lifecycle window as evidence for the row's resume state. A reused
+ * `turnId` can carry a completed attempt from BEFORE the resume divider was
+ * persisted (an interrupted pre-steer run whose notification landed later);
+ * that window predates the thing it would prove, so it can neither adopt the
+ * notification nor lend it timing — discard it. A same-timestamp start stays:
+ * the host stamps the divider before launching the adopting provider turn.
+ * Non-resume turns and windows without a start pass through unchanged (a
+ * bare terminal event is already rejected by `hasCompletedProviderTurn`).
+ */
+function lifecycleWindowSinceResume(
+  timing: TurnLifecycleTiming | null,
+  blocks: ReadonlyArray<ContentBlock>,
+): TurnLifecycleTiming | null {
+  if (timing === null || timing.startedAt === null) return timing;
+  const notifiedAt = autonomousResumeNotifiedAt(blocks);
+  if (notifiedAt === null || timing.startedAt >= notifiedAt) return timing;
+  return null;
+}
+
+function isNotificationOnlyAutonomousResume(
+  turnComplete: boolean,
+  hasCompletedLifecycle: boolean,
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  return (
+    turnComplete &&
+    !hasCompletedLifecycle &&
+    hasOnlyAutonomousResumeAssistantBlocks(blocks)
+  );
+}
+
+interface AssistantTurnTimingInput {
+  readonly lifecycle: TurnLifecycleTiming | null;
+  readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly persistedStartedAt: number | null;
+  readonly lastUserTimestamp: number | null;
+  readonly persistedCompletedAt: number;
+  readonly stoppedAt: number | null;
+}
+
+interface AssistantTurnTiming {
+  readonly rowAnchorAt: number;
+  readonly elapsedStartedAt: number;
+  readonly completedAt: number;
+  readonly cacheToken: string;
+  /**
+   * Start of the lifecycle window the row displays, when timing selected one;
+   * `null` on the persisted-timing path. Pause accounting is clipped to this
+   * so an earlier attempt's user-wait never subtracts from the resumed
+   * attempt's duration.
+   */
+  readonly lifecycleWindowStartedAt: number | null;
+}
+
+function assistantTurnTiming(
+  input: AssistantTurnTimingInput,
+): AssistantTurnTiming {
+  const fallbackStartedAt =
+    input.persistedStartedAt ??
+    input.lastUserTimestamp ??
+    input.persistedCompletedAt;
+  const fallbackCompletedAt = input.stoppedAt ?? input.persistedCompletedAt;
+  if (
+    input.lifecycle === null ||
+    !turnInitiatedByAutonomousResume(input.blocks) ||
+    input.lifecycle.startedAt === null
+  ) {
+    return {
+      rowAnchorAt: fallbackStartedAt,
+      elapsedStartedAt: fallbackStartedAt,
+      completedAt: fallbackCompletedAt,
+      cacheToken: "lifecycle:none",
+      lifecycleWindowStartedAt: null,
+    };
+  }
+  const elapsedStartedAt = input.lifecycle.startedAt;
+  const terminalAt = input.stoppedAt ?? input.lifecycle.endedAt;
+  // A start without terminal proof adopts the live timer only: completion
+  // stays anchored to persisted state, and the classification keeps such a
+  // row footerless until the matching terminal event lands.
+  if (terminalAt === null) {
+    return {
+      rowAnchorAt: fallbackStartedAt,
+      elapsedStartedAt,
+      completedAt: fallbackCompletedAt,
+      cacheToken: `lifecycle:${elapsedStartedAt}:pending`,
+      lifecycleWindowStartedAt: elapsedStartedAt,
+    };
+  }
+  return {
+    rowAnchorAt: fallbackStartedAt,
+    elapsedStartedAt,
+    completedAt: Math.max(elapsedStartedAt, terminalAt),
+    cacheToken: `lifecycle:${elapsedStartedAt}:${terminalAt}`,
+    lifecycleWindowStartedAt: elapsedStartedAt,
+  };
+}
+
+function assistantCompletionCacheToken(
+  turnComplete: boolean,
+  notificationOnlyAutonomousResume: boolean,
+  timestamp: number,
+): string {
+  if (!turnComplete) return "live";
+  const state = notificationOnlyAutonomousResume ? "notification" : "done";
+  return `${state}:${timestamp}`;
+}
+
 function renderPersistedAssistantMessageTurn(
   args: PersistedAssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
@@ -1567,23 +2037,48 @@ function renderPersistedAssistantMessageTurn(
   // group suppressed.
   const turnComplete = input.activeTurnId !== turnKey;
   const runState = turnComplete ? null : input.activeRunState;
-  const pause = input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE;
   const stopped = input.turnStoppedByTurnKey.get(turnKey) ?? null;
-  const startedAt = acc.startedAt ?? args.lastUserTimestamp ?? acc.timestamp;
-  // Signature includes `acc.timestamp` (when complete) and `startedAt` so a
-  // post-completion snapshot re-emit that moves either instant (cloud-sync
-  // replica swap, canonicalized timestamps) invalidates the cached model.
-  // Without it, a stale `completedAt`/anchor would be served for the lifetime
-  // of the ctx.
-  const completionToken = turnComplete ? `done:${acc.timestamp}` : "live";
+  const lifecycleTiming = lifecycleWindowSinceResume(
+    input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null,
+    acc.blocks,
+  );
+  const notificationOnlyAutonomousResume = isNotificationOnlyAutonomousResume(
+    turnComplete,
+    hasCompletedProviderTurn(lifecycleTiming),
+    acc.blocks,
+  );
+  const timing = assistantTurnTiming({
+    lifecycle: lifecycleTiming,
+    blocks: acc.blocks,
+    persistedStartedAt: acc.startedAt,
+    lastUserTimestamp: args.lastUserTimestamp,
+    persistedCompletedAt: acc.timestamp,
+    stoppedAt: stopped?.stoppedAt ?? null,
+  });
+  const pause = pauseScopedToWindow(
+    input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE,
+    timing.lifecycleWindowStartedAt,
+  );
+  // Signature includes the persisted timing plus the lifecycle timing token,
+  // so either a canonicalized snapshot timestamp or a later terminal event
+  // invalidates the cached model. Without both, a stale `completedAt`/elapsed
+  // would be served for the lifetime of the ctx.
+  const completionToken = assistantCompletionCacheToken(
+    turnComplete,
+    notificationOnlyAutonomousResume,
+    acc.timestamp,
+  );
   const cacheKey = [
     acc.messageId,
     turnBlocksSignature(acc),
     checkpointSignature(checkpointView),
     nestedSteeredUsersSignature(acc.blocks, args.userMessagesById),
     completionToken,
+    timing.cacheToken,
     runState ?? "none",
-    String(startedAt),
+    String(timing.rowAnchorAt),
+    String(timing.elapsedStartedAt),
+    acc.profileLabel ?? "profile:none",
     turnPauseSignature(pause),
     stoppedSignature(stopped),
   ].join(":");
@@ -1596,12 +2091,20 @@ function renderPersistedAssistantMessageTurn(
     turnKey,
     checkpointView,
     turnComplete,
+    // A plain completion/interruption without a matching start remains a
+    // notification-only row. A user Stop is itself a transcript boundary and
+    // must retain its stopped marker even when it lands before `turn.started`.
+    showCompletionFooter: !notificationOnlyAutonomousResume || stopped !== null,
+    completedAt: timing.completedAt,
     runState,
     pause,
     stopped,
     userMessagesById: args.userMessagesById,
-    startedAt,
+    rowAnchorAt: timing.rowAnchorAt,
+    elapsedStartedAt: timing.elapsedStartedAt,
     ctx: input.ctx,
+    epicId: input.epicId,
+    chatId: input.chatId,
   });
   turnCache.set(turnKey, { cacheKey, models });
   return models;
@@ -1610,12 +2113,21 @@ function renderPersistedAssistantMessageTurn(
 function addAssistantMessageToAccumulator(
   turnAccumulator: Map<string, AssistantTurnAccumulator>,
   message: AssistantMessage,
+  profileLabel: string | null,
 ): void {
   const turnKey = assistantTurnKey(message);
   const existing = turnAccumulator.get(turnKey);
   if (existing !== undefined) {
-    existing.blocks.push(...message.blocks);
-    existing.blocksVersion = null;
+    ownedTurnBlocks(existing).push(...message.blocks);
+    addAssistantImageProjection(
+      existing,
+      message.blocks,
+      assistantImageResolutions(message).map((entry) => ({
+        messageId: message.messageId,
+        entry,
+      })),
+    );
+    existing.signatureParts.push(assistantRecordSignature(message));
     // A turn split across multiple AssistantMessage records (subagent flows,
     // legacy/migrated snapshots) must merge timestamps, not keep the FIRST
     // record's: completedAt = max(timestamp) so the elapsed reflects the real
@@ -1631,6 +2143,7 @@ function addAssistantMessageToAccumulator(
     existing.reasoningEffort =
       existing.reasoningEffort ?? message.reasoningEffort;
     existing.serviceTier = existing.serviceTier ?? message.serviceTier;
+    existing.profileLabel = existing.profileLabel ?? profileLabel;
     // `costUsd` is cumulative-to-turn-end and lands on the completing record,
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
@@ -1638,17 +2151,57 @@ function addAssistantMessageToAccumulator(
     existing.messageId = message.messageId;
     return;
   }
-  turnAccumulator.set(turnKey, {
+  const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
     sender: message.sender,
     startedAt: message.startedAt,
     timestamp: message.timestamp,
-    blocks: [...message.blocks],
-    blocksVersion: message.blocksVersion ?? null,
+    // Alias, not a copy - `ownedTurnBlocks` clones on the first mutation.
+    blocks: message.blocks,
+    blocksOwned: false,
+    signatureParts: [assistantRecordSignature(message)],
+    profileLabel,
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
     costUsd: message.usage?.costUsd ?? null,
-  });
+    imageResolutionsByBlockId: new Map(),
+    generatedImageBlockIdByHash: new Map(),
+  };
+  addAssistantImageProjection(
+    created,
+    message.blocks,
+    assistantImageResolutions(message).map((entry) => ({
+      messageId: message.messageId,
+      entry,
+    })),
+  );
+  turnAccumulator.set(turnKey, created);
+}
+
+function addAssistantImageProjection(
+  acc: AssistantTurnAccumulator,
+  blocks: ReadonlyArray<ContentBlock>,
+  resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+): void {
+  for (const block of blocks) {
+    if (block.type === "text") {
+      acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
+      continue;
+    }
+    if (block.type !== "tool_call" || block.toolName !== "image_generation") {
+      continue;
+    }
+    // Image-generation cards stay top-level even when their tool call belongs
+    // to a subagent, so their hashes are valid echo-deduplication targets.
+    for (const result of block.imageResults) {
+      if (!acc.generatedImageBlockIdByHash.has(result.attachmentHash)) {
+        acc.generatedImageBlockIdByHash.set(
+          result.attachmentHash,
+          block.blockId,
+        );
+      }
+    }
+  }
 }
 
 function minNullable(a: number | null, b: number | null): number | null {
@@ -1664,13 +2217,194 @@ function appendLiveAssistantBlocks(
   if (liveAssistant === null) return;
   const acc = turnAccumulator.get(liveAssistant.turnId);
   if (acc === undefined) return;
-  acc.blocks.push(...liveAssistant.blocks);
-  acc.blocksVersion = null;
+  ownedTurnBlocks(acc).push(...liveAssistant.blocks);
+  // The live record carries a monotonic version, so the streaming turn
+  // re-signs in O(1) per delta instead of re-hashing its whole block list.
+  acc.signatureParts.push(
+    `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
+  );
+  addLiveAssistantImageProjection(acc, liveAssistant);
 }
 
+function addLiveAssistantImageProjection(
+  acc: AssistantTurnAccumulator,
+  liveAssistant: LiveAssistantMessage,
+): void {
+  const liveResolutionMessageIds = new Set(
+    liveAssistant.imageResolutions.map((resolution) => resolution.messageId),
+  );
+  let ownerMessageId: string | null =
+    liveAssistant.imageResolutionOwnerMessageId ?? null;
+  if (liveAssistant.imageResolutionOwnerMessageId === undefined) {
+    ownerMessageId = acc.messageId;
+  }
+  if (
+    liveAssistant.imageResolutionOwnerMessageId === undefined &&
+    isTransientLiveAssistantMessageId(acc.messageId)
+  ) {
+    const [onlyMessageId] = liveResolutionMessageIds;
+    ownerMessageId = liveResolutionMessageIds.size === 1 ? onlyMessageId : null;
+  }
+  addAssistantImageProjection(
+    acc,
+    liveAssistant.blocks,
+    ownerMessageId === null
+      ? []
+      : liveAssistant.imageResolutions.filter(
+          (resolution) => resolution.messageId === ownerMessageId,
+        ),
+  );
+}
+
+/**
+ * Clone-on-first-write for a turn's block list. Until something appends, the
+ * accumulator aliases the contributing record's own array; aliasing is safe
+ * only because every mutation site routes through here.
+ */
+function ownedTurnBlocks(acc: AssistantTurnAccumulator): ContentBlock[] {
+  if (acc.blocksOwned) return acc.blocks;
+  acc.blocks = [...acc.blocks];
+  acc.blocksOwned = true;
+  return acc.blocks;
+}
+
+/**
+ * Signature for one contributing record.
+ *
+ * `blocksVersion` is the host's own monotonic marker and is free when present.
+ * Otherwise the block list is hashed once and memoized against the record's
+ * OBJECT IDENTITY - which is the correct invalidation key here even though a
+ * settled turn is not strictly immutable: detached backgrounded-subagent
+ * events and snapshot replacement both write settled turns, and both mint a
+ * new message object rather than mutating in place. Keying on "the turn is
+ * complete" would have been wrong; keying on identity is not.
+ */
+const assistantRecordSignatureCache = new WeakMap<AssistantMessage, string>();
+
+/**
+ * Stable per-array identity token.
+ *
+ * `blocksVersion` alone is not sufficient even for a single record: an
+ * authoritative snapshot can replace a record's blocks while preserving its
+ * `messageId`, its timestamp AND its persisted counter (counters restart at 0
+ * on a rebuild), which produces an identical key for different content and
+ * serves the previous render indefinitely. Hashing the blocks instead would
+ * reintroduce the O(blocks-in-transcript) work per pass that keying on a
+ * counter exists to avoid.
+ *
+ * A replacement always mints a NEW array, so array identity separates the two
+ * cases at O(1): same array plus same counter really is the same content;
+ * a new array is a replacement regardless of what the counter says.
+ */
+let blocksIdentityCounter = 0;
+const blocksIdentity = new WeakMap<ReadonlyArray<ContentBlock>, number>();
+function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
+  const existing = blocksIdentity.get(blocks);
+  if (existing !== undefined) return existing;
+  blocksIdentityCounter += 1;
+  blocksIdentity.set(blocks, blocksIdentityCounter);
+  return blocksIdentityCounter;
+}
+
+/**
+ * The empty list every record without `imageResolutions` shares.
+ *
+ * One module-level array, deliberately not a fresh `[]` per call:
+ * `imageResolutionsIdentityToken` keys a WeakMap on this value to build a memo
+ * signature, so a new array per read would change that signature on every
+ * projection and defeat the cache it exists to feed.
+ *
+ * Distinct from `NO_IMAGE_RESOLUTIONS` below, which is the empty PROJECTION
+ * (`AssistantMarkdownImageResolution`, entries already paired with their owning
+ * message id). This one is the empty PERSISTED list a record carries.
+ */
+const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
+
+/**
+ * `imageResolutions` for a persisted assistant record, tolerating one that
+ * never carried the field.
+ *
+ * The type says it is always present, and for a record parsed off the wire it
+ * is. A snapshot on the live schema line takes `ChatStreamClient`'s SHALLOW
+ * parse path, which validates `chat.messages` with
+ * `z.custom<Message>(isStructuralRecord)` - a structural check only, so none of
+ * the zod defaults run and `imageResolutions: z.array(...).default([])` never
+ * fills. A host replaying a record stored before the field existed hands it
+ * straight through, typed as present and genuinely `undefined`. Reading it
+ * blind threw "Invalid value used as weak map key" out of
+ * `imageResolutionsIdentityToken` and took the whole chat tile down through its
+ * error boundary.
+ *
+ * The tolerance belongs here and not in the transport: the shallow path is
+ * structural by design - that is what makes it cheap - and a contract test in
+ * `chat-stream-client.test.ts` pins it to hand a live snapshot's message
+ * through structurally unchanged.
+ */
+function assistantImageResolutions(
+  message: AssistantMessage,
+): AssistantMessage["imageResolutions"] {
+  // Read through `unknown` deliberately. The declared field type is not
+  // optional, so annotating a local `| undefined` does not survive: TypeScript
+  // narrows a `const` to its initializer's type and `no-unnecessary-condition`
+  // then rejects the `??` as dead. `unknown` is the honest declaration here -
+  // the type system cannot express the runtime shape this guards against.
+  const resolutions: unknown = message.imageResolutions;
+  return Array.isArray(resolutions)
+    ? message.imageResolutions
+    : NO_PERSISTED_IMAGE_RESOLUTIONS;
+}
+
+let imageResolutionsIdentityCounter = 0;
+const imageResolutionsIdentity = new WeakMap<
+  AssistantMessage["imageResolutions"],
+  number
+>();
+function imageResolutionsIdentityToken(
+  imageResolutions: AssistantMessage["imageResolutions"],
+): number {
+  const existing = imageResolutionsIdentity.get(imageResolutions);
+  if (existing !== undefined) return existing;
+  imageResolutionsIdentityCounter += 1;
+  imageResolutionsIdentity.set(
+    imageResolutions,
+    imageResolutionsIdentityCounter,
+  );
+  return imageResolutionsIdentityCounter;
+}
+
+function assistantRecordSignature(message: AssistantMessage): string {
+  const imageIdentity = imageResolutionsIdentityToken(
+    assistantImageResolutions(message),
+  );
+  const version = message.blocksVersion;
+  if (version !== undefined) {
+    return `v:${version}#${blocksIdentityToken(message.blocks)}#i:${imageIdentity}`;
+  }
+  const cached = assistantRecordSignatureCache.get(message);
+  if (cached !== undefined) return cached;
+  const computed = `h:${turnSignature(message.blocks)}#i:${imageIdentity}`;
+  assistantRecordSignatureCache.set(message, computed);
+  return computed;
+}
+
+/**
+ * Cache key for a turn's merged block list.
+ *
+ * A single-record turn keys on that record's signature, which pairs its
+ * `blocksVersion` with its blocks' array identity so a replacement is caught
+ * even when the counter is preserved (see `assistantRecordSignature`).
+ *
+ * A MULTI-record turn needs more than that. Records are minted at
+ * `blocksVersion: 0`, so joining per-record parts positionally is only as
+ * strong as the weakest part, and the merged list is what the render actually
+ * consumes: two different merges can be assembled from parts that each look
+ * unchanged. So the moment a second record joins, hash the merged list. That
+ * is what the pre-accumulator code did, and it is what makes this class of
+ * stale-cache miss impossible rather than merely unlikely.
+ */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
-  if (acc.blocksVersion !== null) return `v:${acc.blocksVersion}`;
-  return `h:${turnSignature(acc.blocks)}`;
+  if (acc.signatureParts.length === 1) return acc.signatureParts[0];
+  return `h:${turnSignature(acc.blocks)}#records:${acc.signatureParts.join("|")}`;
 }
 
 interface AssistantTurnRenderInput {
@@ -1678,21 +2412,22 @@ interface AssistantTurnRenderInput {
   readonly turnKey: string;
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
+  /** False for a background notification row that no provider turn adopted. */
+  readonly showCompletionFooter: boolean;
+  /** Wall-clock terminal instant stamped onto the completed assistant row. */
+  readonly completedAt: number;
   readonly runState: ChatMessageRunState | null;
   readonly pause: TurnPauseAccounting;
   /** `turn.stopped` event info for this turn, if any. See `withTurnCompletion`. */
   readonly stopped: TurnStoppedEventInfo | null;
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
-  /**
-   * Wall-clock turn start used to anchor `createdAt` on EVERY row this turn
-   * emits (assistant slices and nested steer rows alike). A single per-turn
-   * anchor keeps the turn's rows contiguous under the stable `createdAt` sort
-   * (intra-turn order falls out of push order) and lets the final assistant
-   * slice's `completedAt - createdAt` measure the whole turn, not just its
-   * trailing chunk.
-   */
-  readonly startedAt: number;
+  /** Stable transcript-sort anchor for every row this turn emits. */
+  readonly rowAnchorAt: number;
+  /** Wall-clock turn start used only for elapsed-duration calculations. */
+  readonly elapsedStartedAt: number;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 type AssistantTurnTimelineEntry = {
@@ -1707,6 +2442,11 @@ function renderAssistantTurnRows(
 ): ReadonlyArray<ChatMessageModel> {
   const entries = assistantTurnTimelineEntries(input.acc.blocks);
   const split = entries.some(entrySplitsAssistantTurn);
+  const rowIdByBlockId = assistantRowIdsByBlockId(
+    entries,
+    input.turnKey,
+    split,
+  );
   const rows: ChatMessageModel[] = [];
   let chunk: ContentBlock[] = [];
   let chunkIndex = 0;
@@ -1722,10 +2462,14 @@ function renderAssistantTurnRows(
         runState: split ? null : input.runState,
         pause: input.pause,
         ctx: input.ctx,
+        epicId: input.epicId,
+        chatId: input.chatId,
         blocks: chunk,
         chunkIndex,
         split,
-        createdAt: input.startedAt,
+        rowAnchorAt: input.rowAnchorAt,
+        elapsedStartedAt: input.elapsedStartedAt,
+        rowIdByBlockId,
       }),
     );
     chunk = [];
@@ -1744,7 +2488,7 @@ function renderAssistantTurnRows(
           input.ctx,
           input.userMessagesById.get(entry.block.messageId) ?? null,
         ),
-        createdAt: input.startedAt,
+        createdAt: input.rowAnchorAt,
       });
       continue;
     }
@@ -1763,10 +2507,14 @@ function renderAssistantTurnRows(
           runState: input.runState,
           pause: input.pause,
           ctx: input.ctx,
+          epicId: input.epicId,
+          chatId: input.chatId,
           blocks: [],
           chunkIndex: 0,
           split: false,
-          createdAt: input.startedAt,
+          rowAnchorAt: input.rowAnchorAt,
+          elapsedStartedAt: input.elapsedStartedAt,
+          rowIdByBlockId,
         }),
       ],
       input,
@@ -1775,7 +2523,12 @@ function renderAssistantTurnRows(
 
   if (split) {
     return withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(rows, input, chunkIndex),
+      attachRunStateToTrailingAssistantSlice(
+        rows,
+        input,
+        chunkIndex,
+        rowIdByBlockId,
+      ),
       input,
     );
   }
@@ -1783,13 +2536,14 @@ function renderAssistantTurnRows(
 }
 
 /**
- * Stamp `completedAt` (and, when the turn ended via a user Stop, `stopped`)
- * onto the LAST assistant row of a completed turn so the elapsed footer
- * renders once, on the turn's final slice, measuring the whole turn (every
- * row already anchors `createdAt` at the turn start). Live turns get `null`
- * for both so the footer stays hidden until completion - `input.stopped` is
- * looked up unconditionally by the caller, but only takes effect here, behind
- * the same `turnComplete` gate as `completedAt`.
+ * Stamp `completedAt`, footer visibility, and (when the turn ended via a user
+ * Stop) `stopped` onto the LAST assistant row of a completed turn. This gives
+ * every completed row terminal state while allowing a notification-only row
+ * to suppress the elapsed footer. When visible, the footer renders once on
+ * the turn's final slice and measures from that row's separate
+ * `elapsedStartedAt`. Live turns get `null` for terminal fields until
+ * completion - `input.stopped` is looked up unconditionally by the caller, but
+ * only takes effect here behind the same `turnComplete` gate as `completedAt`.
  */
 function withTurnCompletion(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -1800,31 +2554,36 @@ function withTurnCompletion(
   if (lastAssistantIndex === -1) return rows;
   // The stamped row is sometimes a content-less boundary marker (synthesized
   // after a trailing steer bubble by `attachRunStateToTrailingAssistantSlice`),
-  // so both "did the turn produce output" and "what is the turn's copyable
-  // reply text" must be derived across every row of the turn, not just the
-  // one being stamped - otherwise a turn that DID answer before the steer
-  // would misreport as having produced nothing, and its copy button would
-  // have no text to copy (the boundary row's own segments are empty).
+  // so both "did the turn produce response output", "is this a silent
+  // autonomous resume", and "what is the turn's copyable reply text" must be
+  // derived across every row of the turn, not just the one being stamped -
+  // otherwise a turn that DID answer before the steer would misreport as
+  // having produced nothing, and its copy button would have no text to copy
+  // (the boundary row's own segments are empty).
+  const turnReplySegments = rows.flatMap((row) =>
+    row.role === "assistant" ? row.segments : [],
+  );
+  const turnHasOnlyAutonomousResumeSegments =
+    turnReplySegments.length > 0 &&
+    turnReplySegments.every((segment) => segment.kind === "autonomous_resume");
   const stopped: ChatMessageStoppedInfo | null =
     input.stopped === null
       ? null
       : {
           stoppedAt: input.stopped.stoppedAt,
           reason: input.stopped.reason,
-          turnHadOutput: rows.some(
-            (row) => row.role === "assistant" && row.segments.length > 0,
+          turnHadOutput: turnReplySegments.some(
+            (segment) => segment.kind !== "autonomous_resume",
           ),
-          turnReplyText: collectAssistantReplyText(
-            rows.flatMap((row) =>
-              row.role === "assistant" ? row.segments : [],
-            ),
-          ),
+          turnReplySegments,
         };
   return rows.map((row, index) =>
     index === lastAssistantIndex
       ? {
           ...row,
-          completedAt: stopped?.stoppedAt ?? input.acc.timestamp,
+          turnHasOnlyAutonomousResumeSegments,
+          showCompletionFooter: input.showCompletionFooter,
+          completedAt: input.completedAt,
           stopped,
         }
       : row,
@@ -1833,6 +2592,29 @@ function withTurnCompletion(
 
 function entrySplitsAssistantTurn(entry: AssistantTurnTimelineEntry): boolean {
   return entry.block.type === "steer";
+}
+
+function assistantRowIdsByBlockId(
+  entries: ReadonlyArray<AssistantTurnTimelineEntry>,
+  turnKey: string,
+  split: boolean,
+): ReadonlyMap<string, string> {
+  const rowIdByBlockId = new Map<string, string>();
+  let chunkIndex = 0;
+  let chunkHasBlocks = false;
+  for (const entry of entries) {
+    if (entry.block.type === "steer") {
+      if (chunkHasBlocks) chunkIndex += 1;
+      chunkHasBlocks = false;
+      continue;
+    }
+    rowIdByBlockId.set(
+      entry.block.blockId,
+      assistantSliceRowId(turnKey, chunkIndex, split),
+    );
+    chunkHasBlocks = true;
+  }
+  return rowIdByBlockId;
 }
 
 interface AssistantTurnSliceRenderInput {
@@ -1846,7 +2628,11 @@ interface AssistantTurnSliceRenderInput {
   readonly blocks: ReadonlyArray<ContentBlock>;
   readonly chunkIndex: number;
   readonly split: boolean;
-  readonly createdAt: number | null;
+  readonly rowAnchorAt: number | null;
+  readonly elapsedStartedAt: number;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly rowIdByBlockId: ReadonlyMap<string, string>;
 }
 
 function renderAssistantTurnSlice(
@@ -1856,6 +2642,7 @@ function renderAssistantTurnSlice(
   const assistantMeta: AssistantTurnMeta = {
     provider: input.acc.sender.harnessId,
     providerLabel: agentSender.providerLabel,
+    profileLabel: input.acc.profileLabel,
     modelLabel: agentSender.modelLabel,
     reasoningEffort: input.acc.reasoningEffort,
     reasoningEffortLabel: input.ctx.resolveAgentReasoningLabel(
@@ -1867,22 +2654,32 @@ function renderAssistantTurnSlice(
   };
   const firstBlock = input.blocks.at(0) ?? null;
   const createdAt =
-    input.createdAt !== null
-      ? input.createdAt
+    input.rowAnchorAt !== null
+      ? input.rowAnchorAt
       : (firstBlock?.timestamp ?? input.acc.timestamp);
   return {
     id: assistantSliceRowId(input.turnKey, input.chunkIndex, input.split),
     role: "assistant",
-    content: input.ctx.contentBlocksText(input.blocks),
+    content: input.ctx.contentBlocksPreview(input.blocks),
     segments: buildAssistantSegments(
       input.blocks,
       input.checkpointView,
       input.turnComplete,
+      {
+        epicId: input.epicId,
+        chatId: input.chatId,
+        resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
+        generatedImageBlockIdByHash: input.acc.generatedImageBlockIdByHash,
+        rowIdByBlockId: input.rowIdByBlockId,
+      },
     ),
     structuredContent: null,
     attachments: [],
     settings: null,
     createdAt,
+    ...(input.elapsedStartedAt === createdAt
+      ? {}
+      : { elapsedStartedAt: input.elapsedStartedAt }),
     // Stamped onto the turn's last slice by `withTurnCompletion`; null on
     // every other slice and while the turn is still live.
     completedAt: null,
@@ -1904,10 +2701,37 @@ function renderAssistantTurnSlice(
   };
 }
 
+function deduplicatedAssistantImageTargets(
+  generatedImageBlockIdByHash: ReadonlyMap<string, string>,
+  rowIdByBlockId: ReadonlyMap<string, string>,
+  resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+): ReadonlyMap<string, AssistantMarkdownImageTarget> {
+  if (generatedImageBlockIdByHash.size === 0) {
+    return NO_DEDUPLICATED_IMAGE_TARGETS;
+  }
+
+  const targetsBySource = new Map<string, AssistantMarkdownImageTarget>();
+  for (const resolution of resolutions) {
+    const entry = resolution.entry;
+    if (entry.state !== "resolved") continue;
+    const toolBlockId = generatedImageBlockIdByHash.get(entry.attachmentHash);
+    if (toolBlockId === undefined) continue;
+    const rowId = rowIdByBlockId.get(toolBlockId);
+    if (rowId === undefined) continue;
+    const target = { toolBlockId, rowId };
+    targetsBySource.set(entry.source, target);
+    targetsBySource.set(entry.canonicalSource, target);
+  }
+  return targetsBySource.size === 0
+    ? NO_DEDUPLICATED_IMAGE_TARGETS
+    : targetsBySource;
+}
+
 function attachRunStateToTrailingAssistantSlice(
   rows: ReadonlyArray<ChatMessageModel>,
   input: AssistantTurnRenderInput,
   nextChunkIndex: number,
+  rowIdByBlockId: ReadonlyMap<string, string>,
 ): ReadonlyArray<ChatMessageModel> {
   // A live turn needs a trailing indicator row. A STOPPED turn needs one too,
   // for a different reason: `withTurnCompletion` stamps `completedAt`/`stopped`
@@ -1928,19 +2752,16 @@ function attachRunStateToTrailingAssistantSlice(
     );
   }
   // Live case (unchanged): bump past every existing row so the trailing
-  // indicator sorts last - its `createdAt` only ever feeds a live, still-
-  // ticking timer, so this ordering-only offset is harmless there.
+  // indicator sorts last.
   // Stopped case: every other row in this turn already anchors `createdAt` to
-  // `input.startedAt` (see the steer-row comment below) and relies on push
+  // `input.rowAnchorAt` (see the steer-row comment below) and relies on push
   // order + the stable `createdAt` sort for position, not on a numerically
-  // later value - reuse that anchor exactly so `AssistantElapsedFooter`'s
-  // frozen `completedAt - createdAt - pausedDurationMs` measures the real
-  // turn duration instead of landing 1ms short (which `formatWorkedFor`'s
-  // second-flooring would round down at an exact-second boundary).
+  // later value - reuse that anchor exactly. Elapsed timing is carried
+  // separately by `elapsedStartedAt`.
   const createdAt =
     input.runState !== null
       ? rows.reduce((latest, row) => Math.max(latest, row.createdAt), 0) + 1
-      : input.startedAt;
+      : input.rowAnchorAt;
   return [
     ...rows,
     renderAssistantTurnSlice({
@@ -1951,10 +2772,14 @@ function attachRunStateToTrailingAssistantSlice(
       runState: input.runState,
       pause: input.pause,
       ctx: input.ctx,
+      epicId: input.epicId,
+      chatId: input.chatId,
       blocks: [],
       chunkIndex: nextChunkIndex,
       split: true,
-      createdAt,
+      rowAnchorAt: createdAt,
+      elapsedStartedAt: input.elapsedStartedAt,
+      rowIdByBlockId,
     }),
   ];
 }
@@ -2016,7 +2841,7 @@ function renderSteerBlockUserMessage(
 
 function renderSteeredUserMessage(input: {
   readonly id: string;
-  readonly content: ChatQueuedItem["message"]["content"];
+  readonly content: ChatQueuedPromptItem["message"]["content"];
   readonly timestamp: number;
   readonly persistentMessageId: string | null;
   readonly sender: UserMessageSender | null;
@@ -2168,28 +2993,48 @@ function renderLiveAssistant(
   if (input.mergesIntoPersisted) {
     return [];
   }
+  const acc: AssistantTurnAccumulator = {
+    messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    sender: liveAssistant.sender,
+    startedAt: liveAssistant.startedAt,
+    timestamp: liveAssistant.timestamp,
+    // A standalone live row owns its list from the start: it is built fresh
+    // here each pass and never aliases a persisted record.
+    blocks: [...liveAssistant.blocks],
+    blocksOwned: true,
+    signatureParts: [
+      `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
+    ],
+    profileLabel:
+      input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
+    reasoningEffort: liveAssistant.reasoningEffort,
+    serviceTier: liveAssistant.serviceTier,
+    // A live turn has no final cost yet; it surfaces once the turn completes
+    // and re-renders via the persisted path. The live footer is suppressed.
+    costUsd: null,
+    imageResolutionsByBlockId: new Map(),
+    generatedImageBlockIdByHash: new Map(),
+  };
+  addLiveAssistantImageProjection(acc, liveAssistant);
   return renderAssistantTurnRows({
-    acc: {
-      messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
-      sender: liveAssistant.sender,
-      startedAt: liveAssistant.startedAt,
-      timestamp: liveAssistant.timestamp,
-      blocks: [...liveAssistant.blocks],
-      blocksVersion: liveAssistant.blocksVersion,
-      reasoningEffort: liveAssistant.reasoningEffort,
-      serviceTier: liveAssistant.serviceTier,
-      // A live turn has no final cost yet; it surfaces once the turn completes
-      // and re-renders via the persisted path. The live footer is suppressed.
-      costUsd: null,
-    },
+    acc,
     turnKey: liveAssistant.turnId,
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
     turnComplete: false,
+    showCompletionFooter: true,
+    // Unused while `turnComplete` is false; keep the input total and explicit.
+    completedAt: liveAssistant.timestamp,
     // Track the host's run state exactly: a live row lingering for one frame
     // after the turn completes (runStatus idle) must not show a spinner.
     runState: input.activeRunState,
-    pause: input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+    // Scoped to the live attempt's own start: a steer continuation reuses the
+    // turnId, and an earlier attempt's user-wait must not subtract from an
+    // elapsed measured from this attempt's start.
+    pause: pauseScopedToWindow(
+      input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+      liveAssistant.startedAt,
+    ),
     // A live turn is never `turnComplete`, so `withTurnCompletion` never stamps
     // this - the persisted re-render (once the `turn.stopped` event lands)
     // owns the stopped marker.
@@ -2199,8 +3044,11 @@ function renderLiveAssistant(
     // turn-start) so the live row sorts at the same `createdAt` the persisted
     // form will use post-swap - prevents a sort-position jump at
     // live→persisted reconciliation.
-    startedAt: liveAssistant.startedAt,
+    rowAnchorAt: liveAssistant.startedAt,
+    elapsedStartedAt: liveAssistant.startedAt,
     ctx: input.ctx,
+    epicId: input.epicId,
+    chatId: input.chatId,
   }).map((message) =>
     message.role === "assistant"
       ? { ...message, statusLabel: "Streaming" }
@@ -2314,7 +3162,7 @@ function renderStoppedTurnsWithoutAssistantRecords(
         stoppedAt: stopped.stoppedAt,
         reason: stopped.reason,
         turnHadOutput: false,
-        turnReplyText: "",
+        turnReplySegments: [],
       },
       pausedDurationMs: 0,
       pausedSinceMs: null,
@@ -2343,6 +3191,9 @@ function assistantSliceRowId(
   return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
 }
 
+const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
+  [];
+
 function queueSteerRowId(queueItemId: string): string {
   return `steer:${queueItemId}`;
 }
@@ -2351,18 +3202,62 @@ function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
+  imageProjection: {
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly resolutionsByBlockId: ReadonlyMap<
+      string,
+      ReadonlyArray<AssistantMarkdownImageResolution>
+    >;
+    readonly generatedImageBlockIdByHash: ReadonlyMap<string, string>;
+    readonly rowIdByBlockId: ReadonlyMap<string, string>;
+  },
 ): ReadonlyArray<MessageSegment> {
   const flat: MessageSegment[] = [];
+  const targetsByResolutions = new Map<
+    ReadonlyArray<AssistantMarkdownImageResolution>,
+    ReadonlyMap<string, AssistantMarkdownImageTarget>
+  >();
+  const targetsFor = (
+    resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+  ): ReadonlyMap<string, AssistantMarkdownImageTarget> => {
+    const cached = targetsByResolutions.get(resolutions);
+    if (cached !== undefined) return cached;
+    const computed = deduplicatedAssistantImageTargets(
+      imageProjection.generatedImageBlockIdByHash,
+      imageProjection.rowIdByBlockId,
+      resolutions,
+    );
+    targetsByResolutions.set(resolutions, computed);
+    return computed;
+  };
   for (const block of blocks) {
     const segment = blockToSegment(block);
     if (segment !== null) {
-      flat.push(segment);
+      const resolutions =
+        imageProjection.resolutionsByBlockId.get(block.blockId) ??
+        NO_IMAGE_RESOLUTIONS;
+      flat.push(
+        segment.kind === "text"
+          ? {
+              ...segment,
+              assistantImageContext: {
+                epicId: imageProjection.epicId,
+                chatId: imageProjection.chatId,
+                resolutions,
+                deduplicatedTargetsBySource: targetsFor(resolutions),
+              },
+            }
+          : segment,
+      );
     }
   }
   const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
-  const visible = suppressAuthErrors(
-    suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested)),
-  );
+  // Auth errors (`code: "auth"`) deliberately render as normal error segments:
+  // suppressing them made a headless (A2A-triggered) auth failure completely
+  // invisible after the transient re-auth banner cleared. Like rate-limit
+  // errors, the transcript row and the composer banner now coexist.
+  const visible = suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested));
   // The card's merged change rides on the `artifact_operation` block itself
   // (set at emit from the turn's checkpoint builder), so no manifest enrichment
   // is needed for the card - it's available the moment the edit completes.
@@ -2396,20 +3291,6 @@ function artifactChangeRowsFromManifest(
   });
 }
 
-/**
- * Drop `error` segments tagged `code: "auth"`. A signed-out provider is a
- * connection condition surfaced live above the composer (the re-auth banner),
- * not a transcript row - so the failed turn collapses to an empty slice instead
- * of leaving a scary red error card. An auth-only turn renders zero segments.
- */
-function suppressAuthErrors<T extends MessageSegment>(
-  flat: ReadonlyArray<T>,
-): ReadonlyArray<T> {
-  return flat.filter(
-    (s) => !(s.kind === "error" && s.code === AUTH_ERROR_CODE),
-  );
-}
-
 function isSubagentChildSegment(
   segment: MessageSegment,
 ): segment is SubagentChildSegment {
@@ -2419,8 +3300,10 @@ function isSubagentChildSegment(
   // provider_notice IS eligible too - a notice on a subagent's own thread
   // nests under that card instead of interrupting the top-level transcript;
   // one with no matching parent (or none) falls through to topLevel below.
+  // Image-generation cards stay top-level so SubagentChildrenSection cannot
+  // swallow a nested generation while rendering only child agents.
   return (
-    segment.kind === "tool" ||
+    (segment.kind === "tool" && segment.toolName !== "image_generation") ||
     segment.kind === "file_change" ||
     segment.kind === "command" ||
     segment.kind === "subagent" ||
@@ -2982,6 +3865,7 @@ const BLOCK_HANDLERS: {
     taskTodoItems: block.taskTodoItems,
     error: block.error,
     agentMessageSend: block.agentMessageSend,
+    managedCommand: block.managedCommand,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,
@@ -2991,6 +3875,7 @@ const BLOCK_HANDLERS: {
     startedAt: block.startedAt ?? block.timestamp,
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
+    imageResults: block.imageResults,
   }),
   file_change: (block) => ({
     kind: "file_change",
@@ -3017,6 +3902,8 @@ const BLOCK_HANDLERS: {
     // No command-progress signal today; the field exists for footer symmetry.
     progress: null,
     startedAt: block.timestamp,
+    backgroundTask: block.backgroundTask,
+    stopped: block.stopped,
     parentId: block.parentBlockId ?? null,
   }),
   subagent: (block) =>
@@ -3110,7 +3997,11 @@ const BLOCK_HANDLERS: {
     description: block.description,
     questions: block.questions,
     answers: block.answers,
+    draftAnswers: block.draftAnswers,
+    outcome: block.outcome,
+    settlement: block.settlement,
     error: block.error,
+    delivery: block.delivery,
     forkedWithoutAnswer: block.metadata?.["forkedWithoutAnswer"] === true,
   }),
   // Artifact-operation cards render top-level regardless of the authoring agent
@@ -3157,7 +4048,8 @@ function planContentIdentity(
 
 function blockToSegment(block: ContentBlock): MessageSegment | null {
   const handler = BLOCK_HANDLERS[block.type] as
-    ((b: ContentBlock) => Omit<MessageSegment, "id"> | null) | undefined;
+    | ((b: ContentBlock) => Omit<MessageSegment, "id"> | null)
+    | undefined;
   if (handler === undefined) {
     // Forward-compat: a newer host may emit a block.type the current GUI
     // bundle does not know about. Drop it instead of crashing the chat.

@@ -10,6 +10,8 @@ import {
   retargetPersistedStore,
 } from "@/lib/persist/zustand-persist-lifecycle";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
+import { clearAppLocalCompletionReceipts } from "@/lib/notifications/app-local-completion-receipts";
 
 export interface AppLocalNotificationsPersistLifecycleBridgeProps {
   readonly children: ReactNode;
@@ -23,10 +25,14 @@ export function AppLocalNotificationsPersistLifecycleBridge(
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
     if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
-      const transitionUserId = transition.email;
+      const transitionUserId = transition.userId;
       retargetPersistedStore({
         store: useAppLocalNotificationsStore,
         name: appLocalNotificationsKey(transitionUserId),
+        // No legacy key: this bridge already watched and bucketed by the
+        // canonical `userId`. It only read it back off a field NAMED `email`,
+        // which is the naming that let the other nine disagree with it.
+        legacyName: null,
       });
       if (transitionUserId !== null) {
         // `retargetPersistedStore` rehydrates from localStorage synchronously for
@@ -39,6 +45,11 @@ export function AppLocalNotificationsPersistLifecycleBridge(
         useAppLocalNotificationsStore.getState().deactivateIdentity();
       }
       return;
+    }
+    const activeUserId = useAppLocalNotificationsStore.getState().activeUserId;
+    if (activeUserId !== null) {
+      clearAppLocalDisplayReceipts(activeUserId);
+      clearAppLocalCompletionReceipts(activeUserId);
     }
     clearAndResetPersistedStore({
       store: useAppLocalNotificationsStore,

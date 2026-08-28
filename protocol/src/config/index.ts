@@ -11,3 +11,5 @@ export * from "./schema";
 export * from "./log-level";
 export * from "./paths";
 export * from "./store";
+export * from "./installation";
+export * from "./host-stop-intent";

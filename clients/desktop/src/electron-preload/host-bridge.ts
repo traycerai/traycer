@@ -3,7 +3,11 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
-import type { DesktopLocalHostSnapshot } from "../ipc-contracts/host-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  RegisteredHostsPush,
+} from "../ipc-contracts/host-types";
+import type { HostRestartRequestResult } from "../ipc-contracts/host-management-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
@@ -12,13 +16,23 @@ import { subscribe, type Disposable, type Listener } from "./subscribe";
  * constructs its `DesktopRunnerHost` after that push. New subscribers receive
  * the cached value synchronously and every subsequent transition via fan-out.
  */
-let cachedLocalHost: DesktopLocalHostSnapshot | null = null;
-const localHostHandlers = new Set<Listener<DesktopLocalHostSnapshot | null>>();
+let cachedLocalHost: DesktopPublishedHostSnapshot | null = null;
+/**
+ * Bumped on every PUSH. The pull below carries the value it saw before its
+ * `invoke`, so a push that lands while the round trip is in flight always
+ * wins - the pull is a floor, never an overwrite.
+ */
+let localHostPushGeneration = 0;
+let localHostPullStarted = false;
+const localHostHandlers = new Set<
+  Listener<DesktopPublishedHostSnapshot | null>
+>();
 
 ipcRenderer.on(
   RunnerHostEvent.localHostChange,
   (_event: unknown, payload: unknown): void => {
-    const snapshot = payload as DesktopLocalHostSnapshot | null;
+    const snapshot = payload as DesktopPublishedHostSnapshot | null;
+    localHostPushGeneration += 1;
     cachedLocalHost = snapshot;
     for (const handler of localHostHandlers) {
       handler(snapshot);
@@ -26,11 +40,58 @@ ipcRenderer.on(
   },
 );
 
+/**
+ * Ask main for the snapshot rather than waiting to be told.
+ *
+ * `cachedLocalHost` starts at `null`, and `null` is not "unknown" downstream -
+ * it is the renderer's ONLY way of saying "this machine has no host", which the
+ * directory turns into an explicitly unavailable row and every chat owned by
+ * that host turns into a read-only published copy. So any delivery hazard on
+ * the push channel does not degrade, it LIES, and it lies in the direction that
+ * costs the user their session: a window that registered after the install-time
+ * fan-out, a `webContents` reload that resets this module's cache, a send
+ * dropped while the renderer was navigating. None of them self-correct on a
+ * steady-state host, because the correction was going to be a `change` event
+ * and nothing is changing.
+ *
+ * One invoke on first subscribe closes all of them at once. It runs exactly
+ * once per preload instance - so it also covers ⌘R, which re-executes this
+ * module - and it defers to any push that arrives while it is in flight.
+ */
+function pullLocalHostOnce(): void {
+  if (localHostPullStarted) return;
+  localHostPullStarted = true;
+  const generationAtRequest = localHostPushGeneration;
+  void (
+    ipcRenderer.invoke(RunnerHostInvoke.localHostSnapshot) as Promise<unknown>
+  )
+    .then((payload: unknown) => {
+      if (localHostPushGeneration !== generationAtRequest) return;
+      const snapshot = payload as DesktopPublishedHostSnapshot | null;
+      if (snapshot === null && cachedLocalHost === null) return;
+      cachedLocalHost = snapshot;
+      for (const handler of localHostHandlers) {
+        handler(snapshot);
+      }
+    })
+    .catch(() => {
+      // A main process that cannot answer leaves the push channel exactly as
+      // it was; this is a repair path, not a dependency. But a failed attempt
+      // must not consume the once-per-preload slot: with the flag left set, a
+      // boot-time rejection would freeze `cachedLocalHost` at `null` - which
+      // downstream reads as "this machine has no host", not "unknown" - until
+      // a `change` event a steady-state host will never send. Clearing it lets
+      // the next subscriber run the repair again.
+      localHostPullStarted = false;
+    });
+}
+
 function subscribeLocalHost(
-  handler: Listener<DesktopLocalHostSnapshot | null>,
+  handler: Listener<DesktopPublishedHostSnapshot | null>,
 ): Disposable {
   localHostHandlers.add(handler);
   handler(cachedLocalHost);
+  pullLocalHostOnce();
   return {
     dispose: () => {
       localHostHandlers.delete(handler);
@@ -40,20 +101,30 @@ function subscribeLocalHost(
 
 export interface HostBridgeSurface {
   onLocalHostChange(
-    handler: Listener<DesktopLocalHostSnapshot | null>,
+    handler: Listener<DesktopPublishedHostSnapshot | null>,
   ): Disposable;
+  onRegisteredHostsChange(handler: Listener<RegisteredHostsPush>): Disposable;
   onSystemResumed(handler: () => void): Disposable;
-  requestHostRespawn(): Promise<void>;
-  hostPicker: {
-    requestOpen(): Promise<void>;
-    requestClose(): Promise<void>;
-    onChange(handler: Listener<boolean>): Disposable;
-  };
+  requestHostRespawn(): Promise<HostRestartRequestResult>;
+  getLastKnownLocalHostId(): Promise<string | null>;
 }
 
 export function buildHostBridge(): HostBridgeSurface {
   return {
     onLocalHostChange: (handler) => subscribeLocalHost(handler),
+
+    // Main's one registry read, pushed to every window (P4.1/F22). Routed
+    // through the generic per-event subscription rather than the cached shape
+    // above, and the difference is deliberate: an absent local-host snapshot
+    // LIES (`null` means "this machine has no host", not "unknown"), whereas a
+    // window that has not heard a registry tick yet has simply not heard one -
+    // it has already done its own initial read and the next tick is 60s away.
+    // There is nothing for a cache or a first-subscribe pull to repair.
+    onRegisteredHostsChange: (handler) =>
+      subscribe<RegisteredHostsPush>(
+        RunnerHostEvent.registeredHostsChange,
+        handler,
+      ),
 
     // A transient "machine woke" pulse - no snapshot to cache, so it routes
     // through the generic per-event subscription (unlike the cached
@@ -62,15 +133,13 @@ export function buildHostBridge(): HostBridgeSurface {
       subscribe<void>(RunnerHostEvent.systemResumed, handler),
 
     requestHostRespawn: () =>
-      ipcRenderer.invoke(RunnerHostInvoke.requestHostRespawn) as Promise<void>,
+      ipcRenderer.invoke(
+        RunnerHostInvoke.requestHostRespawn,
+      ) as Promise<HostRestartRequestResult>,
 
-    hostPicker: {
-      requestOpen: () =>
-        ipcRenderer.invoke(RunnerHostInvoke.hostPickerRequestOpen),
-      requestClose: () =>
-        ipcRenderer.invoke(RunnerHostInvoke.hostPickerRequestClose),
-      onChange: (handler) =>
-        subscribe<boolean>(RunnerHostEvent.hostPickerChange, handler),
-    },
+    getLastKnownLocalHostId: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.lastKnownLocalHostId) as Promise<
+        string | null
+      >,
   };
 }

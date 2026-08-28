@@ -99,7 +99,7 @@ describe("versioned-record framework - non-object schemas", () => {
 });
 
 describe("versioned-record framework - minor additivity", () => {
-  it("allows adding an enum value across minors", () => {
+  it("rejects adding an enum value across minors", () => {
     const enumV101 = defineRecordContract({
       name: "role-record",
       schemaVersion: { major: 1, minor: 1 } as const,
@@ -127,7 +127,9 @@ describe("versioned-record framework - minor additivity", () => {
       },
     };
 
-    expect(() => validateVersionedRecordRegistry(registry)).not.toThrow();
+    expect(() => validateVersionedRecordRegistry(registry)).toThrow(
+      /adds enum value 'guest'/,
+    );
   });
 
   it("rejects removing an enum value across minors", () => {
@@ -369,10 +371,15 @@ describe("versioned-record framework - loadRecord (parse + migrate)", () => {
   });
 
   it("loadRecord parses against the historical schema and migrates to latest", () => {
-    const parsed = loadRecord(registry, "obj", { id: "x" }, {
-      major: 1,
-      minor: 0,
-    });
+    const parsed = loadRecord(
+      registry,
+      "obj",
+      { id: "x" },
+      {
+        major: 1,
+        minor: 0,
+      },
+    );
     expect(parsed).toEqual({ id: "x", label: "" });
   });
 
@@ -384,10 +391,15 @@ describe("versioned-record framework - loadRecord (parse + migrate)", () => {
 
   it("loadRecord throws on data that does not match the historical schema", () => {
     expect(() =>
-      loadRecord(registry, "obj", { unrelated: true }, {
-        major: 1,
-        minor: 0,
-      }),
+      loadRecord(
+        registry,
+        "obj",
+        { unrelated: true },
+        {
+          major: 1,
+          minor: 0,
+        },
+      ),
     ).toThrow();
   });
 });

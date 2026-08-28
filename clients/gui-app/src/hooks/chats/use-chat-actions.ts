@@ -2,7 +2,9 @@ import { useMemo } from "react";
 import type {
   ChatRunSettings,
   ChatActiveTurn,
+  ChatQueueDeliveryPolicy,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   InterviewAnswer,
@@ -12,6 +14,7 @@ import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/a
 import type {
   ChatSessionStoreHandle,
   EditUserMessageInput,
+  InterviewDeliveryRetryIdentity,
   SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -35,6 +38,7 @@ export interface ChatActions {
     content: JsonContent,
     sender: UserMessageSender,
     settings: ChatRunSettings,
+    deliveryPolicy: ChatQueueDeliveryPolicy,
   ) => SentChatMessageAction | null;
   readonly deleteMessageSuffix: (fromMessageId: string) => string | null;
   readonly editUserMessage: (
@@ -48,6 +52,7 @@ export interface ChatActions {
   readonly stopTurn: () => string | null;
   readonly stopBackgroundItem: (taskId: string) => string | null;
   readonly stopAllBackgroundItems: () => string | null;
+  readonly stopBackgroundSession: () => string | null;
   readonly pauseQueue: () => string | null;
   readonly resumeQueue: () => string | null;
   readonly queueEdit: (
@@ -64,6 +69,10 @@ export interface ChatActions {
   ) => void;
   readonly updateActivePermissionMode: (
     permissionMode: PermissionMode,
+  ) => string | null;
+  readonly updateActiveProfile: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
   ) => string | null;
   readonly queueCancel: (queueItemId: string) => string | null;
   readonly queueReorder: (
@@ -91,7 +100,14 @@ export interface ChatActions {
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
   ) => string | null;
-  readonly interviewError: (blockId: string, reason: string) => string | null;
+  readonly interviewSkip: (
+    blockId: string,
+    reason: string,
+    draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+  ) => string | null;
+  readonly interviewDeliveryRetry: (
+    identity: InterviewDeliveryRetryIdentity,
+  ) => string | null;
   readonly ackFailedSendRestoration: (clientActionId: string) => void;
   readonly ackAcceptedAction: (clientActionId: string) => void;
   readonly takeSetupFailedRestoration: (
@@ -116,13 +132,14 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
-      sendMessage: (content, sender, settings) =>
+      sendMessage: (content, sender, settings, deliveryPolicy) =>
         tracked(
-          handle.store.getState().sendMessage(content, sender, settings),
+          handle.store
+            .getState()
+            .sendMessage(content, sender, settings, deliveryPolicy),
           () => {
             Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
               harness: settings.harnessId,
-              mode: settings.agentMode,
             });
           },
         ),
@@ -172,6 +189,13 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
             { scope: "all" },
           );
         }),
+      stopBackgroundSession: () =>
+        tracked(handle.store.getState().stopBackgroundSession(), () => {
+          Analytics.getInstance().track(
+            AnalyticsEvent.ChatBackgroundItemStopped,
+            { scope: "session" },
+          );
+        }),
       pauseQueue: () =>
         tracked(handle.store.getState().pauseQueue(), () => {
           Analytics.getInstance().track(AnalyticsEvent.ChatQueuePaused, null);
@@ -195,6 +219,8 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
           .restampQueuedItemSettings(settings, excludeQueueItemId),
       updateActivePermissionMode: (permissionMode) =>
         handle.store.getState().updateActivePermissionMode(permissionMode),
+      updateActiveProfile: (harnessId, profileId) =>
+        handle.store.getState().updateActiveProfile(harnessId, profileId),
       queueCancel: (queueItemId) =>
         tracked(handle.store.getState().queueCancel(queueItemId), () => {
           Analytics.getInstance().track(
@@ -264,8 +290,10 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
             });
           },
         ),
-      interviewError: (blockId, reason) =>
-        handle.store.getState().interviewError(blockId, reason),
+      interviewSkip: (blockId, reason, draftAnswers) =>
+        handle.store.getState().interviewSkip(blockId, reason, draftAnswers),
+      interviewDeliveryRetry: (identity) =>
+        handle.store.getState().interviewDeliveryRetry(identity),
       ackFailedSendRestoration: (clientActionId) =>
         handle.store.getState().ackFailedSendRestoration(clientActionId),
       ackAcceptedAction: (clientActionId) =>

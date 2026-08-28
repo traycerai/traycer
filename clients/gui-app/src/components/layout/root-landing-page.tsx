@@ -1,5 +1,4 @@
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
-import { HomePage } from "@/components/home/home-page";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -7,8 +6,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  *
  * Signed-out users land on the auth-first desktop welcome surface. Once
  * authentication succeeds, `/` becomes the normal landing workspace; the
- * surrounding `LocalHostGate` still blocks the composer until the desktop's
- * local host is ready.
+ * surrounding `DefaultHostReadyGate` still holds the composer back until a
+ * host can serve the window, and the window narrator says why.
  */
 export function RootLandingPage() {
   const status = useAuthStore((state) => state.status);
@@ -17,5 +16,5 @@ export function RootLandingPage() {
     return <AuthLandingPage />;
   }
 
-  return <HomePage />;
+  return null;
 }

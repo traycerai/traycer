@@ -1,14 +1,63 @@
-import { memo, useMemo, type DragEventHandler, type ReactNode } from "react";
-import { ImageIcon } from "lucide-react";
+import { memo, type DragEventHandler, type ReactNode } from "react";
+import { FileText, Files, ImageIcon } from "lucide-react";
 
 import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
+import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
+
+const FILE_DROP_OVERLAY_CONTENT = {
+  images: {
+    Icon: ImageIcon,
+    title: "Drop image to attach",
+    subtitle: "PNG, JPG, GIF up to 5MB",
+  },
+  paths: {
+    Icon: FileText,
+    title: "Drop to insert file path",
+    subtitle: "Path will be inserted in the message",
+  },
+  mixed: {
+    Icon: Files,
+    title: "Drop to attach images and insert file paths",
+    subtitle: "Images attach; file paths are inserted",
+  },
+} satisfies Record<
+  FileTransferDragOverlayVariant,
+  {
+    readonly Icon: typeof ImageIcon;
+    readonly title: string;
+    readonly subtitle: string;
+  }
+>;
+
+export function ComposerDropOverlay({
+  Icon,
+  title,
+  subtitle,
+}: {
+  readonly Icon: typeof ImageIcon;
+  readonly title: string;
+  readonly subtitle: string;
+}) {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary bg-card/90 backdrop-blur-sm"
+    >
+      <Icon className="size-6 text-primary" aria-hidden />
+      <p className="text-ui-sm font-medium text-foreground">{title}</p>
+      <p className="text-ui-xs text-muted-foreground">{subtitle}</p>
+    </div>
+  );
+}
 
 export interface ComposerAreaProps {
   readonly pickerStore: ComposerPickerStore;
   readonly overlay: ReactNode;
+  readonly utilityRail: ReactNode;
+  readonly attachmentsStrip: ReactNode;
   readonly editor: ReactNode;
   readonly toolbar: ReactNode | null;
 }
@@ -16,6 +65,8 @@ export interface ComposerAreaProps {
 function ComposerAreaImpl({
   pickerStore,
   overlay,
+  utilityRail,
+  attachmentsStrip,
   editor,
   toolbar,
 }: ComposerAreaProps): ReactNode {
@@ -24,10 +75,24 @@ function ComposerAreaImpl({
       <ComposerMenu pickerStore={pickerStore} />
       <div
         data-composer-shell=""
-        className="relative rounded-lg bg-muted/30 ring-1 ring-border ring-inset focus-within:ring-ring/30"
+        className="relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30"
       >
         {overlay}
-        <div className="px-4 pt-4">{editor}</div>
+        <div
+          data-composer-utility-overlay=""
+          className="absolute right-3 top-0 z-40 -translate-y-1/2 empty:hidden"
+        >
+          {utilityRail}
+        </div>
+        <div data-composer-editor-frame="" className="px-4 pt-4">
+          <div
+            data-composer-attachment-rail=""
+            className="flex min-w-0 items-start gap-2 pb-2 empty:hidden"
+          >
+            {attachmentsStrip}
+          </div>
+          {editor}
+        </div>
         {toolbar}
       </div>
     </div>
@@ -42,7 +107,9 @@ interface ComposerShellProps {
   readonly onDrop: DragEventHandler<HTMLElement>;
   readonly onDragEnter: DragEventHandler<HTMLElement>;
   readonly onDragLeave: DragEventHandler<HTMLElement>;
-  readonly isDraggingFiles: boolean;
+  readonly dragOverlayVariant: FileTransferDragOverlayVariant | null;
+  /** Compact composer chrome anchored outside document flow. */
+  readonly utilityRail: ReactNode;
   /** Slot rendered just above the editor (e.g. image-attachment chips). */
   readonly attachmentsStrip: ReactNode;
   /** Slot for the editor surface. */
@@ -58,45 +125,22 @@ function ComposerShellImpl(props: ComposerShellProps) {
     onDrop,
     onDragEnter,
     onDragLeave,
-    isDraggingFiles,
+    dragOverlayVariant,
+    utilityRail,
     attachmentsStrip,
     editor,
     toolbar,
   } = props;
 
-  const { ref, isNarrow } = useComposerNarrowObserver();
-  const overlay = useMemo(
-    () =>
-      isDraggingFiles ? (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary bg-card/90 backdrop-blur-sm"
-        >
-          <ImageIcon className="size-6 text-primary" aria-hidden />
-          <p className="text-ui-sm font-medium text-foreground">
-            Drop image to attach
-          </p>
-          <p className="text-ui-xs text-muted-foreground">
-            PNG, JPG, GIF up to 5MB
-          </p>
-        </div>
-      ) : null,
-    [isDraggingFiles],
-  );
-  const editorSlot = useMemo(
-    () => (
-      <>
-        {attachmentsStrip}
-        {editor}
-      </>
-    ),
-    [attachmentsStrip, editor],
-  );
-
+  const { ref: narrowRef, isNarrow } = useComposerNarrowObserver();
+  const overlayContent =
+    dragOverlayVariant === null
+      ? null
+      : FILE_DROP_OVERLAY_CONTENT[dragOverlayVariant];
   return (
     <ComposerNarrowProvider isNarrow={isNarrow}>
       <div
-        ref={ref}
+        ref={narrowRef}
         className="@container"
         onDragOver={onDragOver}
         onDrop={onDrop}
@@ -105,8 +149,14 @@ function ComposerShellImpl(props: ComposerShellProps) {
       >
         <ComposerArea
           pickerStore={pickerStore}
-          overlay={overlay}
-          editor={editorSlot}
+          overlay={
+            overlayContent === null ? null : (
+              <ComposerDropOverlay {...overlayContent} />
+            )
+          }
+          utilityRail={utilityRail}
+          attachmentsStrip={attachmentsStrip}
+          editor={editor}
           toolbar={toolbar}
         />
       </div>

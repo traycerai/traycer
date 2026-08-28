@@ -1,5 +1,15 @@
 import { z } from "zod";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  clientCompatibilityRequirementSchema,
+  clientHandshakeIdentitySchema,
+  type ClientCompatibilityRequirement,
+  type ClientHandshakeIdentity,
+} from "@traycer/protocol/framework/client-identity";
+import {
+  worktreeBusyHoldersWireFieldSchema,
+  type WorktreeBusyHolder,
+} from "./worktree-busy-holders";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -16,14 +26,13 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
  */
 
 /**
- * Per-method canonical version manifest exchanged on connection open.
+ * Per-method version manifest exchanged on connection open.
  *
- * Each side advertises, per known method, only its canonical (highest
- * installed) `{ major, minor }`. Local registries carry the structural
- * invariants required to answer "can I bridge from my canonical to theirs?"
- * without extra data on the wire.
+ * Each side advertises, per known method, its canonical (highest installed)
+ * `{ major, minor }` plus every installed major. An omitted `supportedMajors`
+ * is reserved for legacy peers that predate this additive field.
  */
-export type ConnectionManifest = Readonly<Record<string, SchemaVersion>>;
+export type ConnectionManifest = Readonly<Record<string, ManifestMethodEntry>>;
 
 /**
  * Discriminated reason for a method being incompatible between two sides.
@@ -59,6 +68,67 @@ export type IncompatibilityUpgradeGuidance = {
 };
 
 /**
+ * Fatal code emitted when the unary host sent `openAck` but did not observe the
+ * client's `request` before its bounded post-open deadline. This is a transport
+ * timeout, not an authentication rejection: the request was never dispatched,
+ * so a client may safely retry even a non-idempotent method on a fresh socket.
+ */
+export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
+
+/**
+ * Fatal code a host emits on every live connection when it is deliberately
+ * standing itself down and expects to come back - the restart tombstone
+ * (connection registry §3 / D5 / M1). Always paired with `retryable: true`
+ * and a {@link FatalErrorDetails.restartIntent} payload.
+ *
+ * The code is stable and separate from the payload on purpose: the payload is
+ * what a selection authority acts on, while the code is what a log line, a
+ * support transcript, or a client that never grew the payload reads.
+ */
+export const HOST_RESTARTING_FATAL_CODE = "HOST_RESTARTING";
+
+/**
+ * The restart tombstone a host publishes to every client attached to it, at
+ * the moment it latches restart intent and before any teardown step runs.
+ *
+ * It rides {@link FatalErrorDetails} rather than a frame kind of its own
+ * because that one payload is shared verbatim by all three host->client
+ * planes - the unary `/rpc` `fatalError` frame, the `/stream` `fatalError`
+ * frame, and the relay mux's `FATAL` on the session control stream - so one
+ * additive field reaches every attached client whatever transport it holds.
+ * The alternatives are both fail-closed against peers that predate them: a
+ * new mux frame type throws `MuxFrameDecodeError` in `decodeMuxFrame`
+ * (unknown type bytes are rejected, not skipped), and a new `/stream` control
+ * kind falls through to the application-frame envelope, whose required
+ * `hasBinaryPayload` is absent - tearing the socket down as malformed.
+ *
+ * A new METHOD name does not fit either, though the reason is narrower than
+ * "the release invariant forbids it" - a new OPTIONAL stream method is
+ * additive and degrades quietly, as this repo's own two-sided tests show. It
+ * fails for a different reason: a method is something a client SUBSCRIBES to,
+ * and this frame has to reach peers that already hold whatever sessions they
+ * hold, at the instant the host is going down. A host cannot make an attached
+ * client subscribe to a new method retroactively, so the ones that never did
+ * would hear nothing. Putting it on the FLOOR instead - so every peer must
+ * serve it - is what the release invariant genuinely bars, since a floor
+ * addition breaks every host below the version bump.
+ *
+ * `tombstoneId` is minted once per teardown episode and is IDENTICAL on every
+ * connection and both planes. That is what makes the authority's
+ * (hostId, tombstoneId) episode key work: first receipt anchors one fixed
+ * expected-outage episode and every duplicate - another window, the other
+ * plane, a replay - is inert.
+ *
+ * `expiresAt` is the HOST's clock (epoch ms) and is display-only; an
+ * authority bounds the episode with its own ceiling, never with a peer's
+ * clock.
+ */
+export type HostRestartIntent = {
+  readonly tombstoneId: string;
+  readonly expiresAt: number | null;
+};
+
+/**
  * Full detail payload carried by a fatal error frame prior to WebSocket
  * close. The subsequent close event is only the fatal signal - all rich
  * detail MUST travel inside this frame.
@@ -70,24 +140,55 @@ export type FatalErrorDetails = {
   readonly upgradeGuidance: IncompatibilityUpgradeGuidance | null;
   /**
    * When `true`, the rejection is transient and host-side (e.g. the host's
-   * JWKS fetch timed out while verifying the bearer) - NOT a statement about
-   * the credential's authenticity. A client that understands this field should
+   * JWKS fetch timed out while verifying the bearer, or a post-open frame
+   * deadline elapsed while a process was suspended) - NOT a statement about the
+   * credential's authenticity. A client that understands this field should
    * reconnect with plain backoff instead of running credential recovery or
    * going terminal. Additive and optional: an older host omits it entirely and
    * a newer client then reads "not retryable".
    */
   readonly retryable?: boolean;
+  /**
+   * Present exactly when this connection is being closed by a host that is
+   * deliberately restarting - see {@link HostRestartIntent} and
+   * {@link HOST_RESTARTING_FATAL_CODE}. Additive and optional in both
+   * directions: an older host omits it and a newer client reads "no
+   * tombstone" (bouncing exactly as it does today), while an older client
+   * STRIPS it at the schema below and handles the frame as the ordinary
+   * retryable fatal it already understands.
+   */
+  readonly restartIntent?: HostRestartIntent;
+  /**
+   * Present exactly when this connection was refused by the host's CLIENT
+   * COMPATIBILITY EPOCH gate - see {@link ClientCompatibilityRequirement}.
+   *
+   * Additive and optional under the same rule as the two fields above, and it
+   * is what makes this rejection survivable for the population it targets: a
+   * released old app strips this member and is left with `code`, `reason`,
+   * `upgradeGuidance` and `retryable: false`, which it already handles as a
+   * terminal stop. That is precisely why the epoch rejection keeps the
+   * existing `INCOMPATIBLE` code and why its `reason` has to be independently
+   * actionable - the clients that most need to read it are the ones that
+   * cannot see this field at all.
+   */
+  readonly clientCompatibilityRequirement?: ClientCompatibilityRequirement;
 };
 
 /**
  * First frame sent by the client: bearer token plus the client's per-method
- * canonical manifest.
+ * version manifest.
  */
 export type ClientOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
   readonly optionalManifest?: ConnectionManifest;
+  /**
+   * Who is connecting - see {@link ClientHandshakeIdentity}. Optional on the
+   * wire so an old client's omission reaches the host's deliberate
+   * legacy-epoch verdict instead of a generic parse failure.
+   */
+  readonly clientIdentity?: ClientHandshakeIdentity;
 };
 
 /**
@@ -123,8 +224,8 @@ export type ClientFrame =
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
- * the host's per-method canonical manifest so the client can run its own
- * mirror check.
+ * the host's selected per-method manifest so the client can run its own mirror
+ * check.
  */
 export type HostOpenAckFrame = {
   readonly kind: "openAck";
@@ -143,7 +244,11 @@ export type HostResponseFrame = {
   readonly method: string;
   readonly schemaVersion: SchemaVersion;
   readonly result: unknown | null;
-  readonly error: { readonly code: string; readonly message: string } | null;
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly holders?: readonly WorktreeBusyHolder[];
+  } | null;
 };
 
 /**
@@ -173,12 +278,23 @@ export const schemaVersionSchema = z.object({
 });
 
 /**
- * Canonical schema for the per-method canonical version manifest exchanged
- * on `open` / `openAck`.
+ * Per-method manifest entry. This deliberately remains non-strict: a newer
+ * peer's future additive keys must be stripped by an older peer rather than
+ * rejecting an otherwise compatible connection.
+ */
+export const manifestMethodEntrySchema = schemaVersionSchema.extend({
+  supportedMajors: z.array(z.number().int().nonnegative()).min(1).optional(),
+});
+
+export type ManifestMethodEntry = z.infer<typeof manifestMethodEntrySchema>;
+
+/**
+ * Canonical schema for the per-method version manifest exchanged on `open` /
+ * `openAck`.
  */
 export const connectionManifestSchema = z.record(
   z.string(),
-  schemaVersionSchema,
+  manifestMethodEntrySchema,
 );
 
 /**
@@ -202,9 +318,25 @@ export const incompatibilityUpgradeGuidanceSchema = z.object({
   hostShouldUpgrade: z.boolean(),
 });
 
+/** Canonical schema for the restart tombstone carried on a fatal error frame. */
+export const hostRestartIntentSchema = z.object({
+  tombstoneId: z.string().min(1),
+  // The host's own clock, and display-only - so a peer whose clock is absurd
+  // costs a wrong tooltip, never a wrong deadline. Nullable rather than
+  // omitted-when-unknown: "the host did not say" is a real answer here.
+  expiresAt: z.number().nullable(),
+});
+
 /**
  * Canonical schema for the full detail payload carried by a fatal error
  * frame.
+ *
+ * Deliberately NOT `.strict()`, and load-bearingly so: every additive field
+ * below (`retryable`, `restartIntent`) is backward-safe precisely because a
+ * peer that predates it parses the frame with its own older copy of this
+ * schema, which STRIPS the unknown key instead of rejecting the frame. A
+ * `.strict()` here would turn each future addition into a connection-killing
+ * parse error on every older peer in the field.
  */
 export const fatalErrorDetailsSchema = z.object({
   code: z.string().min(1),
@@ -213,9 +345,19 @@ export const fatalErrorDetailsSchema = z.object({
   upgradeGuidance: incompatibilityUpgradeGuidanceSchema.nullable(),
   // Additive/optional: an older host omits it, so a newer client parsing an
   // older host's frame reads `undefined` (not retryable). Set `true` only for
-  // transient host-side rejections (e.g. a JWKS fetch timeout) that the client
-  // recovers from with plain reconnect backoff, not credential revalidation.
+  // transient host-side rejections (e.g. a JWKS fetch or post-open frame
+  // timeout) that the client recovers from with plain reconnect backoff, not
+  // credential revalidation.
   retryable: z.boolean().optional(),
+  // Additive/optional, same rule as `retryable`: absent from every host that
+  // predates the restart tombstone, and stripped by every client that does.
+  restartIntent: hostRestartIntentSchema.optional(),
+  // Additive/optional, same rule again: absent from every host that predates
+  // the compatibility-epoch gate, and stripped by every client that does -
+  // which is exactly the population this rejection is aimed at, so the
+  // envelope's `reason` carries the whole remedy on its own.
+  clientCompatibilityRequirement:
+    clientCompatibilityRequirementSchema.optional(),
 });
 
 /** Canonical schema for the client `open` frame. */
@@ -224,6 +366,11 @@ export const clientOpenFrameSchema = z.object({
   token: z.string(),
   manifest: connectionManifestSchema,
   optionalManifest: connectionManifestSchema.optional(),
+  // Additive/optional in BOTH directions: a released old host's copy of this
+  // schema strips it (so a new client still connects), and a released old
+  // client omits it (so a new host sees "no identity" and applies its legacy
+  // epoch rule rather than rejecting the frame as malformed).
+  clientIdentity: clientHandshakeIdentitySchema.optional(),
 });
 
 /** Canonical schema for the client `request` frame. */
@@ -268,6 +415,10 @@ export const hostOpenAckFrameSchema = z.object({
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
+  // Typed `WORKTREE_BUSY` inventory. Malformed values are sanitized to
+  // absent rather than rejecting the envelope — adding this optional
+  // field must never fail a `{ code, message }` that parsed before it.
+  holders: worktreeBusyHoldersWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

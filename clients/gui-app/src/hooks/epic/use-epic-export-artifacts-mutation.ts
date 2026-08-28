@@ -1,10 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
 import {
   createArtifactExport,
   type ArtifactExportFormat,
 } from "@/lib/artifacts/artifact-export";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { appLogger } from "@/lib/logger";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -25,8 +26,9 @@ export interface EpicExportArtifactsInput {
 
 export function useEpicExportArtifacts() {
   const epicHandle = useOpenEpicHandle();
+  const openSaved = useOpenSavedFile();
 
-  return useMutation<string | null, Error, EpicExportArtifactsInput>({
+  return useMutation<SavedFile | null, Error, EpicExportArtifactsInput>({
     mutationKey: epicMutationKeys.exportArtifacts(),
     mutationFn: async (input) => {
       const firstArtifact = input.artifacts.at(0);
@@ -34,20 +36,37 @@ export function useEpicExportArtifacts() {
         throw new Error("Select at least one artifact to export.");
       }
       const state = epicHandle.store.getState();
-      const artifacts = input.artifacts.map((artifact) => {
-        const fragment = state.getArtifactFragment(artifact.id);
-        if (fragment === null) {
-          throw new Error(`“${artifact.title}” is still loading.`);
-        }
-        return { ...artifact, fragment };
-      });
-      const output = await createArtifactExport({
-        artifacts,
-        format: input.format,
-        archive: input.archive,
-        archiveTitle: input.archiveTitle ?? firstArtifact.title,
-      });
-      return saveBlobToDisk(output.blob, output.suggestedName);
+      // Artifact-room docs are only materialized while leased, and export is
+      // the one fragment reader with no editor mounted behind it. Take a lease
+      // per artifact for the duration of the read - without one, exporting a
+      // body nobody has opened in this session reads as "still loading".
+      const releases: Array<() => void> = [];
+      try {
+        const artifacts = input.artifacts.map((artifact) => {
+          releases.push(state.acquireArtifactBodyLease(artifact.id));
+          const fragment = state.getArtifactFragment(artifact.id);
+          if (fragment === null) {
+            throw new Error(`“${artifact.title}” is still loading.`);
+          }
+          return { ...artifact, fragment };
+        });
+        const output = await createArtifactExport({
+          artifacts,
+          format: input.format,
+          archive: input.archive,
+          archiveTitle: input.archiveTitle ?? firstArtifact.title,
+        });
+        // The blob is fully built, so the fragments are dead from here on.
+        // Release before the save dialog: `saveBlobToDisk` blocks on native OS
+        // UI the user may leave open for minutes, and a leased room can never
+        // be cooled - holding them across the dialog would pin every exported
+        // body for that whole time. Releases are idempotent, so the `finally`
+        // stays as the throw-path backstop.
+        releases.forEach((release) => release());
+        return await saveBlobToDisk(output.blob, output.suggestedName);
+      } finally {
+        releases.forEach((release) => release());
+      }
     },
     onSuccess: (saved, input) => {
       if (saved !== null) {
@@ -55,7 +74,7 @@ export function useEpicExportArtifacts() {
           format: input.format,
           artifact_count: input.artifacts.length,
         });
-        toast.success(`Saved ${saved}`);
+        toastSavedFile(saved, openSaved.mutate);
       }
     },
     onError: (error, input) => {

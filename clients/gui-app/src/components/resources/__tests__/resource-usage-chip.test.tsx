@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type {
   EpicResourceSnapshotWire,
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV14,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -37,12 +37,14 @@ function process(
 function owner(
   kind: ResourceOwnerKindWire,
   ownerId: string,
-  over: Partial<OwnerResourceSnapshotWire>,
-): OwnerResourceSnapshotWire {
+  over: Partial<OwnerResourceSnapshotWireV14>,
+): OwnerResourceSnapshotWireV14 {
   return {
     owner: { kind, hostId: "host-1", epicId: "epic-1", ownerId },
     sampledAt: 1_000,
     rootPids: [1],
+    harnessId: null,
+    managedCommand: null,
     activeProcessName: "bash",
     processCount: 3,
     cpuPercent: 12,
@@ -133,6 +135,7 @@ describe("OwnerResourceChip", () => {
           epicId="epic-1"
           kind="terminal"
           ownerId="s1"
+          hostId="host-1"
           className={undefined}
         />
       </>,
@@ -161,6 +164,7 @@ describe("OwnerResourceChip", () => {
           epicId="epic-1"
           kind="terminal"
           ownerId="missing"
+          hostId="host-1"
           className={undefined}
         />
       </>,
@@ -171,6 +175,50 @@ describe("OwnerResourceChip", () => {
         .onSnapshot(projection({ owners: [owner("terminal", "s1", {})] }));
     });
     expect(screen.queryByLabelText(/Resource usage/)).toBeNull();
+  });
+
+  it("selects the matching host when two terminals share an owner id", () => {
+    const stub = installStubFactory();
+    render(
+      <>
+        <ResourcesStreamMount epicId="epic-1" />
+        <OwnerResourceChip
+          epicId="epic-1"
+          kind="terminal"
+          ownerId="shared"
+          hostId="host-b"
+          className={undefined}
+        />
+      </>,
+    );
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner("terminal", "shared", {
+              owner: {
+                kind: "terminal",
+                hostId: "host-a",
+                epicId: "epic-1",
+                ownerId: "shared",
+              },
+              cpuPercent: 12,
+            }),
+            owner("terminal", "shared", {
+              owner: {
+                kind: "terminal",
+                hostId: "host-b",
+                epicId: "epic-1",
+                ownerId: "shared",
+              },
+              cpuPercent: 88,
+            }),
+          ],
+        }),
+      );
+    });
+    expect(screen.getByLabelText(/Resource usage: 88% CPU/)).not.toBeNull();
+    expect(screen.queryByLabelText(/Resource usage: 12% CPU/)).toBeNull();
   });
 });
 

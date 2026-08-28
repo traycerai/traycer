@@ -1,6 +1,6 @@
-import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,7 +9,10 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeFolderIntent,
+  WorktreeWorkspaceSummary,
+} from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   contrastRatio,
@@ -65,6 +68,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
   };
 });
 
+import { FolderBranchControl } from "../folder-branch-control";
 import { FolderLocationControl } from "../folder-location-control";
 import { FolderRow } from "../folder-row";
 import { WorkspaceFolderRows } from "../workspace-folder-rows";
@@ -72,6 +76,7 @@ import { WorkspaceFolderSummaryControl } from "../workspace-folder-summary-contr
 import { WorkspaceSummaryTrigger } from "../workspace-summary-trigger";
 import type { WorkspaceRunItem } from "../workspace-run-item";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 const EMPTY_COUNTS: ReadonlyMap<string, number> = new Map();
@@ -133,6 +138,7 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     summary: GIT_SUMMARY,
     currentIntent: null,
     defaultNewBranchName: "traycer/swift-otter",
+    branchPrefixWarning: null,
     repoIdentifier: { owner: "acme", repo: "app" },
     isPrimary: true,
     canChangePrimary: true,
@@ -310,6 +316,7 @@ describe("FolderRow", () => {
     render(
       <TooltipProvider>
         <FolderRow
+          moveToRecent={false}
           item={item(over)}
           onEditEnvironment={onEdit}
           uncommittedByPath={EMPTY_COUNTS}
@@ -373,6 +380,45 @@ describe("FolderRow", () => {
     expect(screen.queryByLabelText("Copy folder path")).toBeNull();
   });
 
+  it("shows the branch-prefix fallback warning on a new-worktree row", () => {
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: null,
+        branchPrefixWarning:
+          'Repository branch prefix "has spaces" in /repo/.traycer/environment.json is invalid: Prefix can\'t contain spaces. Using the global default.',
+      },
+      NOOP,
+    );
+    expect(screen.getByTestId("folder-row-branch-prefix-warning")).toBeTruthy();
+  });
+
+  it("hides the branch-prefix warning when there is nothing to warn about", () => {
+    renderRow(
+      { mode: "worktree", currentIntent: null, branchPrefixWarning: null },
+      NOOP,
+    );
+    expect(screen.queryByTestId("folder-row-branch-prefix-warning")).toBeNull();
+  });
+
+  it("hides the branch-prefix warning for an imported (existing) worktree - nothing was generated to fall back on", () => {
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: {
+          kind: "import",
+          workspacePath: "/repo",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          isPrimary: true,
+          worktreePath: "/wt/feat-login",
+        },
+        branchPrefixWarning: "some warning that should not render here",
+      },
+      NOOP,
+    );
+    expect(screen.queryByTestId("folder-row-branch-prefix-warning")).toBeNull();
+  });
+
   it("keeps the copy-path icon's default state free of stacked opacity attenuation and >=3:1 against the popover in every theme preset", () => {
     renderRow(
       { mode: "local", displayPath: "/repo", currentIntent: null },
@@ -424,7 +470,10 @@ describe("FolderRow", () => {
     expect(identity.children[1].className).toContain("text-foreground/90");
     expect(location.className).toContain("var(--color-muted-foreground)");
     expect(branch.className).toContain("text-foreground/75");
-    expect(identity.getAttribute("title")).toBe("/repo");
+    // The path tooltip is scoped to the NAME now, not the whole chip - the
+    // chip also carries the copy-path button and missing-folder warning, each
+    // with a tooltip of its own.
+    expect(tooltipTextNear(identity.children[1])).toBe("/repo");
   });
 
   it("reserves two stable trailing action slots", () => {
@@ -564,20 +613,19 @@ describe("FolderRow", () => {
       NOOP,
     );
     fireEvent.click(screen.getByTestId("folder-branch-import-trigger"));
-    expect(screen.getByTestId("import-worktree-branch-form")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("import-worktree-source-branch")
-        .getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("import-worktree-source-branch").textContent,
-    ).toContain("development");
-    const branchNameInput = screen.getByTestId("import-worktree-branch-name");
-    if (!(branchNameInput instanceof HTMLInputElement)) {
-      throw new Error("Expected imported worktree branch name input");
-    }
-    expect(branchNameInput.value).toBe("feat/login");
+    const details = screen.getByTestId("import-worktree-branch-form");
+    expect(details).toBeInstanceOf(HTMLDListElement);
+    expect(within(details).queryByRole("listbox")).toBeNull();
+    expect(within(details).queryByRole("option")).toBeNull();
+    expect(within(details).queryByRole("button")).toBeNull();
+    const sourceBranch = screen.getByTestId("import-worktree-source-branch");
+    expect(sourceBranch).not.toBeInstanceOf(HTMLInputElement);
+    expect(sourceBranch.textContent).toBe("development");
+    const branchName = screen.getByTestId("import-worktree-branch-name");
+    expect(branchName).not.toBeInstanceOf(HTMLInputElement);
+    expect(branchName.textContent).toBe("feat/login");
+    expect(screen.getByText("Source branch")).toBeTruthy();
+    expect(screen.getByText("Current branch")).toBeTruthy();
     expect(screen.queryByTestId("folder-branch-trigger")).toBeNull();
   });
 
@@ -590,11 +638,24 @@ describe("FolderRow", () => {
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
-  it("offers both Locate and Remove on an Unavailable row", () => {
+  it("offers both Locate and Remove on a not-available row", () => {
     const onLocate = vi.fn();
     const onRemove = vi.fn();
-    renderRow({ unresolved: true, onLocate, onRemove }, NOOP);
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    renderRow(
+      {
+        unresolved: true,
+        branchLabel: "Not available on Staging VM",
+        onLocate,
+        onRemove,
+      },
+      NOOP,
+    );
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on Staging VM");
+    expect(screen.getByTestId("folder-row-locate").textContent).toContain(
+      "Locate on this host",
+    );
 
     fireEvent.click(screen.getByTestId("folder-row-locate"));
     expect(onLocate).toHaveBeenCalledTimes(1);
@@ -603,11 +664,17 @@ describe("FolderRow", () => {
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
-  it("hides both actions on a read-only Unavailable row", () => {
+  it("hides both actions on a read-only not-available row", () => {
     render(
       <TooltipProvider>
         <FolderRow
-          item={item({ unresolved: true, onLocate: NOOP, onRemove: NOOP })}
+          moveToRecent={false}
+          item={item({
+            unresolved: true,
+            branchLabel: "Not available on Staging VM",
+            onLocate: NOOP,
+            onRemove: NOOP,
+          })}
           onEditEnvironment={NOOP}
           uncommittedByPath={EMPTY_COUNTS}
           boundaryEl={null}
@@ -615,7 +682,9 @@ describe("FolderRow", () => {
         />
       </TooltipProvider>,
     );
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on Staging VM");
     expect(screen.queryByTestId("folder-row-locate")).toBeNull();
     expect(screen.queryByTestId("folder-remove")).toBeNull();
   });
@@ -642,7 +711,7 @@ describe("FolderRow", () => {
     expect(pin.className).toContain("cursor-not-allowed");
     fireEvent.focus(pin);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the chat starts",
+      "cannot be changed after the agent starts",
     );
   });
 
@@ -654,7 +723,7 @@ describe("FolderRow", () => {
     tabForward();
     expect(document.activeElement).toBe(pin);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the chat starts",
+      "cannot be changed after the agent starts",
     );
   });
 
@@ -748,6 +817,8 @@ describe("WorkspaceFolderRows", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[item({})]}
           trailingSlot={<span data-testid="device-slot">device</span>}
           onAddFolder={NOOP_ADD}
@@ -766,13 +837,18 @@ describe("WorkspaceFolderRows", () => {
     );
     expect(screen.getByTestId("device-slot")).toBeTruthy();
     expect(screen.getByTestId("folder-row")).toBeTruthy();
-    expect(screen.getByTestId("folder-add")).toBeTruthy();
+    const addButton = screen.getByTestId("folder-add");
+    expect(addButton.textContent).toContain("Add folder");
+    expect(addButton.getAttribute("data-variant")).toBe("ghost");
+    expect(addButton.className).toContain("text-muted-foreground");
   });
 
   it("lets the container own all text-track widths so long values cannot overflow a modal", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[
             item({
               key: "/repo",
@@ -815,7 +891,10 @@ describe("WorkspaceFolderRows", () => {
 
     const grid = screen.getByTestId("workspace-folder-grid");
     expect(grid.className).toContain(
-      "grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto]",
+      "grid-cols-[1.5rem_minmax(0,1.35fr)_minmax(0,0.85fr)_minmax(0,1.1fr)_auto]",
+    );
+    expect(grid.className).toContain(
+      "@max-[28rem]:grid-cols-[1.5rem_minmax(0,1fr)_auto]",
     );
     expect(grid.className).not.toContain("max-content");
 
@@ -840,11 +919,13 @@ describe("WorkspaceFolderRows", () => {
     );
   });
 
-  it("opens the OS folder picker from Add folder when empty and resolved", () => {
+  it("opens the folder picker from Add folder when empty and resolved", () => {
     let added = 0;
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[]}
           trailingSlot={null}
           onAddFolder={() => {
@@ -864,7 +945,12 @@ describe("WorkspaceFolderRows", () => {
         />
       </TooltipProvider>,
     );
-    fireEvent.click(screen.getByTestId("folder-add"));
+    const chooseButton = screen.getByTestId("folder-add");
+    expect(chooseButton.getAttribute("data-variant")).toBe("ghost");
+    expect(chooseButton.className).toContain("rounded-lg");
+    expect(chooseButton.className).toContain("text-muted-foreground");
+    expect(chooseButton.textContent).toContain("Add folder");
+    fireEvent.click(chooseButton);
     expect(added).toBe(1);
   });
 
@@ -872,6 +958,8 @@ describe("WorkspaceFolderRows", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[]}
           trailingSlot={null}
           onAddFolder={NOOP_ADD}
@@ -896,6 +984,8 @@ describe("WorkspaceFolderRows", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[item({})]}
           trailingSlot={null}
           onAddFolder={NOOP_ADD}
@@ -929,6 +1019,8 @@ describe("WorkspaceFolderRows", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[item({})]}
           trailingSlot={null}
           onAddFolder={NOOP_ADD}
@@ -954,6 +1046,8 @@ describe("WorkspaceFolderRows", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[item({})]}
           trailingSlot={null}
           onAddFolder={NOOP_ADD}
@@ -983,6 +1077,8 @@ describe("WorkspaceFolderRows", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
           items={[item({})]}
           trailingSlot={null}
           onAddFolder={NOOP_ADD}
@@ -1009,6 +1105,21 @@ describe("WorkspaceFolderRows", () => {
 });
 
 describe("WorkspaceSummaryTrigger", () => {
+  it("shows a pending indicator for an uncommitted draft", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceSummaryTrigger
+          items={[item({})]}
+          readOnly={false}
+          bindingResolved
+          draftPending
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("workspace-summary-draft")).toBeTruthy();
+    expect(screen.getByLabelText("Uncommitted workspace draft")).toBeTruthy();
+  });
+
   it("summarizes the primary folder and extra count", () => {
     render(
       <TooltipProvider>
@@ -1144,11 +1255,131 @@ describe("WorkspaceSummaryTrigger", () => {
   });
 });
 
+describe("FolderBranchControl — Escape close", () => {
+  const AUTOSAVE_DELAY_MS = 500;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("commits the pending autosave draft when Escape closes the popover", async () => {
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <FolderBranchControl
+          item={item({
+            mode: "worktree",
+            currentIntent: null,
+            branchLabel: "traycer/swift-otter",
+            summary: GIT_SUMMARY,
+            onEmit,
+          })}
+          boundaryEl={null}
+          readOnly={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId("folder-branch-popover");
+    const name = screen.getByTestId("new-worktree-branch-name");
+    fireEvent.change(name, { target: { value: "feat/escape-commits" } });
+    expect(onEmit).not.toHaveBeenCalled();
+
+    // Escape before debounce: unmount flush still commits (no cancel path).
+    act(() => {
+      vi.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
+    });
+    expect(onEmit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
+
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 200);
+      await Promise.resolve();
+    });
+
+    expect(onEmit).toHaveBeenCalledTimes(1);
+    expect(onEmit.mock.calls[0][0]).toMatchObject({
+      branch: { name: "feat/escape-commits" },
+    });
+    expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
+  });
+
+  it("returns focus to the chip on Escape without opening the chip tooltip from focus restore", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <FolderBranchControl
+          item={item({
+            mode: "worktree",
+            currentIntent: null,
+            branchLabel: "traycer/swift-otter",
+            summary: GIT_SUMMARY,
+          })}
+          boundaryEl={null}
+          readOnly={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId("folder-branch-popover");
+    expect(popover).toBeTruthy();
+
+    // Escape closes the popover and restores focus to the trigger. Production
+    // arms suppress via onCloseAutoFocus (no preventDefault) so the chip
+    // tooltip does not open solely from that focus return.
+    fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
+    });
+
+    // Do not preventDefault onCloseAutoFocus for Escape — chip must regain focus.
+    expect(document.activeElement).toBe(chip);
+
+    // Drain focusin microtask + 150ms suppress fallback so any delayed open
+    // would surface. With delayDuration={0}, a suppress miss would show a
+    // tooltip role for the chip label.
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(document.activeElement).toBe(chip);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(
+      document.querySelector(
+        '[data-slot="tooltip-content"][data-state="open"]',
+      ),
+    ).toBeNull();
+    expect(
+      document.querySelector(
+        '[data-slot="tooltip-content"][data-state="delayed-open"]',
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("WorkspaceFolderSummaryControl", () => {
   it("uses the rich hover preview instead of a competing native title", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[item({})]}
           readOnly={false}
           bindingResolved
@@ -1161,6 +1392,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1176,6 +1408,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[
             item({ mode: "local", displayPath: "/repo", currentIntent: null }),
           ]}
@@ -1190,6 +1425,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1239,6 +1475,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[
             item({
               displayName: "a-very-long-repository-name-that-is-truncated",
@@ -1269,6 +1508,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1294,6 +1534,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[item({ isPrimary: true })]}
           readOnly={false}
           bindingResolved
@@ -1306,6 +1549,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1325,6 +1569,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[item({ mode: "local", displayPath: "/repo" })]}
           readOnly={false}
           bindingResolved
@@ -1337,6 +1584,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1369,6 +1617,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[]}
           readOnly={false}
           bindingResolved
@@ -1384,6 +1635,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1395,10 +1647,83 @@ describe("WorkspaceFolderSummaryControl", () => {
     expect(added).toBe(1);
   });
 
+  it("uses the neutral ghost hover when recent folders remain", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={1}
+          moveToRecent={false}
+          items={[]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          refresh={null}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const addFolder = screen.getByRole("button", { name: "Add folder" });
+    expect(addFolder.className).toContain("hover:bg-foreground/5");
+    expect(addFolder.className).not.toContain("hover:bg-accent/50");
+  });
+
+  it("keeps the recent-folder trigger disabled with its reason", async () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={1}
+          moveToRecent={false}
+          items={[]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled
+          addFolderDisabledReason="Wait for the current task to finish."
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          refresh={null}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const addFolder = screen.getByTestId("folder-add");
+    expect(addFolder instanceof HTMLButtonElement && addFolder.disabled).toBe(
+      true,
+    );
+    fireEvent.click(addFolder);
+    expect(screen.queryByTestId("workspace-rows-popover")).toBeNull();
+
+    fireEvent.focus(screen.getByTestId("folder-add-disabled-reason"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Wait for the current task to finish.",
+    );
+  });
+
   it("keeps unresolved empty bindings in the loading summary state", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[]}
           readOnly={false}
           bindingResolved={false}
@@ -1411,6 +1736,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1419,7 +1745,7 @@ describe("WorkspaceFolderSummaryControl", () => {
 
     expect(
       screen.getByTestId("workspace-summary-trigger").textContent,
-    ).toContain("Linking workspace");
+    ).toContain("Linking folder");
     expect(screen.queryByTestId("folder-add")).toBeNull();
   });
 
@@ -1428,6 +1754,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     const { rerender } = render(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[]}
           readOnly={false}
           bindingResolved
@@ -1440,6 +1769,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1452,6 +1782,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     rerender(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[item({})]}
           readOnly={false}
           bindingResolved
@@ -1464,6 +1797,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1484,6 +1818,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     const { rerender } = render(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[]}
           readOnly={false}
           bindingResolved
@@ -1496,6 +1833,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1508,6 +1846,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     rerender(
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[item({})]}
           readOnly={false}
           bindingResolved
@@ -1520,6 +1861,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />

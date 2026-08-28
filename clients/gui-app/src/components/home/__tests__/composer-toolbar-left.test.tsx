@@ -3,10 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
-import type {
-  AgentMode,
-  PermissionMode,
-} from "@/components/home/data/landing-options";
+import type { PermissionMode } from "@/components/home/data/landing-options";
 
 describe("<ComposerToolbarLeft />", () => {
   afterEach(() => {
@@ -15,12 +12,7 @@ describe("<ComposerToolbarLeft />", () => {
 
   it("opens an images-only file picker from the attachment button", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
-    const { container } = renderToolbar(
-      onAttachImages,
-      false,
-      () => undefined,
-      () => undefined,
-    );
+    const { container } = renderToolbar(onAttachImages, false, () => undefined);
     const input = getImageInput(container);
     const clickSpy = vi.spyOn(input, "click").mockImplementation(() => {
       return undefined;
@@ -35,12 +27,7 @@ describe("<ComposerToolbarLeft />", () => {
 
   it("passes selected image files to the attachment pipeline", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
-    const { container } = renderToolbar(
-      onAttachImages,
-      false,
-      () => undefined,
-      () => undefined,
-    );
+    const { container } = renderToolbar(onAttachImages, false, () => undefined);
     const input = getImageInput(container);
     const imageFile = new File(["image-bytes"], "screenshot.png", {
       type: "image/png",
@@ -53,27 +40,19 @@ describe("<ComposerToolbarLeft />", () => {
     expect(call[0]).toEqual([imageFile]);
   });
 
-  it("locks permission and agent mode pickers while settings are locked", () => {
+  it("locks the permission picker while settings are locked", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
     const onPermissionChange = vi.fn<(next: PermissionMode) => void>();
-    const onAgentModeChange = vi.fn<(next: AgentMode) => void>();
-    renderToolbar(onAttachImages, true, onPermissionChange, onAgentModeChange);
+    renderToolbar(onAttachImages, true, onPermissionChange);
 
     expect(screen.getByRole("button", { name: "Supervised" })).toHaveProperty(
       "disabled",
       true,
     );
-    expect(
-      screen.getByRole("button", { name: "Switch to Epic Mode" }),
-    ).toHaveProperty("disabled", true);
 
     fireEvent.click(screen.getByRole("button", { name: "Supervised" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Switch to Epic Mode" }),
-    );
 
     expect(onPermissionChange).not.toHaveBeenCalled();
-    expect(onAgentModeChange).not.toHaveBeenCalled();
   });
 });
 
@@ -81,20 +60,16 @@ function renderToolbar(
   onAttachImages: (files: ReadonlyArray<File>) => void,
   settingsLocked: boolean,
   onPermissionChange: (next: PermissionMode) => void,
-  onAgentModeChange: (next: AgentMode) => void,
 ) {
   return render(
     <TooltipProvider>
       <ComposerToolbarLeft
         onAttachImages={onAttachImages}
-        agentMode="regular"
-        onAgentModeChange={onAgentModeChange}
         permission="supervised"
         onPermissionChange={onPermissionChange}
         supportedPermissionModes={null}
         harnessLabel={null}
         showNextTurnPermissionNote={false}
-        showAgentModeTooltip={false}
         settingsLocked={settingsLocked}
       />
     </TooltipProvider>,

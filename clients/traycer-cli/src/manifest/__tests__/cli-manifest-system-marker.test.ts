@@ -20,6 +20,21 @@ let sandboxRoot = "";
 
 // Pin every environment-aware path helper at a sandbox under tmpdir so the
 // reader probes the test workspace rather than the real ~/.traycer.
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
+// load - any export this mock leaves un-overridden would otherwise resolve
+// against the REAL production `~/.traycer`, not this sandbox. Redirect the
+// `os` boundary itself so `vi.importActual`'s fresh module evaluation picks
+// up the sandbox (falling back to the real tmpdir, never the real home,
+// before the first `beforeEach` has set `sandboxRoot`).
+// `vi.mock` factories are hoisted above this file's own top-level `let
+// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
+// live value has to live in `vi.hoisted` instead.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 vi.mock("../../store/paths", async () => {
   const actual =
     await vi.importActual<typeof import("../../store/paths")>(
@@ -73,6 +88,7 @@ describe("readCliManifest - system-marker fallback (Linux .deb / .rpm)", () => {
 
   beforeEach(() => {
     sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-cli-marker-test-"));
+    osHome.current = sandboxRoot;
     markerDir = join(sandboxRoot, "var-lib-traycer");
     previousMarkerDir = __setSystemSourceMarkerDirForTest(markerDir);
   });

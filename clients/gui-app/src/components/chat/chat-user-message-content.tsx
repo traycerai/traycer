@@ -1,4 +1,12 @@
-import { File, Folder, FolderGit2, GitBranch, Layers } from "lucide-react";
+import {
+  CircleDot,
+  File,
+  Folder,
+  FolderGit2,
+  GitBranch,
+  GitPullRequest,
+  Layers,
+} from "lucide-react";
 import { memo, type ReactElement, type ReactNode } from "react";
 import { MaterialFileIcon } from "@/components/material-file-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -12,6 +20,14 @@ import { basenameOfPath } from "@/lib/path";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 
 const MENTION_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+
+function isGithubMentionContextType(
+  contextType: MentionAttachment["contextType"],
+): boolean {
+  return (
+    contextType === "github_pull_request" || contextType === "github_issue"
+  );
+}
 
 interface ChatUserMessageContentProps {
   readonly content: string;
@@ -76,7 +92,14 @@ function ChatUserMessageMentionChipImpl({
   mention,
 }: ChatUserMessageMentionChipProps): ReactNode {
   const pathKind = mention.pathKind ?? inferPathKind(mention.path);
+  // A GitHub mention's `path` is a synthetic token (`github-pr:org/repo#12`),
+  // not a filesystem path: taking its basename would read `repo#12`, and
+  // showing it as the tooltip would put the raw token in front of the user.
+  // Both facts it needs are already on the attachment - the `#12` / `repo#12`
+  // label the composer chip used, and the `org/repo#12 · title` description.
+  const isGithub = isGithubMentionContextType(mention.contextType);
   const usesLabel =
+    isGithub ||
     mention.contextType === "git" ||
     mention.contextType === "worktree" ||
     "epicId" in mention;
@@ -85,7 +108,7 @@ function ChatUserMessageMentionChipImpl({
     : basenameOfPath(mention.path) || mention.path;
   const filename = basenameOfPath(mention.path) || mention.path;
   const tooltip =
-    mention.contextType === "git" || "epicId" in mention
+    isGithub || mention.contextType === "git" || "epicId" in mention
       ? mention.description
       : (mention.absolutePath ?? mention.path);
   return (
@@ -95,6 +118,7 @@ function ChatUserMessageMentionChipImpl({
       sideOffset={undefined}
       align={undefined}
     >
+      {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
       <span
         className="mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90"
         data-composer-chip="mention"
@@ -129,8 +153,21 @@ function MentionChipIcon({
   if (mention.contextType === "epic") {
     return <Layers className={MENTION_ICON_CLASS} aria-hidden />;
   }
-  if (mention.contextType === "chat") {
-    const Icon = EPIC_NODE_ICONS.chat;
+  // Untinted, unlike the composer row's state-coloured icon: a sent message is
+  // a record of what was referenced, and a PR that has merged since would have
+  // this chip asserting a state that went stale on the reader.
+  if (mention.contextType === "github_pull_request") {
+    return <GitPullRequest className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (mention.contextType === "github_issue") {
+    return <CircleDot className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (
+    mention.contextType === "chat" ||
+    mention.contextType === "terminal-agent" ||
+    mention.contextType === "terminal"
+  ) {
+    const Icon = EPIC_NODE_ICONS[mention.contextType];
     return <Icon className={MENTION_ICON_CLASS} aria-hidden />;
   }
   if (

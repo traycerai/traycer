@@ -25,8 +25,8 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
  *   tick into two overlapping subprocess spawns. This enqueue is deliberately
  *   NOT gated by window visibility - only the interval timer pauses when hidden;
  *   a background turn finishing while the user is away must still update data.
- * - `httpFetch` (openrouter, kilocode): invalidates the query directly (no
- *   subprocess to bound), exactly as before.
+ * - `httpFetch` (openrouter, kilocode, huggingface, opencode): invalidates the
+ *   query directly (no subprocess to bound), exactly as before.
  *
  * Unlike the aperture refresh hook, this uses the current `HostRuntimeContext`
  * scope so Settings-selected and future tab-scoped consumers target the same
@@ -51,6 +51,7 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
 export function useRefreshProviderRateLimitsOnTurn(
   providerId: RateLimitProviderId | null,
   profileId: string | null,
+  fetchEligible: boolean,
 ): void {
   const queryClient = useQueryClient();
   const queueScope = useRateLimitQueueScope();
@@ -63,7 +64,7 @@ export function useRefreshProviderRateLimitsOnTurn(
     // previous provider's cooldown timestamp and can skip its own first,
     // otherwise-due invalidation.
     lastInvalidatedAtRef.current = 0;
-    if (providerId === null) return;
+    if (providerId === null || !fetchEligible) return;
     const harnessId = providerIdToGuiHarnessId(providerId);
     return subscribeChatTurnCompletions((completion) => {
       if (completion.harnessId !== harnessId) return;
@@ -94,8 +95,8 @@ export function useRefreshProviderRateLimitsOnTurn(
         );
         return;
       }
-      // httpFetch providers (openrouter, kilocode) never touch the queue - a
-      // plain credential GET has no subprocess to bound, so invalidate directly.
+      // httpFetch providers never touch the queue - a plain credential GET has
+      // no subprocess to bound, so invalidate directly.
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
@@ -107,5 +108,5 @@ export function useRefreshProviderRateLimitsOnTurn(
         }),
       });
     });
-  }, [queryClient, profileId, providerId, queueScope]);
+  }, [fetchEligible, queryClient, profileId, providerId, queueScope]);
 }

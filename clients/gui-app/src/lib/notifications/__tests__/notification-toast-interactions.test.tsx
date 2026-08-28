@@ -13,6 +13,7 @@ import {
   type NotificationDisplayTarget,
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
@@ -22,6 +23,8 @@ const NOTIFICATION: MergedNotificationRow = {
   feedId: "host:n-1",
   source: "host",
   sourceId: "n-1",
+  originHostId: null,
+  providerPackAttribution: null,
   createdAt: 10,
   readAt: null,
   title: "Checkout notifications",
@@ -32,18 +35,25 @@ const NOTIFICATION: MergedNotificationRow = {
   globalEntry: null,
   severity: "done",
   outcome: "completed",
+  resolvedAt: null,
+  sourceRef: null,
+  category: "task",
 };
 
 describe("notification toast interactions", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(1_000);
+    // The in-app toast only renders in a focused window; jsdom reports
+    // unfocused by default.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
   });
 
   afterEach(() => {
     toast.dismiss();
     cleanup();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("activates when the rendered toast surface is clicked", async () => {
@@ -51,11 +61,17 @@ describe("notification toast interactions", () => {
     render(<Toaster />);
 
     act(() => {
-      displayNotificationRows([NOTIFICATION], {
-        showNotification: vi.fn(() => Promise.resolve()),
-        playChime: vi.fn(),
-        onToastClick,
-      });
+      displayNotificationRows(
+        [NOTIFICATION],
+        {
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
+          playChime: vi.fn(),
+          onToastClick,
+        },
+        null,
+      );
     });
 
     const title = await screen.findByText("Checkout notifications");
@@ -64,14 +80,10 @@ describe("notification toast interactions", () => {
     expect(toastSurface).not.toBeNull();
     if (toastSurface === null) return;
 
-    const beforeClick = Date.now();
     fireEvent.click(toastSurface);
 
     expect(onToastClick).toHaveBeenCalledOnce();
-    expect(onToastClick).toHaveBeenCalledWith(NOTIFICATION, expect.any(Number));
-    const activatedAt = onToastClick.mock.calls[0]?.[1];
-    expect(activatedAt).toBeGreaterThanOrEqual(beforeClick);
-    expect(activatedAt).not.toBe(NOTIFICATION.createdAt);
+    expect(onToastClick).toHaveBeenCalledWith(NOTIFICATION);
   });
 
   it("does not activate when the close control is clicked", async () => {
@@ -79,11 +91,17 @@ describe("notification toast interactions", () => {
     render(<Toaster />);
 
     act(() => {
-      displayNotificationRows([NOTIFICATION], {
-        showNotification: vi.fn(() => Promise.resolve()),
-        playChime: vi.fn(),
-        onToastClick,
-      });
+      displayNotificationRows(
+        [NOTIFICATION],
+        {
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
+          playChime: vi.fn(),
+          onToastClick,
+        },
+        null,
+      );
     });
 
     const closeToastButton = await screen.findByRole("button", {

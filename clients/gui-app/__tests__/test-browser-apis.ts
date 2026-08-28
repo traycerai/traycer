@@ -47,6 +47,74 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", () => ({
   },
 }));
 
+// ECharts (the usage charts' renderer) cannot run under jsdom: zrender
+// measures text through a real canvas context, which jsdom does not
+// implement (see the getContext stub below). Mock the tree-shaken entry
+// points globally so any test that mounts a usage surface gets a recording
+// fake instead of a crash; chart tests read the captured options back
+// through `getEChartsMockInstances`. Registered here rather than per test
+// file because the chart mounts transitively from several suites (settings
+// panel, epic dialog, summary panel).
+export interface EChartsMockInstance {
+  readonly dom: HTMLElement;
+  readonly options: unknown[];
+  /** Every `setOption` call's second argument, index-aligned with `options`. */
+  readonly setOptionOpts: unknown[];
+  disposed: boolean;
+}
+interface EChartsMockGlobal {
+  __traycerEChartsMockInstances?: EChartsMockInstance[];
+}
+/**
+ * LIVE chart instances only. The record list is append-only and shared
+ * across a file's tests, and every consumer reaches for `.at(-1)` - so
+ * without this filter a test could read an option belonging to a chart
+ * that a previous test already unmounted, and pass on stale data.
+ * {@link getAllEChartsMockInstances} keeps the unfiltered list for
+ * lifecycle assertions (e.g. "did unmount dispose it").
+ */
+export function getEChartsMockInstances(): readonly EChartsMockInstance[] {
+  return getAllEChartsMockInstances().filter((record) => !record.disposed);
+}
+export function getAllEChartsMockInstances(): readonly EChartsMockInstance[] {
+  return (globalThis as EChartsMockGlobal).__traycerEChartsMockInstances ?? [];
+}
+export function clearEChartsMockInstances(): void {
+  (globalThis as EChartsMockGlobal).__traycerEChartsMockInstances = [];
+}
+vi.mock("echarts/core", () => ({
+  use: (): void => undefined,
+  init: (dom: HTMLElement) => {
+    const record: EChartsMockInstance = {
+      dom,
+      options: [],
+      setOptionOpts: [],
+      disposed: false,
+    };
+    const target = globalThis as EChartsMockGlobal;
+    target.__traycerEChartsMockInstances = [
+      ...(target.__traycerEChartsMockInstances ?? []),
+      record,
+    ];
+    return {
+      setOption: (option: unknown, opts: unknown): void => {
+        record.options.push(option);
+        record.setOptionOpts.push(opts);
+      },
+      resize: (): void => undefined,
+      dispose: (): void => {
+        record.disposed = true;
+      },
+    };
+  },
+}));
+vi.mock("echarts/charts", () => ({ LineChart: {} }));
+vi.mock("echarts/components", () => ({
+  GridComponent: {},
+  TooltipComponent: {},
+}));
+vi.mock("echarts/renderers", () => ({ SVGRenderer: {} }));
+
 // Brand icons (@lobehub/icons) render a decorative SVG `<title>BrandName</title>`
 // for accessibility. Those titles aren't visible content, but they DO satisfy
 // `getByText`, which makes any text query near a provider icon ambiguous (the
@@ -98,13 +166,14 @@ export function installMockLocalStorage(): Storage {
   return storage;
 }
 
-if (typeof globalThis.ResizeObserver === "undefined") {
-  Object.defineProperty(globalThis, "ResizeObserver", {
-    configurable: true,
-    writable: true,
-    value: MockResizeObserver,
-  });
-}
+// Vitest reruns setup files for each test file while reusing fork processes.
+// Reset this global every time so a suite with a controllable observer cannot
+// leak it into the unrelated test file that happens to run next in the worker.
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: MockResizeObserver,
+});
 
 if (typeof globalThis.IntersectionObserver === "undefined") {
   class MockIntersectionObserver implements IntersectionObserver {
@@ -123,6 +192,21 @@ if (typeof globalThis.IntersectionObserver === "undefined") {
     configurable: true,
     writable: true,
     value: MockIntersectionObserver,
+  });
+}
+
+// jsdom implements no image decoder, so `createImageBitmap` (ADV-I4's
+// attach-time decodability check in use-report-issue-attachments.ts) is
+// absent. Default to a successful decode - tests exercising a genuine
+// decode failure stub their own rejecting/throwing implementation over
+// this default (see use-report-issue-attachments.test.ts); interaction
+// tests elsewhere just need attaching a well-formed fixture to work.
+if (typeof globalThis.createImageBitmap === "undefined") {
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: (): Promise<{ close: () => void }> =>
+      Promise.resolve({ close: () => undefined }),
   });
 }
 

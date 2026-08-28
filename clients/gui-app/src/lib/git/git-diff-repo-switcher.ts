@@ -1,7 +1,12 @@
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
 import { getBasename } from "@/lib/path/cross-platform-path";
-import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import {
+  formatWorktreeFolderDisabledReason,
+  worktreeFolderRowBadge,
+  type WorktreeFolderRowBadge,
+} from "@/lib/worktree/worktree-folder-disabled-reason";
+import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 
 export interface GitDiffRepoSelection {
@@ -16,7 +21,7 @@ export interface GitDiffRepoSwitcherRootCounts {
 }
 
 export interface GitDiffRepoSwitcherRootInput extends GitDiffRepoSwitcherRootCounts {
-  readonly row: WorktreeBindingSelectorRow;
+  readonly row: WorktreeBindingSelectorRowV12;
 }
 
 export interface GitDiffRepoSwitcherInput {
@@ -41,7 +46,7 @@ export interface GitDiffRepoSwitcherTriggerModel {
 export interface GitDiffRepoSwitcherRootRow {
   readonly kind: "root";
   readonly key: string;
-  readonly row: WorktreeBindingSelectorRow;
+  readonly row: WorktreeBindingSelectorRowV12;
   readonly label: string;
   readonly secondaryLabel: string;
   readonly headLabel: string | null;
@@ -49,6 +54,10 @@ export interface GitDiffRepoSwitcherRootRow {
   readonly moduleChangeCount: number | null;
   readonly selected: boolean;
   readonly disabledLabel: string | null;
+  /** Visible row health; setup failure can be non-blocking. */
+  readonly statusBadge: WorktreeFolderRowBadge | null;
+  /** Disabled only by unverified facts: render muted "checking", not an error. */
+  readonly pending: boolean;
   readonly unavailable: false;
   readonly clean: boolean;
   readonly depth: 0;
@@ -62,11 +71,20 @@ export interface GitDiffRepoSwitcherModel {
   readonly visibleRows: ReadonlyArray<GitDiffRepoSwitcherRow>;
 }
 
-function rootLabel(row: WorktreeBindingSelectorRow): string {
+function rootLabel(row: WorktreeBindingSelectorRowV12): string {
   return row.repoIdentifier?.repo ?? getBasename(row.runningDir);
 }
 
-function rootDisabledLabel(row: WorktreeBindingSelectorRow): string | null {
+function rootDisabledLabel(
+  row: WorktreeBindingSelectorRowV12,
+  pending: boolean,
+): string | null {
+  // Unverified placeholder facts (cold resolve on the host still in flight):
+  // "checking" instead of the lying "not git" / "missing" - the host's sweep
+  // pushes the resolved row and this converges on the refetch. `pending` is
+  // computed once by the caller so the row's `pending` flag and this label
+  // cannot disagree.
+  if (pending) return "checking";
   if (!row.isGitRepo) return "not git";
   return formatWorktreeFolderDisabledReason(row);
 }
@@ -79,9 +97,10 @@ function searchableText(parts: ReadonlyArray<string | null>): string {
 }
 
 function rootSearchText(
-  row: WorktreeBindingSelectorRow,
+  row: WorktreeBindingSelectorRowV12,
   label: string,
   disabledLabel: string | null,
+  statusLabel: string | null,
 ): string {
   return searchableText([
     label,
@@ -91,13 +110,14 @@ function rootSearchText(
     row.workspacePath,
     row.worktreePath,
     disabledLabel,
+    statusLabel,
   ]);
 }
 
 function submoduleSearchText(args: {
   readonly node: GitSubmoduleSummary;
   readonly repoName: string;
-  readonly rootRow: WorktreeBindingSelectorRow;
+  readonly rootRow: WorktreeBindingSelectorRowV12;
   readonly rootLabel: string;
 }): string {
   return searchableText([
@@ -115,7 +135,7 @@ function submoduleSearchText(args: {
 }
 
 function rootSubmodules(
-  row: WorktreeBindingSelectorRow,
+  row: WorktreeBindingSelectorRowV12,
   activeRootSubmodules: ReadonlyArray<GitSubmoduleSummary>,
   selected: GitDiffRepoSelection | null,
 ): ReadonlyArray<GitSubmoduleSummary> {
@@ -142,7 +162,9 @@ function buildRootRow(
   selected: GitDiffRepoSelection | null,
 ): GitDiffRepoSwitcherRootRow {
   const label = rootLabel(input.row);
-  const disabledLabel = rootDisabledLabel(input.row);
+  const pending = isWorkspaceResolvePending(input.row);
+  const disabledLabel = rootDisabledLabel(input.row, pending);
+  const statusBadge = worktreeFolderRowBadge(input.row);
   const submodules = rootSubmodules(input.row, activeRootSubmodules, selected);
   const fileChangeCount = input.fileChangeCount;
   const moduleChangeCount = input.moduleChangeCount;
@@ -175,22 +197,30 @@ function buildRootRow(
     moduleChangeCount,
     selected: selectedRoot,
     disabledLabel,
+    statusBadge,
+    pending,
     unavailable: false,
     clean:
       disabledLabel === null &&
+      statusBadge === null &&
       fileChangeCount === 0 &&
       moduleChangeCount === 0 &&
       !submoduleStateChanged,
     depth: 0,
     searchText: searchableText([
-      rootSearchText(input.row, label, disabledLabel),
+      rootSearchText(
+        input.row,
+        label,
+        disabledLabel,
+        statusBadge?.label ?? null,
+      ),
       ...submoduleSearch,
     ]),
   };
 }
 
 function isActiveRoot(
-  row: WorktreeBindingSelectorRow,
+  row: WorktreeBindingSelectorRowV12,
   selected: GitDiffRepoSelection | null,
 ): boolean {
   return (

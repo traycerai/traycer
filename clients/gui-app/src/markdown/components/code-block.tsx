@@ -1,11 +1,10 @@
 import { Check, Copy } from "lucide-react";
 import { useCallback, type ReactNode } from "react";
+import { useThrottledHighlight } from "@tailmark/react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { cn } from "@/lib/utils";
-import { useShikiHighlighter } from "../shiki-highlighter";
-import { useIsMarkdownStreaming } from "../shiki-streaming-context";
-import { useThrottledCodeHighlight } from "../use-throttled-code-highlight";
 import { extractText } from "./extract-react-node-text";
+import { getTraycerStreamingHighlighter } from "../traycer-streaming-highlighter";
 
 interface CodeBlockProps {
   children?: ReactNode;
@@ -52,21 +51,21 @@ function FencedCodeBlock({
   code: string;
   containerClassName: string | undefined;
 }) {
-  const { highlighter, theme, themesVersion } = useShikiHighlighter();
-  const isStreaming = useIsMarkdownStreaming();
+  // Module singleton also passed to StreamingMarkdown as `highlighter` so
+  // throttle/subscribe share one readiness bus with the wrapper.
+  const highlighter = getTraycerStreamingHighlighter();
+  // Empty fence info stays unhighlighted (plain path) but still quoteable.
+  const highlightLang = language.length > 0 ? language : null;
+  const highlightedNodes = useThrottledHighlight(
+    code,
+    highlightLang ?? "text",
+    highlightLang === null ? null : highlighter,
+  );
+
   const { copied, copy } = useClipboardCopy({
     resetMs: 2000,
     onSuccess: null,
     onError: null,
-  });
-
-  const highlightedNodes = useThrottledCodeHighlight({
-    highlighter,
-    theme,
-    themesVersion,
-    code,
-    language,
-    isStreaming,
   });
 
   const handleCopy = useCallback(() => copy(code), [copy, code]);
@@ -101,7 +100,7 @@ function FencedCodeBlock({
           className={cn(
             "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
             "text-muted-foreground/70 transition-all",
-            "opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100",
+            "opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
             "hover:bg-accent hover:text-foreground",
             "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
           )}

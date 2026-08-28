@@ -14,7 +14,12 @@ export interface AutoOpenRecord {
 interface AutoOpenTarget {
   readonly id: string;
   readonly type:
-    "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review";
+    | "chat"
+    | "terminal-agent"
+    | "spec"
+    | "ticket"
+    | "story"
+    | "review";
   readonly name: string;
   readonly hostId: string;
 }
@@ -41,8 +46,9 @@ export function resolveAutoOpenTarget(
   focusArtifactId: string | null,
   persistedFocus: string | null,
 ): AutoOpenTarget | null {
-  const focusMatch = findOpenableRecord(records, focusArtifactId);
-  if (focusMatch !== null) return focusMatch;
+  if (focusArtifactId !== null) {
+    return findOpenableRecord(records, focusArtifactId);
+  }
 
   const persistedMatch = findOpenableRecord(records, persistedFocus);
   if (persistedMatch !== null) return persistedMatch;

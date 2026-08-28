@@ -1,6 +1,5 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -11,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 async function renderHistoryButton(initialPath: "/epics" | `/epics/${string}`) {
   const rootRoute = createRootRoute({
@@ -55,5 +55,15 @@ describe("<HistoryButton />", () => {
     const button = await renderHistoryButton("/epics/epic-1");
 
     expect(button.className).not.toContain("bg-accent");
+  });
+
+  it("shows the current History shortcut in its tooltip", async () => {
+    const button = await renderHistoryButton("/epics");
+
+    fireEvent.focus(button);
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      `History (${formatChordForDisplay("mod+y")})`,
+    );
   });
 });

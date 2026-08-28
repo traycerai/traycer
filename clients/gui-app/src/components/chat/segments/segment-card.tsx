@@ -1,11 +1,10 @@
 import { ChevronDown } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
 import { cn } from "@/lib/utils";
 
 interface SegmentCardProps {
@@ -32,6 +31,20 @@ const TONE_CLASS: Record<SegmentCardProps["tone"], string> = {
   destructive: "border-destructive/30 bg-destructive/5",
   primary: "border-primary/40 bg-primary/5",
 };
+
+/**
+ * The cell a `headerAction` sits in: the header row is `items-stretch` (so
+ * the whole header stays one click target), so a bare icon button dropped in
+ * as the action rides its top edge. This centres it. No divider - the button
+ * reads as part of the same card, and a rule there only adds noise.
+ */
+export function SegmentCardHeaderActionCell(props: {
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="flex shrink-0 items-center px-1.5">{props.children}</div>
+  );
+}
 
 /**
  * Shared segment shell - chip→card chrome with a collapsible body. Header is
@@ -97,11 +110,10 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
     bodyFindUnitId,
     className,
   } = props;
-  const measuredOpenChange = useChatMeasuredOpenChange(onOpenChange);
   return (
     <Collapsible
       open={open}
-      onOpenChange={measuredOpenChange}
+      onOpenChange={onOpenChange}
       className={cn(
         "rounded-md border text-ui-sm",
         TONE_CLASS[tone],
@@ -122,6 +134,7 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
           data-find-include="true"
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
+            // muted-fill-ok: transcript segment header on bg-background
             "group/segment-card relative flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-2.5 py-2 text-left transition-colors hover:bg-muted/40",
             headerAction === null ? "rounded-md" : "rounded-l-md",
             open ? "rounded-b-none" : null,

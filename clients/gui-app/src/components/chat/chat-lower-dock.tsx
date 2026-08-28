@@ -2,6 +2,7 @@ import type {
   BackgroundItem,
   ChatActiveTurn,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PinnedStackSections } from "@/components/chat/chat-pinned-stack";
 import { hasChatPinnedStackContent } from "@/components/chat/chat-pinned-stack-utils";
@@ -12,39 +13,60 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { chatBackgroundSectionVisible } from "@/lib/chat/chat-lower-scroll-budget";
 import { cn } from "@/lib/utils";
 import type { ChatPinnedStackTopSpacing } from "@/components/chat/chat-pinned-stack";
 
 export interface ChatLowerDockProps {
   readonly snapshotLoaded: boolean;
   readonly epicId: string;
+  /** The chat this dock belongs to - the strip's managed-command join key. */
+  readonly chatId: string;
+  readonly viewTabId: string;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly todo: PinnedTodoSnapshot | null;
   readonly restore: ChatRestoreContextValue;
   readonly queue: ChatSessionState["queue"];
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  /**
+   * This chat's running managed commands, counted by the parent because the
+   * surfaces around the dock size themselves from the same number - see
+   * `chatBackgroundSectionVisible`.
+   */
+  readonly runningManagedCommandCount: number;
+  /**
+   * This chat's held shells, counted by the parent for the same reason - and
+   * counted separately because the hold a human has to clear sits on a shell
+   * that has FINISHED, which the running count above will never see. A chat
+   * whose only background state is a hold opens the section on this alone.
+   */
+  readonly heldManagedCommandCount: number;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
+  readonly backgroundSessionStopPending: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly canAct: boolean;
+  readonly queueResumeRequested: boolean;
+  readonly queueKeepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
   readonly topSpacing: ChatPinnedStackTopSpacing;
   readonly scrollRegionMaxHeightClass: string;
   readonly onQueuePause: () => string | null;
   readonly onQueueResume: () => string | null;
-  readonly onQueueEdit: (item: ChatQueuedItem) => void;
+  readonly onQueueEdit: (item: ChatQueuedPromptItem) => void;
   readonly onQueueCancel: (item: ChatQueuedItem) => void;
-  readonly onQueueAbortSteer: (item: ChatQueuedItem) => void;
+  readonly onQueueAbortSteer: (item: ChatQueuedPromptItem) => void;
   readonly onQueueReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onQueueSteerNow: (item: ChatQueuedItem) => void;
+  readonly onQueueSteerNow: (item: ChatQueuedPromptItem) => void;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
+  readonly onBackgroundSessionStop: () => string | null;
 }
 
 export function ChatLowerDock(props: ChatLowerDockProps) {
@@ -56,8 +78,11 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const queueVisible = props.queue.items.length > 0;
   const agentsVisible =
     props.activeAgents.length > 0 && props.selfAgent !== null;
-  const backgroundVisible =
-    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+  const backgroundVisible = chatBackgroundSectionVisible({
+    backgroundItemCount: props.backgroundItems?.length ?? 0,
+    runningManagedCommandCount: props.runningManagedCommandCount,
+    heldManagedCommandCount: props.heldManagedCommandCount,
+  });
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {
     return null;
@@ -66,11 +91,13 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const topPadding = props.topSpacing === "compact" ? "pt-2" : "pt-4";
 
   return (
-    <div
-      className={cn("bg-canvas px-4", topPadding)}
-      data-testid="chat-lower-dock"
-    >
-      <div className="mx-auto w-full max-w-3xl">
+    <div className="pointer-events-none px-4" data-testid="chat-lower-dock">
+      <div
+        className={cn(
+          "pointer-events-auto mx-auto w-full max-w-3xl bg-canvas",
+          topPadding,
+        )}
+      >
         <div className="@container mx-3 -mb-px overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/30">
           <QueueSection visible={queueVisible} dock={props} />
           <PinnedSection
@@ -105,6 +132,8 @@ function QueueSection(props: {
       queue={dock.queue}
       activeTurnStatus={dock.activeTurnStatus}
       canAct={dock.canAct}
+      resumeRequested={dock.queueResumeRequested}
+      keepPausedRequested={dock.queueKeepPausedRequested}
       readOnly={dock.readOnly}
       editingQueueItemId={dock.editingQueueItemId}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
@@ -150,6 +179,7 @@ function AgentsSection(props: {
   return (
     <ActiveAgentsPanel
       epicId={dock.epicId}
+      viewTabId={dock.viewTabId}
       self={selfAgent}
       descendants={dock.activeAgents}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
@@ -164,20 +194,28 @@ function BackgroundSection(props: {
   readonly dock: ChatLowerDockProps;
 }) {
   const { dock } = props;
-  const items = dock.backgroundItems;
-  if (!props.visible || items === undefined) return null;
+  // An undefined `backgroundItems` is "the host has not said yet"; the
+  // managed-command rows come from a different stream and need not wait on it.
+  const items = dock.backgroundItems ?? [];
+  if (!props.visible) return null;
   return (
     <BackgroundItemsPanel
       items={items}
+      epicId={dock.epicId}
+      chatId={dock.chatId}
+      viewTabId={dock.viewTabId}
       canAct={dock.canAct}
       readOnly={dock.readOnly}
       pendingStopTaskIds={dock.backgroundStopPendingTaskIds}
       stopAllPending={dock.backgroundStopAllPending}
+      sessionStopPending={dock.backgroundSessionStopPending}
+      turnActive={dock.activeTurnStatus !== null}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
       separated={props.separated}
       onItemClick={dock.onBackgroundItemClick}
       onStopItem={dock.onBackgroundItemStop}
       onStopAll={dock.onBackgroundItemsStopAll}
+      onStopSession={dock.onBackgroundSessionStop}
     />
   );
 }

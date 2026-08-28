@@ -5,6 +5,7 @@ import {
   type EpicCloudSyncStatus,
   type EpicMigrationPhase,
   type EpicSubscribeClientFrame,
+  type EpicSubscribeClientSeedOffer,
   type EpicSubscribeServerFrame,
 } from "@traycer/protocol/host/epic/subscribe";
 
@@ -17,6 +18,15 @@ export interface EpicDeletedAttribution {
   readonly deletedByDisplayName: string | null;
   readonly deletedByTraycerUserId: string | null;
 }
+
+/**
+ * One room's host-to-cloud durability state in an atomic subscription
+ * snapshot. A room absent from a received snapshot is clean at that instant.
+ */
+export interface EpicArtifactRoomDirtySnapshot {
+  readonly artifactRoomId: string;
+  readonly dirty: boolean;
+}
 import type {
   EarlyMetaEpic,
   SnapshotMetaEpic,
@@ -28,10 +38,10 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
- * Typed handlers for an `epic.subscribe@1.0` session.
+ * Typed handlers for an `epic.subscribe` session.
  *
  * Every callback maps a server frame kind defined by the contract to a
  * stable shape callers can bind into Zustand / React state. Connection
@@ -45,6 +55,18 @@ import type { WsStreamClient } from "./ws-stream-client";
  * forgot about.
  */
 export interface EpicStreamCallbacks {
+  /**
+   * Initial root-doc state for this subscribe cycle.
+   *
+   * `meta.seededFromOffer === true` means `snapshotBytes` is a **delta**
+   * against the state vector this client offered through
+   * `seedOfferProvider`, not a self-sufficient snapshot: it MUST be merged
+   * into the very doc that produced that offer, and MUST NOT be used to
+   * replace a doc or seed a fresh one. Anything else - including a full
+   * snapshot that arrived despite an offer - is self-sufficient and safe to
+   * apply either way. Both cases apply with the same `Y.applyUpdate`, so this
+   * distinction constrains WHICH DOC, never how.
+   */
   readonly onSnapshot: (
     meta: SnapshotMetaEpic,
     snapshotBytes: Uint8Array,
@@ -124,6 +146,32 @@ export interface EpicStreamCallbacks {
     state: EpicArtifactRoomAvailability,
   ) => void;
   /**
+   * Per-artifact-room sync state: the host holds work for this room that its
+   * cloud connection has not acknowledged. Orthogonal to
+   * `onArtifactRoomState` - a room stays `ready` and editable across a
+   * websocket drop (artifact rooms are local-first), so availability and
+   * dirtiness move independently.
+   *
+   * Emitted by the host only on `epic.subscribe@1.1` and only on a CHANGE.
+   * A room is known clean only after this cycle's `onDirtySnapshot`; an old
+   * host never sends that snapshot, so its dirtiness remains unknown.
+   */
+  readonly onArtifactRoomDirty: (
+    artifactRoomId: string,
+    dirty: boolean,
+  ) => void;
+  /** Root-doc host-to-cloud durability transition after `onDirtySnapshot`. */
+  readonly onRootDirty: (dirty: boolean) => void;
+  /**
+   * Atomic @1.1 baseline for this subscription cycle. Its arrival, rather
+   * than the order of individual deltas, establishes that host dirtiness is
+   * known for the current open stream.
+   */
+  readonly onDirtySnapshot: (
+    rootDirty: boolean,
+    rooms: readonly EpicArtifactRoomDirtySnapshot[],
+  ) => void;
+  /**
    * Host-observed Tiptap/cloud room connection state. Distinct from the
    * renderer→host `/stream` lifecycle: the local stream can be open while
    * the host is offline from Tiptap Cloud.
@@ -178,9 +226,29 @@ export interface EpicStreamCallbacks {
 }
 
 export interface EpicStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly callbacks: EpicStreamCallbacks;
+  /**
+   * Reports the root-doc state this client ALREADY holds, so a reattach can be
+   * served as a delta instead of re-shipping the whole document. Read
+   * immediately before every wire subscribe, including the re-declare after a
+   * reconnect — so it must be a cheap, synchronous, side-effect-free read of
+   * live state, never a cached value computed once.
+   *
+   * Returns `null` whenever there is nothing safe to offer, and the caller is
+   * expected to use that freely: no doc yet (a cold open — first-open cost is
+   * not what this mechanism addresses), or a doc whose originating `roomId` is
+   * unknown, which happens for state seeded by a pre-`@1.2` host that never
+   * reported one. Offering a vector without its room would let the host diff
+   * against a doc from a room a migration has since replaced.
+   *
+   * Required rather than optional: every construction site must decide whether
+   * it can offer state. A wrapper that silently defaulted to "no offer" would
+   * leave the reattach cost this class exists to remove, and would do it
+   * invisibly.
+   */
+  readonly seedOfferProvider: () => EpicSubscribeClientSeedOffer | null;
 }
 
 /**
@@ -204,9 +272,24 @@ export class EpicStreamClient {
     this.callbacks = options.callbacks;
     this.closed = false;
 
-    this.session = options.wsStreamClient.subscribe("epic.subscribe", {
-      epicId: options.epicId,
-    });
+    // `subscribeWithParamsProvider`, not `subscribe`: the offer has to be read
+    // at each wire subscribe, because the reattach is the only moment it is
+    // worth anything. Freezing params at construction would send the state the
+    // doc had when the tab opened — on the first subscribe that is `null`
+    // (nothing loaded yet), so every later reconnect would re-request the whole
+    // document, which is the exact behaviour this class exists to remove.
+    this.session = options.wsStreamClient.subscribeWithParamsProvider(
+      "epic.subscribe",
+      () => {
+        const seedOffer = options.seedOfferProvider();
+        // Omit the key entirely rather than sending an explicit `undefined`:
+        // the field is `.optional()`, and absence is the wire encoding of
+        // "no offer".
+        return seedOffer === null
+          ? { epicId: options.epicId }
+          : { epicId: options.epicId, seedOffer };
+      },
+    );
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -323,6 +406,10 @@ export class EpicStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
+    // The receive-path half of the `closed` contract the send methods
+    // already keep: after `close()` the session can still deliver frames
+    // already in flight, and the callbacks must not hear them.
+    if (this.closed) return;
     const parsed = epicSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       return;
@@ -402,6 +489,18 @@ export class EpicStreamClient {
       }
       case "artifactRoomState": {
         this.callbacks.onArtifactRoomState(frame.artifactRoomId, frame.state);
+        return;
+      }
+      case "artifactRoomDirty": {
+        this.callbacks.onArtifactRoomDirty(frame.artifactRoomId, frame.dirty);
+        return;
+      }
+      case "rootDirty": {
+        this.callbacks.onRootDirty(frame.dirty);
+        return;
+      }
+      case "dirtySnapshot": {
+        this.callbacks.onDirtySnapshot(frame.rootDirty, frame.rooms);
         return;
       }
       case "migrationStarted": {

@@ -1,6 +1,6 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from "react";
 import { create } from "zustand";
 import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -24,6 +25,8 @@ const testState = vi.hoisted(() => ({
   reachability: {
     status: "reachable",
     hostLabel: "Host A",
+    basis: "directory",
+    unavailability: null as string | null,
   },
   navigateResults: [] as Array<NestedFocusTarget | null>,
   navigateNested: vi.fn(),
@@ -61,6 +64,8 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => testState.reachability,
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -89,8 +94,39 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
   }),
 }));
 
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: "legacy",
+    projection: undefined,
+    viewModel: null,
+    canMutate: false,
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    create: {},
+    ensureRunning: {},
+    rename: {},
+    close: {},
+  }),
+}));
+
 vi.mock("@/lib/perf/terminal-load-perf", () => ({
   beginTerminalLoad: vi.fn(),
+}));
+
+// The tab's host client is reached twice here: an exited sign-in tile renders
+// the restart button (which instantiates the terminal-login mutation), and the
+// live tile resolves its terminal title through `terminal.list`. Neither is
+// under test, so a stub answering the identity reads and readiness
+// subscription every host query makes is enough - the full host runtime is not
+// what these cases exercise.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({
+    getActiveHostId: () => HOST_ID,
+    getRequestContextUserId: () => null,
+    onChange: () => () => undefined,
+    request: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/analytics", () => ({
@@ -110,7 +146,14 @@ const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
 
 function withTabHost(node: ReactNode): ReactNode {
-  return <TabHostProvider hostId={HOST_ID}>{node}</TabHostProvider>;
+  // A sign-in tile that has exited renders the restart button, and that button
+  // instantiates the terminal-login mutation hook - so this wrapper needs a
+  // QueryClient even though the ordinary-terminal cases never reach one.
+  return (
+    <QueryClientProvider client={new QueryClient()}>
+      <TabHostProvider hostId={HOST_ID}>{node}</TabHostProvider>
+    </QueryClientProvider>
+  );
 }
 
 function resetNavigationSpy(): void {
@@ -138,6 +181,20 @@ function terminalNode(id: string, instanceId: string): EpicTerminalRef {
     titleSource: "manual",
     hostId: HOST_ID,
     cwd: "/work/repo",
+  };
+}
+
+function signInTerminalNode(id: string, instanceId: string): EpicTerminalRef {
+  return {
+    id,
+    instanceId,
+    type: "terminal",
+    name: "Copilot sign-in",
+    titleSource: "manual",
+    hostId: HOST_ID,
+    cwd: "~",
+    origin: "provider-login",
+    originProviderId: "copilot",
   };
 }
 
@@ -173,7 +230,12 @@ describe("<TerminalTile /> close navigation", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __resetAppLocalNotificationsStoreForTests();
     exitedHandle.store.setState({ exitCode: 0, exitReason: null });
-    testState.reachability = { status: "reachable", hostLabel: "Host A" };
+    testState.reachability = {
+      status: "reachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
     testState.bootstrap = { attached: true, hostSessionExited: false };
     resetNavigationSpy();
   });
@@ -183,7 +245,12 @@ describe("<TerminalTile /> close navigation", () => {
   });
 
   it("routes unreachable-banner close for an active tile through the nested-focus boundary", () => {
-    testState.reachability = { status: "unreachable", hostLabel: "Host A" };
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
     const fixture = openTerminalFixture(false);
 
     render(
@@ -356,6 +423,238 @@ describe("<TerminalTile /> close navigation", () => {
     const pane = collectPanes(canvas.root)[0];
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
   });
+
+  // A sign-in terminal is exempt from the clean-exit auto-close every
+  // ordinary terminal gets (the "routes PTY-exit close" case above): it is
+  // the only surface that can restart the sign-in, and closing it on a clean
+  // exit (the user typing `exit` after signing in) would retract that
+  // restart affordance and the CLI's last words with no explanation.
+  // Probed: dropping `isSignInTerminal` from `TerminalLive`'s exit effect
+  // dependency guard makes this tile close identically to the ordinary one -
+  // confirmed and reverted.
+  it("keeps a sign-in terminal tile open after a clean exit, unlike an ordinary terminal", async () => {
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    // Give the exit effect a couple of ticks - the same window the ordinary
+    // "routes PTY-exit close" case awaits its close through.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expectTileOpen(viewTabId, signInNode.instanceId);
+    expect(testState.navigateNested).not.toHaveBeenCalled();
+
+    // Staying open is only half the contract: the tile has to SAY the shell
+    // ended and offer the restart. `signInSessionGone` in the parent cannot
+    // cover this - it reads `terminal.list`, which has a 60s staleTime and
+    // never polls, so on the ATTACHED path it still believes the session is
+    // live long after the store's stream-driven status says otherwise. Before
+    // `TerminalLive` learned to render the panel itself, this assertion failed
+    // while the one above passed: an open tile holding a dead, torn-down xterm
+    // with no explanation and no way back.
+    expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
+    expect(screen.getByRole("button", { name: /Start again/ })).toBeDefined();
+  });
+
+  it("dismisses a capable-host sign-in ended panel through the legacy close branch", async () => {
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
+
+    store.closeCanvasTab(viewTabId, paneId, signInNode.instanceId);
+    expectTileClosed(viewTabId, signInNode.instanceId);
+  });
+});
+
+/**
+ * The `basis` notification gate (`terminal-tile.tsx`'s
+ * `if (reachability.basis !== "directory") return;`). Zero prior suite
+ * asserted either direction of this: `app-local-notifications-store.test.ts`
+ * covers the emitter, never the tile's decision to call it. A `directory`
+ * verdict is proof a session ended; a `starting-deadline` one is only the
+ * UI's patience running out on a host that is very likely still up, so
+ * writing "Terminal closed" into the persisted feed off THAT would be a
+ * false claim. Both cases render the SAME dead banner - `basis` is read only
+ * by the notification effect, never by the render branch above - so a
+ * passing render assertion here would prove nothing about the gate; only the
+ * notification-store side effect does.
+ */
+describe("<TerminalTile /> basis notification gate", () => {
+  beforeEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    exitedHandle.store.setState({ exitCode: 0, exitReason: null });
+    testState.bootstrap = { attached: true, hostSessionExited: false };
+    resetNavigationSpy();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('fires "Terminal closed" when unreachable arrives with basis "directory"', async () => {
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
+    const fixture = openTerminalFixture(false);
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
+        1,
+      );
+    });
+    const notificationId =
+      useAppLocalNotificationsStore.getState().orderedIds[0];
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].kind,
+    ).toBe("terminal.closed");
+  });
+
+  it('withholds the notification when unreachable arrives with basis "starting-deadline", while the dead banner still renders', async () => {
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "Host A",
+      basis: "starting-deadline",
+      unavailability: null,
+    };
+    const fixture = openTerminalFixture(false);
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    // The render branch does not key on `basis` at all - the dead banner
+    // fires off `status` alone - so this must still appear even though the
+    // notification below is withheld. A test that only checked the
+    // notification's absence could not tell "gate correctly withheld" apart
+    // from "tile crashed and rendered nothing".
+    expect(
+      await screen.findByRole("button", { name: "Close tab" }),
+    ).toBeDefined();
+
+    // Give the exit/reachability effect the same couple of ticks the other
+    // notification-asserting cases in this file await, then assert the feed
+    // stayed empty - not just that no wait resolved, which would pass
+    // vacuously if the effect were simply slow.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+});
+
+/**
+ * S5: this tile used to render a wordless skeleton for BOTH `checking` and
+ * `host-starting` - indistinguishable from a terminal about to appear, and
+ * neither state ended. It now names the host it is waiting on (invariant 6).
+ * Asserted on the rendered SENTENCE, not on the absence of a spinner - an
+ * empty starved mount also has no visible spinner, which is exactly the
+ * vacuous shape this pin exists to avoid.
+ */
+describe("<TerminalTile /> S5 bounded pre-bootstrap wait", () => {
+  beforeEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    resetNavigationSpy();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each([
+    ["checking", "the host"],
+    ["host-starting", "Host A"],
+  ] as const)(
+    "names the host it is waiting on for reachability %s",
+    (status, expectedNaming) => {
+      testState.reachability = {
+        status,
+        hostLabel: "Host A",
+        basis: "directory",
+        unavailability: null,
+      };
+      const fixture = openTerminalFixture(false);
+
+      render(
+        withTabHost(
+          <TerminalTile
+            viewTabId={fixture.viewTabId}
+            node={fixture.closingNode}
+            tileId={fixture.paneId}
+            isActive
+          />,
+        ),
+      );
+
+      const load = screen.getByTestId(`terminal-tile-${fixture.paneId}`);
+      expect(load.textContent).toContain(expectedNaming);
+      expect(load.textContent).not.toBe("");
+      // The old skeleton this replaces was a `role="status"` region with NO
+      // text at all - present in the DOM, invisible to this assertion if it
+      // only checked for the region's existence.
+      expect(screen.queryByText("Starting terminal session…")).toBeNull();
+    },
+  );
 });
 
 function expectTileOpen(viewTabId: string, instanceId: string): void {

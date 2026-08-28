@@ -19,8 +19,11 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 
 let mockActiveHostId: string | null = "active-host-1";
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mockActiveHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mockActiveHostId,
+}));
+vi.mock("@/components/epic-canvas/view-tab-context", () => ({
+  useEpicViewTabId: () => "tab-for-open-epic",
 }));
 
 const navigate = vi.fn();
@@ -85,8 +88,13 @@ const {
   openTilePreviewInEpic: vi.fn(),
   openTilePreviewInTab: vi.fn(),
   resolveTargetTabForEpic: vi.fn(() => "tab-for-open-epic"),
+  // The global/MRU resolver the chip must NOT consult. It resolves a DIFFERENT
+  // tab ("tab-focused-partner") than the chip's owning `useEpicViewTabId`
+  // context ("tab-for-open-epic"), modelling a same-Epic split with a different
+  // pane focused. The drag tests assert the payload carries the owner and that
+  // this spy is never called, so a regression to MRU resolution goes red.
   resolveTabIdForEpic: vi.fn((epicId: string) =>
-    epicId === "epic-open" ? "tab-for-open-epic" : null,
+    epicId === "epic-open" ? "tab-focused-partner" : null,
   ),
   // Capture every `useDraggable` call so tests can assert the emitted payload
   // and the `disabled` gate without wiring a DndContext + pointer simulation.
@@ -175,10 +183,31 @@ import { TraycerSpecReference } from "@/markdown/components/traycer-spec-referen
 import { TraycerTicketReference } from "@/markdown/components/traycer-ticket-reference";
 import { TraycerChatReference } from "@/markdown/components/traycer-chat-reference";
 import { TraycerEpicReference } from "@/markdown/components/traycer-epic-reference";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+/**
+ * Naming the effective host is part of building an app-wide host fixture
+ * (P2.1's sweep convention). These references resolve through
+ * `useCanvasHostId()` -> `useEffectiveHostId()` -> the selection authority
+ * store, so the STORE is the seam that must carry the host. Seeding it here
+ * rather than mocking the hook keeps the fixture indifferent to which hook
+ * the component reaches for next.
+ */
+function setEffectiveHostId(hostId: string | null): void {
+  useSelectionAuthorityStore.getState().applyKernelSnapshot({
+    attached: true,
+    preferredHostId: hostId,
+    targetHostId: hostId,
+    effectiveHostId: hostId,
+    leases: [],
+    selectionRevision: 1,
+  });
+}
 
 beforeEach(() => {
   mockHandle = { epicId: OPEN_EPIC_ID, store: { getState: () => ({}) } };
   mockActiveHostId = "active-host-1";
+  setEffectiveHostId(mockActiveHostId);
   navigate.mockClear();
   epicNodeRefForNodeId.mockClear();
   openTilePreviewInEpic.mockClear();
@@ -191,7 +220,10 @@ beforeEach(() => {
   setNodeRefSpy.mockClear();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useSelectionAuthorityStore.getState().reset();
+});
 
 function clickRef(label: string): void {
   fireEvent.click(screen.getByRole("button", { name: label }));
@@ -369,7 +401,7 @@ describe("same-epic spec/ticket chips are canvas drag sources", () => {
     // Occurrence-unique drag id keyed on `useId()` (C3), not the artifact id.
     expect(call.id.startsWith("chat-artifact:")).toBe(true);
     expect(call.id).not.toBe("chat-artifact:spec-1");
-    expect(resolveTabIdForEpic).toHaveBeenCalledWith(OPEN_EPIC_ID);
+    expect(resolveTabIdForEpic).not.toHaveBeenCalled();
     expect(call.data).toEqual({
       kind: "chat-artifact",
       epicId: OPEN_EPIC_ID,

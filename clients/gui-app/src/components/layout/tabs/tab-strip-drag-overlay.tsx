@@ -12,6 +12,8 @@ const HEADER_TAB_OVERLAY_TRANSITION = {
 
 interface HeaderTabDragOverlayProps {
   readonly tab: HeaderTab;
+  /** Source tab's measured width, so the dragged object is the tab itself. */
+  readonly width: number | null;
 }
 
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
@@ -22,11 +24,18 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
     tab.kind === "epic" ? displayTitle(tab.name, "epic") : tab.name;
   return (
     <m.div
-      initial={{ opacity: 0, scale: 0.96, y: 2 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.96, y: 2 }}
+      // Named so an instrument can find it by identity rather than by a
+      // heuristic. It was previously located as "the first `.cursor-grabbing`
+      // element under 500px wide, excluding the shield" - which happened to be
+      // correct and had no reason to stay so.
+      data-testid="header-tab-drag-overlay"
+      // No entry scale/offset: the dragged tab must be the SAME object that was
+      // under the pointer a frame ago, not a chip that animates into being.
+      initial={false}
+      animate={{ opacity: 1 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
-      className="pointer-events-none flex h-10 max-w-56 cursor-grabbing select-none items-center gap-2 rounded-md border border-border/80 bg-background px-3 text-ui-sm font-medium text-foreground shadow-lg"
+      style={props.width === null ? undefined : { width: props.width }}
+      className="pointer-events-none flex h-10 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
     >
       <TabLeadingIcon icon={tab.icon} />
       <span className="min-w-0 truncate">{displayName}</span>

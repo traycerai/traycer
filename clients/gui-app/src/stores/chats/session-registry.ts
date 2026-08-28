@@ -6,6 +6,8 @@ import {
 interface RegistryEntry {
   readonly key: string;
   readonly scopeKey: string;
+  /** Part of this entry's identity (see the class doc), kept readable. */
+  readonly hostId: string;
   readonly handle: ChatSessionStoreHandle;
   leases: number;
   lastUsedAt: number;
@@ -38,6 +40,18 @@ export const MAX_ACTIVE_CHAT_IDLE_DEFER_MS = 60 * 60 * 1_000;
  */
 export const DEFAULT_MAX_WARM_CHAT_SESSIONS = 6;
 
+/**
+ * Everything `acquire` needs to name ONE session: its identity - (epic, chat,
+ * host), see the class doc on why the host is part of it - plus the scope key
+ * that discriminates rebuilds within that identity.
+ */
+export interface ChatSessionTarget {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly scopeKey: string;
+}
+
 export interface ChatSessionRegistryOptions {
   readonly idleTtlMs: number;
   readonly maxWarmSessions: number;
@@ -48,8 +62,27 @@ export interface ChatSessionRegistryOptions {
  * the open-Epic registry shape, but chat tiles are lease-counted because the
  * same chat can be rendered by more than one surface in a window.
  *
+ * ## Session identity is (epic, chat, HOST)
+ *
+ * `chatId` is HOST-MINTED, so it is unique per host, not globally: two
+ * different hosts can legitimately own a chat with the same id under the same
+ * epic (post-fork twins in production, `--adopt-store` copies of one identity
+ * store in dev). Keying sessions on `epic:chat` alone made those two chats
+ * ONE entry, and since the scope key does carry the host, a second tile's
+ * `acquire` read the first host's entry, saw a scope mismatch, and DISPOSED
+ * it - closing the live websocket out from under a mounted tile that was
+ * still holding the handle. The host therefore belongs in the entry key, not
+ * only in the scope key: a different host is a DIFFERENT session, never a
+ * rebuild of the same one.
+ *
+ * The scope key keeps its own (narrower) job: within one (epic, chat, host)
+ * it still discriminates user, transport dialability and owner identity, and
+ * a mismatch there is still a legitimate in-place rebuild.
+ *
  * Time-based keep-alive: when a chat's last lease is dropped (its tile
- * unmounts on a tab switch) the session is NOT torn down. Its websocket stays
+ * unmounts - no longer on a mere tab switch, since pane chat retention keeps
+ * the tile mounted, but still on eviction or close) the session is NOT torn
+ * down. Its websocket stays
  * open and its loaded snapshot is retained so switching back paints instantly
  * - no reconnect, no loading spinner. A lease-free ("idle") session is held
  * until it goes untouched for `idleTtlMs`, at which point it is disposed.
@@ -80,22 +113,60 @@ export class ChatSessionRegistry {
   get(
     epicId: string,
     chatId: string,
+    hostId: string,
     scopeKey: string,
   ): ChatSessionStoreHandle | null {
-    const entry = this.entries.get(chatSessionKey(epicId, chatId));
+    const entry = this.entries.get(chatSessionKey(epicId, chatId, hostId));
     if (entry === undefined) return null;
     if (entry.scopeKey !== scopeKey) return null;
     this.touch(entry);
     return entry.handle;
   }
 
-  peek(epicId: string, chatId: string): ChatSessionStoreHandle | null {
-    return this.entries.get(chatSessionKey(epicId, chatId))?.handle ?? null;
+  peek(
+    epicId: string,
+    chatId: string,
+    hostId: string,
+  ): ChatSessionStoreHandle | null {
+    return (
+      this.entries.get(chatSessionKey(epicId, chatId, hostId))?.handle ?? null
+    );
   }
 
   /** Live session handles, for aggregate reads (e.g. agent-activity). */
   listHandles(): ChatSessionStoreHandle[] {
     return Array.from(this.entries.values(), (entry) => entry.handle);
+  }
+
+  /**
+   * The live sessions of ONE host in one epic. The host is part of a session's
+   * identity, so a surface bound to a host - a tab, a card - must read through
+   * this rather than filtering `listHandles` on the chat id alone: chat ids are
+   * host-minted, and a cross-host clone carries the source's ids verbatim.
+   */
+  listHandlesForHost(epicId: string, hostId: string): ChatSessionStoreHandle[] {
+    const handles: ChatSessionStoreHandle[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.hostId !== hostId || entry.handle.epicId !== epicId) continue;
+      handles.push(entry.handle);
+    }
+    return handles;
+  }
+
+  /**
+   * Live session keys bound to one host, across every epic. Overview's
+   * `host.status` refresh uses this so a membership change on host B does
+   * not void host A's settled busy. Reads `entry.hostId` (the acquire-time
+   * identity), not the WeakMap the React hook stamps.
+   */
+  membershipIdsForHost(hostId: string): string[] {
+    const ids: string[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.hostId !== hostId) continue;
+      ids.push(entry.key);
+    }
+    ids.sort();
+    return ids;
   }
 
   subscribe(listener: () => void): () => void {
@@ -106,18 +177,20 @@ export class ChatSessionRegistry {
   }
 
   acquire(
-    epicId: string,
-    chatId: string,
-    scopeKey: string,
+    target: ChatSessionTarget,
     factory: (epicId: string, chatId: string) => ChatSessionStoreHandle,
   ): ChatSessionStoreHandle {
-    const key = chatSessionKey(epicId, chatId);
+    const { epicId, chatId, hostId, scopeKey } = target;
+    const key = chatSessionKey(epicId, chatId, hostId);
     const existing = this.entries.get(key);
     if (existing !== undefined) {
       if (existing.scopeKey !== scopeKey) {
-        // The chat id is the same, but the session was opened against an older
-        // user/host/transport scope. Close it before creating the replacement
-        // so callers never get a store backed by a stale ChatStreamClient.
+        // Same (epic, chat, host), but the session was opened against an older
+        // user/transport/owner-identity scope. Close it before creating the
+        // replacement so callers never get a store backed by a stale
+        // ChatStreamClient. A DIFFERENT host never reaches this branch - it
+        // has its own key - so this can no longer dispose another tile's live
+        // session out from under it.
         this.disposeEntry(existing);
       } else {
         // Revives an idle (lease-free) session in place - the websocket and
@@ -134,6 +207,7 @@ export class ChatSessionRegistry {
     this.entries.set(key, {
       key,
       scopeKey,
+      hostId,
       handle,
       leases: 1,
       lastUsedAt: now(),
@@ -144,8 +218,8 @@ export class ChatSessionRegistry {
     return handle;
   }
 
-  release(epicId: string, chatId: string): void {
-    const key = chatSessionKey(epicId, chatId);
+  release(epicId: string, chatId: string, hostId: string): void {
+    const key = chatSessionKey(epicId, chatId, hostId);
     const entry = this.entries.get(key);
     if (entry === undefined) return;
     this.releaseEntry(entry);
@@ -154,9 +228,10 @@ export class ChatSessionRegistry {
   releaseHandle(
     epicId: string,
     chatId: string,
+    hostId: string,
     handle: ChatSessionStoreHandle,
   ): void {
-    const entry = this.entries.get(chatSessionKey(epicId, chatId));
+    const entry = this.entries.get(chatSessionKey(epicId, chatId, hostId));
     if (entry === undefined || entry.handle !== handle) return;
     this.releaseEntry(entry);
   }
@@ -177,8 +252,8 @@ export class ChatSessionRegistry {
     this.evictWarmOverflow();
   }
 
-  forceRelease(epicId: string, chatId: string): void {
-    const entry = this.entries.get(chatSessionKey(epicId, chatId));
+  forceRelease(epicId: string, chatId: string, hostId: string): void {
+    const entry = this.entries.get(chatSessionKey(epicId, chatId, hostId));
     if (entry === undefined) return;
     this.disposeEntry(entry);
     this.notify();
@@ -280,8 +355,20 @@ export class ChatSessionRegistry {
 function now(): number {
   return Date.now();
 }
-function chatSessionKey(epicId: string, chatId: string): string {
-  return `${epicId}:${chatId}`;
+/**
+ * NUL-joined rather than colon-joined so no component can forge another
+ * key: epic, chat and host ids are opaque strings, and a printable
+ * separator would let one of them contain the separator and collide two
+ * distinct triples onto a single entry.
+ */
+const CHAT_SESSION_KEY_SEPARATOR = "\u0000";
+
+function chatSessionKey(
+  epicId: string,
+  chatId: string,
+  hostId: string,
+): string {
+  return [epicId, chatId, hostId].join(CHAT_SESSION_KEY_SEPARATOR);
 }
 
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {

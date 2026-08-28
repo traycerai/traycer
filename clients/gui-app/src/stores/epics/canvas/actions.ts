@@ -19,17 +19,25 @@
  * `instanceId`; dedup and rename key on the payload's content `id`.
  */
 import { v4 as uuidv4 } from "uuid";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import type {
+  CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
   GitDiffTileRef,
   GitDiffTileViewState,
+  PrDiffTileViewState,
   TilesByInstanceId,
 } from "./types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
+  isPrDiffTileRef,
+  isHostEpicTerminalRef,
+  isUnsupportedEpicTerminalRef,
 } from "./types";
 import {
   activationHistoryEqual,
@@ -199,6 +207,9 @@ export interface PaneTabLocation {
  * hash), so dedup is plain id equality across all kinds. Used by global
  * dedup - opening content already present anywhere focuses that tab instead
  * of cloning.
+ *
+ * For a host-bound kind, prefer {@link findPaneTabForRef}: ids minted by a
+ * host (a chat, a shell) are unique per host, not globally.
  */
 export function findPaneTabByContentId(
   state: EpicCanvasState,
@@ -211,6 +222,49 @@ export function findPaneTabByContentId(
       if (ref !== undefined && ref.id === contentId) {
         return { pane, index, instanceId, ref };
       }
+    }
+  }
+  return null;
+}
+
+/** The bound host of a tile kind that has one; null for the rest. */
+/**
+ * The identity a tab is deduped and looked up by: content id plus bound host,
+ * for the kinds that have one. Deliberately structural - callers that hold a
+ * ref-in-progress (a sidebar row about to open one) match on the same rule as
+ * callers holding a finished `EpicCanvasTileRef`.
+ */
+export interface TileIdentity {
+  readonly id: string;
+  readonly hostId?: string | null;
+}
+
+function tileHostId(ref: TileIdentity): string | null {
+  return ref.hostId ?? null;
+}
+
+/**
+ * The dedup lookup an opener uses, holding the whole ref rather than an id
+ * alone: same content id AND same bound host.
+ *
+ * Host-minted ids are unique per host, not globally - a cross-host clone
+ * carries the source's chat and shell ids verbatim - so id equality alone
+ * would let a door on host B focus host A's open tab and quietly hand back a
+ * window bound to the wrong machine. Kinds with no host (artifacts, diffs)
+ * compare null to null and dedup exactly as before.
+ */
+export function findPaneTabForRef(
+  state: EpicCanvasState,
+  node: TileIdentity,
+): PaneTabLocation | null {
+  const hostId = tileHostId(node);
+  for (const pane of collectPanes(state.root)) {
+    for (let index = 0; index < pane.tabInstanceIds.length; index += 1) {
+      const instanceId = pane.tabInstanceIds[index];
+      const ref = state.tilesByInstanceId[instanceId];
+      if (ref === undefined) continue;
+      if (ref.id !== node.id || tileHostId(ref) !== hostId) continue;
+      return { pane, index, instanceId, ref };
     }
   }
   return null;
@@ -474,9 +528,10 @@ export function openTile(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
   preview: boolean,
+  preferredPaneId: string | null,
 ): EpicCanvasState {
   if (state.root === null) return seedRootPane(node, preview);
-  const existing = findPaneTabByContentId(state, node.id);
+  const existing = findPaneTabForRef(state, node);
   if (existing !== null) {
     const root = replacePane(state.root, existing.pane.id, (pane) => {
       const previewTabId =
@@ -492,7 +547,12 @@ export function openTile(
     }
     return { ...state, root, activePaneId: existing.pane.id };
   }
-  const target = activePaneOrFirst(state);
+  // Prefer `preferredPaneId` (e.g. a history entry's original pane) when it
+  // still exists in the tree; otherwise fall back to the active pane, same
+  // as every other caller.
+  const preferredPane =
+    preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
+  const target = preferredPane ?? activePaneOrFirst(state);
   if (target === null) return state;
 
   // Fill-in-place: a permanent open while the active tab is a blank "New tab"
@@ -534,6 +594,35 @@ export function openTile(
     };
   }
 
+  return insertTileInPane(state, target, node, preview);
+}
+
+/**
+ * Restore one exact historical tile instance as a preview. Unlike
+ * {@link openTile}, this deliberately bypasses content-id dedup: opener paths
+ * can create two views of the same content under different instance ids, and
+ * history must recreate the specific instance addressed by the landing URL.
+ */
+export function restoreTilePreview(
+  state: EpicCanvasState,
+  node: EpicCanvasTileRef,
+  preferredPaneId: string | null,
+): EpicCanvasState {
+  if (state.root === null) return seedRootPane(node, true);
+  const preferredPane =
+    preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
+  const target = preferredPane ?? activePaneOrFirst(state);
+  if (target === null) return state;
+  return insertTileInPane(state, target, node, true);
+}
+
+function insertTileInPane(
+  state: EpicCanvasState,
+  target: TilePane,
+  node: EpicCanvasTileRef,
+  preview: boolean,
+): EpicCanvasState {
+  if (state.root === null) return seedRootPane(node, preview);
   const inserted = insertTabInstance(
     target,
     node.instanceId,
@@ -568,7 +657,7 @@ export function openTileInBackgroundTab(
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
   if (state.root === null) return state;
-  if (findPaneTabByContentId(state, node.id) !== null) return state;
+  if (findPaneTabForRef(state, node) !== null) return state;
   const target = activePaneOrFirst(state);
   if (target === null) return state;
   const root = replacePane(state.root, target.id, (pane) => ({
@@ -581,6 +670,28 @@ export function openTileInBackgroundTab(
     root,
     tilesByInstanceId: withTile(state.tilesByInstanceId, node),
   };
+}
+
+/**
+ * Opener path for a SINGLETON tile - one whose content `id` is derived rather
+ * than per-instance (the comm graph is one per epic).
+ *
+ * {@link openTileInPane} deliberately bypasses dedup so two views of the same
+ * content can sit side by side. That is wrong for a singleton: a second tab
+ * would share the content id, so any per-tile state keyed on it (the comm
+ * graph's persisted viewport) would be written by both copies. Focus the
+ * existing tab wherever it lives, and only open into `paneId` when there is
+ * none.
+ */
+export function openSingletonTileInPane(
+  state: EpicCanvasState,
+  paneId: string,
+  ref: EpicCanvasTileRef,
+): EpicCanvasState {
+  if (state.root !== null && findPaneTabForRef(state, ref) !== null) {
+    return openTile(state, ref, false, null);
+  }
+  return openTileInPane(state, paneId, ref);
 }
 
 /**
@@ -719,6 +830,36 @@ export function promotePreview(
   if (state.root === null) return state;
   const root = replacePane(state.root, paneId, (pane) =>
     pane.previewTabId === null ? pane : { ...pane, previewTabId: null },
+  );
+  if (root === state.root) return state;
+  return { ...state, root };
+}
+
+/**
+ * Restore a pane's preview slot to `previewTabId`, the inverse of
+ * `promotePreview`.
+ *
+ * Dragging a preview tile promotes it on drag start, so a CANCELLED drag would
+ * otherwise leave the promotion behind - a state residual, which is exactly
+ * what `Esc restores order and geometry exactly` forbids. Only restores when
+ * that tile is still in the pane, so a cancel cannot resurrect a preview for a
+ * tab that has since gone.
+ *
+ * It also refuses when the pane's preview slot has been claimed by a DIFFERENT
+ * tile since the drag began - agent activity can open a new preview mid-drag,
+ * and restoring over it would evict a preview this gesture never touched.
+ * Cancel must undo its own promotion, not the pane's current state.
+ */
+export function restorePreview(
+  state: EpicCanvasState,
+  paneId: string,
+  previewTabId: string,
+): EpicCanvasState {
+  if (state.root === null) return state;
+  const root = replacePane(state.root, paneId, (pane) =>
+    pane.tabInstanceIds.includes(previewTabId) && pane.previewTabId === null
+      ? { ...pane, previewTabId }
+      : pane,
   );
   if (root === state.root) return state;
   return { ...state, root };
@@ -950,13 +1091,21 @@ function reorderTabInPane(
   const adjustedIndex = targetIndex > fromIndex ? targetIndex - 1 : targetIndex;
   if (adjustedIndex === fromIndex) {
     const wantsActive = state.activePaneId !== pane.id;
+    const wantsTabActive = pane.activeTabId !== tabId;
     const wantsPromote = pane.previewTabId === tabId;
-    if (!wantsActive && !wantsPromote) return state;
+    if (!wantsActive && !wantsTabActive && !wantsPromote) return state;
     const root =
       state.root === null
         ? null
         : replacePane(state.root, pane.id, (current) =>
-            wantsPromote ? { ...current, previewTabId: null } : current,
+            recordPaneActivation(
+              {
+                ...current,
+                activeTabId: tabId,
+                previewTabId: wantsPromote ? null : current.previewTabId,
+              },
+              tabId,
+            ),
           );
     return { ...state, root, activePaneId: pane.id };
   }
@@ -1046,7 +1195,7 @@ export function dropOnTabStrip(
   if (targetPane === null) return state;
 
   if (source.kind === "node") {
-    const existing = findPaneTabByContentId(state, source.node.id);
+    const existing = findPaneTabForRef(state, source.node);
     if (existing !== null) {
       if (existing.pane.id === targetPaneId) {
         return reorderTabInPane(
@@ -1121,23 +1270,23 @@ function resolveSplitSource(
   if (sourcePane === null) return null;
   const fromIndex = sourcePane.tabInstanceIds.indexOf(source.tabId);
   if (fromIndex === -1) return null;
-  // Splitting a single-tab source pane onto its own edge would just
-  // rearrange the same pane - reject as no-op.
-  if (
-    source.sourcePaneId === targetPaneId &&
-    sourcePane.tabInstanceIds.length === 1
-  ) {
-    return null;
-  }
   const ref = state.tilesByInstanceId[source.tabId];
   if (ref === undefined) return null;
   const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   const root = replacePane(state.root, source.sourcePaneId, () => removed.pane);
+  // An emptied source pane normally collapses - a tab dragged OUT of a pane
+  // shouldn't leave a hole behind. But when the drop targets that same pane,
+  // collapsing would undo the very split the drop preview just promised (the
+  // sole-tab case: open a Git Diff or Terminal, drag it to the pane edge). Keep
+  // the emptied pane as the split's other half, where it renders the standard
+  // opener - the same shape the "Split group" button produces.
+  const emptiedSourcePane = removed.pane.tabInstanceIds.length === 0;
+  const splitsIntoItself = source.sourcePaneId === targetPaneId;
   return {
     state: { ...state, root },
     node: ref,
     collapseSourcePaneId:
-      removed.pane.tabInstanceIds.length === 0 ? source.sourcePaneId : null,
+      emptiedSourcePane && !splitsIntoItself ? source.sourcePaneId : null,
   };
 }
 
@@ -1162,7 +1311,7 @@ export function splitPaneAtEdge(
   }
 
   if (source.kind === "node") {
-    const existing = findPaneTabByContentId(state, source.node.id);
+    const existing = findPaneTabForRef(state, source.node);
     if (existing !== null) {
       return splitPaneAtEdge(state, targetPaneId, position, {
         kind: "tab",
@@ -1244,6 +1393,18 @@ function sizesEqual(
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function shellArgsEqual(
+  left: ReadonlyArray<string> | undefined,
+  right: ReadonlyArray<string> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 /**
  * Commit a group's child fractions (clamped + normalized). Touches ONLY
  * `sizesByGroupId` - the tree object is untouched, so layout subscribers
@@ -1306,6 +1467,27 @@ export function renameArtifact(
       if (ref.type !== "terminal") {
         return ref.name === name ? ref : { ...ref, name };
       }
+      if (isHostEpicTerminalRef(ref)) {
+        if (
+          ref.name === name &&
+          ref.legacyFallback.name === name &&
+          ref.legacyFallback.titleSource === "manual"
+        ) {
+          return ref;
+        }
+        return {
+          ...ref,
+          name,
+          legacyFallback: {
+            ...ref.legacyFallback,
+            name,
+            titleSource: "manual",
+          },
+        };
+      }
+      if (isUnsupportedEpicTerminalRef(ref)) {
+        return ref.name === name ? ref : { ...ref, name };
+      }
       if (ref.name === name && ref.titleSource === "manual") return ref;
       return { ...ref, name, titleSource: "manual" };
     },
@@ -1332,10 +1514,117 @@ export function renameTerminalTiles(
       ref.type === "terminal" && ref.id === sessionId && ref.hostId === hostId,
     (ref) => {
       if (ref.type !== "terminal") return ref;
+      if (isHostEpicTerminalRef(ref)) {
+        if (
+          ref.name === name &&
+          ref.legacyFallback.name === name &&
+          ref.legacyFallback.titleSource === "manual"
+        ) {
+          return ref;
+        }
+        return {
+          ...ref,
+          name,
+          legacyFallback: {
+            ...ref.legacyFallback,
+            name,
+            titleSource: "manual",
+          },
+        };
+      }
+      if (isUnsupportedEpicTerminalRef(ref)) return ref;
       if (ref.name === name && ref.titleSource === "manual") return ref;
       return { ...ref, name, titleSource: "manual" };
     },
   );
+}
+
+/** Adopt a capable host's canonical winner without changing canvas topology. */
+export function adoptHostTerminalProjection(
+  state: EpicCanvasState,
+  hostId: string,
+  terminal: PlainTerminalProjection,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) =>
+      ref.type === "terminal" &&
+      ref.hostId === hostId &&
+      ref.id === terminal.record.terminalId,
+    (ref) => {
+      if (ref.type !== "terminal") return ref;
+      if (isUnsupportedEpicTerminalRef(ref)) return ref;
+      const fallbackName =
+        terminal.record.manualTitle ?? DEFAULT_TERMINAL_TITLE;
+      const titleSource =
+        terminal.record.manualTitle === null ? "default" : "manual";
+      // `updateTilesWhere` treats any new object as a change, so an already
+      // adopted ref that matches the projection byte-for-byte would still mint
+      // a new canvas identity on every stream tick - re-rendering every canvas
+      // subscriber and invalidating the persist cache for every tab.
+      if (
+        isHostEpicTerminalRef(ref) &&
+        ref.legacyFallback.name === fallbackName &&
+        ref.legacyFallback.titleSource === titleSource &&
+        ref.legacyFallback.cwd === terminal.record.launch.cwd &&
+        ref.legacyFallback.shellCommand ===
+          terminal.record.launch.shellCommand &&
+        shellArgsEqual(
+          ref.legacyFallback.shellArgs,
+          terminal.record.launch.shellArgs,
+        )
+      ) {
+        return ref;
+      }
+      return {
+        id: ref.id,
+        instanceId: ref.instanceId,
+        type: "terminal",
+        name: ref.name,
+        hostId: ref.hostId,
+        authority: "host",
+        legacyFallback: {
+          name: fallbackName,
+          titleSource,
+          cwd: terminal.record.launch.cwd,
+          shellCommand: terminal.record.launch.shellCommand,
+          shellArgs: terminal.record.launch.shellArgs,
+        },
+        ...(ref.origin === undefined ? {} : { origin: ref.origin }),
+        ...(ref.originProviderId === undefined
+          ? {}
+          : { originProviderId: ref.originProviderId }),
+      };
+    },
+  );
+}
+
+/**
+ * Remove every supported local presentation ref for an authoritative host
+ * deletion. Legacy refs are migration evidence, but a deletion/tombstone is
+ * conclusive; only unknown future-authority refs remain presentation-only.
+ */
+export function removeTerminalTiles(
+  state: EpicCanvasState,
+  hostId: string,
+  terminalId: string,
+): EpicCanvasState {
+  const instanceIds = Object.values(state.tilesByInstanceId).flatMap((ref) =>
+    ref?.type === "terminal" &&
+    !isUnsupportedEpicTerminalRef(ref) &&
+    ref.hostId === hostId &&
+    ref.id === terminalId
+      ? [ref.instanceId]
+      : [],
+  );
+  return instanceIds.reduce((current, instanceId) => {
+    const pane = collectPanes(current.root).find((candidate) =>
+      candidate.tabInstanceIds.includes(instanceId),
+    );
+    return pane === undefined
+      ? current
+      : closeTab(current, pane.id, instanceId);
+  }, state);
 }
 
 export function updateGitDiffTileView(
@@ -1346,7 +1635,10 @@ export function updateGitDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isGitDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
+    // Re-narrowed here, not just in the predicate: `view` is per-kind now that
+    // the comm-graph tile carries a viewport-shaped one, so a bare spread over
+    // the union would type-check against the wrong kind.
+    (ref) => (isGitDiffTileRef(ref) ? { ...ref, view } : ref),
   );
 }
 
@@ -1358,7 +1650,34 @@ export function updateSnapshotDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
+    (ref) => (isSnapshotDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * Persist a comm-graph tile's viewport. Called on gesture END (React Flow's
+ * `onMoveEnd`), never per animation frame - the canvas snapshot is serialized
+ * on every write, so a per-frame pan would churn the whole persistence path.
+ */
+export function updateCommGraphTileView(
+  state: EpicCanvasState,
+  tileId: string,
+  view: CommGraphTileViewState,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        ref.view.x === view.x &&
+        ref.view.y === view.y &&
+        ref.view.zoom === view.zoom
+      ) {
+        return ref;
+      }
+      return { ...ref, view };
+    },
   );
 }
 
@@ -1390,11 +1709,62 @@ export function toggleSnapshotDiffBundleFileCollapsed(
   );
 }
 
+export function updatePrDiffTileView(
+  state: EpicCanvasState,
+  tileId: string,
+  view: PrDiffTileViewState,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isPrDiffTileRef(ref),
+    // Re-narrowed here for the same reason as `updateGitDiffTileView`: `view`
+    // is per-kind now that the comm-graph tile carries a viewport-shaped one,
+    // so a bare spread over the union would type-check against the wrong kind.
+    (ref) => (isPrDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * No `ref.diff.kind` gate, unlike the git and snapshot pairs: a PR diff tile
+ * is ALWAYS the multi-file view (there is no single-file PR diff tile), so
+ * there is no non-bundle variant to exclude.
+ *
+ * `fileKey` is a tagged canonical key (`prLocalDiffFileKey`), toggled in the
+ * PR tile's own `collapsedFileKeys` - deliberately NOT the shared
+ * `toggleCollapsedFilePath`, whose bare-path field the PR tile no longer
+ * reads or writes.
+ */
+export function togglePrDiffFileCollapsed(
+  state: EpicCanvasState,
+  tileId: string,
+  fileKey: string,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isPrDiffTileRef(ref),
+    (ref) => {
+      if (!isPrDiffTileRef(ref)) return ref;
+      const collapsed = new Set(ref.view.collapsedFileKeys);
+      if (collapsed.has(fileKey)) {
+        collapsed.delete(fileKey);
+      } else {
+        collapsed.add(fileKey);
+      }
+      return {
+        ...ref,
+        view: { ...ref.view, collapsedFileKeys: [...collapsed] },
+      };
+    },
+  );
+}
+
 function toggleCollapsedFilePath(
   ref: EpicCanvasTileRef,
   filePath: string,
 ): EpicCanvasTileRef {
-  if (!isGitDiffTileRef(ref) && !isSnapshotDiffTileRef(ref)) return ref;
+  if (!isGitDiffTileRef(ref) && !isSnapshotDiffTileRef(ref)) {
+    return ref;
+  }
   const collapsed = new Set(ref.view.collapsedFilePaths);
   if (collapsed.has(filePath)) {
     collapsed.delete(filePath);

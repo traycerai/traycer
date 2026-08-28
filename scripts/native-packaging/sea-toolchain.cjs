@@ -249,11 +249,9 @@ function provisionOfficialNode() {
     `[sea] host '${process.execPath}' is not SEA-capable; downloading official Node ${version} (${platform}-${arch})`,
   );
   console.warn(`[sea]   ${url}`);
-  const curl = spawnSync(
-    "curl",
-    ["-fSL", "--retry", "3", "-o", tarball, url],
-    { stdio: "inherit" },
-  );
+  const curl = spawnSync("curl", ["-fSL", "--retry", "3", "-o", tarball, url], {
+    stdio: "inherit",
+  });
   if (curl.status !== 0) {
     throw new Error(
       `Failed to download official Node from ${url} (curl exit ${curl.status}). ` +

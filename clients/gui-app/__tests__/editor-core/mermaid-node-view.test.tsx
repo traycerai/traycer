@@ -12,11 +12,17 @@ import { EditorContent, EditorContext } from "@tiptap/react";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 
 // The download path lives in a shared lib module; mock it on its own.
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
-  saveBlobToDisk: vi.fn().mockResolvedValue("mermaid-diagram.png"),
+  saveBlobToDisk: vi
+    .fn()
+    .mockResolvedValue({ name: "mermaid-diagram.png", path: null }),
+  // Browser-runtime shape: no path comes back, so no "Open file" action.
+  canOpenSavedFile: () => false,
+  openSavedFile: vi.fn(),
 }));
 
 // Mocks must be declared before the editor imports the service.
@@ -37,6 +43,7 @@ vi.mock("@/editor-core/nodes/mermaid/mermaid-service", () => {
       .mockResolvedValue(new Blob(["mock-png"], { type: "image/png" })),
     subscribeMermaidTheme: vi.fn().mockReturnValue(() => undefined),
     getMermaidThemeVersion: vi.fn().mockReturnValue(0),
+    getSvgIntrinsicSize: vi.fn().mockReturnValue({ width: 10, height: 10 }),
     deriveMermaidAriaLabel: (code: string): string => {
       const firstLine = code
         .split("\n")
@@ -108,11 +115,13 @@ function makeQueryClient() {
 function renderMermaidEditor(editor: Editor) {
   const queryClient = makeQueryClient();
   render(
-    <QueryClientProvider client={queryClient}>
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>
-    </QueryClientProvider>,
+    <TooltipProvider>
+      <QueryClientProvider client={queryClient}>
+        <EditorContext.Provider value={{ editor }}>
+          <EditorContent editor={editor} />
+        </EditorContext.Provider>
+      </QueryClientProvider>
+    </TooltipProvider>,
   );
   return queryClient;
 }
@@ -123,7 +132,10 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.mocked(saveBlobToDisk).mockReset();
-  vi.mocked(saveBlobToDisk).mockResolvedValue("mermaid-diagram.png");
+  vi.mocked(saveBlobToDisk).mockResolvedValue({
+    name: "mermaid-diagram.png",
+    path: null,
+  });
   // jsdom does not implement clipboard.writeText; install a stub.
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -139,10 +151,28 @@ describe("MermaidNodeView", () => {
       editable: true,
     });
     renderMermaidEditor(editor);
-    const region = await screen.findByRole("img", { name: /graph TD/ });
-    await waitFor(() => {
-      expect(region.querySelector("svg")).not.toBeNull();
+    const diagram = await screen.findByRole("button", {
+      name: /expand diagram: graph TD/i,
     });
+    await waitFor(() => {
+      expect(diagram.querySelector("svg")).not.toBeNull();
+    });
+    editor.destroy();
+  });
+
+  it("opens the fullscreen preview by clicking the rendered diagram", async () => {
+    const editor = mountMermaidEditor({
+      code: "graph TD\n  A --> B",
+      editable: true,
+    });
+    renderMermaidEditor(editor);
+
+    const diagram = await screen.findByRole("button", {
+      name: /expand diagram: graph TD/i,
+    });
+    fireEvent.click(diagram);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
     editor.destroy();
   });
 
@@ -161,6 +191,7 @@ describe("MermaidNodeView", () => {
     expect(
       await screen.findByRole("button", { name: /edit source/i }),
     ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /fullscreen/i })).toBeNull();
     editor.destroy();
   });
 
@@ -198,8 +229,8 @@ describe("MermaidNodeView", () => {
 
   it("ignores overlapping download clicks while the save picker is open", async () => {
     const saveBlobToDiskMock = vi.mocked(saveBlobToDisk);
-    let resolveSave = (_value: string | null): void => undefined;
-    const pendingSave = new Promise<string | null>((resolve) => {
+    let resolveSave = (_value: SavedFile | null): void => undefined;
+    const pendingSave = new Promise<SavedFile | null>((resolve) => {
       resolveSave = resolve;
     });
     saveBlobToDiskMock.mockReturnValueOnce(pendingSave);
@@ -212,9 +243,11 @@ describe("MermaidNodeView", () => {
     const download = await screen.findByRole("button", {
       name: /download png/i,
     });
-    const region = await screen.findByRole("img", { name: /graph TD/ });
+    const diagram = await screen.findByRole("button", {
+      name: /expand diagram: graph TD/i,
+    });
     await waitFor(() => {
-      expect(region.querySelector("svg")).not.toBeNull();
+      expect(diagram.querySelector("svg")).not.toBeNull();
       expect((download as HTMLButtonElement).disabled).toBe(false);
     });
 
@@ -225,7 +258,7 @@ describe("MermaidNodeView", () => {
     });
     fireEvent.click(download);
     expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
-    resolveSave("mermaid-diagram.png");
+    resolveSave({ name: "mermaid-diagram.png", path: null });
     await waitFor(() => {
       expect((download as HTMLButtonElement).disabled).toBe(false);
     });

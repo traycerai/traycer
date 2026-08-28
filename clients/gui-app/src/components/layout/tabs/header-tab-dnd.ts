@@ -14,6 +14,8 @@ export const HEADER_TAB_SLOT_DND_TYPE = "header-tab-slot";
 
 export interface HeaderTabDragData {
   readonly kind: typeof HEADER_TAB_DND_TYPE;
+  /** Authoritative strip item id; a split group is always one source. */
+  readonly stripItemId: string;
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
   /** Rendered strip index at drag start - drives reorder noop suppression. */
@@ -40,6 +42,10 @@ export function getHeaderTabSlotDropId(
   id: string,
 ): string {
   return `header-tab-slot:${kind}:${id}`;
+}
+
+export function getHeaderStripItemSlotDropId(itemId: string): string {
+  return `header-tab-slot:item:${itemId}`;
 }
 
 export const HEADER_TAB_TRAILING_SLOT_DROP_ID = "header-tab-slot:trailing";
@@ -71,6 +77,13 @@ export function readHeaderTabDragData(
   }
   return {
     kind: HEADER_TAB_DND_TYPE,
+    // Older drag payloads carried only a member ref. Keep them readable so a
+    // drag begun before a hot reload is harmless; current sources always
+    // provide the authoritative item id.
+    stripItemId:
+      typeof value.stripItemId === "string" && value.stripItemId.length > 0
+        ? value.stripItemId
+        : `tab:${tabKind}:${value.tabId}`,
     tabKind,
     tabId: value.tabId,
     index: value.index,
@@ -98,10 +111,11 @@ export function readHeaderTabSlotDropData(
 }
 
 /**
- * Pointer-x midpoint insertion-index resolution over a header slot, with
- * reorder noop suppression for header-tab sources (`sourceIndex` is the
- * dragged tab's rendered index; pass null for canvas tear-off sources,
- * which have no noop slot).
+ * Pointer-x midpoint insertion-index resolution over a header slot, for CANVAS
+ * TEAR-OFF onto the strip - a source with no slot of its own, so hit-testing
+ * cannot feed back on itself. Header-tab reorder does NOT come through here; it
+ * resolves from `header-strip-drag-model.ts` instead. `sourceIndex` is retained
+ * for the noop-suppression case and is null for tear-off.
  */
 export function resolveHeaderStripDropIndex(input: {
   readonly slot: HeaderTabSlotDropData;

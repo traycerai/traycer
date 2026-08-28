@@ -137,12 +137,14 @@ describe("epic canvas dnd-kit data guards", () => {
         kind: "sidebar-node",
         epicId: "epic-1",
         viewTabId: "view-1",
+        hostId: "host-1",
         nodeId: "node-1",
       }),
     ).toEqual({
       kind: "sidebar-node",
       epicId: "epic-1",
       viewTabId: "view-1",
+      hostId: "host-1",
       nodeId: "node-1",
     });
   });
@@ -291,22 +293,26 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
         panelId: "chats",
         origin: "rail",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
       panelId: "chats",
       origin: "rail",
     });
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
         panelId: "artifacts",
         origin: "panel-section",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
       panelId: "artifacts",
       origin: "panel-section",
     });
@@ -316,6 +322,7 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-b",
         panelId: "",
         origin: "rail",
       }),
@@ -323,6 +330,7 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-b",
         panelId: "source-control",
         origin: "rail",
       }),
@@ -391,26 +399,32 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
         panelId: "artifacts",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
       panelId: "artifacts",
     });
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-rail-list",
+        viewTabId: "tab-a",
       }),
     ).toEqual({
       kind: "left-panel-rail-list",
+      viewTabId: "tab-a",
     });
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-group",
+        viewTabId: "tab-a",
         panelIds: ["chats", "git-diff"],
       }),
     ).toEqual({
       kind: "left-panel-group",
+      viewTabId: "tab-a",
       panelIds: ["chats", "git-diff"],
     });
   });
@@ -711,6 +725,7 @@ describe("getEpicCanvasDropPreview", () => {
         },
         rect,
         { x: 80, y: 50 },
+        false,
       ),
     ).toEqual({
       kind: "artifact-tab-strip",
@@ -730,6 +745,7 @@ describe("getEpicCanvasDropPreview", () => {
         },
         rect,
         { x: 5, y: 50 },
+        false,
       ),
     ).toEqual({
       kind: "artifact-tab-group-body",
@@ -744,9 +760,11 @@ describe("getEpicCanvasDropPreview", () => {
         { kind: "empty-shell", epicId: "epic-1", viewTabId: "view-1" },
         null,
         { x: 0, y: 0 },
+        false,
       ),
     ).toEqual({
       kind: "empty-shell",
+      viewTabId: "view-1",
     });
   });
 
@@ -759,6 +777,7 @@ describe("getEpicCanvasDropPreview", () => {
         },
         rect,
         { x: 20, y: 50 },
+        false,
       ),
     ).toEqual({
       kind: "left-panel-rail",
@@ -772,6 +791,7 @@ describe("getEpicCanvasDropPreview", () => {
         },
         rect,
         { x: 20, y: 50 },
+        false,
       ),
     ).toEqual({
       kind: "left-panel-rail-list",
@@ -784,6 +804,7 @@ describe("getEpicCanvasDropPreview", () => {
         },
         rect,
         { x: 20, y: 50 },
+        false,
       ),
     ).toBeNull();
   });
@@ -873,5 +894,67 @@ describe("getEpicCanvasDropPreview", () => {
     expect(
       getLeftPanelGroupDropPreview(target, [], { x: 20, y: 20 }),
     ).toBeNull();
+  });
+
+  /**
+   * The corridor's WIRING, not its geometry.
+   *
+   * `pane-corridor-geometry.test.ts` covers the pure function exhaustively, but
+   * nothing asserted that `getEpicCanvasDropPreview` actually consults it - the
+   * `useNeutralCorridor === true` branch had no direct test, so the pure
+   * geometry could have been correct while the consumer ignored it. These are
+   * the two answers that differ between the branches.
+   */
+  describe("neutral corridor wiring", () => {
+    const paneRect = { left: 0, top: 0, width: 600, height: 600 };
+    const bodyTarget = {
+      kind: "artifact-tab-group-body",
+      viewTabId: "view-1",
+      groupId: "group-1",
+      tabCount: 2,
+    } as const;
+
+    it("returns NULL in the corridor when the corridor is enabled", () => {
+      // Between the 48px edge band and the 140px centre box on a 600px pane.
+      const corridorPoint = { x: 120, y: 300 };
+      expect(
+        getEpicCanvasDropPreview(bodyTarget, paneRect, corridorPoint, true),
+      ).toBeNull();
+    });
+
+    it("still commits a split at the same point with the corridor disabled", () => {
+      // The same coordinates under the legacy nearest-edge fallback resolve to
+      // a position - which is precisely the behaviour change the corridor makes,
+      // and why the flag has to be passed explicitly at every call site.
+      const corridorPoint = { x: 120, y: 300 };
+      expect(
+        getEpicCanvasDropPreview(bodyTarget, paneRect, corridorPoint, false),
+      ).not.toBeNull();
+    });
+
+    it("resolves the centre box to center with the corridor enabled", () => {
+      expect(
+        getEpicCanvasDropPreview(
+          bodyTarget,
+          paneRect,
+          { x: 300, y: 300 },
+          true,
+        ),
+      ).toEqual({
+        kind: "artifact-tab-group-body",
+        groupId: "group-1",
+        position: "center",
+      });
+    });
+
+    it("resolves the edge band to a split with the corridor enabled", () => {
+      expect(
+        getEpicCanvasDropPreview(bodyTarget, paneRect, { x: 10, y: 300 }, true),
+      ).toEqual({
+        kind: "artifact-tab-group-body",
+        groupId: "group-1",
+        position: "left",
+      });
+    });
   });
 });

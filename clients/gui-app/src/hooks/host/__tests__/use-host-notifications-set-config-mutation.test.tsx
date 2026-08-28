@@ -15,6 +15,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostNotificationsSetConfigForClient } from "@/hooks/host/use-host-notifications-set-config-mutation";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 type NotificationConfig = ResponseOfMethod<
@@ -45,9 +46,17 @@ describe("useHostNotificationsSetConfigForClient", () => {
     const mutationResponse = new Promise<NotificationConfig>((resolve) => {
       resolveMutation = resolve;
     });
-    const client = new HostClient<HostRpcRegistry>({
+    const hostA = { ...mockLocalHostEntry, hostId: "host-a" };
+    const hostB = { ...mockRemoteHostEntry, hostId: "host-b" };
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      findHostById: (hostId) => {
+        if (hostId === hostA.hostId) return hostA;
+        if (hostId === hostB.hostId) return hostB;
+        return null;
+      },
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-1",
@@ -59,13 +68,13 @@ describe("useHostNotificationsSetConfigForClient", () => {
         },
       }),
     });
-    client.bind({ ...mockLocalHostEntry, hostId: "host-a" });
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    let client = spine.createRequester(hostA);
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
         {props.children}
@@ -85,9 +94,13 @@ describe("useHostNotificationsSetConfigForClient", () => {
       expect(setRequests).toHaveLength(1);
     });
 
+    // A host swap is now a NEW pinned requester passed on the next render,
+    // not a mutation of the same client's bound identity (redesign P4.2
+    // deleted the active slot `.bind()` used to drive this).
     act(() => {
-      client.bind({ ...mockRemoteHostEntry, hostId: "host-b" });
+      client = spine.createRequester(hostB);
     });
+    rendered.rerender();
     await act(async () => {
       resolveMutation(makeNotificationConfig());
       await mutationResponse;

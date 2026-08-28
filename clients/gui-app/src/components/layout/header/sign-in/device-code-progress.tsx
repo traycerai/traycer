@@ -7,7 +7,7 @@ import { type DeviceFlowProgress } from "@/lib/auth/auth-service";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import { DeviceCodeFallback } from "./device-code-fallback";
-import { useRemainingDeviceSeconds } from "./use-remaining-device-seconds";
+import { useRemainingSeconds } from "./use-remaining-seconds";
 
 /**
  * Active device-flow progress. The app already auto-opens the pre-filled
@@ -24,8 +24,11 @@ export function DeviceCodeProgress(props: {
   const openVerificationPageMutation = useAuthOpenVerificationPageMutation();
   const signInMutation = useAuthSignInMutation();
   const progress = props.progress;
-  const remainingSeconds = useRemainingDeviceSeconds(progress.expiresAtMs);
-  const isExpired = remainingSeconds === 0;
+  const remainingSeconds = useRemainingSeconds(progress.expiresAtMs);
+  const isFinalizing = progress.phase === "finalizing";
+  // A consumed (approved) code can no longer expire - finalizing wins over the
+  // countdown reaching zero while the token is validated.
+  const isExpired = !isFinalizing && remainingSeconds === 0;
   const expiryCopy = isExpired
     ? "Code expired"
     : `Expires in ${formatClockDuration(remainingSeconds)}`;
@@ -70,7 +73,7 @@ export function DeviceCodeProgress(props: {
             "flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-3 py-2 text-ui-xs",
             props.isHero
               ? "border-white/10 bg-black/[0.18] text-white/[0.65]"
-              : "border-border/70 bg-muted/30 text-muted-foreground",
+              : "border-border/70 bg-foreground/3 text-muted-foreground",
           )}
         >
           {isExpired ? (
@@ -85,13 +88,19 @@ export function DeviceCodeProgress(props: {
                 className="ml-0.5 shrink-0"
                 testId="signin-device-spinner"
               />
-              <span className="shrink-0">Waiting for approval</span>
+              <span className="shrink-0">
+                {isFinalizing
+                  ? "Approved - finishing sign-in"
+                  : "Waiting for approval"}
+              </span>
             </div>
           )}
-          <div className="flex items-center gap-1">
-            <Clock className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="truncate">{expiryCopy}</span>
-          </div>
+          {!isFinalizing && (
+            <div className="flex items-center gap-1">
+              <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{expiryCopy}</span>
+            </div>
+          )}
         </div>
 
         <DeviceCodeFallback progress={progress} isHero={props.isHero} />

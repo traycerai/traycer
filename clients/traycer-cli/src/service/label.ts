@@ -1,5 +1,6 @@
 import { homedir, platform as osPlatform } from "node:os";
 import { join } from "node:path";
+import { HOST_START_LAUNCHER_BASENAME } from "@traycer-clients/shared/host-lifecycle";
 import type { Environment } from "../runner/environment";
 import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
 
@@ -68,6 +69,25 @@ export function serviceLabelFor(environment: Environment): ServiceLabel {
   };
 }
 
+// The label Traycer Desktop registers via SMAppService for the same
+// environment's host: `<cli-label>.agent`. Split from the CLI label because
+// macOS BTM matches an SMAppService registration to an existing legacy
+// record (a raw `~/Library/LaunchAgents` plist ever registered under the
+// label) BY LABEL, and that record survives file deletion and bootout -
+// same-label registration lands `not-registered` forever on such machines.
+// The CLI never registers this label; it only probes it (install refusal /
+// status ownership) and boots it out on uninstall.
+//
+// LOCKSTEP: the `.agent` derivation is duplicated in the desktop's
+// `electron-main/host/host-paths.ts` (`smAppServiceAgentLabelId`), the OSS
+// packaging injector (`clients/desktop/scripts/prepack/
+// inject-host-launch-agent.cjs`), and the internal repo's
+// `scripts/desktop-install-cloud.js` (`hostAgentLabel`) - separate bundles
+// that cannot import this module. Change all four together.
+export function smAppServiceAgentLabelId(label: ServiceLabel): string {
+  return `${label.id}.agent`;
+}
+
 // Platform-specific manifest path (plist / unit / task XML).
 // Windows Scheduled Tasks aren't filesystem-backed - we return the
 // empty string as a sentinel; the Windows controller uses the task
@@ -82,6 +102,23 @@ export function serviceManifestPath(label: ServiceLabel): string {
     return "";
   }
   return join(home, ".config", "systemd", "user", `${label.id}.service`);
+}
+
+// On-disk home of the macOS launcher file the LaunchAgent executes
+// (`~/.traycer/service/<label-id>/traycer-host-start`). The label id is the
+// parent directory - load-bearing, not tidiness: the shared recognizer
+// (`attestTraycerRegistration`) matches a launcher-form plist to a label by
+// finding `/<label-id>/` in `ProgramArguments[0]`, and the basename is the
+// name macOS shows in Login Items. Written by `service install` alongside
+// the plist and removed by `service uninstall`.
+export function serviceLauncherScriptPath(label: ServiceLabel): string {
+  return join(
+    homedir(),
+    ".traycer",
+    "service",
+    label.id,
+    HOST_START_LAUNCHER_BASENAME,
+  );
 }
 
 // Windows Scheduled Task identifier. production = `\Traycer\Host`,

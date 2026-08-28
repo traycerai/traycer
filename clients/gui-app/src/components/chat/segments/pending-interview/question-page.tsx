@@ -1,56 +1,56 @@
 import { useCallback, type ReactNode } from "react";
-import { CircleHelp, Pencil } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
 import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import type { DraftAnswer } from "./interview-draft";
 import { QUESTION_TRANSITION } from "./use-interview-card";
 
 const OTHER_LABEL = "Other";
 
-const ANSWER_TEXTAREA_CLASS =
-  "w-full resize-none rounded-md border border-input bg-background/70 px-2.5 py-2 text-ui-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40";
-
-interface DetailItem {
-  readonly label: string;
-  readonly value: string;
-}
-
-function normalizedText(value: string | null): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function detailItem(label: string, value: string | null): DetailItem | null {
-  const text = normalizedText(value);
-  return text === null ? null : { label, value: text };
-}
-
-function compactDetails(items: ReadonlyArray<DetailItem | null>) {
-  return items.filter((item): item is DetailItem => item !== null);
-}
-
-function optionDetails(
+function interviewOptionKey(
+  options: ReadonlyArray<InterviewQuestionOption>,
   option: InterviewQuestionOption,
-): ReadonlyArray<DetailItem> {
-  return compactDetails([
-    detailItem("Details", option.description),
-    detailItem("Preview", option.preview),
-  ]);
+  index: number,
+): string {
+  const fingerprint = [
+    option.label,
+    option.description ?? "",
+    option.preview ?? "",
+  ].join("\u0000");
+  const occurrence = options.slice(0, index).filter((candidate) => {
+    const candidateFingerprint = [
+      candidate.label,
+      candidate.description ?? "",
+      candidate.preview ?? "",
+    ].join("\u0000");
+    return candidateFingerprint === fingerprint;
+  }).length;
+  return `${fingerprint}\u0000${occurrence}`;
 }
+
+const ANSWER_TEXTAREA_CLASS =
+  "w-full resize-none rounded-md border border-input bg-background/70 px-2.5 py-2 text-ui-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60";
 
 interface QuestionPageProps {
   question: InterviewQuestion;
   draft: DraftAnswer;
   // Gates auto-focus so a background pane's field never steals focus.
   isActive: boolean;
-  pendingLabel: string | null;
-  onToggleOption: (label: string) => void;
+  // True while a Submit/Skip this card sent is in flight or accepted but
+  // unresolved. Natively disables every option button and text field so they
+  // are neither focusable, typeable, nor exposed as actionable to assistive
+  // tech - callbacks already reject while busy, but the controls must also
+  // look and behave disabled.
+  disabled: boolean;
+  pendingOptionIndex: number | null;
+  onToggleOption: (optionIndex: number) => void;
   onToggleOther: () => void;
   onOtherTextChange: (text: string) => void;
   onFreeTextChange: (text: string) => void;
@@ -61,7 +61,8 @@ export function QuestionPage(props: QuestionPageProps) {
     question,
     draft,
     isActive,
-    pendingLabel,
+    disabled,
+    pendingOptionIndex,
     onToggleOption,
     onToggleOther,
     onOtherTextChange,
@@ -75,15 +76,22 @@ export function QuestionPage(props: QuestionPageProps) {
   // deferred one frame for the same reason as the card itself: a pane is
   // activated on pointerdown, and the trailing mousedown's native focus would
   // otherwise steal focus before this runs (see useInterviewCard).
+  // On the installed mobile app it does nothing: a question rendering, or its
+  // tab becoming active, is not a tap, and a phone keyboard must be summoned by
+  // a tap. Tapping the field there focuses it the ordinary way.
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
-      if (!isActive || node === null) return;
+      if (!isActive || disabled || node === null || isMobileApp()) return;
       const frame = window.requestAnimationFrame(() => {
         node.focus({ preventScroll: true });
       });
       return () => window.cancelAnimationFrame(frame);
     },
-    [isActive],
+    // `disabled` is a dependency (not just a guard) so the ref re-runs and
+    // restores focus when a rejected action clears the busy gate: a disabled
+    // field cannot take focus, and a callback ref only re-fires when its
+    // identity changes, not merely when the prop it reads changes.
+    [disabled, isActive],
   );
 
   // A question with no options is pure free-text: a single textarea that
@@ -98,6 +106,7 @@ export function QuestionPage(props: QuestionPageProps) {
         className={ANSWER_TEXTAREA_CLASS}
         rows={2}
         aria-label="Interview answer"
+        disabled={disabled}
       />
     );
   }
@@ -106,19 +115,20 @@ export function QuestionPage(props: QuestionPageProps) {
     <div className="flex flex-col gap-1.5">
       <ul className="m-0 flex list-none flex-col gap-1.5 pl-0">
         {question.options.map((option, index) => {
-          const selected = draft.selected.has(option.label);
+          const selected = draft.selected.has(index);
           return (
-            <li key={option.label}>
+            <li key={interviewOptionKey(question.options, option, index)}>
               <OptionRow
                 label={option.label}
                 ariaLabel={`${index + 1}. ${option.label}`}
-                details={optionDetails(option)}
+                option={option}
                 selected={selected}
-                pending={pendingLabel === option.label}
+                pending={pendingOptionIndex === index}
+                disabled={disabled}
                 badge={
                   <OptionNumberBadge index={index + 1} selected={selected} />
                 }
-                onToggle={() => onToggleOption(option.label)}
+                onToggle={() => onToggleOption(index)}
               />
             </li>
           );
@@ -127,6 +137,7 @@ export function QuestionPage(props: QuestionPageProps) {
       <OtherRow
         selected={draft.otherSelected}
         value={draft.otherText}
+        disabled={disabled}
         inputRef={focusFieldIfActive}
         onSelect={onToggleOther}
         onValueChange={onOtherTextChange}
@@ -138,6 +149,7 @@ export function QuestionPage(props: QuestionPageProps) {
 interface OtherRowProps {
   selected: boolean;
   value: string;
+  disabled: boolean;
   inputRef: (node: HTMLTextAreaElement | null) => void;
   onSelect: () => void;
   onValueChange: (text: string) => void;
@@ -147,7 +159,8 @@ interface OtherRowProps {
 // a pencil badge; selecting it (click or the N+1 key) morphs the row in place
 // into a focused multi-line answer field.
 function OtherRow(props: OtherRowProps) {
-  const { selected, value, inputRef, onSelect, onValueChange } = props;
+  const { selected, value, disabled, inputRef, onSelect, onValueChange } =
+    props;
   if (selected) {
     return (
       <div className="relative flex w-full items-start gap-2 rounded-md border border-input bg-background/70 px-2 py-1.5 transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40">
@@ -158,8 +171,10 @@ function OtherRow(props: OtherRowProps) {
           onChange={(e) => onValueChange(e.target.value)}
           placeholder="Type your answer…"
           aria-label={`${OTHER_LABEL} answer`}
+          data-native-scrollbar="true"
           rows={1}
-          className="field-sizing-content max-h-[3lh] min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-ui-sm text-foreground outline-none placeholder:text-muted-foreground chat-scrollbar-native-thin"
+          className="field-sizing-content max-h-[3lh] min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-ui-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={disabled}
         />
       </div>
     );
@@ -168,9 +183,10 @@ function OtherRow(props: OtherRowProps) {
     <OptionRow
       label={OTHER_LABEL}
       ariaLabel={OTHER_LABEL}
-      details={[]}
+      option={null}
       selected={false}
       pending={false}
+      disabled={disabled}
       badge={<OtherIconBadge selected={false} />}
       onToggle={onSelect}
     />
@@ -198,16 +214,25 @@ function OtherIconBadge(props: { selected: boolean }) {
 interface OptionRowProps {
   label: string;
   ariaLabel: string;
-  details: ReadonlyArray<DetailItem>;
+  option: InterviewQuestionOption | null;
   selected: boolean;
   pending: boolean;
+  disabled: boolean;
   badge: ReactNode;
   onToggle: () => void;
 }
 
 function OptionRow(props: OptionRowProps) {
-  const { label, ariaLabel, details, selected, pending, badge, onToggle } =
-    props;
+  const {
+    label,
+    ariaLabel,
+    option,
+    selected,
+    pending,
+    disabled,
+    badge,
+    onToggle,
+  } = props;
   const shouldReduceMotion = useReducedMotion();
   return (
     <m.div
@@ -219,10 +244,24 @@ function OptionRow(props: OptionRowProps) {
     >
       <div
         className={cn(
-          "relative flex w-full items-center gap-2 rounded-md border border-transparent bg-muted/25 px-2 py-1.5 transition-colors",
+          "relative flex w-full items-center gap-2 rounded-md border border-transparent bg-foreground/3 px-2 py-1.5 transition-colors",
           selected
-            ? "border-border bg-muted/70 text-foreground shadow-sm"
-            : "text-muted-foreground hover:border-border/70 hover:bg-muted/40 hover:text-foreground",
+            ? "border-border bg-foreground/6 text-foreground shadow-sm"
+            : "text-muted-foreground",
+          // `hover:*` matches an ancestor whenever ANY hit-tested descendant
+          // is hovered - including through this row's own `pointer-events:
+          // none` state, since the shared details button deliberately keeps
+          // `pointer-events-auto` so its tooltip stays usable. So hovering it
+          // alone would still light up the row unless these classes are
+          // omitted outright while disabled; `pointer-events-none` here
+          // can't suppress that.
+          !disabled &&
+            !selected &&
+            "hover:border-border/70 hover:bg-foreground/5 hover:text-foreground",
+          // The overlay button below is transparent (no visible pixels of
+          // its own), so a `disabled:` class on it has nothing to dim. Apply
+          // the disabled look to this visible container instead.
+          disabled && "opacity-60",
         )}
       >
         <button
@@ -230,16 +269,20 @@ function OptionRow(props: OptionRowProps) {
           onClick={onToggle}
           aria-pressed={selected}
           aria-label={ariaLabel}
+          disabled={disabled}
           className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
         />
         <span className="pointer-events-none relative z-10 min-w-0 truncate font-medium text-foreground/90">
           {label}
         </span>
-        <InfoHint
-          ariaLabel={`${label} details`}
-          details={details}
-          className="pointer-events-auto relative z-20 self-center"
-        />
+        {option === null ? null : (
+          <InterviewOptionDetailsButton
+            label={label}
+            option={option}
+            className="pointer-events-auto relative z-20 self-center"
+            pinnedDetailRegionId={null}
+          />
+        )}
         <span aria-hidden className="pointer-events-none min-w-0 flex-1" />
         {badge}
       </div>
@@ -262,49 +305,5 @@ function OptionNumberBadge(props: { index: number; selected: boolean }) {
     >
       {props.index}
     </span>
-  );
-}
-
-interface InfoHintProps {
-  readonly ariaLabel: string;
-  readonly details: ReadonlyArray<DetailItem>;
-  readonly className: string | null;
-}
-
-function InfoHint(props: InfoHintProps) {
-  if (props.details.length === 0) return null;
-  return (
-    <TooltipWrapper
-      label={<DetailsTooltip details={props.details} />}
-      side="top"
-      sideOffset={6}
-      align="center"
-    >
-      <button
-        type="button"
-        aria-label={props.ariaLabel}
-        className={cn(
-          "inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
-          props.className,
-        )}
-      >
-        <CircleHelp className="size-3.5" aria-hidden />
-      </button>
-    </TooltipWrapper>
-  );
-}
-
-function DetailsTooltip(props: {
-  readonly details: ReadonlyArray<DetailItem>;
-}) {
-  return (
-    <div className="flex max-w-[min(80vw,20rem)] flex-col gap-2 text-ui-xs">
-      {props.details.map((detail) => (
-        <div key={detail.label} className="flex flex-col gap-0.5">
-          <span className="font-medium text-background/70">{detail.label}</span>
-          <span className="text-background">{detail.value}</span>
-        </div>
-      ))}
-    </div>
   );
 }

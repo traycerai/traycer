@@ -4,6 +4,8 @@
 @import "@fontsource-variable/figtree";
 @import "./editor-core/styles/editor.css";
 @import "./styles/terminal-themes.css";
+@import "./styles/usage-analytics-chart.css";
+@import "./styles/image-preview.css";
 
 @custom-variant dark (&:is(.dark *));
 /* Window Controls Overlay: active only when Chromium reports the
@@ -37,6 +39,88 @@
   40% {
     opacity: 1;
     transform: translateY(-1px);
+  }
+}
+
+/* Indeterminate host-progress bar: a segment sweeping across the track, for a
+   stage that is RUNNING but reports no percentage (verify, extract, swap,
+   service-start). Plain CSS for the same reason as the shimmer above - no motion
+   runtime, so it animates regardless of the LazyMotion provider.
+
+   It must MOVE. A static full-width fill was the previous behaviour here and it
+   was a lie: the progress carry-forward used to leak a completed download's 100%
+   into the next stage, so the card sat at a full bar for minutes of real work. A
+   motionless indeterminate bar would be that same claim in a new costume.
+
+   `transform` only, so it composites without laying out - this runs for the whole
+   multi-minute extract. */
+@keyframes host-progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+@keyframes prompt-stash-count-flash {
+  0%,
+  72% {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-primary) 18%, transparent);
+  }
+  /* The animation is `both`, so this frame is not a hand-off back to the
+     class - it is the element's permanent background from 700ms on. It must
+     therefore restate the pill's own `bg-foreground/8`, not `--muted`: every
+     preset dark defines `--muted` as its `--popover`/`--card` value, so a
+     muted terminal frame silently re-collapsed the count pill into the
+     composer surface the moment the first stash landed. */
+  100% {
+    background-color: color-mix(
+      in oklab,
+      var(--color-foreground) 8%,
+      transparent
+    );
+    color: inherit;
+    box-shadow: none;
+  }
+}
+
+.prompt-stash-count-flash {
+  animation: prompt-stash-count-flash 700ms ease-out both;
+}
+
+/* A label-only tooltip must never win hit-testing from what it covers.
+   `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
+   renders the content inside a positioning wrapper of exactly the same size,
+   and that wrapper keeps `pointer-events: auto` (Popper only sets `none` on it
+   for `hideWhenDetached`). So the wrapper still swallowed every click that
+   landed on the tooltip's rect - measured in a real browser against the
+   workspace folder picker, where rows are 28px apart and a `side="top"`
+   tooltip lands squarely on the row above: the covered row's controls never
+   received the click, and the cursor read as a text caret over the tooltip's
+   text (traycerai/traycer#466, #446).
+
+   Scoped by the direct child so only tooltip wrappers opt out - popovers,
+   dropdowns and hover cards hold real controls and must stay hit-testable. */
+[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+  pointer-events: none;
+}
+
+/* Attachment previews stay on one compact, independently scrollable row. */
+[data-composer-attachment-strip] {
+  scrollbar-width: none;
+}
+
+[data-composer-attachment-strip]::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-stash-count-flash {
+    animation-duration: 1ms;
   }
 }
 
@@ -132,8 +216,33 @@
     @apply font-heading;
   }
 
+  /*
+   * The app's single safe-area guarantee. `viewport-fit=cover` lets the phone
+   * web view paint under the status bar, so the mount point spends the insets
+   * on padding and everything inside it - routes, both shells, the readiness
+   * and error screens - starts inside the safe region without asking. The
+   * strips left behind show `body`'s themed background, so they read as the
+   * app continuing outward rather than as bands, in either theme.
+   *
+   * Both horizontal edges are reserved, not just the one the sensor housing is
+   * on: the app supports both landscape orientations (`Info.plist`), which put
+   * the housing on opposite sides, and a rotation must not have to re-lay-out
+   * the page. Whichever side is currently flat reports a zero inset anyway.
+   *
+   * The BOTTOM edge is deliberately not reserved here. A surface decides for
+   * itself whether the home indicator earns a gutter, because some are meant
+   * to run to the bottom edge and pad their contents instead.
+   *
+   * `position: fixed` escapes all of this, its containing block being the
+   * viewport and not the padding box, so portalled overlays inset themselves -
+   * see `--spacing-safe-center-y` and the `data-side` variants in
+   * `components/ui/sheet.tsx`.
+   */
   #root {
     min-height: 100vh;
+    padding-top: var(--safe-area-inset-top);
+    padding-right: var(--safe-area-inset-right);
+    padding-left: var(--safe-area-inset-left);
   }
 
   ::selection {
@@ -262,6 +371,27 @@
  * of plugin source order.
  */
 
+/*
+ * Tailmark nests each top-level block under:
+ *   .prose > [data-tailmark] > [display:contents host] > block
+ * Tailwind Typography only zeroes outer margins with `.prose > :first-child`
+ * / `:last-child`. With that wrapper the first/last *block roots* keep full
+ * paragraph margins, so chat surfaces grow awkward empty space at the start
+ * and end of every markdown body (and double gaps between segments such as
+ * thinking → answer). Re-apply the same zeroing through the Tailmark hosts.
+ * Unlayered so it outranks the plugin's components-layer prose rules.
+ *
+ * Cross-tree gaps (body markdown → next-steps prose, often after a trailing
+ * `---`) cannot use collapsed margins between separate `.md-prose` roots -
+ * `TextSegment` owns that spacing on the next-steps wrapper.
+ */
+.md-prose > [data-tailmark] > :first-child > :first-child {
+  margin-top: 0;
+}
+.md-prose > [data-tailmark] > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
 /* Strip the backtick quotes Tailwind Typography adds via ::before / ::after. */
 .md-prose :where(code)::before,
 .md-prose :where(code)::after {
@@ -314,6 +444,13 @@
 }
 
 :root {
+  /* The pressed-state scrim (see the `press-scrim` utility). Neutral rather
+     than hue-matched: it dims a surface, it does not tint it, so the accent
+     themes below inherit this pair unchanged and only the light/dark polarity
+     ever flips. Plain rgba rather than a `color-mix` off `--foreground`, which
+     would compile to an opaque fallback on any engine without color-mix - a
+     press would paint the control solid black or solid white. */
+  --press-scrim: #0000001a;
   --traycer-font-ui:
     "Figtree Variable", "Figtree", ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -367,6 +504,7 @@
 }
 
 .dark {
+  --press-scrim: #ffffff1a;
   --background: oklch(0.205 0 0);
   --foreground: oklch(0.985 0 0);
   --canvas: oklch(0.145 0 0);
@@ -929,7 +1067,118 @@
   --success: oklch(0.76 0.12 135);
 }
 
+/*
+ * Device safe-area insets, named once so no surface ever writes a raw `env()`.
+ *
+ * The phone shell runs with `viewport-fit=cover`, so the web view spans the
+ * whole screen and the status bar / home indicator are painted OVER the page.
+ * Every other shell reports zero insets, which is what lets one set of tokens
+ * stay correct on desktop and in a browser: each utility below collapses to
+ * the value it had before these existed.
+ */
+:root {
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+
+  /*
+   * The safe region's width, declared here rather than read back off the
+   * theme token below. Hand-written CSS composes it - a cap has to be the
+   * smaller of a call site's own width and this, `max-w-[min(…,
+   * var(--safe-area-width))]` - and that is a different job from feeding a
+   * utility scale. This name is the stable one to read: `--spacing-safe-dvw`
+   * is named for the utility namespace it serves, so its identity belongs to
+   * Tailwind's theme rather than to the app. Keeping the expression here and
+   * pointing the token at it leaves one definition either way.
+   */
+  --safe-area-width: calc(
+    100dvw - var(--safe-area-inset-left) - var(--safe-area-inset-right)
+  );
+}
+
 @theme inline {
+  /*
+   * Safe-area spacing scale: `pt-safe-top`, `pb-safe-bottom`, `top-safe-top`,
+   * and every other utility that reads the spacing namespace.
+   *
+   * The TOP and HORIZONTAL edges are not a per-surface concern - `#root`
+   * reserves them for the whole app, so a new screen already clears the status
+   * bar and the landscape sensor housing with no safe-area code of its own.
+   * Those tokens are left for the `fixed` surfaces that escape that padding.
+   * The BOTTOM edge stays a per-surface decision, because whether the home
+   * indicator deserves a gutter depends on what the surface puts against it.
+   *
+   * Insetting a `fixed` overlay that a PRIMITIVE already positions has one
+   * trap, and it is silent off-device where every token below is zero:
+   *
+   *   - `tailwind-merge` only treats two classes as conflicting when their
+   *     modifiers match, so an override of a `data-[side=left]:inset-y-0` base
+   *     has to carry `data-[side=left]:` too. Bare, it is not a smaller
+   *     override - it is a second rule, and stylesheet order decides.
+   *   - Its conflict map is one-directional: `inset-y-*` displaces an earlier
+   *     `top-*`/`bottom-*`, never the reverse. `top-safe-top` cannot beat a
+   *     base's `inset-y-0`.
+   *
+   * So: reposition with `top-safe-top bottom-0` where the call site owns the
+   * box outright, and offset with `mt-safe-top` + `h-safe-dvh` where it does
+   * not. Margin and height are different properties from the base's `inset-y`,
+   * which is what makes the second spelling win rather than tie.
+   */
+  --spacing-safe-top: var(--safe-area-inset-top);
+  --spacing-safe-right: var(--safe-area-inset-right);
+  --spacing-safe-bottom: var(--safe-area-inset-bottom);
+  --spacing-safe-left: var(--safe-area-inset-left);
+
+  /*
+   * The edge a surface that floats over the viewport actually wants: its own
+   * 1rem gutter, or the device inset where that is larger. `max()` and not a
+   * sum, so an inset is never stacked on top of a gutter that already clears
+   * it - and off-device every one of these is exactly the 1rem it replaces.
+   */
+  --spacing-safe-top-gutter: max(1rem, var(--safe-area-inset-top));
+  --spacing-safe-right-gutter: max(1rem, var(--safe-area-inset-right));
+  --spacing-safe-bottom-gutter: max(1rem, var(--safe-area-inset-bottom));
+  --spacing-safe-left-gutter: max(1rem, var(--safe-area-inset-left));
+
+  /*
+   * Viewport heights measured from BELOW the reserved strip - the replacements
+   * for `h-dvh` / `min-h-svh` on any surface that fills the window. `#root`
+   * has already spent the top inset on padding, so a full `100dvh` child would
+   * overhang the bottom of the screen by exactly that much.
+   */
+  --spacing-safe-dvh: calc(100dvh - var(--safe-area-inset-top));
+  --spacing-safe-svh: calc(100svh - var(--safe-area-inset-top));
+
+  /*
+   * The width counterpart, for the same reason. Both horizontal insets come
+   * off, not the one the sensor housing is actually on: a `fixed` surface is
+   * placed against the viewport, and the two orientations put the housing on
+   * opposite edges, so a width that only cleared one of them would be right in
+   * landscape-left and wrong in landscape-right.
+   */
+  --spacing-safe-dvw: var(--safe-area-width);
+
+  /*
+   * The centre line of the safe region. `position: fixed` resolves against the
+   * viewport rather than `#root`'s padding box, so a centred overlay would
+   * centre on the status bar too; `top-safe-center-y` with the usual
+   * `-translate-y-1/2` centres it on the part of the screen the app owns.
+   */
+  --spacing-safe-center-y: calc(50% + var(--safe-area-inset-top) / 2);
+
+  /*
+   * The horizontal counterpart, and NOT a mirror of the vertical one. The two
+   * horizontal insets are asymmetric - in landscape the sensor housing is on
+   * one edge and the other is flat - so the safe region's centre is displaced
+   * by half their DIFFERENCE. It happens to reduce to `left-1/2` in portrait
+   * and on every desktop, where both insets are zero and the difference with
+   * them.
+   */
+  --spacing-safe-center-x: calc(
+    50% + (var(--safe-area-inset-left) - var(--safe-area-inset-right)) / 2
+  );
+
   --font-sans: var(--traycer-font-ui);
   --font-heading: var(--traycer-font-heading);
   --font-pixel: var(--traycer-font-pixel);
@@ -1059,34 +1308,124 @@
   }
 }
 
-@utility compact-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent)
-    transparent;
+/*
+ * The pressed state for every interactive surface, applied as `active:press-scrim`.
+ *
+ * A scrim rather than a background COLOR, because a color cannot be shared. A
+ * control's resting and hover backgrounds belong to its call site - a white
+ * CTA, a saturated status control, a tinted list row - and any fixed press
+ * color a shared variant declares is wrong for all of them. Worse,
+ * it is silently wrong: `cn()` merges a call site's `hover:bg-*` over the
+ * variant's, but a variant's `active:bg-*` has no counterpart to merge with, so
+ * it survives and the control presses into a color it never hovers.
+ *
+ * `background-image` is the key. It is a different property from
+ * `background-color`, so it composites ON TOP of whatever color the element
+ * already has instead of replacing it, and it can never lose to - or win
+ * against - a `bg-*` utility. The result reads as "dim whatever the element
+ * already is", which is correct on a white button, a saturated one, and a
+ * transparent ghost alike. `--press-scrim` flips polarity with the theme, so the same token
+ * darkens light surfaces and lightens dark ones.
+ *
+ * `transition-duration` rides along because the two are one decision: the press
+ * must land on the same frame as the touch. Easing it in over the base
+ * `transition-all` (150ms) outlasts a quick tap, so the tint would only ever
+ * half-appear before release. Only the press is instant - release still fades
+ * at the element's normal duration.
+ *
+ * Suppress it with `active:bg-none` wherever a press must not answer, e.g. an
+ * `aria-disabled` control (which, unlike a natively `disabled` one, still
+ * matches `:active`).
+ */
+@utility press-scrim {
+  background-image: linear-gradient(var(--press-scrim), var(--press-scrim));
+  transition-duration: 0s;
+}
 
-  &::-webkit-scrollbar {
-    width: 2px !important;
-    height: 2px !important;
-  }
+/*
+ * App chrome that is not a semantically interactive element - list rows, header
+ * bars, drawer surfaces, tab strips. On iOS a long press over any of these pops
+ * the copy / look-up bubble and starts a text selection, which is exactly what
+ * a slow swipe or a drag off a row looks like, so the gesture ends in a
+ * selection bubble instead of the interaction the user meant.
+ *
+ * Apply as `pointer-coarse:touch-chrome` - the callout is a touch-only concept,
+ * and leaving desktop alone keeps chrome text selectable with a mouse. Never
+ * put it on a surface whose text is CONTENT (chat messages, code blocks,
+ * terminal output, diffs): those must stay selectable everywhere.
+ */
+@utility touch-chrome {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
 
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
+@layer base {
+  /*
+   * The same policy, applied once to everything that already declares itself
+   * interactive - so a control never has to remember. Deliberately NOT applied
+   * to the document root: a blanket rule would also kill selection over chat
+   * messages, code blocks, diffs and terminal output, which is the one thing
+   * that must survive. Only elements whose whole purpose is to be tapped are
+   * listed, and `label` earns its place because dragging across a settings row
+   * is a common near-miss for tapping its switch.
+   *
+   * Anchors are covered through `[data-slot]` (Button/Badge `asChild` put the
+   * slot on the anchor) rather than a bare `a[href]`, which would also catch
+   * links inside rendered markdown - there, the long-press callout is a real
+   * affordance ("Copy Link") and should stay.
+   *
+   * `@layer base` keeps this beatable: a surface that needs selection back can
+   * say so with a `select-text` utility, which lands in a later layer.
+   */
+  @media (pointer: coarse) {
+    :is(
+      button,
+      label,
+      summary,
+      [role="button"],
+      [role="tab"],
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"],
+      [role="radio"],
+      [role="checkbox"],
+      [role="switch"],
+      [role="treeitem"],
+      [data-slot="button"],
+      [data-slot="badge"],
+      [data-slot="tabs-trigger"],
+      [data-slot="command-item"],
+      [data-slot="select-trigger"]
+    ) {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
 
-  &::-webkit-scrollbar-thumb {
-    min-height: 1.25rem;
-    border: 0;
-    border-radius: 9999px;
-    background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+    /* `user-select` and `-webkit-touch-callout` both inherit, so a text entry
+       nested inside one of the surfaces above (a `label` wrapping its input, a
+       composer inside a tap-to-focus row) would inherit `none` and lose its
+       caret handles. An inherited value loses to any directly-matching rule,
+       so this zero-specificity guard is enough to restore them. */
+    :where(input, textarea, [contenteditable="true"], [contenteditable=""]) {
+      -webkit-touch-callout: default;
+      -webkit-user-select: text;
+      user-select: text;
+    }
   }
 }
 
 @layer base {
-  * {
+  /* Explicit opt-outs keep a scroll owner outside the compact app theme when
+     a platform-native gutter and thumb are part of that surface's contract. */
+  [data-native-scrollbar] {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  *:not([data-native-scrollbar]) {
     scrollbar-width: thin;
     scrollbar-color: color-mix(
         in oklch,
@@ -1095,34 +1434,24 @@
       )
       transparent;
   }
-  *::-webkit-scrollbar {
+  *:not([data-native-scrollbar])::-webkit-scrollbar {
     width: 4px !important;
     height: 4px !important;
   }
-  *::-webkit-scrollbar-track {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-track {
     background: transparent;
   }
-  *::-webkit-scrollbar-thumb {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
     border-radius: var(--radius-sm);
     border: 0;
     min-height: 24px;
   }
-  *::-webkit-scrollbar-thumb:hover {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-thumb:hover {
     background: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
   }
-  *::-webkit-scrollbar-corner {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-corner {
     background: transparent;
-  }
-
-  .chat-scrollbar-native-thin {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-scrollbar-native-thin::-webkit-scrollbar {
-    width: 2px !important;
-    height: 2px !important;
   }
 
   /* `@pierre/trees` scroll surface. The global `*::-webkit-scrollbar`
@@ -1140,6 +1469,15 @@
   [data-file-tree-virtualized-scroll]::-webkit-scrollbar-thumb {
     border: 0 !important;
     background-clip: padding-box !important;
+  }
+
+  /* xterm draws its own slider div rather than a native scrollbar, so the
+     `::-webkit-scrollbar-thumb` rule above never reaches it. Width and colors
+     are matched where xterm accepts them (options + ITheme); the radius has
+     nowhere to go but here. xterm inline-styles only position/size/background,
+     so this is uncontested. */
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+    border-radius: var(--radius-sm);
   }
 }
 
@@ -1168,7 +1506,7 @@
 
   /* Reveal on hover, or keyboard focus - NOT :focus-within. A mouse-drag reorder
      focuses the tab div, and dnd-kit swallows the trailing click so the tab is
-     never activated; with :focus-within the reveal (slot width + close button)
+     never activated; with :focus-within the reveal (opacity + close button)
      would stay stuck lit on that inactive tab until focus moved away.
      Keyboard focus is expressed as :focus-visible (mouse focus doesn't match it,
      so a drag doesn't stick) across two selectors:
@@ -1178,12 +1516,26 @@
          :focus-visible, so without this the slot would collapse and hide the
          very button the user just focused.
      Keep in sync with the accent chrome's `group-focus-visible/tab` +
-     `group-has-[:focus-visible]/tab` gates in tab-strip-item.tsx. */
+     `group-has-[:focus-visible]/tab` gates in tab-strip-item.tsx.
+
+     The width is reserved unconditionally once the tab is wide enough to
+     spare the room - hover/focus only toggle opacity now. The title span
+     (the tooltip anchor, tab-strip-item.tsx) sits in the same flex row and
+     used to shrink every time the slot animated 0 -> 1.25rem on hover;
+     Floating UI's autoUpdate would reposition the tooltip against that
+     resize, the content would land under the cursor, hit-testing would
+     drop off the tab, and the slot would collapse - an infinite loop. A
+     stable width breaks that at the source. Below 7rem the button never
+     reveals at all, so the slot stays width 0 (the base rule above) rather
+     than permanently eating title space on narrow tabs. */
   @container (min-width: 7rem) {
+    .header-tab-trailing-slot {
+      width: 1.25rem;
+    }
+
     .group\/tab:hover .header-tab-trailing-slot,
     .group\/tab:focus-visible .header-tab-trailing-slot,
     .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
-      width: 1.25rem;
       opacity: 1;
     }
 
@@ -1281,4 +1633,15 @@
 ::highlight(traycer-find-match-active) {
   background-color: color-mix(in srgb, var(--primary) 75%, transparent);
   color: var(--primary-foreground);
+}
+
+/*
+ * Communication-graph edge focus (`comm-graph-edge-interaction.ts`).
+ * React Flow strips the edge group's outline and paints its own focus stroke
+ * only for a `selectable` edge - which that canvas is not - so a focused edge
+ * would otherwise look identical to an unfocused one.
+ */
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--ring);
+  stroke-width: 2;
 }

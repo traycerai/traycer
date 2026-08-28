@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Cpu } from "lucide-react";
-import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
+import type { ResourceOwnerKindWireV14 } from "@traycer/protocol/host/resources/subscribe";
 import {
   useEpicResourceUsage,
   useOwnerResourceUsage,
@@ -12,6 +12,7 @@ import {
 } from "@/lib/resources/format-resource-usage";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 function pluralize(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : plural;
 }
@@ -23,18 +24,24 @@ function ResourceChipFrame(props: {
   readonly children: ReactNode;
 }) {
   return (
-    <span
-      data-slot={props.slot}
-      title={props.description}
-      aria-label={props.description}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
-        props.className,
-      )}
+    <TooltipWrapper
+      label={props.description}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Cpu aria-hidden className="size-3 shrink-0" />
-      {props.children}
-    </span>
+      <span
+        data-slot={props.slot}
+        aria-label={props.description}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
+          props.className,
+        )}
+      >
+        <Cpu aria-hidden className="size-3 shrink-0" />
+        {props.children}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -85,8 +92,10 @@ export function ResourceUsageChip(props: ResourceUsageChipProps) {
 
 export interface OwnerResourceChipProps {
   readonly epicId: string;
-  readonly kind: ResourceOwnerKindWire;
+  readonly kind: ResourceOwnerKindWireV14;
   readonly ownerId: string;
+  /** Immutable owner host. Required for terminal rows; null for chat/agent. */
+  readonly hostId: string | null;
   readonly className: string | undefined;
 }
 
@@ -95,7 +104,12 @@ export interface OwnerResourceChipProps {
  * owner - absent means "not currently tracked" (unknown), never zero use.
  */
 export function OwnerResourceChip(props: OwnerResourceChipProps) {
-  const usage = useOwnerResourceUsage(props.epicId, props.kind, props.ownerId);
+  const usage = useOwnerResourceUsage(
+    props.epicId,
+    props.kind,
+    props.ownerId,
+    props.hostId,
+  );
   if (usage === null) return null;
   return (
     <ResourceUsageChip

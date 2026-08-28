@@ -19,6 +19,7 @@ function chat(
     userId: null,
     hostId: "host-1",
     isTitleEditedByUser: false,
+    archivedAt: null,
     settings: null,
   };
 }
@@ -30,6 +31,9 @@ function terminalAgent(
 ): TuiAgentProjection {
   return {
     id,
+    // An ordinary registry-backed agent - this suite exercises workspace-seed
+    // ordering, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: id,
     parentId: null,
@@ -43,6 +47,7 @@ function terminalAgent(
     reasoningEffort: null,
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

@@ -1,13 +1,16 @@
 export {
   buildPayloadFromEvent,
+  isNotificationPayloadRoutable,
   parseNotificationPayload,
   routeNotification,
+  routeNotificationForHost,
   type ApprovalNotificationPayload,
   type ArtifactNotificationPayload,
   type ChatNotificationPayload,
   type EpicNotificationPayload,
   type NotificationPayload,
   type NotificationPayloadKind,
+  type NotificationNavigate,
   type SessionNotificationPayload,
 } from "./payload";
 export {
@@ -18,3 +21,18 @@ export {
   notificationPayloadBelongsToEpic,
   notificationPayloadBelongsToEntity,
 } from "./notification-entity";
+export {
+  classifyProviderPackNotificationLocality,
+  compareProviderPackLocalFirst,
+  hostLabelSurvivesBodyTruncation,
+  isProviderPackNotificationRemote,
+  parseProviderPackNotificationAttribution,
+  presentProviderPackNotificationBody,
+  providerPackNotificationAllowsLocalAction,
+  providerPackViewingLocalityFromShell,
+  PROVIDER_PACK_BODY_VISIBLE_PREFIX_CHARS,
+  type ProviderPackNotificationAttribution,
+  type ProviderPackNotificationLocality,
+  type ProviderPackNotificationPayloadKind,
+  type ProviderPackViewingLocalityContext,
+} from "./provider-pack-notification-attribution";

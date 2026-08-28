@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Active, ClientRect, DroppableContainer } from "@dnd-kit/core";
 import { epicRootCollisionDetection } from "@/components/epic-canvas/dnd/root-dnd-collision";
@@ -36,6 +35,7 @@ const SIDEBAR_NODE_SOURCE_DATA = {
   kind: "sidebar-node",
   epicId: EPIC_ID,
   viewTabId: VIEW_TAB_ID,
+  hostId: "host-1",
   nodeId: "node-a",
 } as const;
 
@@ -52,6 +52,16 @@ const TERMINAL_TILE_SOURCE_DATA = {
     hostId: "host-1",
     cwd: "/repo",
   },
+} as const;
+
+const WORKSPACE_FOLDER_SOURCE_DATA = {
+  kind: "workspace-folder",
+  epicId: EPIC_ID,
+  viewTabId: VIEW_TAB_ID,
+  hostId: "host-1",
+  workspacePath: "/repo",
+  folderPath: "src/",
+  name: "src",
 } as const;
 
 function makeRect(input: {
@@ -295,6 +305,83 @@ describe("epicRootCollisionDetection", () => {
     ).toEqual(["tab"]);
   });
 
+  it("prioritizes an accepting composer over its overlapping pane body", () => {
+    const composer = {
+      id: "composer",
+      data: {
+        kind: "composer-attachment-drop-target",
+        viewTabId: VIEW_TAB_ID,
+        accepts: () => true,
+        attach: () => undefined,
+      },
+      rect: HIT_RECT,
+    };
+    expect(
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: SIDEBAR_NODE_SOURCE_DATA,
+            droppables: [
+              droppableOfKind("body", "artifact-tab-group-body"),
+              composer,
+            ],
+            pointer: POINTER,
+          }),
+        ),
+      ),
+    ).toEqual(["composer"]);
+
+    expect(
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: WORKSPACE_FOLDER_SOURCE_DATA,
+            droppables: [composer],
+            pointer: POINTER,
+          }),
+        ),
+      ),
+    ).toEqual(["composer"]);
+  });
+
+  it("defers attachability to the composer target", () => {
+    const rejectingComposer = {
+      id: "composer",
+      data: {
+        kind: "composer-attachment-drop-target",
+        viewTabId: VIEW_TAB_ID,
+        accepts: () => false,
+        attach: () => undefined,
+      },
+      rect: HIT_RECT,
+    };
+    expect(
+      epicRootCollisionDetection(
+        makeCollisionArgs({
+          activeData: SIDEBAR_NODE_SOURCE_DATA,
+          droppables: [rejectingComposer],
+          pointer: POINTER,
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: TERMINAL_TILE_SOURCE_DATA,
+            droppables: [
+              {
+                ...rejectingComposer,
+                data: { ...rejectingComposer.data, accepts: () => true },
+              },
+            ],
+            pointer: POINTER,
+          }),
+        ),
+      ),
+    ).toEqual(["composer"]);
+  });
+
   it("returns no hits for unknown sources or missing pointers", () => {
     const droppables = [droppableOfKind("tab", "artifact-tab")];
 
@@ -436,15 +523,24 @@ describe("sidebar reparent preview fields", () => {
   it("records a row target and suppresses equal writes", () => {
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: "node-a",
+      targetViewTabId: null,
       rootPanelId: null,
+      rootViewTabId: null,
     });
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBe("node-a");
     expect(useEpicDndStore.getState().reparentRootPanelId).toBeNull();
+    // `null`, never `undefined`: the preview writes straight through to state
+    // typed `string | null`, so an absent view-tab has to arrive as the same
+    // empty value the readers and the drag-end reset compare against.
+    expect(useEpicDndStore.getState().reparentTargetViewTabId).toBeNull();
+    expect(useEpicDndStore.getState().reparentRootViewTabId).toBeNull();
 
     const before = useEpicDndStore.getState();
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: "node-a",
+      targetViewTabId: null,
       rootPanelId: null,
+      rootViewTabId: null,
     });
     expect(useEpicDndStore.getState()).toBe(before);
   });
@@ -452,19 +548,25 @@ describe("sidebar reparent preview fields", () => {
   it("records a panel root target", () => {
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: null,
+      targetViewTabId: null,
       rootPanelId: "chats",
+      rootViewTabId: "view-tab-a",
     });
     expect(useEpicDndStore.getState().reparentRootPanelId).toBe("chats");
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBeNull();
+    expect(useEpicDndStore.getState().reparentRootViewTabId).toBe("view-tab-a");
   });
 
   it("clears both reparent fields on drag end", () => {
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: "node-a",
+      targetViewTabId: "view-tab-a",
       rootPanelId: null,
+      rootViewTabId: null,
     });
     useEpicDndStore.getState().dragEnded();
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBeNull();
     expect(useEpicDndStore.getState().reparentRootPanelId).toBeNull();
+    expect(useEpicDndStore.getState().reparentTargetViewTabId).toBeNull();
   });
 });

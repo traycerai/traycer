@@ -1,365 +1,310 @@
-# AGENTS.md
+# AGENTS.md — clients/gui-app
 
-This file is the local agent guide for `clients/gui-app`. Read it
-together with the repo-root `AGENTS.md`.
+GUI renderer for Traycer. Read with repo-root `AGENTS.md`. Treat as a normal
+browser React app unless the task needs native/desktop integration.
 
-## Workspace Purpose
+**Stack:** Vite, React, TS, TanStack Router (file-based) + Query, Zustand,
+Tailwind v4, shadcn/ui, Vitest + Testing Library.
 
-`gui-app` is the standalone Traycer application shell. It is separate from the
-older `clients/gui/` webview work and should be treated as a normal
-browser-run React application unless the user explicitly asks for native or
-desktop-specific integration.
-
-## Stack
-
-- Vite
-- React
-- TypeScript
-- TanStack Router with file-based routing
-- TanStack Query
-- Zustand
-- Tailwind CSS v4
-- shadcn/ui primitives
-- Vitest + Testing Library
-
-## Important Commands
-
-Run these from `clients/gui-app/`:
+## Commands
 
 ```bash
+# from clients/gui-app/
 bun run dev
 bun run build
 bun run test
 bun run lint
 bun run compile
-bun run react-doctor
+bun run react-doctor   # manual after .ts/.tsx changes; not in pre-commit
 ```
 
-Run `bun run react-doctor` manually after touching gui-app `.ts`/`.tsx` files
-and address any findings before committing. It is not wired into pre-commit. For
-changed-files-only output against the base branch use
-`npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
-
-## Folder Structure
-
-- `src/` Main application source.
-
-- `src/routes/` File-based route modules and route composition.
-
-- `src/components/` App-specific components and layout composition.
-
-- `src/components/ui/` Primitive UI building blocks installed and managed
-  through shadcn workflows. Prefer composing these before modifying them.
-
-- `src/providers/` Global providers such as theming and app-wide context setup.
-
-- `src/stores/` Zustand stores for local client state.
-
-- `src/lib/` Shared app-local utilities and infrastructure helpers.
-
-- `src/hooks/` Reusable app-local hooks.
-
-- `public/` Static public assets.
-
-- `__tests__/` Workspace-level tests and smoke checks.
-
-- `dist/` Build output. Treat as generated.
-
-- `.tanstack/` Tool-managed router metadata/cache. Treat as generated.
-
-## Working Rules
-
-- Prefer route and composition changes before editing primitives.
-- If the user asks to use primitives directly, keep changes in app composition
-  and avoid rewriting `src/components/ui/` unless necessary.
-- Use `src/components/ui/agent-spinning-dots.tsx` (`AgentSpinningDots`) for
-  loading spinners and animated loading dots. Do not add new ad hoc spinner
-  components or inline spinner markup when this component can represent the
-  loading state.
-- Keep the app browser-safe unless the task explicitly introduces a native host.
-- Prefer viewport-agnostic responsive sizing for UI surfaces and layouts. Use
-  fluid constraints such as flex/grid sizing, `w-full`, `max-w-*`, `min-h-*`,
-  `max-h-*`, percentages, `clamp()`, and viewport units before reaching for
-  fixed pixel widths or heights. Only use hardcoded pixel sizing when the size
-  is inherently fixed, such as icons, hairlines, or explicit touch targets. Is
-  it a good pattern that we have implemented and protected against?- Avoid
-  nullish-coalescing fallbacks in JSX `key` props when `undefined` already
-  expresses the same remount behavior.
-- Preserve TanStack Router file-based routing.
-- Use Zustand for local UI/client state, not server-state caching.
-- Use TanStack Query for fetched data once data fetching is introduced.
-- Always concatenate className values through `cn(...)` from `@/lib/utils`. Do
-  not build class strings with template literals, `+`, or `${}` interpolation,
-  and do not assemble arrays and `.join(" ")` them. `cn` is the single source of
-  truth for conditional classes, conflict resolution via `tailwind-merge`, and
-  de-duplication - bypassing it produces stale variants that override the
-  intended Tailwind state. Static single-string literals that need no
-  composition may remain as plain strings.
-
-## Backend Actions And TanStack Query
-
-Every request/response backend call (host RPC, AuthService, RunnerHost) must
-flow through TanStack Query. No `useState<boolean>` loading flags around awaited
-backend calls, no ad-hoc try/catch + `toast.error` orchestration in components.
-
-- Host RPC: use `useHostQuery` / `useHostMutation` for single calls and
-  `useHostQueries` for arrays. The wrappers own the host-scoped query key
-  and the `hostId === null` enabled gate. Do not roll your own
-  `queryOptions(...)` + `useQueries(...)` pair against `client.request(...)`.
-- Non-host (`AuthService`, `IRunnerHost`): use bare `useMutation` / `useQuery`
-  with a stable `mutationKey` from `src/lib/query-keys/`. Do not inline the key
-  shape at the call site.
-- Hooks return raw `UseMutationResult` / `UseQueryResult`. Do not narrow the
-  surface - callers want `isPending`, `error`, `mutate`, `mutateAsync`, `reset`,
-  `data`, `variables`. Hook layout:
-  `src/hooks/<namespace>/use-<verb>-<noun>-mutation.ts` (or `-query.ts`);
-  namespaces: `epic`, `workspace`, `agent`, `auth`, `runner`. Hook name pattern:
-  `use<Namespace><Verb><Noun>` - e.g. `useEpicCreate`,
-  `useRunnerCliLogin`, `useRunnerRequestHostRespawn`.
-- Cache: `invalidateQueries` in `onSuccess` is the default. Optimistic
-  `setQueryData` is reserved for response-equals-state cases and must be
-  justified explicitly; new mutations should not introduce optimistic writes
-  without prior discussion.
-- Host-swap race protection: capture the active host id in `onMutate` and
-  consume it from the mutation context in `onSuccess`/`onError` so a host swap
-  mid-flight does not invalidate the wrong scope.
-- Error mapping: each source has one helper in `src/lib/`:
-  `toastFromHostError`, `toastFromAuthError`, `toastFromRunnerError`. Mutation
-  hooks call the matching helper from `onError`. The exception is surfaces that
-  must stay inline-only: the hook omits `onError` and the component renders
-  `mutation.error?.message` directly.
-- Pending UX recipe: `disabled={mutation.isPending}` + keep the button label
-  unchanged + render `AgentSpinningDots` inline next to the label. Do not swap
-  labels (no "Submitting…", no "Retrying…").
-- Mutation key builders live under
-  `src/lib/query-keys/<namespace>-mutation-keys.ts` and are re-exported through
-  `src/lib/query-keys/index.ts`. Add new builders there; never inline
-  `["mutation", "..."]` literals in hooks or components.
-
-## Remembered Patterns
-
-- Prefer configured import aliases over long relative imports whenever an alias
-  exists. In this workspace, use `@/*` for app code and workspace aliases like
-  `@core/*`, `@traycer-clients/shared/*`, and `@traycer/protocol/*` instead of
-  manual `../../..` paths.
-
-- Structured perf telemetry (separate from the human log) goes through
-  `src/lib/perf/perf-telemetry.ts` `logPerfEvent(name, fields)`. It prints a
-  `[traycer-perf]` console line the desktop shell appends to a dedicated
-  machine-parseable file, `<Electron userData>/traycer-perf.ndjson` (rotates to
-  `.ndjson.1` at ~5 MB), instead of `traycer-desktop.log`. Enable with
-  `localStorage["traycer:perf:telemetry"] = "1"` (on by default in dev, off in
-  tests, opt-in in prod). Sibling gated probes: `main-thread-block-probe.ts`
-  (`traycer:perf:mainthread`) and `terminal-load-perf.ts`
-  (`traycer:perf:terminal`).
-
-- Keep query-key management centralized. Define durable query-key builders in a
-  dedicated `src/lib/query-keys/` area and expose them through a barrel export,
-  rather than rebuilding key shapes ad hoc in components, hooks, or tests.
-
-- Keep query fetching concerns separate from query-key definitions. Query keys
-  describe cache identity; query helpers can live next to the integration they
-  support, but they should consume the centralized key builders instead of
-  inventing parallel key layouts.
-
-- For host-scoped TanStack Query data, keep the key hierarchy semantic and
-  prefix-based so broad invalidation stays predictable: base host scope →
-  host id scope → method/resource scope → params or filters. Invalidating a
-  host scope should naturally drop all queries tied to that host.
-
-- Prefer TanStack Router route lifecycle APIs for route concerns: `beforeLoad`
-  for auth/redirect guards and route-context setup, `validateSearch` for
-  canonical URL/search normalization, and route `loader` + Query prefetch for
-  critical server-state hydration. Do not use component effects for work that
-  belongs to routing.
-
-- Do not mutate UI/client state from route preloading paths. With Router intent
-  preloading enabled, `beforeLoad` and `loader` may run before navigation is
-  committed, so tab creation, local store writes, and similar UI mutations must
-  stay in committed component lifecycle or explicit user actions.
-
-- Apply the React “You Might Not Need an Effect” bar consistently: use effects
-  only for true external synchronization (router ↔ external store, live stream ↔
-  UI store, browser API subscriptions). Derived values, cache identities, and
-  route control flow should be expressed without effects whenever possible.
-
-## Preferred Local Skills
-
-This repo includes GUI-relevant local skills under `.agents/skills/`. Prefer
-using them when the task matches their scope:
-
-- `shadcn` Use for shadcn init/apply flows, preset codes, component lookup,
-  registry usage, and primitive composition questions.
-
-- `tailwind-v4-shadcn` Use for Tailwind v4 + shadcn setup, theme token wiring,
-  CSS variable issues, dark mode behavior, and Tailwind v4 migration/debugging.
-
-- `tanstack-router-best-practices` Use for route structure, loaders, search
-  params, navigation, code splitting, and TanStack Router organization.
-
-- `tanstack-query-best-practices` Use for fetched data, cache keys,
-  invalidation, mutations, hydration, and general TanStack Query behavior.
-
-- `tanstack-integration-best-practices` Use when Router and Query need to work
-  together, especially loaders, preloading, SSR/hydration, and cache
-  coordination.
-
-- `zustand-5` Use for client-side state stores, selectors, persist middleware,
-  slices, and Zustand 5 usage patterns.
-
-If multiple skills apply, use the smallest relevant set rather than loading all
-of them by default.
-
-## Generated And Tool-Managed Files
-
-These may change automatically and should not be treated as stable design
-documentation:
-
-- `src/routeTree.gen.ts` Generated by TanStack Router tooling.
-
-- `components.json` Managed by shadcn init/add workflows.
-
-- `dist/` Build output.
-
-- `.tanstack/` Tool-managed artifacts.
-
-- `.eslintcache` Lint cache output.
-
-When applying a shadcn preset, expect tool-managed updates to:
-
-- `components.json`
-- app-level CSS entrypoints
-- files under `src/components/ui/`
-
-After any preset or scaffold operation, re-run build and tests.
-
-## Per-Epic State + Y.Doc Projector
-
-Per-Epic state, the editor binding (`Y.XmlFragment`), comment anchors, snapshot
-ingest / replica swap / dirty tracking, and the live-Y escape hatch
-(`getArtifactFragment`) live under `src/stores/epics/open-epic/`. This area
-carries render-count invariants — read the existing code and tests there before
-adding fields, actions, or selectors.
-
-## Navigation Advice
-
-- Start in `src/routes/` for page and route work.
-- Start in `src/components/` for app-specific UI composition.
-- Start in `src/components/ui/` only when the change is truly primitive-level.
-- Start in `src/providers/` for theme/provider behavior.
-- Start in `src/stores/` for Zustand-driven UI state.
-- Start in `src/lib/commands/` for command palette behavior. Sources, dispatch,
-  subpages, and the scope/prefix/pin machinery live here. Palette-visible user
-  actions must delegate to a function in `src/lib/commands/actions/` (both
-  palette sources and manual UI call the same function so behavior stays in
-  lockstep).
-- Start in `src/components/command-palette/` for the dialog shell, chips, pin
-  toggle, and sub-page rendering.
-
-## Testing Philosophy
-
-- Prefer end-to-end tests that run as much of the real machinery as possible
-  (real filesystem, real watchers, real docs/stores) over isolated unit tests.
-  Most bugs live in the seams between layers, and an end-to-end test also fails
-  when an underlying unit is wrong — its capture group is strictly larger.
-- Fake only true external boundaries (network, cloud services) or sources of
-  nondeterminism.
-- Unit tests are acceptable for isolated logic, but treat them as a supplement,
-  never as the reason to skip exercising the integrated path.
-
-## Testing Notes
-
-- Tests use Testing Library role queries, so semantic markup and accessible
-  names matter.
-- If state leaks between tests, reset store state in test setup instead of
-  weakening assertions.
-
-## Terminal Theming
-
-xterm.js terminals (`TerminalXtermHost`, used by both `TerminalTile` and
-`TerminalAgentTile`) follow the active theme preset + light/dark variant. The
-architecture is intentionally small - three TS files plus one CSS file - so
-adding a new preset only needs a CSS block.
-
-- **CSS tokens.** Per-preset ANSI palettes live in
-  `src/styles/terminal-themes.css` as named custom properties:
-  `--term-ansi-{black|red|green|yellow|blue|magenta|cyan|white}` and the
-  matching `--term-ansi-bright-*`. `:root` and `.dark` carry the neutral
-  defaults that the "neutral" preset and the six accent-only presets share;
-  `[data-theme="X"]` and `.dark[data-theme="X"]` blocks override every slot for
-  full-palette presets (dracula, github, gruvbox, …). When a theme publishes
-  only 8 colors, leave the bright slots unset and the build helper L-shifts
-  normals at runtime. Adding a new full-palette preset is one new CSS block; no
-  TS changes.
-
-- **DOM cascade owner.** `src/lib/theme-applier.ts` is the imperative owner of
-  `<html>` `class` / `data-theme` / `color-scheme`. It subscribes directly to
-  the Zustand settings store and the `matchMedia` listener at module load -
-  outside React. On any theme/preset change, the applier mutates the DOM
-  **before** React re-renders. This is non-negotiable for xterm: the host
-  captures its palette as a JS object via `getComputedStyle` inside a `useMemo`
-  during render. If `applyVariant` lived in `ThemeProvider`'s `useEffect`, child
-  effects would fire before the parent's commit - pushing the previous-toggle's
-  palette into `term.options.theme` while the surrounding Tailwind UI flipped to
-  the new cascade. (Tailwind doesn't show this race because utilities resolve
-  `var(...)` at paint time against the live cascade, with no JS snapshot.) Don't
-  write `<html>` class/data-theme attributes from anywhere else.
-
-- **Resolved theme context.** `src/providers/theme-provider.tsx` exposes
-  `useResolvedTheme(): { resolvedTheme, themePreset }` via context. The resolved
-  value is mirrored from the applier through
-  `useSyncExternalStore(subscribeResolvedTheme, getResolvedTheme)`, so by the
-  time the context updates downstream, the DOM cascade is already flipped. Read
-  context for the resolved value; never read the store directly for it.
-
-- **Build helper.** `src/lib/terminal-theme.ts` -
-  `buildTerminalTheme(resolvedTheme, doc)` reads `--term-ansi-*` and the
-  semantic tokens (`--foreground`, `--background`, `--primary`) via
-  `getComputedStyle`, parses them with culori (the same dependency
-  `mermaid-theme.ts` uses), and returns a fully populated xterm `ITheme`.
-  `selectionBackground` is `--primary` at α 0.3; `selectionForeground` is
-  intentionally undefined so selected glyphs keep their original ANSI color
-  (standard terminal behavior). `useTerminalTheme()` wraps the builder in a
-  `useMemo` keyed on `[resolvedTheme, themePreset]`. The build is synchronous so
-  `new Terminal({ theme })` paints the right palette on the first frame - no
-  flash of default xterm colors.
-
-- **L-shift brightening.** When a `--term-ansi-bright-*` slot is unset, the
-  builder takes the matching normal, parses to oklch, shifts L by `+0.08` in
-  dark mode and `−0.08` in light mode, and reformats to `rgb(...)`. The
-  directional flip matches Solarized Light / GitHub Light / Gruvbox Light
-  convention (brights are darker / more saturated on a light backdrop, lighter
-  on a dark one).
-
-- **Atlas scheduler.** `src/lib/terminal-theme-scheduler.ts` exports
-  `scheduleAtlasClear(terminal, webglAddon | null)`. Theme- and font-change
-  effects in `terminal-tile-xterm.tsx` enqueue here; one `requestAnimationFrame`
-  flushes every pending entry, deduplicated per Terminal instance. Toggling a
-  preset with N tiles open fires one rAF burst, not N. Disposed addons (the
-  WebGL fallback path) are tolerated.
-
-- **Lazy-loaded host.** `TerminalXtermHost` exports a default symbol so
-  `TerminalTile` and `TerminalAgentTile` lazy-load the chunk via
-  `lazy(() => import("./terminal-tile-xterm"))` and wrap usage in
-  `<Suspense fallback={<TerminalLoadingSkeleton />}>`. The ~150 KB of `@xterm/*`
-  is deferred until first terminal mount per session.
-
-- **Font.** `fontSize` and `fontFamily` are the effective terminal values from
-  the settings store: `terminalFontSize ?? codeFontSize` and
-  `terminalFontFamily ?? codeFontFamily` prepended to the shared default mono
-  stack (`src/lib/default-font-stacks.ts`). The font-family string is built
-  from store values rather than read from `--traycer-font-mono`, because xterm
-  can't resolve CSS variables in its canvas measurement pass and a
-  `getComputedStyle` read would race the `ThemeProvider` effect that writes
-  the variable's inline override. Live size or family changes trigger a
-  `fitAddon.fit()` refit alongside the atlas clear.
-
-- **What stays pinned.** No per-tab terminal palette overrides - every terminal
-  mirrors the app theme. The xterm.js stylesheet (`@xterm/xterm/css/xterm.css`)
-  is left untouched; scrollbar / search overlay use xterm defaults. Scrollback
-  size and `allowProposedApi` are constants in `terminal-tile-xterm.tsx`. Cursor
-  shape and cursor blink are Settings → Appearance values
-  (`terminalCursorStyle` / `terminalCursorBlink`): captured in
-  `initialOptionsRef` for the first paint and live-synced through
-  `useTerminalAppearanceSync` (no refit/atlas clear - they don't change cell
-  geometry).
+Changed-files-only: `npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
+
+**Commits:** don't manually run `compile` / `build` / `lint` / `format` before
+committing — repo-root `pre-commit` already runs the affected checks (see root
+`AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
+failures. `react-doctor` stays manual (not hooked).
+
+## Map
+
+| Path                          | Role                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `src/routes/`                 | File-based routes                                                      |
+| `src/components/`             | App UI; `components/ui/` = shadcn primitives (compose, don't rewrite)  |
+| `src/stores/`                 | Zustand (UI/client state only)                                         |
+| `src/hooks/`                  | App hooks (`hooks/<ns>/use-<verb>-<noun>-{mutation,query}.ts`)         |
+| `src/lib/query-keys/`         | Central query/mutation key builders                                    |
+| `src/lib/commands/`           | Command palette sources + `actions/` (palette and UI call the same fn) |
+| `src/stores/epics/open-epic/` | Per-epic Y.Doc projector — read code/tests before changing             |
+| `src/providers/`              | App-wide providers                                                     |
+
+Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
+
+## Non-negotiable rules
+
+- **`cn(...)`** from `@/lib/utils` for all composed `className`s. No template
+  literals / `+` / `.join(" ")`. Static single strings OK.
+- **Fluid layout sizing** — `w-full`, `max-w-*`, viewport caps. No fixed px/rem
+  for layout surfaces (icons / touch targets OK).
+- **Safe area** — never write `env(safe-area-inset-*)`; `index.css` owns the
+  only reads. `#root` reserves the top and both horizontal insets app-wide
+  (landscape is supported, so the sensor housing can be on either side), which
+  makes every in-flow surface safe with no code of its own. Those edges have no
+  opt-out, for content and surface backgrounds alike. What is left to a
+  surface: the bottom edge (`pb-safe-bottom`), and anything `fixed`.
+  - Window-filling: `h-safe-dvh` / `min-h-safe-svh` / `w-safe-dvw`, never the
+    raw `h-dvh` / `min-h-svh` / `w-screen`.
+  - Floating over the viewport: the `*-safe-<edge>-gutter` tokens, which are
+    the layout's own 1rem or the device inset, whichever is larger.
+  - `fixed` overlays are portalled outside `#root` and inset themselves:
+    `top-safe-center-y` + `left-safe-center-x` when centred (the horizontal
+    centre is displaced by half the DIFFERENCE between the side insets, since
+    the landscape housing is only ever on one side), `top-safe-top` when
+    full-height, and `max-w-safe-dvw` to cap width. CSS allows one width clamp
+    per element, so that cap is a default a call site can displace with an
+    unmodified `max-w-*`, not a floor — the contract test is the other half of
+    the guarantee. Where a
+    primitive already owns `inset-y-0`/`h-full` under a `data-*` variant, use
+    `mt-safe-top` + `h-safe-dvh` under that **same** variant —
+    `tailwind-merge` only displaces a class whose modifiers match, and its
+    conflict map lets `inset-y-*` displace `top-*` but not the reverse, so a
+    bare `top-safe-top` ties on specificity instead of winning. `sheet.tsx` and
+    `drawer.tsx` already do this per side, so their callers need nothing.
+  - A full-screen dim is not a surface and stays edge to edge.
+  - **The one sanctioned full-bleed surface** is `StandaloneShell`
+    (`routes/root-route-components.tsx`) — sign-in and the tour. It is `fixed
+inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
+    instead of sitting inside `#root`'s reservation, and its edge-to-edge
+    artwork reaches the status bar. The exception covers the BACKGROUND only:
+    each surface inside it insets its own content layer, because artwork and
+    content are siblings there. `fixed` escapes `#root` wholesale, so a content
+    layer must restore **all three** reservations — top and both sides —
+    plus the bottom wherever that surface has content near it. Restoring only
+    the top reads as handled and still fails in landscape; a band whose
+    HEIGHT clears the home indicator does not clear it for a line box centred
+    inside that band. Do not add a second full-bleed surface — the contract
+    test asserts the marker appears exactly once.
+  - New tokens must also be registered in `cn()`'s `extendTailwindMerge`
+    (`lib/utils.ts`) or they never conflict with the utility they override —
+    which is invisible on desktop, where every inset is zero.
+  - When a library takes geometry as a value rather than a style (Radix
+    `collisionPadding`), read `readSafeAreaInsets()` from
+    `lib/safe-area-insets.ts`. It is the only sanctioned runtime read; do not
+    add another `getComputedStyle` call site.
+- Prefer composition over editing `src/components/ui/`.
+- Spinners: `AgentSpinningDots` only — no new ad-hoc spinners.
+- **Never fill with `bg-muted` on a raised surface.** Every preset theme's
+  dark variant defines `--muted` identical to `--popover` and `--card`, and
+  the flat light presets (github, gruvbox, tokyo-night, nord, everforest)
+  collapse it into `--background` too — so a muted fill inside a dialog,
+  popover, dropdown, or card is _invisible_, and only the default light/dark
+  pair makes it look right. `--accent` never collapses but is too weak to
+  substitute (1.05–1.15 in preset darks). Use an alpha of the foreground,
+  which is surface-independent by construction: `bg-foreground/8` for a
+  solid fill or an interaction state, `/10` for a skeleton, `/6 · /5 · /3`
+  descending for tints. `bg-muted` stays fine for zones on `bg-background` /
+  `bg-canvas`, and `bg-muted-foreground` (a text color) is unaffected.
+  The rule is about the RENDERED fill, not the utility class, so it binds in
+  raw CSS too: `var(--muted)` in a `@keyframes` frame or behind a custom
+  property collapses identically and no class-level sweep can see it. Watch
+  terminal frames especially — an `animation: … both` frame is not a hand-off
+  back to the class, it is the element's permanent background from then on.
+  `src/__tests__/muted-fill-on-raised-surface-lint.test.ts` guards the `.tsx`
+  half and takes a per-line `// muted-fill-ok: <reason>` waiver for a fill a
+  collapse cannot erase — the surface does not collapse (`bg-canvas`), or an
+  explicit border or a second state channel survives it.
+- No `key={x ?? fallback}` when `undefined` already remounts correctly.
+- Zustand = client UI state; TanStack Query = server/host data.
+- Keep browser-safe unless the task adds a native host.
+
+## Backend calls → TanStack Query
+
+Every host RPC / AuthService / RunnerHost request goes through Query. No
+`useState` loading flags or ad-hoc `toast.error` in components.
+
+| Kind     | Use                                                                               |
+| -------- | --------------------------------------------------------------------------------- |
+| Host RPC | `useHostQuery` / `useHostMutation` / `useHostQueries` (owns host key + null gate) |
+| Non-host | bare `useQuery` / `useMutation` + key from `src/lib/query-keys/`                  |
+
+- Return full `UseQueryResult` / `UseMutationResult` — don't narrow.
+- Hook names: `use<Namespace><Verb><Noun>` (e.g. `useEpicCreate`).
+- Default cache update: `invalidateQueries` in `onSuccess`. Optimistic
+  `setQueryData` only when justified.
+- Host-swap races: capture `hostId` in `onMutate`, use it in
+  `onSuccess`/`onError`.
+- Errors: `toastFromHostError` / `toastFromAuthError` / `toastFromRunnerError`
+  in `onError` (omit only for inline-error surfaces).
+- Pending UX: `disabled={isPending}` + unchanged label + inline
+  `AgentSpinningDots`. Never swap labels ("Submitting…").
+- Never inline `["mutation", "..."]` keys — add builders under
+  `src/lib/query-keys/`.
+
+Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
+surfaces use `useEffectiveHostId()` / `useHostClient()`. Don't mix.
+`useEffectiveHostId()` is the selection authority's DERIVED host (selection
+model §1) — one decider per app, delivered to every window. Settings ▸ Activate
+is the only UI gesture that changes it; no picker anywhere writes it, and
+`HostDirectoryService.selectById` is lint-restricted to the one authority
+bridge. Surface pickers write a per-surface pin (`useSurfaceHostPin`), and a
+surface with no pin resolves to `useEffectiveHostId()`.
+
+**A pin is a preference, not a binding** — the same two-tier shape as
+preferred/effective, one tier down. `resolvedHostId` is the pin while its host
+can serve and `effective` while it cannot, so a surface whose pinned host dies
+AUTO-FOLLOWS and returns on its own when the host is usable again. The pin is
+never cleared by death; that is what makes the return sticky. Only deliberate
+deregistration clears it (the host left the account — a pointer to nothing),
+mirroring the authority's own `clearPreferredOutsideFleet`, empty-fleet guard
+included. Death is `lease.status === "dead"` and deliberately NOT
+`!isUsableForSelection`: `restarting-expected` is a hold, and an incumbent
+holds through an expected restart exactly as the app-wide failover does.
+Read `honoredSelection`, never `selection`, when resolving a client — the raw
+pin still names the dead host. There is no dead-state banner: the chip renders
+the RESOLVED host, and the dead host's own picker row says `offline`.
+
+Composers have a **target host** (tab host, fork dialog's fixed host, the
+new-conversation modal's host). `null` means "this surface owns its
+placement", and the two surfaces that own one resolve it differently:
+
+- the **landing composer** resolves its WINDOW-keyed pin ?? `effective`
+  (`useComposerPlacement`);
+- the **in-Epic new-conversation modal** resolves its per-**EPIC** pin ?? the
+  Epic session's host ?? `effective` (`useEpicConversationPlacement`). The
+  per-Epic pin is that Epic's _last created chat's host_: the picker writes
+  it, and every create in the modal re-records it — the same memory shape as
+  the model picker's last-used settings. So a new agent in an Epic opens on
+  the host the last one was created on, or before any on the host the Epic is
+  served from — never on wherever the window's landing chip last pointed,
+  which is not a fact about the Epic. Every in-Epic trigger (the sidebar `+`,
+  a row's "new child", the palette's new-agent items) passes `hostId: null`
+  for that reason; only a trigger with a machine genuinely in mind (a terminal
+  quote, whose terminal exists on one host) names one, and naming freezes the
+  picker (§55).
+
+Only a placement that `effective` answered FOLLOWS a derivation move
+(`ComposerPlacement.followsEffective`); one resting on a pin or on the Epic's
+host is not re-pointed by one and does not narrate one.
+
+**The composer is PLACEMENT.** Its resolved host (the pin rule above, keyed per
+WINDOW) decides where a created epic/chat lives for life, so its picker writes
+that pin and never the app-wide selection. Submit re-validates: a host the
+CALLER NAMED (the row-scoped modal's `overrideHostId`) must not be dead, and —
+named, pinned or following — the client the create is about to be sent on must
+still address the resolved host, else the composer refuses inline and creates
+nothing, never a silent fallback onto whatever the window is bound to. A PIN
+does not reach that first refusal: it re-resolves to `effective` instead, and
+the chip has been showing that host since it moved. An override does, because
+naming the machine IS the request. There is deliberately no separate
+reachability gate on the following path: usability of the effective host is the
+selection authority's call (selection model §1), and re-deriving it here would
+be a second decider.
+A create that resolves its host separately from the chip is the bug this
+structure exists to prevent; route new composer creates through the placement
+the chip is showing.
+
+Every host RPC around a
+composer — mentions, slash commands, harness/model catalog, providers/profiles,
+pack retry, catalog refresh — and every surface that dispatches into the
+focused composer (the palette's Pick provider/model, via
+`FocusedComposerEntry.hostClient`) resolves through that host's client
+(`…ForClient` hooks / `runTargetHostId` → `useHostClientForHostId`). The
+default-host wrappers (`useProvidersList()`, `useGuiHarness*Query()`) are for
+app-wide surfaces only (prefetcher, Settings, a palette with no focused
+composer) — never inside a composer surface. (`useDefaultHostClient()` was the
+third of these and is gone: once `HostRuntimeBinding` carried its own `hostId`
+it resolved exactly what `useHostClient()` resolves.)
+
+**"Default host" means the SURFACE's host**, which inside Settings is the
+SCOPED one, not the app-wide one. A binding re-provided by a host-scoped panel
+names its host (`HostRuntimeBinding.hostId`), and every consumer below it —
+`useHostClient()`, `useAddressableHostId()`, the wrappers above — resolves to
+that host. Seven surfaces re-provide; `useScopedHostBinding` lists them and the
+two governed exceptions. Resolve a binding through
+`lib/host/binding-host-client.ts` and never inline
+`hostClient.createRequesterForHostId(...)` beside a separately-read host id:
+that pairing is a defect with its own history, and those resolvers are pure
+functions taking the binding as an ARGUMENT precisely so a consumer's own
+`useHostBinding()` — including a test's — is what they see.
+
+Persisted "last used" and pending state is per-host too:
+`composer-run-settings-store`, `composer-harness-memory-store`,
+`workspace-folders-store`, and `worktree-intent-memory-store` bucket by
+`hostId` (the toolbar store carries it in `catalog.hostId`; a `null` host
+drops the write), and every `WorktreeStagingKey` carries the host its slot
+stages for. A new read/write of any of these must pass the composer's target
+host — never the flat pre-bucket shape.
+
+Anything keyed by a bare **local path** belongs in this set: the same string
+names a different directory on two machines, so an unbucketed map silently
+merges them. Do not reason that a key is "already host-bound" because its id
+happens to imply one host (a chat id, an owner id) — that holds only until
+someone adds a slot keyed by an epic or a draft, and nothing checks it. The
+migrated memory stores keep their pre-bucket data as a read-only `legacy*`
+fallback consulted per key, so a single-host install keeps its memory. That
+tier is **transitional**: the first host to act (write or sweep) adopts it
+wholesale into its own bucket and retires it, because an unattributed tier
+that several hosts read is the same leak in miniature — and one that never
+terminates, since a host that supersedes a legacy choice and later has that
+entry purged would fall back to the superseded one. Staging slots are pending
+picks, so their v1 data is dropped rather than carried.
+
+A host-scoped store also needs its **invalidations** scoped. A worktree sweep
+is one machine's filesystem event, so `purgeRemovedWorktreeIntents` (both
+stores) takes the swept `hostId` and touches only that host's slots — an
+identically-named path or branch on another host still materializes there.
+Contrast `clearEpicIntent`, which is account-wide: the epic is gone
+everywhere.
+
+`worktreeStagingKeyString` puts the host segment first and percent-encodes it,
+so a `:` in a host id can never split the key; an empty segment is the
+unresolved-host bucket. Anything that parses a serialized key (the
+persistability filter, the purge) counts segments from that layout — add a
+segment and both must move with it.
+
+**Deliberate exception — dictation.** `useDictationAvailability` /
+`useVoiceDictation` stay on the app-wide host (`useHostClient()`) even inside a
+host-pinned composer. They describe the person at the keyboard, not the run:
+`speech.dictate` streams live microphone audio and `speech.ensureModel`
+downloads an on-device model, so following a remote run target would ship a
+user's audio to a machine they only picked to execute a turn on, and drop a
+model download there. The cost is real and accepted — a composer pinned to
+host B gates its mic on the app-wide host's model, not B's. Scope a NEW
+composer RPC to the target host unless it is about the human's input devices.
+
+## Routing
+
+- Auth/redirects → route `beforeLoad`; search → `validateSearch`; critical
+  data → route `loader` + Query prefetch. Not component effects.
+- Don't mutate UI/stores from preload paths (`beforeLoad`/`loader` may run
+  before commit).
+- Effects only for external sync (router↔store, streams, browser APIs).
+
+## Testing
+
+Prefer integrated tests (real stores/docs/watchers) over isolated units. Fake
+only external/nondeterministic boundaries. Reset stores between tests; use
+Testing Library role queries.
+
+## Skills (use when matched)
+
+| Skill                             | When                           |
+| --------------------------------- | ------------------------------ |
+| `shadcn`                          | Init/add/primitives            |
+| `tailwind-v4-shadcn`              | Theme tokens, dark mode, TW v4 |
+| `react-best-practices`            | React / `.tsx`                 |
+| `frontend-design`                 | New UI / visual work           |
+| `vite` / `vitest` / `zod` / `bun` | As named                       |
+
+Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
+
+## Terminal theming (xterm)
+
+Invariants only — read `src/lib/theme-applier.ts`, `terminal-theme.ts`,
+`styles/terminal-themes.css` before changing:
+
+- `theme-applier.ts` owns `<html>` class / `data-theme` (module-load, outside
+  React). Don't write those attributes elsewhere.
+- ANSI tokens in CSS (`--term-ansi-*`); new full-palette preset = one CSS block.
+- `buildTerminalTheme` is sync (no flash); unset bright slots L-shift at runtime.
+- Lazy-load `TerminalXtermHost`; clear atlas via `scheduleAtlasClear`.

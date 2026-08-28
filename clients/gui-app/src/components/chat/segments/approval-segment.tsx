@@ -7,6 +7,7 @@ import { SegmentCard } from "./segment-card";
 import { SegmentRow } from "./segment-row";
 import { ToolInputPanel } from "./tool-input-panel";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ResolvedApprovalSegmentProps {
   toolName: string | null;
   description: string | null;
@@ -16,6 +17,11 @@ interface ResolvedApprovalSegmentProps {
   decision: ApprovalDecision;
   variant: "card" | "row";
   headerFindUnitId: string | null;
+  // Seeds the disclosure at mount, once. Open state is local here, so the copy
+  // of this row inside the bounded live activity window cannot hand its own
+  // over: a click there promotes, and this is how the copy that replaces it
+  // knows it was the row asked for.
+  initiallyOpen: boolean;
 }
 
 /**
@@ -33,7 +39,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
     decision,
     variant,
   } = props;
-  const [open, setOpen] = useState<boolean>(false);
+  const [open, setOpen] = useState<boolean>(props.initiallyOpen);
   const label = toolName ?? description ?? "approval";
   const header = (
     <ResolvedApprovalHeader
@@ -54,6 +60,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}
@@ -131,12 +138,16 @@ function ResolvedApprovalHeader(props: {
         <span aria-hidden className="flex-1" />
       )}
       {!decision.approved && decision.reason !== null ? (
-        <span
-          className="@max-[28rem]:hidden shrink-0 truncate text-ui-xs text-destructive/80"
-          title={decision.reason}
+        <TooltipWrapper
+          label={decision.reason}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {decision.reason}
-        </span>
+          <span className="@max-[28rem]:hidden shrink-0 truncate text-ui-xs text-destructive/80">
+            {decision.reason}
+          </span>
+        </TooltipWrapper>
       ) : null}
     </>
   );

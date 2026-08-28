@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schemas";
@@ -39,6 +38,7 @@ const HTML_LOOKING_LABEL = '<img src=x onerror="alert(1)">';
 function claudeStateWithoutProfile(): ProviderCliState {
   const ambient: ProviderProfile = {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -51,6 +51,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -74,6 +75,16 @@ function claudeStateWithoutProfile(): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     // The provider HAS enumerated profiles (non-empty, so
     // `resolveTombstonedProfileLabel` doesn't bail out as "flag off / not
     // enumerated") - the removed profile is simply absent from that list,
@@ -93,6 +104,7 @@ function anchorWithLabelSnapshot(labelSnapshot: string): ChatSessionAnchor {
       secondaryWorkspaces: [],
     },
     claudeMessageUuid: "uuid-1",
+    turnTailUuid: null,
     createdAt: 100,
     coveredUntilMessageId: null,
     profileId: "removed-uuid",
@@ -128,7 +140,10 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
 
 function renderTombstoned(labelSnapshot: string) {
   return render(
-    <TombstonedProfileProvider providers={[claudeStateWithoutProfile()]}>
+    <TombstonedProfileProvider
+      providers={[claudeStateWithoutProfile()]}
+      hostId="host-1"
+    >
       <ChatExpansionTestProviders tileInstanceId="tombstone-f4-tile">
         <TooltipProvider>
           <UserMessageBody

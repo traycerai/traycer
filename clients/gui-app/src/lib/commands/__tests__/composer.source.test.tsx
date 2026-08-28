@@ -1,6 +1,8 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   registerFocusedComposerControls,
   resetFocusedComposerControlsForTests,
@@ -18,59 +20,115 @@ import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversatio
 import type {
   CommandContext,
   CommandItem,
+  CommandSubpage,
   FocusedComposerKind,
 } from "@/lib/commands/types";
+import type { HostRpcRegistry } from "@/lib/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 
-const catalogMock = vi.hoisted(() => ({
-  harnesses: [
-    {
-      id: "codex",
-      label: "Codex",
-      available: true,
-      error: null,
-      models: [
-        {
-          harnessId: "codex",
-          slug: "gpt-live",
-          label: "GPT Live",
-          description: null,
-          isDefault: true,
-          contextWindow: null,
-          maxOutputTokens: null,
-          defaultReasoningEffort: "high",
-          supportedReasoningEfforts: [
-            { id: "high", label: "High", description: null },
-          ],
-          defaultServiceTier: null,
-          supportedServiceTiers: [],
-          metadata: {},
-        },
-      ],
-      modelsLoading: false,
-      modelsError: null,
-    },
-  ],
-}));
-
-interface CreateChatPayload {
-  readonly epicId: string;
-  readonly parentId: string | null;
-  readonly title: string;
-  readonly chatId: string;
-  readonly worktreeIntent: WorktreeIntent | null;
+/**
+ * Minimal shape this fixture needs - not the full `GuiHarnessCatalogEntry`,
+ * which requires fields (`modes`, `requiresApiKey`, `enabled`, …) this
+ * suite's mocked `useGuiHarnessCatalog` never reads. `authStatus` is
+ * explicit and optional here so a test can add a signed-out row without
+ * TS inferring the array's element type from the first literal alone (which
+ * would then reject a later literal that adds the field).
+ */
+interface ComposerCatalogHarnessFixture {
+  readonly id: string;
+  readonly label: string;
+  readonly available: boolean;
+  readonly authStatus?: GuiHarnessOption["authStatus"];
+  readonly error: string | null;
+  readonly models: ReadonlyArray<{
+    readonly harnessId: string;
+    readonly slug: string;
+    readonly label: string;
+    readonly description: string | null;
+    readonly isDefault: boolean;
+    readonly contextWindow: number | null;
+    readonly maxOutputTokens: number | null;
+    readonly defaultReasoningEffort: string;
+    readonly supportedReasoningEfforts: ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+      readonly description: string | null;
+    }>;
+    readonly defaultServiceTier: string | null;
+    readonly supportedServiceTiers: ReadonlyArray<string>;
+    readonly metadata: Record<string, unknown>;
+  }>;
+  readonly modelsLoading: boolean;
+  readonly modelsError: null;
 }
 
-interface CreateChatOptions {
-  readonly onSuccess: () => void;
+const catalogMock: { harnesses: ComposerCatalogHarnessFixture[] } = vi.hoisted(
+  () => ({
+    harnesses: [
+      {
+        id: "codex",
+        label: "Codex",
+        available: true,
+        error: null,
+        models: [
+          {
+            harnessId: "codex",
+            slug: "gpt-live",
+            label: "GPT Live",
+            description: null,
+            isDefault: true,
+            contextWindow: null,
+            maxOutputTokens: null,
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: [
+              { id: "high", label: "High", description: null },
+            ],
+            defaultServiceTier: null,
+            supportedServiceTiers: [],
+            metadata: {},
+          },
+        ],
+        modelsLoading: false,
+        modelsError: null,
+      },
+    ],
+  }),
+);
+
+/**
+ * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
+ * need: only object identity matters to the assertions below (which host's
+ * catalog the subpages asked for), never any real RPC behavior.
+ */
+interface FakeCatalogHostClient {
+  readonly getActiveHostId: () => string | null;
 }
 
-const createChatMock = vi.hoisted(() => ({
-  mutate:
-    vi.fn<(payload: CreateChatPayload, options: CreateChatOptions) => void>(),
+const focusedComposerCatalogMock = vi.hoisted(() => ({
+  defaultClient: { getActiveHostId: () => "default-host" },
+  clientCalls: [] as Array<{ getActiveHostId: () => string | null } | null>,
 }));
+
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
+}));
+
+// The app-wide client the palette falls back to with no focused composer. It
+// used to come from this file's `use-gui-harness-catalog` mock, as
+// `useDefaultHostClient`; that export was deleted once a binding could name its
+// own host, and the source resolves a client from the BINDING now - so the
+// fixture moves to where the question is actually asked. Spread rather than
+// replaced: `@/lib/host` has many other exports this graph pulls in.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({
+    // A binding that NAMES a host, so `resolveSubtreeHostClient` hands back
+    // this client verbatim instead of rebuilding a requester off it - which a
+    // fake with no `createRequesterForHostId` could not survive.
+    hostClient: focusedComposerCatalogMock.defaultClient,
+    hostId: "default-host",
+  }),
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
@@ -80,13 +138,22 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     harnessesError: null,
     modelsLoading: false,
   }),
+  // Records the `client` each call was invoked with, so tests can assert the
+  // composer subpages resolve the FOCUSED composer's host client (not the
+  // default host's) - regardless of which client was passed, this returns
+  // the same fixture catalog `useGuiHarnessCatalog` above does, since none of
+  // this file's cases need per-host catalog content, only per-host routing.
+  useGuiHarnessCatalogForClient: (client: FakeCatalogHostClient | null) => {
+    focusedComposerCatalogMock.clientCalls.push(client);
+    return {
+      harnesses: catalogMock.harnesses,
+      harnessesLoading: false,
+      harnessesError: null,
+      modelsLoading: false,
+    };
+  },
 }));
 
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({
-    mutate: createChatMock.mutate,
-  }),
-}));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
     latestConversationWorkspaceSeedMock.seed,
@@ -134,6 +201,37 @@ function captureItems(
   return captured;
 }
 
+/**
+ * Same idea as `renderSubpageItems`, but returns the collected items instead
+ * of discarding them. Takes `subpage` as a plain (non-nullable) parameter so
+ * the caller's own narrowing of an `x | undefined` lookup carries through -
+ * a nested `Probe` closure capturing the outer optional directly does not
+ * narrow across that boundary.
+ */
+function collectSubpageItems(
+  subpage: CommandSubpage,
+  focusedComposerKind: FocusedComposerKind,
+): ReadonlyArray<CommandItem> {
+  let captured: ReadonlyArray<CommandItem> = [];
+  function Probe() {
+    captured = subpage.useItems(ctx(null, focusedComposerKind));
+    return null;
+  }
+  render(<Probe />);
+  return captured;
+}
+
+function renderSubpageItems(
+  subpage: CommandSubpage,
+  focusedComposerKind: FocusedComposerKind,
+): void {
+  function SubProbe() {
+    subpage.useItems(ctx(null, focusedComposerKind));
+    return null;
+  }
+  render(<SubProbe />);
+}
+
 function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
   return {
     setReasoning: () => undefined,
@@ -144,6 +242,42 @@ function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
     ...overrides,
   };
 }
+
+/**
+ * A real, distinct `HostClient` instance (never a cast) so identity
+ * assertions on `FocusedComposerEntry.hostClient` compare the exact object a
+ * test registered, not some other host's client. Never actually dispatched -
+ * `registerFocusedComposerControls`'s consumers here only read it back
+ * (nothing in this file issues a real RPC through it).
+ */
+function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
+  const entry = {
+    hostId,
+    label: hostId,
+    kind: "local" as const,
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${hostId}`,
+      handlers: {},
+    }),
+  });
+  return spine.createRequester(entry);
+}
+
+// The host client every pre-existing test in this file registers a focused
+// composer with - non-null, so the composer subpages list a resolved host's
+// catalog exactly as they did before `hostClient` became part of the entry.
+// Its identity is irrelevant to those tests; only the tests that assert
+// per-host routing below construct their own distinct clients.
+const TEST_HOST_CLIENT = buildTestHostClient("test-host");
 
 function resetCanvasStore(): void {
   useEpicCanvasStore.setState({
@@ -160,8 +294,8 @@ function resetCanvasStore(): void {
 
 describe("composerSource", () => {
   beforeEach(() => {
-    createChatMock.mutate.mockReset();
     latestConversationWorkspaceSeedMock.seed = null;
+    focusedComposerCatalogMock.clientCalls.length = 0;
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -171,8 +305,8 @@ describe("composerSource", () => {
 
   afterEach(() => {
     cleanup();
-    createChatMock.mutate.mockReset();
     latestConversationWorkspaceSeedMock.seed = null;
+    focusedComposerCatalogMock.clientCalls.length = 0;
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -186,7 +320,11 @@ describe("composerSource", () => {
   });
 
   it("landing composer shows provider / model; no new-chat items", () => {
-    registerFocusedComposerControls("landing", stubControls({}));
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     const ids = captureItems(null, "landing").map((i) => i.id);
     expect(ids).toContain("composer:switch-provider");
     expect(ids).toContain("composer:switch-model");
@@ -196,16 +334,39 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
+  it("emits a context-gated Stash prompt row bound to composer.stash", () => {
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    const item = captureItems(null, "landing").find(
+      (row) => row.id === "composer:stash-prompt",
+    );
+    expect(item).toBeDefined();
+    expect(item?.actionId).toBe("composer.stash");
+    expect(item?.label).toBe("Stash prompt");
+    expect(item?.shortcut).toBe("mod+s");
+  });
+
   it("hides Change model… when no picker is registered", () => {
     // A focused composer with no active picker (e.g. locked/pending) registers
     // its controls but not a picker, so the toggle would no-op.
-    registerFocusedComposerControls("landing", stubControls({}));
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     const ids = captureItems(null, "landing").map((i) => i.id);
     expect(ids).not.toContain("composer:open-model-picker");
   });
 
   it("shows Change model… with the active selection when a picker is registered", () => {
-    registerFocusedComposerControls("landing", stubControls({}));
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     registerActiveModelPicker({
       toggle: () => undefined,
       getSelectionSummary: () => "Claude Opus 4.8",
@@ -218,7 +379,11 @@ describe("composerSource", () => {
   });
 
   it("refreshes the Change model… summary when the top picker is swapped", () => {
-    registerFocusedComposerControls("landing", stubControls({}));
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     registerActiveModelPicker({
       toggle: () => undefined,
       getSelectionSummary: () => "base",
@@ -246,7 +411,11 @@ describe("composerSource", () => {
   });
 
   it("chat-tile composer with an active epic shows the new-chat + terminal items; no Select PC", () => {
-    registerFocusedComposerControls("chat-tile", stubControls({}));
+    registerFocusedComposerControls(
+      "chat-tile",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     const ids = captureItems("epic-1", "chat-tile").map((i) => i.id);
     expect(ids).toContain("composer:switch-provider");
     expect(ids).toContain("composer:switch-model");
@@ -258,7 +427,11 @@ describe("composerSource", () => {
   });
 
   it("new-chat active tile command opens the modal in chat mode (active-tile)", () => {
-    registerFocusedComposerControls("chat-tile", stubControls({}));
+    registerFocusedComposerControls(
+      "chat-tile",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     const items = captureItems("epic-1", "chat-tile");
     const item = items.find((candidate) => {
       return candidate.id === "composer:new-chat:replace";
@@ -270,12 +443,12 @@ describe("composerSource", () => {
 
     // The command no longer creates directly; it opens the shared modal which
     // owns the compose-then-create flow.
-    expect(createChatMock.mutate).not.toHaveBeenCalled();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",
       placement: { kind: "active-tile" },
       parentId: null,
+      hostId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -284,7 +457,11 @@ describe("composerSource", () => {
   });
 
   it("new-chat split command opens the modal in chat mode with the active group's split placement", () => {
-    registerFocusedComposerControls("chat-tile", stubControls({}));
+    registerFocusedComposerControls(
+      "chat-tile",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     useEpicCanvasStore
       .getState()
       .seedEpic("epic-1", { tabId: "epic-1", name: "Epic 1" }, []);
@@ -310,12 +487,12 @@ describe("composerSource", () => {
 
     // The command opens the modal (no direct create) and leaves the canvas
     // untouched until submit; placement carries the active group + edge.
-    expect(createChatMock.mutate).not.toHaveBeenCalled();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",
       placement: { kind: "split", groupId: activeGroupId, position: "right" },
       parentId: null,
+      hostId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -327,13 +504,21 @@ describe("composerSource", () => {
   });
 
   it("chat-tile without an active epic hides new-chat items", () => {
-    registerFocusedComposerControls("chat-tile", stubControls({}));
+    registerFocusedComposerControls(
+      "chat-tile",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     const ids = captureItems(null, "chat-tile").map((i) => i.id);
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
   it("provider / model entry items carry a subpage", () => {
-    registerFocusedComposerControls("landing", stubControls({}));
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
     const items = captureItems(null, "landing");
     const provider = items.find((i) => i.id === "composer:switch-provider");
     const model = items.find((i) => i.id === "composer:switch-model");
@@ -349,6 +534,7 @@ describe("composerSource", () => {
         selectModel: (harnessId, modelSlug) =>
           picks.push({ harnessId, modelSlug }),
       }),
+      TEST_HOST_CLIENT,
     );
 
     const items = captureItems(null, "landing");
@@ -381,6 +567,7 @@ describe("composerSource", () => {
       stubControls({
         switchHarness: (harnessId) => switches.push(harnessId),
       }),
+      TEST_HOST_CLIENT,
     );
 
     const items = captureItems(null, "landing");
@@ -408,5 +595,226 @@ describe("composerSource", () => {
     // remembered model/effort/tier), never the old `setSelection(firstModel…)`.
     // (`setSelection` is no longer part of `ComposerControls` at all.)
     expect(switches).toEqual(["codex"]);
+  });
+
+  it("the provider and model subpages resolve the FOCUSED composer's host client, not the default host's", () => {
+    const hostClientB = buildTestHostClient("host-b");
+    registerFocusedComposerControls("landing", stubControls({}), hostClientB);
+
+    const items = captureItems(null, "landing");
+    const providerSubpage = items.find(
+      (i) => i.id === "composer:switch-provider",
+    )?.subpage;
+    const modelSubpage = items.find(
+      (i) => i.id === "composer:switch-model",
+    )?.subpage;
+    if (providerSubpage === null || providerSubpage === undefined) {
+      throw new Error("expected a provider subpage");
+    }
+    if (modelSubpage === null || modelSubpage === undefined) {
+      throw new Error("expected a model subpage");
+    }
+
+    renderSubpageItems(providerSubpage, "landing");
+    expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBe(hostClientB);
+
+    renderSubpageItems(modelSubpage, "landing");
+    expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBe(hostClientB);
+  });
+
+  it("demotes a signed-out provider to the end of both subpages and badges it, but never removes it - the ambient verdict is not the send gate's verdict", () => {
+    const original = catalogMock.harnesses;
+    catalogMock.harnesses = [
+      ...original,
+      {
+        id: "claude",
+        label: "Claude Code",
+        available: true,
+        authStatus: "unauthenticated",
+        error: null,
+        models: [
+          {
+            harnessId: "claude",
+            slug: "opus",
+            label: "Opus",
+            description: null,
+            isDefault: true,
+            contextWindow: null,
+            maxOutputTokens: null,
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: [
+              { id: "high", label: "High", description: null },
+            ],
+            defaultServiceTier: null,
+            supportedServiceTiers: [],
+            metadata: {},
+          },
+        ],
+        modelsLoading: false,
+        modelsError: null,
+      },
+    ];
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({}),
+        TEST_HOST_CLIENT,
+      );
+      const items = captureItems(null, "landing");
+      const providerSubpage = items.find(
+        (i) => i.id === "composer:switch-provider",
+      )?.subpage;
+      const modelSubpage = items.find(
+        (i) => i.id === "composer:switch-model",
+      )?.subpage;
+      if (providerSubpage === null || providerSubpage === undefined) {
+        throw new Error("expected a provider subpage");
+      }
+      if (modelSubpage === null || modelSubpage === undefined) {
+        throw new Error("expected a model subpage");
+      }
+
+      const providerItems = collectSubpageItems(providerSubpage, "landing");
+      const providerIds = providerItems.map((item) => item.id);
+      // Still listed. The row's `authStatus` is the provider's AMBIENT
+      // verdict; a composer pinned to a signed-in managed profile runs turns
+      // on this provider perfectly well, and the send gate - which has the
+      // profile in hand and this palette does not - is what decides.
+      expect(providerIds).toContain("composer:provider:claude");
+      // codex (from the base fixture, no authStatus) still lists, and sorts
+      // ahead of the signed-out row.
+      expect(providerIds).toContain("composer:provider:codex");
+      expect(providerIds.indexOf("composer:provider:codex")).toBeLessThan(
+        providerIds.indexOf("composer:provider:claude"),
+      );
+      // ...and it says WHY it is demoted, which is the whole point of reading
+      // `authStatus` here: the subpage is no longer auth-blind.
+      expect(
+        providerItems.find((item) => item.id === "composer:provider:claude")
+          ?.statusBadge,
+      ).toBe("Signed out");
+      expect(
+        providerItems.find((item) => item.id === "composer:provider:codex")
+          ?.statusBadge,
+      ).toBeUndefined();
+      // Demoted, never inert: a disabled row would re-create the same false
+      // negative one layer down.
+      expect(
+        providerItems.find((item) => item.id === "composer:provider:claude")
+          ?.disabled ?? false,
+      ).toBe(false);
+
+      const modelItems = collectSubpageItems(modelSubpage, "landing");
+      const claudeModels = modelItems.filter((item) =>
+        item.id.startsWith("composer:model:claude"),
+      );
+      expect(claudeModels.length).toBeGreaterThan(0);
+      expect(
+        claudeModels.every((item) => item.statusBadge === "Signed out"),
+      ).toBe(true);
+      // The signed-out provider's models trail every live provider's.
+      const firstClaudeModel = modelItems.findIndex((item) =>
+        item.id.startsWith("composer:model:claude"),
+      );
+      const lastCodexModel = modelItems.findLastIndex((item) =>
+        item.id.startsWith("composer:model:codex"),
+      );
+      expect(lastCodexModel).toBeLessThan(firstClaudeModel);
+    } finally {
+      catalogMock.harnesses = original;
+    }
+  });
+
+  it("excludes a provider with available: false from both subpages regardless of authStatus", () => {
+    const original = catalogMock.harnesses;
+    catalogMock.harnesses = [
+      {
+        id: "codex",
+        label: "Codex",
+        available: false,
+        authStatus: "authenticated",
+        error: null,
+        models: original[0].models,
+        modelsLoading: false,
+        modelsError: null,
+      },
+    ];
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({}),
+        TEST_HOST_CLIENT,
+      );
+      const items = captureItems(null, "landing");
+      const providerSubpage = items.find(
+        (i) => i.id === "composer:switch-provider",
+      )?.subpage;
+      if (providerSubpage === null || providerSubpage === undefined) {
+        throw new Error("expected a provider subpage");
+      }
+      const providerItems = collectSubpageItems(providerSubpage, "landing");
+      expect(providerItems).toEqual([]);
+    } finally {
+      catalogMock.harnesses = original;
+    }
+  });
+
+  it("with a host that reports no authStatus at all, both subpages list exactly what they list today", () => {
+    // The base fixture's `codex` entry already has no `authStatus` key - an
+    // old host below agent.gui.listHarnesses@7.1. Confirms the predicate is
+    // false for every row on such a host rather than excluding everything.
+    expect(catalogMock.harnesses[0]).not.toHaveProperty("authStatus");
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    const items = captureItems(null, "landing");
+    const providerSubpage = items.find(
+      (i) => i.id === "composer:switch-provider",
+    )?.subpage;
+    if (providerSubpage === null || providerSubpage === undefined) {
+      throw new Error("expected a provider subpage");
+    }
+    const providerItems = collectSubpageItems(providerSubpage, "landing");
+    expect(providerItems.map((item) => item.id)).toContain(
+      "composer:provider:codex",
+    );
+  });
+
+  it("with no focused composer registered, the provider subpage resolves the default host's client", () => {
+    // `ctx.focusedComposerKind` (below) only decides which top-level items
+    // render; `useFocusedComposerCatalog` reads the REGISTRY instead - never
+    // populated in this test - to decide "focused or not". This models a
+    // palette rendered while no composer has registered itself as focused.
+    const items = captureItems(null, "landing");
+    const providerSubpage = items.find(
+      (i) => i.id === "composer:switch-provider",
+    )?.subpage;
+    if (providerSubpage === null || providerSubpage === undefined) {
+      throw new Error("expected a provider subpage");
+    }
+
+    renderSubpageItems(providerSubpage, "landing");
+
+    expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBe(
+      focusedComposerCatalogMock.defaultClient,
+    );
+  });
+
+  it("a focused composer whose host client hasn't resolved yet is passed through as null, never the default host's", () => {
+    registerFocusedComposerControls("landing", stubControls({}), null);
+
+    const items = captureItems(null, "landing");
+    const modelSubpage = items.find(
+      (i) => i.id === "composer:switch-model",
+    )?.subpage;
+    if (modelSubpage === null || modelSubpage === undefined) {
+      throw new Error("expected a model subpage");
+    }
+
+    renderSubpageItems(modelSubpage, "landing");
+
+    expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBeNull();
   });
 });

@@ -9,8 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { Check, FileText, FolderGit2, Search } from "lucide-react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Badge } from "@/components/ui/badge";
+import { WorktreeRowStatusBadge } from "@/components/worktree/worktree-row-status-badge";
 import {
   InputGroup,
   InputGroupAddon,
@@ -33,13 +34,15 @@ import {
 } from "@/lib/git/git-diff-repo-switcher";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 export interface GitDiffRepoSwitcherProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly roots: ReadonlyArray<GitDiffRepoSwitcherRootInput>;
   readonly activeRootSubmodules: ReadonlyArray<GitSubmoduleSummary>;
   readonly selected: GitDiffRepoSelection | null;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
   readonly hostSection: ReactNode | null;
   readonly autoFocusSearch: boolean;
   readonly triggerClassName: string | undefined;
@@ -64,34 +67,40 @@ export function GitDiffRepoSwitcher(
     [props.activeRootSubmodules, props.roots, props.selected, searchQuery],
   );
 
-  const handleSelectRoot = (row: WorktreeBindingSelectorRow): void => {
+  const handleSelectRoot = (row: WorktreeBindingSelectorRowV12): void => {
     props.onSelectRoot(row);
     props.onOpenChange(false);
   };
 
   return (
     <Popover open={props.open} onOpenChange={props.onOpenChange}>
-      <PopoverTrigger asChild>
-        <WorktreePickerTrigger
-          worktreeLabel={model.trigger.label}
-          secondaryLabel={model.trigger.secondaryLabel}
-          changeCount={null}
-          trailingStatus={
-            <GitDiffCountBadges
-              fileChangeCount={model.trigger.fileChangeCount}
-              moduleChangeCount={model.trigger.moduleChangeCount}
-            />
-          }
-          testId={props.triggerTestId}
-          className={props.triggerClassName}
-          aria-label={triggerAccessibleName(model)}
-          title={triggerTooltip(model)}
-          aria-haspopup="dialog"
-          aria-expanded={props.open}
-          aria-controls={props.open ? contentId : undefined}
-          data-unavailable={model.trigger.unavailable ? "true" : undefined}
-        />
-      </PopoverTrigger>
+      <TooltipWrapper
+        label={triggerTooltip(model)}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <PopoverTrigger asChild>
+          <WorktreePickerTrigger
+            worktreeLabel={model.trigger.label}
+            secondaryLabel={model.trigger.secondaryLabel}
+            changeCount={null}
+            trailingStatus={
+              <GitDiffCountBadges
+                fileChangeCount={model.trigger.fileChangeCount}
+                moduleChangeCount={model.trigger.moduleChangeCount}
+              />
+            }
+            testId={props.triggerTestId}
+            className={props.triggerClassName}
+            aria-label={triggerAccessibleName(model)}
+            aria-haspopup="dialog"
+            aria-expanded={props.open}
+            aria-controls={props.open ? contentId : undefined}
+            data-unavailable={model.trigger.unavailable ? "true" : undefined}
+          />
+        </PopoverTrigger>
+      </TooltipWrapper>
       <PopoverContent
         id={contentId}
         role="dialog"
@@ -99,6 +108,15 @@ export function GitDiffRepoSwitcher(
         align="start"
         className={cn("w-[min(90vw,30rem)] gap-0 p-0", props.contentClassName)}
         data-testid={props.contentTestId}
+        // The host picker's list is a nested Radix popover: it portals OUTSIDE
+        // this content, so every click in it arrives here as an interaction
+        // from outside. Dismissing on those would close the panel the picker
+        // exists to scope, and no host could ever be chosen from it.
+        onInteractOutside={(event) => {
+          if (isHostSwitcherListInteraction(event.target)) {
+            event.preventDefault();
+          }
+        }}
       >
         {props.hostSection === null ? null : props.hostSection}
         <GitDiffRepoSwitcherDropdown
@@ -142,7 +160,7 @@ export interface GitDiffRepoSwitcherDropdownProps {
   readonly model: GitDiffRepoSwitcherModel;
   readonly searchQuery: string;
   readonly onSearchQueryChange: (query: string) => void;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
   readonly autoFocusSearch: boolean;
 }
 
@@ -209,7 +227,7 @@ export function GitDiffRepoSwitcherDropdown(
 
 function RepoSwitcherRowButton(props: {
   readonly row: GitDiffRepoSwitcherRow;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
 }): ReactNode {
   const { row } = props;
   const disabled = row.disabledLabel !== null;
@@ -327,10 +345,24 @@ function RepoSwitcherRowMarker(props: {
 }): ReactNode {
   const { row } = props;
   if (row.disabledLabel !== null) {
+    const status = row.statusBadge;
     return (
-      <Badge variant="destructive" className="shrink-0">
-        {row.disabledLabel}
-      </Badge>
+      <WorktreeRowStatusBadge
+        label={row.disabledLabel}
+        pending={row.pending}
+        tone={status?.tone ?? "error"}
+        detail={status?.detail ?? "This workspace is unavailable."}
+      />
+    );
+  }
+  if (row.statusBadge !== null) {
+    return (
+      <WorktreeRowStatusBadge
+        label={row.statusBadge.label}
+        pending={row.statusBadge.pending}
+        tone={row.statusBadge.tone}
+        detail={row.statusBadge.detail}
+      />
     );
   }
   return (
@@ -351,26 +383,38 @@ function GitDiffCountBadges(props: {
   return (
     <span className="flex shrink-0 items-center gap-1">
       {moduleLabel === null ? null : (
-        <Badge
-          variant="secondary"
-          className="gap-1 px-1.5 tabular-nums"
-          aria-label={moduleLabel}
-          title={moduleLabel}
+        <TooltipWrapper
+          label={moduleLabel}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <FolderGit2 className="size-3" aria-hidden />
-          <span aria-hidden>{props.moduleChangeCount}</span>
-        </Badge>
+          <Badge
+            variant="secondary"
+            className="gap-1 px-1.5 tabular-nums"
+            aria-label={moduleLabel}
+          >
+            <FolderGit2 className="size-3" aria-hidden />
+            <span aria-hidden>{props.moduleChangeCount}</span>
+          </Badge>
+        </TooltipWrapper>
       )}
       {fileLabel === null ? null : (
-        <Badge
-          variant="secondary"
-          className="gap-1 px-1.5 tabular-nums"
-          aria-label={fileLabel}
-          title={fileLabel}
+        <TooltipWrapper
+          label={fileLabel}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <FileText className="size-3" aria-hidden />
-          <span aria-hidden>{props.fileChangeCount}</span>
-        </Badge>
+          <Badge
+            variant="secondary"
+            className="gap-1 px-1.5 tabular-nums"
+            aria-label={fileLabel}
+          >
+            <FileText className="size-3" aria-hidden />
+            <span aria-hidden>{props.fileChangeCount}</span>
+          </Badge>
+        </TooltipWrapper>
       )}
     </span>
   );

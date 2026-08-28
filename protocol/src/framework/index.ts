@@ -21,6 +21,8 @@ export type {
   AnyRpcContract,
   AnyUpgradePath,
   AnyVersionEntry,
+  ContextlessUpgradePath,
+  ContextualUpgradePath,
   ContractForInstalledVersion,
   DowngradePath,
   DowngradeResult,
@@ -38,6 +40,7 @@ export type {
   RpcErrorFor,
   RpcRequestFor,
   RpcResultFor,
+  RpcResponseUpgradeContext,
   RpcSuccessFor,
   SchemaVersion,
   UncheckedMethodVersionRegistry,
@@ -51,6 +54,26 @@ export type {
 export { RPC_ERROR_CODES, isRpcErrorCode } from "./versioned-rpc-types";
 
 export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+} from "./worktree-busy-holders";
+export {
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyHoldersWireFieldSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+} from "./worktree-busy-holders";
+
+export type {
   AnyOfJsonSchema,
   ArrayJsonSchema,
   ContractJsonSchemas,
@@ -61,6 +84,7 @@ export type {
 } from "./versioned-rpc";
 
 export {
+  defineContextualUpgradePath,
   defineDowngradePath,
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -73,6 +97,7 @@ export {
   toJsonSchemas,
   upgradeRequestToVersion,
   upgradeResponseToVersion,
+  upgradeResponseToVersionWithContext,
   validateVersionedRpcRegistryDegrades,
   validateVersionedRpcRegistry,
 } from "./versioned-rpc";
@@ -137,6 +162,7 @@ export type {
   ClientRequestFrame,
   ClientFatalErrorFrame,
   ConnectionManifest,
+  ManifestMethodEntry,
   HostFrame,
   HostOpenAckFrame,
   HostResponseFrame,
@@ -145,9 +171,12 @@ export type {
   IncompatibleMethodBlocking,
   IncompatibleMethodDetails,
   FatalErrorDetails,
+  HostRestartIntent,
 } from "./ws-protocol";
 
 export {
+  HOST_RESTARTING_FATAL_CODE,
+  RPC_REQUEST_TIMEOUT_FATAL_CODE,
   clientFrameSchema,
   clientOpenFrameSchema,
   clientRequestFrameSchema,
@@ -160,9 +189,36 @@ export {
   hostFatalErrorFrameSchema,
   incompatibilityUpgradeGuidanceSchema,
   incompatibleMethodDetailsSchema,
+  manifestMethodEntrySchema,
   schemaVersionSchema,
   fatalErrorDetailsSchema,
+  hostRestartIntentSchema,
 } from "./ws-protocol";
+
+// ---- Client handshake identity + compatibility epoch --------------------- //
+
+export type {
+  ClientCompatibilityFailure,
+  ClientCompatibilityRequirement,
+  ClientHandshakeIdentity,
+  FirstPartyClientIdentity,
+  FirstPartyClientKind,
+  KnownHostReleaseChannel,
+} from "./client-identity";
+
+export {
+  CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+  KNOWN_HOST_RELEASE_CHANNELS,
+  LEGACY_CLIENT_COMPATIBILITY_EPOCH,
+  MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
+  STRICT_SEMVER_PATTERN,
+  clientCompatibilityRequirementSchema,
+  clientHandshakeIdentitySchema,
+  hostReleaseChannelAllowsRcRecovery,
+  isStrictSemVer,
+  isValidCompatibilityEpoch,
+  toClientHandshakeIdentity,
+} from "./client-identity";
 
 export type {
   ManifestRegistry,
@@ -172,8 +228,12 @@ export type {
 export {
   buildConnectionManifest,
   mergeConnectionManifests,
+  selectConnectionManifestForPeer,
+  SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "./capability-manifest";
+
+export type { ServedMajorsByMethod } from "./capability-manifest";
 
 export type {
   CompatibilityCheckResult,

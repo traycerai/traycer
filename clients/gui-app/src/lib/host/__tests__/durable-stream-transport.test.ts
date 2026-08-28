@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 
 // `openDurableStreamTransport` is the single place "durable stream = transport +
 // auth + bearer rotation + wake" is assembled. These tests pin its load-bearing
@@ -35,21 +36,48 @@ const AUTH: StreamAuthRevalidator = {
   revalidateForReconnect: () => Promise.resolve("rotated"),
 };
 
+// `buildHostStreamClient` is mocked in these tests, so `target` only needs to
+// satisfy the type — its content plays no role in the assembly contract these
+// tests pin.
+const FAKE_TARGET: HostDirectoryEntry = {
+  hostId: "host-a",
+  label: "host-a",
+  kind: "local",
+  websocketUrl: "ws://host-a/rpc",
+  version: null,
+  transportDialability: "dialable",
+};
+
 function buildParams(closeWs: () => void) {
   const order: string[] = [];
+  let availabilityListener: (() => void) | null = null;
   const fakeWs = {
     close: vi.fn(() => {
       order.push("ws");
       closeWs();
     }),
     reconnectAll: vi.fn(),
+    isReady: () => true,
     notifyBearerRotated: vi.fn(),
+    subscribeAvailabilityRecovered: vi.fn((listener: () => void) => {
+      availabilityListener = listener;
+      return () => {
+        availabilityListener = null;
+      };
+    }),
   };
   mocks.buildHostStreamClient.mockReturnValue(fakeWs);
+  const notifyRecoveredForNamedHost = vi.fn();
   return {
     order,
     fakeWs,
+    notifyRecoveredForNamedHost,
+    fireAvailabilityRecovered: (): void => {
+      availabilityListener?.();
+    },
     params: {
+      target: FAKE_TARGET,
+      userId: "user-a",
       endpoint: () => null,
       bearer: () => null,
       auth: AUTH,
@@ -61,6 +89,7 @@ function buildParams(closeWs: () => void) {
       },
       // No endpoint ever moves in these assembly tests; return a no-op disposer.
       subscribeEndpointChange: () => () => undefined,
+      notifyRecoveredForNamedHost,
     },
   };
 }
@@ -132,6 +161,15 @@ describe("openDurableStreamTransport", () => {
     expect(fakeWs.notifyBearerRotated).toHaveBeenCalledTimes(1);
   });
 
+  it("throws when buildHostStreamClient returns null (invalid remote public key)", () => {
+    const { params } = buildParams(() => undefined);
+    mocks.buildHostStreamClient.mockReturnValue(null);
+
+    expect(() => openDurableStreamTransport(params)).toThrow(
+      /invalid public key/,
+    );
+  });
+
   it("closes the half-built socket and rethrows if wiring wake throws", () => {
     const closeWs = vi.fn();
     const { order, params, fakeWs } = buildParams(closeWs);
@@ -148,15 +186,40 @@ describe("openDurableStreamTransport", () => {
     expect(order).toEqual(["bearer", "ws"]);
   });
 
+  it("wires the transport's recovery evidence to the bound-host notify callback", () => {
+    const built = buildParams(() => undefined);
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
+
+    const transport = openDurableStreamTransport(built.params);
+
+    // Evidence from THIS transport's heartbeat reaches the caller's notify -
+    // this is the only wiring that covers a tab bound to a non-active host.
+    expect(built.fakeWs.subscribeAvailabilityRecovered).toHaveBeenCalledTimes(
+      1,
+    );
+    built.fireAvailabilityRecovered();
+    expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledTimes(1);
+
+    transport.close();
+    built.fireAvailabilityRecovered();
+    expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledTimes(1);
+  });
+
   it("re-dials at once when the host's dialable endpoint moves, not on benign re-emits", () => {
     const reconnectAll = vi.fn();
-    const fakeWs = { close: vi.fn(), reconnectAll };
+    const fakeWs = {
+      close: vi.fn(),
+      reconnectAll,
+      subscribeAvailabilityRecovered: () => () => undefined,
+    };
     mocks.buildHostStreamClient.mockReturnValue(fakeWs);
     mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
 
     let websocketUrl: string | null = "ws://host-a/rpc";
     let fireDirectoryChange: () => void = () => undefined;
     const params = {
+      target: FAKE_TARGET,
+      userId: "user-a",
       endpoint: () =>
         websocketUrl === null ? null : { hostId: "host-a", websocketUrl },
       bearer: () => null,
@@ -167,6 +230,7 @@ describe("openDurableStreamTransport", () => {
         fireDirectoryChange = onChange;
         return () => undefined;
       },
+      notifyRecoveredForNamedHost: () => undefined,
     };
 
     const transport = openDurableStreamTransport(params);
@@ -181,7 +245,12 @@ describe("openDurableStreamTransport", () => {
     websocketUrl = "ws://host-a/rpc-2";
     fireDirectoryChange();
     expect(reconnectAll).toHaveBeenCalledTimes(1);
-    expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change");
+    // Forced, not probed: the old socket addresses a url that no longer serves
+    // this host, so an answer from it would not mean it is still the right one.
+    expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
 
     // Endpoint goes away (host down), then returns on a new url: re-dial again -
     // a null gap is recorded but not nudged, the next non-null move fires it.

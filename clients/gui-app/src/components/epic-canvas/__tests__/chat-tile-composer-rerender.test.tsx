@@ -119,28 +119,41 @@ function queryCompactContextTrigger() {
 
 function UsageLeafProbe() {
   const usage = useUsageProbeStore((s) => s.usage);
-  return <ContextUsageChip usage={usage} />;
+  return <ContextUsageChip usage={usage} onCompact={null} />;
 }
 
 // ── Stable composer-relevant props (built once, never re-identified) ──────────
 const RUNTIME: ChatLowerRuntimeState = {
   snapshotLoaded: true,
 };
-const ACCESS: ChatLowerAccessState = { isViewer: false, canAct: true };
+const ACCESS: ChatLowerAccessState = {
+  isViewer: false,
+  canAct: true,
+  readOnlyNotice: null,
+};
 const TURN_IDLE: ChatLowerTurnState = {
   activeTurnStatus: null,
   stopDisabled: true,
   onStopTurn: () => null,
+  steerCapable: false,
+  steerProtocolSupported: true,
+  getActiveTurnForSteer: () => null,
 };
 const TURN_RUNNING: ChatLowerTurnState = {
   activeTurnStatus: "running",
   stopDisabled: false,
   onStopTurn: () => null,
+  steerCapable: false,
+  steerProtocolSupported: true,
+  getActiveTurnForSteer: () => null,
 };
 const INTERVIEW: ChatLowerInterviewState = {
   pending: null,
+  isBusy: false,
+  unanswerable: [],
+  unanswerableBusy: false,
   onAnswer: () => null,
-  onError: () => null,
+  onSkip: () => null,
   onFork: null,
 };
 const APPROVALS: ChatLowerApprovalsState = {
@@ -153,6 +166,8 @@ const QUEUE: ChatLowerQueueState = {
   editingItem: null,
   editingItemId: null,
   value: { status: "idle", items: [] },
+  resumeRequested: false,
+  keepPausedRequested: false,
   onPause: () => null,
   onResume: () => null,
   onEdit: () => undefined,
@@ -161,6 +176,7 @@ const QUEUE: ChatLowerQueueState = {
   onCancelEdit: () => undefined,
   onStopBackgroundItem: () => null,
   onStopAllBackgroundItems: () => null,
+  onStopBackgroundSession: () => null,
   onReorder: () => undefined,
   onSteerNow: () => undefined,
 };
@@ -211,7 +227,9 @@ function props(
 ): ChatLowerInteractionSurfacesProps {
   return {
     epicId: "epic-1",
+    viewTabId: "tab-1",
     chatId: "chat-1",
+    hostId: "host-1",
     runtime: RUNTIME,
     access: ACCESS,
     turn,
@@ -224,6 +242,7 @@ function props(
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: EMPTY_BACKGROUND_STOP_TASK_IDS,
     backgroundStopAllPending: false,
+    backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
   };
 }

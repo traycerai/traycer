@@ -9,7 +9,12 @@ import type {
   ChatSessionAnchor,
   GuiHarnessId,
   InterviewAnswer,
+  InterviewDeliveryProjection,
+  InterviewOutcome,
   InterviewQuestion,
+  InterviewSettlementAuthority,
+  ImageResolutionEntry,
+  ImageGenerationResult,
   TodoItem,
   AgentUserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -28,6 +33,7 @@ import type {
   PlanStep,
   ProviderNoticeDetail,
   ProviderNoticeTone,
+  ToolCallManagedCommand,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -71,6 +77,26 @@ export interface SegmentTodoItem {
   activeForm: string | null;
 }
 
+export interface AssistantMarkdownImageResolution {
+  readonly messageId: string;
+  readonly entry: ImageResolutionEntry;
+}
+
+export interface AssistantMarkdownImageTarget {
+  readonly toolBlockId: string;
+  readonly rowId: string;
+}
+
+export interface AssistantMarkdownImageContext {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly resolutions: ReadonlyArray<AssistantMarkdownImageResolution>;
+  readonly deduplicatedTargetsBySource: ReadonlyMap<
+    string,
+    AssistantMarkdownImageTarget
+  >;
+}
+
 export interface FileChangeSegment {
   id: string;
   kind: "file_change";
@@ -106,6 +132,11 @@ export interface ToolSegment {
   taskTodoItems: ReadonlyArray<ParsedTaskTodo> | null;
   error: string | null;
   agentMessageSend: AgentMessageSend | null;
+  // The shell a `traycer_run_shell` call created, stamped on the block at
+  // completion. Null for every other tool call; also null on a run_shell block
+  // written before the host carried this, which the start card reads as "no
+  // live status to show" rather than as a deleted shell.
+  managedCommand: ToolCallManagedCommand | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
@@ -134,6 +165,8 @@ export interface ToolSegment {
   // Owning subagent block id when this call was made by a subagent (nests under
   // that subagent block). Null for top-level / main-agent tool calls.
   parentId: string | null;
+  /** Generated images carried by chat.subscribe@1.6. Normalized at projection. */
+  imageResults: ReadonlyArray<ImageGenerationResult>;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
@@ -193,6 +226,17 @@ export interface CommandSegment {
   // Wall-clock start of the command (block timestamp; stays anchored while
   // streaming). Drives the elapsed heartbeat shown while it runs.
   startedAt: number;
+  // Persistent: true once the harness promoted this command to a backgrounded
+  // one (Codex yields a long-running exec to the background at the parent
+  // turn's end). Drives standalone-card promotion across the whole lifecycle -
+  // running -> completed/stopped -> reload - exactly like
+  // `ToolSegment.backgroundTask`. `null` means "not yet known" and is treated
+  // like `false` without being a confirmed negative.
+  backgroundTask: boolean | null;
+  // True when the terminal outcome was an explicit stop (the host terminated
+  // the backgrounded command) rather than a real non-zero exit. Drives a
+  // neutral "Stopped" badge in place of the destructive exit-code treatment.
+  stopped: boolean;
   // Owning subagent block id when this command was run by a subagent (nests
   // under that subagent block). Null for top-level / main-agent commands.
   parentId: string | null;
@@ -316,7 +360,13 @@ export interface ArtifactChangeRow {
 }
 
 export type MessageSegment =
-  | { id: string; kind: "text"; markdown: string; isStreaming: boolean }
+  | {
+      id: string;
+      kind: "text";
+      markdown: string;
+      isStreaming: boolean;
+      assistantImageContext?: AssistantMarkdownImageContext;
+    }
   | ReasoningSegment
   | ToolSegment
   | FileChangeSegment
@@ -384,6 +434,26 @@ export type MessageSegment =
        */
       model: SetupCardViewModel;
       viewTabId: string;
+      /**
+       * Ticket 13 (decision #28): the raw triggering message id this card is
+       * associated with (`SetupCardRow.triggeringMessageId`) - `null` only
+       * for the genesis card or a defensive creating-event-without-id shape.
+       * A card whose trigger never became (or no longer is) an anchor
+       * target - queued/steered/branched/deleted - keeps this id but FLOATS
+       * by `createdAt` instead of interleaving (`rendered-messages.ts`'s
+       * `floatingCards`), so it can land directly above a completely
+       * unrelated row by coincidence. Anchor-target substitution must
+       * verify this identity against the row it's evaluating, not just
+       * array adjacency, which a floating card can satisfy by chance.
+       */
+      anchorMessageId: string | null;
+      /**
+       * Ticket 13 (decision #28): true only for the pinned genesis card
+       * (the chat's back-filled initial worktree, unconditionally unshifted
+       * to row index 0 - it has no triggering send to match against, so it
+       * substitutes for whatever the chat's first row is).
+       */
+      isGenesisPin: boolean;
     };
 
 export interface InterviewSegment {
@@ -396,7 +466,11 @@ export interface InterviewSegment {
   description: string | null;
   questions: ReadonlyArray<InterviewQuestion>;
   answers: ReadonlyArray<InterviewAnswer>;
+  draftAnswers: ReadonlyArray<InterviewAnswer>;
+  outcome: InterviewOutcome | null;
+  settlement: InterviewSettlementAuthority | null;
   error: string | null;
+  delivery: InterviewDeliveryProjection | null;
   /**
    * True when this question was carried into a Cross Question fork without
    * being answered (the host settles the copied block with a
@@ -445,7 +519,8 @@ export interface ChatMessageSteerBadge {
 
 /**
  * Per-turn agent run metadata for an assistant row, surfaced in the elapsed
- * footer's info tooltip (provider, model, reasoning effort, fast mode). Only
+ * footer's info tooltip (provider, profile, model, reasoning effort, fast
+ * mode). Only
  * set on assistant rows; `null` for user/system rows and assistant turns that
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
@@ -453,6 +528,8 @@ export interface AssistantTurnMeta {
   /** Raw harness id, used to pick the provider's mono icon for the footer. */
   readonly provider: GuiHarnessId;
   readonly providerLabel: string;
+  /** Profile label snapshotted when the turn's provider session was minted. */
+  readonly profileLabel: string | null;
   readonly modelLabel: string | null;
   /** Raw persisted reasoning effort id from the host turn. */
   readonly reasoningEffort: string | null;
@@ -483,24 +560,29 @@ export interface ChatMessageStoppedInfo {
   readonly stoppedAt: number;
   readonly reason: string | null;
   /**
-   * Whether the TURN (not necessarily this specific row) produced any
-   * visible output before it was stopped. A split turn's stamped row is
-   * sometimes a content-less boundary marker synthesized after a trailing
-   * steer bubble - its own `segments` are empty even though an earlier row
-   * in the same turn has real content. `false` drives "Stopped before
-   * responding" (the turn truly never produced anything); `true` drives the
-   * full "Stopped · Nm Xs" footer even on a row with no segments of its own.
+   * Whether the TURN (not necessarily this specific row) produced response
+   * output before it was stopped. An `autonomous_resume` divider is a turn
+   * boundary, not a response. A split turn's stamped row is sometimes a
+   * content-less boundary marker synthesized after a trailing steer bubble -
+   * its own `segments` are empty even though an earlier row in the same turn
+   * has real content. `false` drives "Stopped before responding"; `true`
+   * drives the full "Stopped · Nm Xs" footer even on a row with no segments
+   * of its own.
    */
   readonly turnHadOutput: boolean;
   /**
-   * The turn's assistant reply text, aggregated across every row of the
-   * turn (not just this one) via the same join `collectAssistantReplyText`
-   * uses. A content-less boundary row's own segments can never supply
-   * copyable text, so the elapsed footer's copy button reads this instead
-   * of the row-local text whenever the row itself is empty - see
-   * `AssistantMessageBody`. Empty string when the turn produced no text.
+   * Every assistant segment in the turn, in order and BY REFERENCE. A
+   * content-less boundary row's own segments can never supply copyable text,
+   * so the elapsed footer's copy button reads these instead of the row-local
+   * ones whenever the row itself is empty - see `AssistantMessageBody`, which
+   * runs `collectAssistantReplyText` over them at render time.
+   *
+   * Deliberately not the joined string: materializing it here kept a second
+   * full copy of the turn's prose alive for every stopped turn in the
+   * transcript, for the sake of a copy button that needs it only when the row
+   * it belongs to is on screen. The pointer array costs a word per segment.
    */
-  readonly turnReplyText: string;
+  readonly turnReplySegments: ReadonlyArray<MessageSegment>;
 }
 
 export interface ChatMessage {
@@ -513,9 +595,30 @@ export interface ChatMessage {
   settings: ChatRunSettings | null;
   createdAt: number;
   /**
+   * Wall-clock start used by the assistant elapsed timer. Defaults to
+   * `createdAt`; differs when a persisted notification is adopted by a later
+   * provider run but must keep its original transcript position.
+   */
+  elapsedStartedAt?: number;
+  /**
+   * Whether every assistant segment in this completed turn is an
+   * `autonomous_resume` divider. Stamped only on the turn's final assistant
+   * row; `undefined` on live and non-final rows.
+   */
+  turnHasOnlyAutonomousResumeSegments?: boolean;
+  /**
+   * Whether this completed row should render the elapsed footer. `false` for
+   * a background-completion notification that no provider turn adopted; its
+   * non-null `completedAt` still records terminal state for transcript
+   * consumers.
+   */
+  showCompletionFooter?: boolean;
+  /**
    * Wall-clock time the assistant turn finished, in ms. Non-null only for
-   * completed assistant rows (drives the "Worked for Nm Xs" footer). Always
-   * `null` for user rows, pending rows, and in-progress assistant turns.
+   * completed assistant rows. It records terminal state; the optional
+   * `showCompletionFooter` flag controls whether that state also renders a
+   * "Worked for Nm Xs" footer. Always `null` for user rows, pending rows, and
+   * in-progress assistant turns.
    */
   completedAt: number | null;
   /** See `ChatMessageStoppedInfo`. */

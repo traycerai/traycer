@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeAll,
@@ -78,6 +77,15 @@ const registryMock = vi.hoisted(() => {
 
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   getOpenEpicRegistry: registryMock.getOpenEpicRegistry,
+}));
+
+// The toast module LEAF `new-chat.ts` calls directly - not the `sonner`
+// barrel underneath it, which would also catch every other toast call this
+// module graph might make and make the assertion below say less than it
+// looks like it does.
+const reportableWarningToast = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableWarningToast,
 }));
 
 const EPIC_ID = "epic-command-new-chat";
@@ -189,6 +197,7 @@ describe("new chat command actions", () => {
     resetCanvasStore();
     registryMock.reset();
     track = vi.spyOn(Analytics.getInstance(), "track");
+    reportableWarningToast.mockClear();
   });
 
   afterEach(() => {
@@ -207,7 +216,10 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       source: "direct_ui",
       worktreeIntent: null,
+      title: "",
       settings: null,
+      forkSource: null,
+      onCreateError: () => undefined,
       createChat: createChat.createChat,
       openWhenProjected: opened.openWhenProjected,
     });
@@ -246,7 +258,10 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       source: "direct_ui",
       worktreeIntent: SEEDED_WORKTREE_INTENT,
+      title: "",
       settings: null,
+      forkSource: null,
+      onCreateError: () => undefined,
       createChat: createChat.createChat,
       openWhenProjected: opened.openWhenProjected,
     });
@@ -254,6 +269,27 @@ describe("new chat command actions", () => {
     expect(createChat.calls[0].request.worktreeIntent).toBe(
       SEEDED_WORKTREE_INTENT,
     );
+  });
+
+  it("sends the caller-supplied title on the create request (clone-on-host-switch keeps its name)", () => {
+    const createChat = createChatRecorder();
+    const opened = openIntentsRecorder();
+
+    openNewChatInActiveTile({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      hostId: "test-host",
+      source: "direct_ui",
+      worktreeIntent: null,
+      title: "Cloned chat title",
+      settings: null,
+      forkSource: null,
+      onCreateError: () => undefined,
+      createChat: createChat.createChat,
+      openWhenProjected: opened.openWhenProjected,
+    });
+
+    expect(createChat.calls[0].request.title).toBe("Cloned chat title");
   });
 
   it("opens an active-tile tab only after the host-created chat appears in projection", () => {
@@ -388,6 +424,75 @@ describe("new chat command actions", () => {
       expect(registryMock.listenerCount()).toBe(0);
     });
 
+    it("surfaces a warning toast when the 30s wait actually expires", () => {
+      // The fallback used to expire silently - "clicked Fork, nothing
+      // happened for a minute" with nothing in the UI to explain it. Ablation:
+      // drop the `reportChatProjectionWaitExpired` call from the timeout arm
+      // and this assertion is the only thing that would catch the regression.
+      seedActiveGroup();
+
+      openCreatedChatWhenProjected({
+        kind: "active-tile",
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        chatId: "host-chat",
+        hostId: "test-host",
+        source: "direct_ui",
+      });
+
+      expect(reportableWarningToast).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(30_000);
+      expect(reportableWarningToast).toHaveBeenCalledTimes(1);
+      expect(reportableWarningToast).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ id: "chat-projection-wait-expired" }),
+        // A concrete field rather than a nested `expect.any(String)`: the
+        // matcher is typed `any`, so asserting the SHAPE of the report context
+        // here would be an unsafe assignment the lint rules reject - and this
+        // pins the reportable arm harder anyway.
+        expect.objectContaining({ source: "Chat" }),
+      );
+    });
+
+    it("does not toast when the chat lands before the timeout", () => {
+      seedActiveGroup();
+
+      openCreatedChatWhenProjected({
+        kind: "active-tile",
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        chatId: "host-chat",
+        hostId: "test-host",
+        source: "direct_ui",
+      });
+
+      registryMock.projectChat({ id: "host-chat", title: "Host chat" });
+      vi.advanceTimersByTime(30_000);
+
+      expect(reportableWarningToast).not.toHaveBeenCalled();
+    });
+
+    it("stays silent when the caller cancels instead of letting the wait expire", () => {
+      // Caller-driven cancellation (unmount, a superseding open) is not a
+      // failure and must not be reported as one - only a genuine timeout
+      // toasts.
+      seedActiveGroup();
+
+      const cancel = openCreatedChatWhenProjected({
+        kind: "active-tile",
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        chatId: "host-chat",
+        hostId: "test-host",
+        source: "direct_ui",
+      });
+
+      cancel();
+      vi.advanceTimersByTime(30_000);
+
+      expect(reportableWarningToast).not.toHaveBeenCalled();
+    });
+
     it("propagates cancel from openNewChatInActiveTile through the projection wait", () => {
       seedActiveGroup();
       const createChat = createChatRecorder();
@@ -398,7 +503,10 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         source: "direct_ui",
         worktreeIntent: null,
+        title: "",
         settings: null,
+        forkSource: null,
+        onCreateError: () => undefined,
         createChat: createChat.createChat,
         openWhenProjected: openCreatedChatWhenProjected,
       });
@@ -420,7 +528,10 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         source: "direct_ui",
         worktreeIntent: null,
+        title: "",
         settings: null,
+        forkSource: null,
+        onCreateError: () => undefined,
         createChat: createChat.createChat,
         openWhenProjected: openCreatedChatWhenProjected,
       });
@@ -522,7 +633,7 @@ describe("new chat command actions", () => {
         type: "chat",
         // Empty stored title renders the "Untitled chat" fallback as the
         // node's snapshot name - never the "New chat" placeholder.
-        name: "Untitled chat",
+        name: "Untitled agent",
         hostId: "test-host",
       }),
     );

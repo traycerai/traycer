@@ -1,242 +1,475 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { DiagnosticsLogTarget } from "@traycer/protocol/host/diagnostics/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { LogLevelRow } from "@/components/settings/panels/log-level-row";
-import { Button } from "@/components/ui/button";
+import {
+  HostConfigUnsupportedNotice,
+  LocalConfigFallbackNotice,
+} from "@/components/settings/host-scope/host-config-notices";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  localConfigFallbackReason,
+  type LocalConfigFallbackReason,
+} from "@/components/settings/host-scope/host-scope-model";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
+import { LogDetailGroup } from "@/components/settings/panels/diagnostics-log-detail-group";
+import {
+  BridgeLogEntry,
+  DiagnosticsLogEntryFrame,
+  LogInfoLine,
+  RecentLogsFrame,
+} from "@/components/settings/panels/diagnostics-log-entries";
+import {
+  LOG_TAIL_LINES,
+  useSupportSnapshotQuery,
+  type LogTailView,
+} from "@/components/settings/panels/diagnostics-log-tail";
+import {
+  useBridgeHostLogLevelControls,
+  useHostLogLevelControls,
+} from "@/components/settings/panels/log-level-controls";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { CopyTextButton } from "@/components/copy-text-button";
-import { useRunnerHost } from "@/providers/use-runner-host";
-import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
-import { getLogLevelsBridge } from "@/lib/desktop-log-levels";
 import {
-  runnerMutationKeys,
-  runnerQueryKeys,
-} from "@/lib/query-keys/runner-mutation-keys";
-import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import type {
-  DesktopSupportBridge,
-  DesktopSupportLogDescriptor,
-  DesktopSupportLogTailResult,
-  DesktopSupportSnapshot,
-} from "@/lib/windows/types";
+  useHostBinding,
+  HostRuntimeContext,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsDensity } from "@/providers/settings-density-context";
+import { cn } from "@/lib/utils";
+import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
+import type { DesktopSupportBridge } from "@/lib/windows/types";
 
-const LOG_TAIL_LINES = 100;
 const PANEL_DESCRIPTION =
-  "Log verbosity for each Traycer component on this machine, plus recent log output. All default to Info — raise a level to Debug when capturing a problem for support, then set it back.";
+  "Log verbosity and recent log output for the host selected above. Both levels default to Info - raise one to Debug when capturing a problem for support, then set it back. This app's own log and memory capture live under Application - Diagnostics.";
+/** The `cli`/`host` rows' method; the whole config family ships in one release. */
+const LOG_LEVELS_GATE_METHOD = "config.logLevels.get";
+/** Recent logs' method, asked separately so each region states its own truth. */
+const HOST_LOGS_GATE_METHOD = "diagnostics.logs.list";
 
+/**
+ * Diagnostics for the SELECTED host, over that host's own RPC.
+ *
+ * Wholly host-scoped, which it did not used to be. The page carried three
+ * app-scoped surfaces as well — the `desktop` verbosity row, the heap capture,
+ * and this window's own log tail — under a doc comment that called the mixed
+ * scope deliberate and stated it per row. Per-row honesty was not the problem;
+ * REPETITION was. All three describe one app and one window, so an account with
+ * four hosts rendered four copies of each, with two of them writing the same
+ * single value from four places. They now live once, under Application ->
+ * Diagnostics (`app-diagnostics-settings-panel.tsx`), and this page is left
+ * with exactly what varies by host: `cli`/`host` verbosity and that host's own
+ * log files.
+ *
+ * That is also why both regions now sit INSIDE `HostScopeGate` rather than
+ * beside it. The gate was previously wrapped around the logs alone, because Log
+ * detail always had the app row to show for an unreachable host; with nothing
+ * app-scoped left, a group rendered outside the gate would be an empty card
+ * under a host that cannot answer.
+ *
+ * The one exception is `localConfigFallbackReason`: this computer's host, when
+ * its process cannot answer — stopped, or a version predating these methods —
+ * still has to be readable, because those are exactly the moments someone is
+ * trying to find out what is wrong with it. There the local bridge answers, as
+ * it always did, under a notice naming which of the two it is. A remote host in
+ * either state gets the capability notice: no local truth describes it.
+ */
 export function DiagnosticsSettingsPanel() {
-  // Every part of this panel (config + log files) is desktop-only; on the web
-  // shell there is no bridge to read or write through.
-  if (getLogLevelsBridge() === null) {
+  const scope = useHostScope();
+  // Hoisted above the branch, which depends on it. Nullable on purpose: `false`
+  // is a host that handshaked WITHOUT the method; `null` is "no handshake yet",
+  // and this page's own first RPC is what produces one — so treating `null` as
+  // absent would divert a capable host onto the bridge before ever trying it.
+  const levelsSupported = useHostMethodSupport(
+    scope.hostId,
+    LOG_LEVELS_GATE_METHOD,
+  );
+  const logsSupported = useHostMethodSupport(
+    scope.hostId,
+    HOST_LOGS_GATE_METHOD,
+  );
+  // Before the branch: hooks may not be conditional. Null for every scope that
+  // is not an explicit, resolved pick.
+  const scopedBinding = useScopedHostBinding(scope);
+  // Keyed on the config family, the same one the Shell page uses — the two
+  // families ship in one host release, so either answers "does this host
+  // predate the batch", and one predicate keeps the two pages consistent.
+  const fallbackReason = localConfigFallbackReason(scope.host, levelsSupported);
+  // Both `false` outcomes below — the bridge fallback and the remote capability
+  // notice — park every host read this page owns, including the handshake that
+  // would overturn the verdict. The probe keeps the answer refutable;
+  // `scope.client` (never the ambient one) so it asks the host being shown.
+  useHostCapabilityProbe({
+    client: scope.client,
+    stale: levelsSupported === false || logsSupported === false,
+    incarnation: [
+      scope.host?.version ?? null,
+      scope.host?.connectable ?? false,
+    ],
+  });
+
+  if (fallbackReason !== null) {
     return (
-      <SettingsPanelShell title="Diagnostics" description={PANEL_DESCRIPTION}>
-        <div className="px-5 py-6 text-ui-sm text-muted-foreground">
-          Log configuration is only available on the desktop app.
-        </div>
-      </SettingsPanelShell>
+      <DiagnosticsPanelOverLocalStore
+        hostName={scope.hostLabel}
+        reason={fallbackReason}
+      />
     );
   }
 
+  const inner = (
+    <DiagnosticsPanelOverRpc
+      scope={scope}
+      levelsSupported={levelsSupported}
+      logsSupported={logsSupported}
+    />
+  );
+  if (scopedBinding === null) return inner;
   return (
-    <SettingsPanelShell title="Diagnostics" description={PANEL_DESCRIPTION}>
-      <LogLevelRow
-        scope="desktop"
-        label="App log level"
-        description="Verbosity of the desktop app's own logs."
-      />
-      <LogLevelRow
-        scope="cli"
-        label="CLI log level"
-        description="Verbosity of the bundled Traycer CLI's logs."
-      />
-      <LogLevelRow
-        scope="host"
-        label="Host log level"
-        description="Verbosity of the background host process's logs."
-      />
-      <DiagnosticsLogs />
+    <HostRuntimeContext.Provider value={scopedBinding}>
+      {inner}
+    </HostRuntimeContext.Provider>
+  );
+}
+
+function DiagnosticsPanelOverRpc(props: {
+  readonly scope: HostScope;
+  /** Both resolved by the panel above, which branches on the first. */
+  readonly levelsSupported: boolean | null;
+  readonly logsSupported: boolean | null;
+}) {
+  const { scope, levelsSupported, logsSupported } = props;
+  const compact = useSettingsDensity() === "compact";
+  // MOUNTING, not rendering: a query hook mounted under a non-ready scope still
+  // fires against the ambient host and caches its answer, however well the gate
+  // hides the result.
+  const usable = isHostScopeUsable(scope.status);
+
+  // The BINDING rather than `useHostClient()`: same context, re-provided by the
+  // panel above for an explicit pick, but `null` instead of a throw when there
+  // is no host runtime at all. Every host-scoped read below is null-gated.
+  const client = useHostBinding()?.hostClient ?? null;
+  const hostControls = useHostLogLevelControls({
+    client,
+    enabled: usable && levelsSupported !== false,
+  });
+
+  return (
+    <SettingsPanelShell
+      title="Diagnostics"
+      description={PANEL_DESCRIPTION}
+      fillHeight
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          compact ? "gap-2.5" : "gap-3",
+        )}
+      >
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          <LogDetailGroup
+            controls={hostControls}
+            // CALLED, not rendered as `<HostLogDetailEmptyReason />`. An
+            // element is truthy however it renders, so as JSX this prop could
+            // never be the `null` that suppresses the whole card — the group
+            // would title an empty "Log detail" over a component returning
+            // nothing.
+            emptyState={hostLogDetailEmptyReason({
+              hostName: scope.hostLabel,
+              levelsSupported,
+              logsSupported,
+            })}
+          />
+          {logsSupported === false ? (
+            <HostConfigUnsupportedNotice
+              hostName={scope.hostLabel}
+              subject="logs and log levels"
+            />
+          ) : (
+            <HostRecentLogsSection client={client} hostName={scope.hostLabel} />
+          )}
+        </HostScopeGate>
+      </div>
     </SettingsPanelShell>
   );
 }
 
-function DiagnosticsLogs(): ReactNode {
+/**
+ * Why this host has no verbosity rows.
+ *
+ * Returns `null` — and so renders no Log detail card at all — when the logs
+ * region below is already stating the same version fact for the same host. Its
+ * subject is literally "logs and log levels", so a second copy here would say
+ * it twice on one screen.
+ *
+ * The residual arm is defensive rather than routine: inside `HostScopeGate` a
+ * usable scope has a client, so `useHostLogLevelControls` returns its two rows
+ * (loading, but present). It exists because silence is the one outcome this
+ * page must not produce — it was the old shared empty copy, "only available on
+ * the desktop app", that sent people to install an app they were running.
+ *
+ * A plain function rather than a component, and named like one, because its
+ * caller needs the RESULT: `LogDetailGroup` decides whether to render a card at
+ * all by testing this for `null`, which an element wrapper would defeat.
+ */
+function hostLogDetailEmptyReason(props: {
+  readonly hostName: string;
+  readonly levelsSupported: boolean | null;
+  readonly logsSupported: boolean | null;
+}): ReactNode {
+  if (props.levelsSupported === false) {
+    if (props.logsSupported === false) return null;
+    return (
+      <HostConfigUnsupportedNotice
+        hostName={props.hostName}
+        subject="log levels"
+      />
+    );
+  }
+  return (
+    <LogInfoLine>
+      Log levels for {props.hostName} aren&apos;t readable right now.
+    </LogInfoLine>
+  );
+}
+
+/**
+ * This computer's host, unable to answer for itself: the bridge reads the same
+ * config store and the same log files that host uses.
+ */
+function DiagnosticsPanelOverLocalStore(props: {
+  readonly hostName: string;
+  readonly reason: LocalConfigFallbackReason;
+}) {
+  const compact = useSettingsDensity() === "compact";
+  const hostControls = useBridgeHostLogLevelControls();
+  return (
+    <SettingsPanelShell
+      title="Diagnostics"
+      description={PANEL_DESCRIPTION}
+      fillHeight
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          compact ? "gap-2.5" : "gap-3",
+        )}
+      >
+        <LocalConfigFallbackNotice
+          hostName={props.hostName}
+          reason={props.reason}
+        />
+        {/*
+          The bridge path reads the on-disk store, so there is no host RPC to
+          be too old for - its empty `hostControls` only ever means "this shell
+          has no log-levels bridge", which is what the empty state says.
+        */}
+        <LogDetailGroup
+          controls={hostControls}
+          emptyState={
+            <LogInfoLine>
+              Log level controls are only available on the desktop app.
+            </LogInfoLine>
+          }
+        />
+        <BridgeRecentLogsSection />
+      </div>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * Recent logs for a host that can be dialled: its OWN log files, read over
+ * `diagnostics.logs.*`.
+ *
+ * This app's log used to be listed alongside them, sourced from the local
+ * bridge whatever the scope was. That was defensible per-page and wrong across
+ * pages: one file, N hosts, N identical entries. It is now the whole content of
+ * Application -> Diagnostics.
+ */
+function HostRecentLogsSection(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostName: string;
+}): ReactNode {
+  const { client } = props;
+  const listQuery = useHostQuery<HostRpcRegistry, "diagnostics.logs.list">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "diagnostics.logs.list",
+    params: {},
+    options: { enabled: client !== null, staleTime: 60_000 },
+  });
+
+  if (client === null) {
+    return (
+      <RecentLogsFrame>
+        <LogInfoLine>
+          There&apos;s no connection to {props.hostName}, so its log files
+          can&apos;t be read from here.
+        </LogInfoLine>
+      </RecentLogsFrame>
+    );
+  }
+  const hostLogs = listQuery.data?.logs ?? [];
+  return (
+    <RecentLogsFrame>
+      {listQuery.isPending ? <LogInfoLine>Loading logs…</LogInfoLine> : null}
+      {/*
+        Carries the same report-issue affordance a failed TAIL read offers.
+        Without it the panel was harder to report from the worse the failure
+        was: a single log that would not open could be filed, while the read
+        that lists every log failing left the user with text and nothing to do.
+      */}
+      {listQuery.isError ? (
+        <div className="flex items-start gap-2">
+          <LogInfoLine>Couldn&apos;t load log details.</LogInfoLine>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load log details",
+              message: null,
+              code: null,
+              source: "Diagnostics",
+            })}
+            presentation="icon"
+            className={undefined}
+          />
+        </div>
+      ) : null}
+      {listQuery.isSuccess && hostLogs.length === 0 ? (
+        <LogInfoLine>No log files on {props.hostName}.</LogInfoLine>
+      ) : null}
+      {hostLogs.map((entry) => (
+        <HostLogEntry
+          key={entry.target}
+          client={client}
+          target={entry.target}
+          label={entry.label}
+          path={entry.path}
+        />
+      ))}
+    </RecentLogsFrame>
+  );
+}
+
+/** Recent logs through the desktop support bridge — the stopped-local path. */
+function BridgeRecentLogsSection(): ReactNode {
   const runnerHost = useRunnerHost();
   const support = useMemo(
     () => resolveDesktopSupportBridge(runnerHost),
     [runnerHost],
   );
 
-  const listQuery = useQuery(
-    queryOptions<DesktopSupportSnapshot>({
-      queryKey: runnerQueryKeys.supportLogList(support),
-      queryFn: () => {
-        if (support === null) throw new Error("Logs unavailable.");
-        return support.getSnapshot();
-      },
-      enabled: support !== null,
-      staleTime: 60_000,
-    }),
-  );
-
-  if (support === null) return null;
-
   return (
-    <>
-      <div className="border-b border-border/40 px-5 py-4 last:border-b-0">
-        <div className="font-medium text-foreground">Logs</div>
-        <p className="text-ui-sm text-muted-foreground">
-          Recent output from each log file. Expand to view the last{" "}
-          {LOG_TAIL_LINES} lines, or reveal the file on disk.
-        </p>
-      </div>
-      <DiagnosticsLogList
-        pending={listQuery.isPending}
-        error={listQuery.isError}
-        logs={listQuery.data?.logs ?? []}
-        support={support}
-      />
-    </>
+    <RecentLogsFrame>
+      {support === null ? (
+        <LogInfoLine>
+          Recent logs are only available on the desktop app.
+        </LogInfoLine>
+      ) : (
+        <BridgeLogList support={support} />
+      )}
+    </RecentLogsFrame>
   );
 }
 
-function DiagnosticsLogList(props: {
-  readonly pending: boolean;
-  readonly error: boolean;
-  readonly logs: readonly DesktopSupportLogDescriptor[];
+function BridgeLogList(props: {
   readonly support: DesktopSupportBridge;
 }): ReactNode {
-  if (props.pending) {
+  const { support } = props;
+  const listQuery = useSupportSnapshotQuery(support);
+  // The snapshot carries `desktop` as well as `host`, and this page is no
+  // longer where the app's own log belongs — Application -> Diagnostics reads
+  // the same entry from the same snapshot. Filtered rather than re-shaped: the
+  // bridge answers one question for both pages, and each takes its half.
+  const logs = (listQuery.data?.logs ?? []).filter(
+    (entry) => entry.target !== "desktop",
+  );
+
+  if (listQuery.isPending) {
     return <LogInfoLine>Loading logs…</LogInfoLine>;
   }
-  if (props.error) {
+  if (listQuery.isError) {
     return <LogInfoLine>Couldn&apos;t load log details.</LogInfoLine>;
+  }
+  if (logs.length === 0) {
+    return <LogInfoLine>No log files found.</LogInfoLine>;
   }
   return (
     <>
-      {props.logs.map((entry) => (
-        <DiagnosticsLogEntry
-          key={entry.target}
-          entry={entry}
-          support={props.support}
-        />
+      {logs.map((entry) => (
+        <BridgeLogEntry key={entry.target} entry={entry} support={support} />
       ))}
     </>
   );
 }
 
-function LogInfoLine(props: { readonly children: ReactNode }): ReactNode {
-  return (
-    <div className="px-5 py-4 text-ui-sm text-muted-foreground">
-      {props.children}
-    </div>
-  );
-}
-
-function DiagnosticsLogEntry(props: {
-  readonly entry: DesktopSupportLogDescriptor;
-  readonly support: DesktopSupportBridge;
+/**
+ * One of the scoped host's own log files.
+ *
+ * Reveal is deliberately NOT offered here. `shell.showItemInFolder` opens a
+ * path on THIS machine, so it is meaningless for a remote host — and even for a
+ * local one it would resolve the path itself rather than the one the host just
+ * named, which is a different file the moment two host slots share a machine.
+ * The plan's degrade is the honest one: show the path and offer to copy it.
+ */
+function HostLogEntry(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly target: DiagnosticsLogTarget;
+  readonly label: string;
+  readonly path: string;
 }): ReactNode {
-  const { entry, support } = props;
   const [open, setOpen] = useState(false);
-
-  const tailQuery = useQuery(
-    queryOptions<DesktopSupportLogTailResult>({
-      queryKey: runnerQueryKeys.supportLogTail(support, entry.target),
-      queryFn: () =>
-        support.tailLog({ target: entry.target, tailLines: LOG_TAIL_LINES }),
-      enabled: open,
-      staleTime: 5_000,
-    }),
-  );
-
-  const revealMutation = useMutation({
-    mutationKey: runnerMutationKeys.revealLog(),
-    mutationFn: () => support.revealLog(entry.target),
-    onError: (error) =>
-      toastFromRunnerError(error, "Couldn't open the log file"),
+  const tailQuery = useHostQuery<HostRpcRegistry, "diagnostics.logs.tail">({
+    cacheKeyIdentity: undefined,
+    client: props.client,
+    method: "diagnostics.logs.tail",
+    params: { target: props.target, tailLines: LOG_TAIL_LINES },
+    options: { enabled: open, staleTime: 5_000 },
   });
 
-  const Chevron = open ? ChevronUp : ChevronDown;
-
-  const lines = tailQuery.isSuccess ? tailQuery.data.lines : [];
-  const copyValue = lines.join("\n");
-  let tailText = "Loading log output…";
+  let tail: LogTailView = { status: "loading" };
   if (tailQuery.isError) {
-    tailText = "Couldn't load log output.";
+    tail = { status: "error" };
   } else if (tailQuery.isSuccess) {
-    tailText = lines.length === 0 ? "Log file is empty." : copyValue;
+    tail =
+      tailQuery.data.status === "available"
+        ? { status: "ready", lines: tailQuery.data.lines }
+        : { status: "missing" };
   }
 
   return (
-    <div className="border-b border-border/40 px-5 py-4 last:border-b-0">
-      <div className="flex items-start justify-between gap-6">
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          data-testid={`diagnostics-log-toggle-${entry.target}`}
-        >
-          <Chevron className="size-4 shrink-0 text-muted-foreground" />
-          <span className="truncate font-medium text-foreground">
-            {entry.label}
-          </span>
-        </button>
-        <div className="flex shrink-0 items-center gap-2">
-          {open ? (
-            <CopyTextButton
-              value={copyValue}
-              label="Copy"
-              ariaLabel={`Copy ${entry.label} log`}
-              disabled={copyValue.length === 0}
-            />
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            disabled={revealMutation.isPending}
-            onClick={() => revealMutation.mutate()}
-          >
-            {revealMutation.isPending ? (
-              <AgentSpinningDots
-                className="text-current"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : (
-              <FolderOpen />
-            )}
-            Reveal
-          </Button>
-        </div>
-      </div>
-      {open ? (
-        <div className="mt-3 flex items-start gap-2">
-          <pre
-            className="max-h-52 min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
-            data-testid={`diagnostics-log-output-${entry.target}`}
-          >
-            {tailText}
-          </pre>
-          {tailQuery.isError ? (
-            <ReportIssueAction
-              context={createReportIssueContext({
-                title: "Couldn't load log output",
-                message: null,
-                code: null,
-                source: "Diagnostics",
-              })}
-              presentation="icon"
-              className={undefined}
-            />
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+    <DiagnosticsLogEntryFrame
+      target={props.target}
+      label={props.label}
+      open={open}
+      onToggle={() => setOpen((value) => !value)}
+      tail={tail}
+      action={
+        <CopyTextButton
+          value={props.path}
+          label="Copy path"
+          ariaLabel={`Copy ${props.label} path`}
+          disabled={false}
+        />
+      }
+    />
   );
 }

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
+  userMessageSenderSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/senders";
 
 /**
@@ -82,6 +83,26 @@ export const chatEventSchemaPreInReplyTo = z.object({
   timestamp: z.number(),
   clientActionId: z.string().nullable(),
   actor: userMessageSenderSchemaPreInReplyTo.nullable(),
+  message: z.string().nullable(),
+  turnId: z.string().nullable(),
+  messageId: z.string().nullable(),
+  queueItemId: z.string().nullable(),
+  approvalId: z.string().nullable(),
+  blockId: z.string().nullable(),
+  severity: chatEventSeveritySchema,
+  metadata: z.record(z.string(), z.unknown()).nullable(),
+});
+
+// Wire-freeze copy with `actor` pinned to the pre-Reasonix sender, bound to
+// `chat.subscribe@1.4`/`@1.5` serverFrames (`eventAppended` + snapshot
+// `chat.events`). Those lines shipped after `inReplyTo`, so the actor keeps that
+// field and freezes only the harness enum. Hand-frozen, not derived.
+export const chatEventSchemaPreReasonix = z.object({
+  eventId: z.string(),
+  type: chatEventTypeSchema,
+  timestamp: z.number(),
+  clientActionId: z.string().nullable(),
+  actor: userMessageSenderSchemaPreReasonix.nullable(),
   message: z.string().nullable(),
   turnId: z.string().nullable(),
   messageId: z.string().nullable(),

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useStore } from "zustand";
@@ -19,7 +18,7 @@ import type {
 /**
  * Banner-flash bug: switching chat tabs (a real ChatTile remount past the
  * keep-alive LRU) or creating a new chat via its first message briefly
- * flashes "This chat's Codex profile is no longer available", then self-
+ * flashes "This agent's Codex profile is no longer available", then self-
  * corrects. Root cause (confirmed): `chat-composer.tsx` seeds its toolbar
  * store with `settingsSeed ?? fallbackSettingsSeed`. Before the chat's own
  * authoritative settings hydrate (fresh mount, or a brand-new chat with
@@ -74,7 +73,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -90,7 +89,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
     isPending: false,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       models: [
         {
@@ -117,9 +116,18 @@ import { authoritativeOrFallbackSeedSource } from "@/lib/composer/composer-seed-
 import { useProviderReauthGate } from "../use-provider-reauth-gate";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = {
+    hostId,
+    label: hostId,
+    kind: "local" as const,
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     // `useHostQuery` is mocked wholesale above, so this messenger's handlers
     // are never actually invoked - this just needs to be a real, distinct
     // `HostClient` instance to key `mocks.providersByClient` by.
@@ -129,15 +137,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
       handlers: {},
     }),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    status: "available",
-  });
-  return client;
+  return spine.createRequester(entry);
 }
 
 // The tab's own host - the ONLY host this composer's turns actually run on.
@@ -155,6 +155,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -167,6 +168,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -196,6 +198,16 @@ function providerState(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -240,7 +252,11 @@ function ChatComposerLikeHarness(props: {
     props.fallbackSettingsSeed,
     TAB_HOST_CLIENT,
   );
-  const toolbarStore = useComposerToolbarStore(null, seedSource, null, false);
+  const toolbarStore = useComposerToolbarStore(null, seedSource, null, {
+    hostClient: TAB_HOST_CLIENT,
+    hostId: "tab-host",
+    tuiOnly: false,
+  });
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const reauthGate = useProviderReauthGate(

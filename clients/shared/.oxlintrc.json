@@ -1,0 +1,134 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/dist-*/**",
+    "**/out/**",
+    "**/@types/**",
+    "**/*.d.ts",
+    "**/*.cjs",
+    "**/*.mjs",
+    "dist-sea/**"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@traycer/protocol/**/_internal/**"],
+                "message": "Do not import from `@traycer/protocol/.../_internal/...`. Use `getRecordSchema(<registry>, \"<record-name>\", \"latest\")` to obtain a versioned record schema, or use `RecordValue<typeof <registry>, \"<record-name>\">` for the type."
+              },
+              {
+                "group": ["@traycerai/**"],
+                "message": "Client packages must not import `@traycerai/*` (for example packages/common). Use `@traycer/protocol/*` or `@traycer-clients/*` instead."
+              },
+              {
+                "group": [
+                  "@traycer/**",
+                  "!@traycer/protocol",
+                  "!@traycer/protocol/**"
+                ],
+                "message": "Client packages may only import `@traycer` through `@traycer/protocol/*`. Use the protocol path alias or `@traycer-clients/*` for other shared code."
+              }
+            ]
+          }
+        ]
+      },
+      "env": {
+        "es2026": true,
+        "browser": true,
+        "node": true
+      },
+      "plugins": ["typescript"]
+    },
+    {
+      "files": ["host-lifecycle/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
+                "message": "host-lifecycle is read-only: inject ProbeCommandRunner; do not spawn mutators here."
+              },
+              {
+                "name": "child_process",
+                "message": "host-lifecycle is read-only: inject ProbeCommandRunner; do not spawn mutators here."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@traycer/protocol/**/_internal/**"],
+                "message": "Do not import from `@traycer/protocol/.../_internal/...`. Use `getRecordSchema(<registry>, \"<record-name>\", \"latest\")` to obtain a versioned record schema, or use `RecordValue<typeof <registry>, \"<record-name>\">` for the type."
+              },
+              {
+                "group": ["@traycerai/**"],
+                "message": "Client packages must not import `@traycerai/*` (for example packages/common). Use `@traycer/protocol/*` or `@traycer-clients/*` instead."
+              },
+              {
+                "group": [
+                  "@traycer/**",
+                  "!@traycer/protocol",
+                  "!@traycer/protocol/**"
+                ],
+                "message": "Client packages may only import `@traycer` through `@traycer/protocol/*`. Use the protocol path alias or `@traycer-clients/*` for other shared code."
+              },
+              {
+                "group": [
+                  "**/traycer-cli/**",
+                  "**/service/platforms/**",
+                  "**/installer/**",
+                  "**/host-login-item*",
+                  "**/desktop/**",
+                  "**/host-lock/**"
+                ],
+                "message": "host-lifecycle must not import CLI/desktop mutators or a sibling that spawns; keep the probe read-only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["host-lifecycle/__tests__/real-supervisor-*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@traycer/protocol/**/_internal/**"],
+                "message": "Do not import from `@traycer/protocol/.../_internal/...`. Use `getRecordSchema(<registry>, \"<record-name>\", \"latest\")` to obtain a versioned record schema, or use `RecordValue<typeof <registry>, \"<record-name>\">` for the type."
+              },
+              {
+                "group": ["@traycerai/**"],
+                "message": "Client packages must not import `@traycerai/*` (for example packages/common). Use `@traycer/protocol/*` or `@traycer-clients/*` instead."
+              },
+              {
+                "group": [
+                  "@traycer/**",
+                  "!@traycer/protocol",
+                  "!@traycer/protocol/**"
+                ],
+                "message": "Client packages may only import `@traycer` through `@traycer/protocol/*`. Use the protocol path alias or `@traycer-clients/*` for other shared code."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

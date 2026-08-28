@@ -29,6 +29,7 @@ import {
   worktreeImportRows,
   type UnifiedPickerWorktreeRow,
 } from "@/components/home/worktree/worktree-unified-picker-model";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 import {
@@ -258,8 +259,10 @@ function FolderLocationMenu(props: {
  * list is always height-capped to ~5 rows and scrolls beyond that; a search bar
  * appears once the worktrees exceed {@link EXISTING_WORKTREE_SEARCH_THRESHOLD}.
  * Mounted only while the submenu is open, so the query resets per open and the
- * search autofocuses. `onKeyDown` stops propagation so the menu's typeahead
- * doesn't steal keystrokes (Escape still bubbles up to close the menu).
+ * search autofocuses on a pointer that can type without covering the list.
+ * `onKeyDown` stops typed characters from reaching the
+ * menu's typeahead, bridges vertical arrows into the filtered menu items, and
+ * lets Escape reach Radix's dismissal handler.
  */
 function ExistingWorktreeList(props: {
   readonly rows: ReadonlyArray<UnifiedPickerWorktreeRow>;
@@ -268,6 +271,8 @@ function ExistingWorktreeList(props: {
   readonly onSelect: (intent: WorktreeFolderIntent) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const allowOpenFocusRecoveryRef = useRef(true);
   const [query, setQuery] = useState("");
   const rows = useMemo(
     () => promotePickerRow(props.rows, props.promoteRowId),
@@ -280,15 +285,23 @@ function ExistingWorktreeList(props: {
   // it a bounded number of times when the menu reclaims it (the non-modal menu
   // above means nothing keeps trapping it afterwards), so the search ends up
   // focused without fighting a deliberate later focus change.
+  //
+  // None of that applies to a touch pointer, where focusing the search raises a
+  // software keyboard over the rows and the reclaim-on-blur loop would then
+  // fight the very tap that dismissed it. There is no hover-open on touch
+  // either, so the whole recovery has nothing to recover from: focus stays on
+  // the submenu trigger the tap put it on.
+  const coarsePointer = useCoarsePointer();
   useEffect(() => {
-    if (!showSearch) return;
+    if (!showSearch || coarsePointer) return;
     const input = inputRef.current;
     if (input === null) return;
     let reclaims = 0;
     const focusSearch = (): void => {
-      if (input.isConnected) input.focus();
+      if (allowOpenFocusRecoveryRef.current && input.isConnected) input.focus();
     };
     const handleBlur = (): void => {
+      if (!allowOpenFocusRecoveryRef.current) return;
       if (reclaims >= 4) return;
       reclaims += 1;
       window.requestAnimationFrame(focusSearch);
@@ -299,7 +312,7 @@ function ExistingWorktreeList(props: {
       window.cancelAnimationFrame(frame);
       input.removeEventListener("blur", handleBlur);
     };
-  }, [showSearch]);
+  }, [coarsePointer, showSearch]);
 
   const needle = query.trim().toLowerCase();
   const filtered =
@@ -310,6 +323,19 @@ function ExistingWorktreeList(props: {
             (row.branch ?? "").toLowerCase().includes(needle) ||
             row.worktreePath.toLowerCase().includes(needle),
         );
+
+  const focusFilteredRow = (edge: "first" | "last"): void => {
+    const list = listRef.current;
+    if (list === null) return;
+    const items = list.querySelectorAll<HTMLElement>(
+      '[data-slot="dropdown-menu-item"]:not([data-disabled])',
+    );
+    if (items.length === 0) return;
+    const item =
+      edge === "first" ? items.item(0) : items.item(items.length - 1);
+    allowOpenFocusRecoveryRef.current = false;
+    item.focus();
+  };
 
   return (
     <>
@@ -324,6 +350,14 @@ function ExistingWorktreeList(props: {
               className="text-ui-sm"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  focusFilteredRow(
+                    event.key === "ArrowDown" ? "first" : "last",
+                  );
+                  return;
+                }
                 if (event.key !== "Escape") event.stopPropagation();
               }}
             />
@@ -334,6 +368,7 @@ function ExistingWorktreeList(props: {
         </div>
       ) : null}
       <div
+        ref={listRef}
         // When the search bar is shown the height is PINNED (not capped) so
         // filtering the list down doesn't shrink the submenu and trigger Radix
         // to recompute/reposition it - that resize-on-every-keystroke is what

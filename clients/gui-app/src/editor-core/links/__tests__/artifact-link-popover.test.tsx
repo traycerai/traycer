@@ -28,6 +28,7 @@ import {
 } from "../artifact-link-popover";
 import { ArtifactToolbar } from "../../toolbar/artifact-toolbar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 
 vi.mock("@floating-ui/dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@floating-ui/dom")>();
@@ -247,9 +248,12 @@ describe("ArtifactLinkPopover", () => {
     );
   });
 
-  it("opens at a collapsed caret and prefills both fields", async () => {
+  it("opens at a collapsed caret in read state, then prefills both fields on Edit", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
+
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     const url = await screen.findByRole<HTMLInputElement>("textbox", {
       name: "Link URL",
@@ -264,7 +268,7 @@ describe("ArtifactLinkPopover", () => {
   it("keeps the portaled card below the shared modal layer", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
-    const card = await screen.findByRole("dialog", { name: "Edit link" });
+    const card = await screen.findByRole("dialog", { name: "Link preview" });
 
     render(
       <Dialog open>
@@ -285,6 +289,8 @@ describe("ArtifactLinkPopover", () => {
   it("commits Enter followed by blur exactly once without duplicating text", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     const text = screen.getByRole("textbox", { name: "Link display text" });
     const documentTransaction = vi.fn();
@@ -305,9 +311,63 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
   });
 
-  it("reverts Escape even when the closing focus cascade blurs the field", async () => {
+  it("retains an in-progress edit when its pane is backgrounded — the boundary's forced blur must not commit/close/refocus", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(2);
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    const boundedPopover = (focused: boolean) => (
+      <SurfacePresentationBoundary visible focused={focused}>
+        <EditorContent editor={editor} />
+        <ArtifactLinkPopover
+          editor={editor}
+          editable
+          scrollContainer={null}
+          openLink={vi.fn()}
+          openLinkPending={false}
+          onOpenChange={onOpenChange}
+        />
+      </SurfacePresentationBoundary>
+    );
+    const { rerender } = render(boundedPopover(true));
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    const before = editor.getHTML();
+    const documentTransaction = vi.fn();
+    editor.on("transaction", ({ transaction }) => {
+      if (transaction.docChanged) documentTransaction();
+    });
+
+    fireEvent.change(url, { target: { value: "https://changed.example" } });
+    act(() => {
+      url.focus();
+    });
+
+    // Background this pane: the boundary force-blurs the focused URL field. That
+    // synthetic relinquish-blur must NOT run the blur-as-commit path.
+    act(() => {
+      rerender(boundedPopover(false));
+    });
+
+    expect(documentTransaction).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(editor.getHTML()).toBe(before);
+    // The card stays MOUNTED (hidden + aria-hidden with the pane, so role queries
+    // can't reach it) — assert via the DOM that the edit field survived with its
+    // in-progress draft intact and that the field WAS relinquished (blurred).
+    const retainedUrl = document.querySelector('input[aria-label="Link URL"]');
+    if (!(retainedUrl instanceof HTMLInputElement)) {
+      throw new Error("Expected the URL field to remain mounted");
+    }
+    expect(retainedUrl.value).toBe("https://changed.example");
+    expect(document.activeElement).not.toBe(retainedUrl);
+  });
+
+  it("reverts Escape to the read state without committing when editing", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     const before = editor.getHTML();
     const documentTransaction = vi.fn();
@@ -317,9 +377,61 @@ describe("ArtifactLinkPopover", () => {
 
     fireEvent.change(url, { target: { value: "https://changed.example" } });
     fireEvent.keyDown(url, { key: "Escape" });
-    fireEvent.blur(url, { relatedTarget: editor.view.dom });
 
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(
+      await screen.findByRole("button", {
+        name: "Open link: https://example.com",
+      }),
+    ).not.toBeNull();
+    expect(editor.getHTML()).toBe(before);
+    expect(documentTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not commit a discarded draft when Escape unmount blur fires after revert", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    setCaretAndRender(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    const form = screen.getByRole("form", { name: "Edit link" });
+    const before = editor.getHTML();
+    const documentTransaction = vi.fn();
+    editor.on("transaction", ({ transaction }) => {
+      if (transaction.docChanged) documentTransaction();
+    });
+
+    fireEvent.change(url, { target: { value: "https://changed.example" } });
+    fireEvent.keyDown(url, { key: "Escape" });
+    // Unmount focus cascade: the form can still emit blur after revertDraft
+    // restored the read preview and cleared editing.
+    fireEvent.blur(form, { relatedTarget: editor.view.dom });
+
+    expect(editor.getHTML()).toBe(before);
+    expect(documentTransaction).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole("button", {
+        name: "Open link: https://example.com",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("reverts read-state Escape even when the closing focus cascade blurs the field", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    setCaretAndRender(editor, true);
+    const preview = await screen.findByRole("dialog", {
+      name: "Link preview",
+    });
+    const before = editor.getHTML();
+    const documentTransaction = vi.fn();
+    editor.on("transaction", ({ transaction }) => {
+      if (transaction.docChanged) documentTransaction();
+    });
+
+    fireEvent.keyDown(preview, { key: "Escape" });
+    fireEvent.blur(preview, { relatedTarget: editor.view.dom });
+
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
     expect(editor.getHTML()).toBe(before);
     expect(documentTransaction).not.toHaveBeenCalled();
   });
@@ -327,25 +439,29 @@ describe("ArtifactLinkPopover", () => {
   it("does not swallow a later caret move to the escaped link end", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
-    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    const preview = await screen.findByRole("dialog", {
+      name: "Link preview",
+    });
     await act(() => new Promise((resolve) => window.setTimeout(resolve, 0)));
 
-    fireEvent.keyDown(url, { key: "Escape" });
+    fireEvent.keyDown(preview, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull(),
     );
     act(() => {
       editor.commands.setTextSelection(8);
     });
 
     expect(
-      await screen.findByRole("dialog", { name: "Edit link" }),
+      await screen.findByRole("dialog", { name: "Link preview" }),
     ).not.toBeNull();
   });
 
   it("removes the mark for an empty URL and restores empty text from the URL", async () => {
     const unlinkEditor = makeEditor(LINK_CONTENT);
     setCaretAndRender(unlinkEditor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     fireEvent.change(url, { target: { value: "" } });
     fireEvent.submit(screen.getByRole("form", { name: "Edit link" }));
@@ -354,6 +470,8 @@ describe("ArtifactLinkPopover", () => {
 
     const restoreEditor = makeEditor(LINK_CONTENT);
     setCaretAndRender(restoreEditor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const displayText = await screen.findByRole("textbox", {
       name: "Link display text",
     });
@@ -365,6 +483,8 @@ describe("ArtifactLinkPopover", () => {
   it("unwraps with Remove and renders a compact viewer preview", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove link" }));
     expect(editor.getHTML()).toBe("<p>Example</p>");
     cleanup();
@@ -411,6 +531,211 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
+  function lastAnchorRect() {
+    const computePosition = vi.mocked(floatingUi.computePosition);
+    const call = computePosition.mock.calls.at(-1);
+    if (call === undefined) throw new Error("Expected a computePosition call");
+    const [anchorArg] = call;
+    if (
+      typeof anchorArg === "function" ||
+      !("getBoundingClientRect" in anchorArg)
+    ) {
+      throw new Error("Expected a virtual element reference");
+    }
+    return anchorArg.getBoundingClientRect();
+  }
+
+  it("anchors the hover card to the document position the pointer resolves to, not the link's start", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    // "Example" spans positions 1-8; the pointer enters mid-word, resolving
+    // (via posAtCoords) to position 5 - distinct from the link's range.from
+    // (1) that the pre-fix implementation always anchored to.
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue({ pos: 5, inside: 5 });
+    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    // trackEditor's coordsAtPos stub returns `left: position * 10`, so
+    // anchoring to the resolved pointer position (5) yields left = 50.
+    expect(lastAnchorRect().left).toBe(50);
+  });
+
+  it("anchors a wrapped link's hover card to the specific visual line the pointer resolves to, not a box spanning both lines", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // JSDOM has no real layout engine, so a genuine line-wrap can't be
+    // rendered; this pins two divergent coordsAtPos rects for positions
+    // within the SAME link the way a real wrapped line would, so the test
+    // still exercises the position-resolution codepath (posAtCoords ->
+    // coordsAtPos) rather than an array-matching shortcut.
+    vi.spyOn(editor.view, "coordsAtPos").mockImplementation((position) => ({
+      left: position < 5 ? position * 10 : (position - 5) * 10,
+      right: position < 5 ? position * 10 + 5 : (position - 5) * 10 + 5,
+      top: position < 5 ? 100 : 130,
+      bottom: position < 5 ? 120 : 150,
+    }));
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue({ pos: 6, inside: 6 });
+    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    const rect = lastAnchorRect();
+    expect(rect.top).toBe(130);
+    expect(rect.bottom).toBe(150);
+  });
+
+  it("keeps the hover anchor live across a scroll that happens during the show delay", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    let scrollOffset = 0;
+    vi.spyOn(editor.view, "coordsAtPos").mockImplementation((position) => ({
+      left: position * 10,
+      right: position * 10 + 5,
+      top: 160 - scrollOffset,
+      bottom: 170 - scrollOffset,
+    }));
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue({ pos: 4, inside: 4 });
+    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
+
+    // The scroll happens WHILE the 300ms show delay is still pending - a
+    // frozen viewport pixel point captured at pointer-over time would still
+    // reflect the pre-scroll position once the card finally opens.
+    scrollOffset = 30;
+    fireEvent.scroll(window);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    expect(lastAnchorRect().top).toBe(130);
+  });
+
+  it("anchors the caret-triggered card to the caret's own position, not the link's start", async () => {
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // "Example" spans positions 1-8; place the caret at 4, distinct from the
+    // link's range.from (1) that the pre-fix implementation always anchored
+    // to regardless of the caret's actual position within the link.
+    editor.commands.setTextSelection(4);
+    renderPopover(editor, false);
+
+    await screen.findByRole("dialog", { name: "Link preview" });
+    // trackEditor's coordsAtPos stub returns `left: position * 10`, so
+    // anchoring to the caret's own position (4) yields left = 40.
+    expect(lastAnchorRect().left).toBe(40);
+  });
+
+  it("keeps a caret-opened read card following the caret within the same wrapped link, staying on the same open target", async () => {
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // "Example" spans positions 1-8; both 2 and 6 are inside that range, so
+    // the caret move stays on the SAME target (not a re-open).
+    editor.commands.setTextSelection(2);
+    const { onOpenChange } = renderPopover(editor, true);
+
+    await screen.findByRole("dialog", { name: "Link preview" });
+    expect(lastAnchorRect().left).toBe(20);
+    onOpenChange.mockClear();
+
+    act(() => {
+      editor.commands.setTextSelection(6);
+    });
+
+    // trackEditor's coordsAtPos stub returns `left: position * 10`, so the
+    // anchor following the caret to 6 (not staying pinned at 2, the
+    // pre-fix behavior) yields left = 60.
+    await waitFor(() => expect(lastAnchorRect().left).toBe(60));
+    // The card stayed open on the SAME target rather than being closed and
+    // reopened: `onOpenChange` doesn't fire again for an in-range move.
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("remaps the caret-triggered anchor after a remote Yjs edit moves its link", async () => {
+    const { first, doc } = makeCollaborativeEditors(
+      "[Example](https://example.com)",
+    );
+    first.commands.setTextSelection(2);
+    renderPopover(first, true);
+
+    await screen.findByRole("dialog", { name: "Link preview" });
+    const initialLeft = lastAnchorRect().left;
+    const remoteDoc = new Y.Doc();
+    docs.push(remoteDoc);
+    Y.applyUpdate(remoteDoc, Y.encodeStateAsUpdate(doc));
+    const remoteFragment = remoteDoc.getXmlFragment("artifact-body");
+    const remote = trackEditor(
+      new Editor({
+        extensions: [
+          StarterKit.configure({ undoRedo: false, link: false }),
+          artifactLinkExtension,
+          Collaboration.configure({
+            document: remoteDoc,
+            fragment: remoteFragment,
+          }),
+        ],
+      }),
+    );
+
+    act(() => {
+      remote.commands.insertContentAt(0, "<p>Before</p>");
+      Y.applyUpdate(
+        doc,
+        Y.encodeStateAsUpdate(remoteDoc, Y.encodeStateVector(doc)),
+      );
+    });
+
+    const precedingParagraph = first.state.doc.firstChild;
+    if (precedingParagraph === null) {
+      throw new Error("Expected the remote edit to insert a paragraph");
+    }
+    await waitFor(() =>
+      expect(lastAnchorRect().left).toBe(
+        (precedingParagraph.nodeSize + 2) * 10,
+      ),
+    );
+    expect(lastAnchorRect().left).not.toBe(initialLeft);
+  });
+
+  it("anchors a caret parked exactly at the link's end to the preceding side, not the following line", async () => {
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // "Example" spans positions 1-8, so range.to = 8 - the end-EXCLUSIVE
+    // boundary. coordsAtPos's default (positive) side there reports
+    // whatever follows the mark, which at a wrap boundary is the next
+    // visual line; the preceding side (-1) must be requested instead.
+    vi.spyOn(editor.view, "coordsAtPos").mockImplementation(
+      (position, side) => ({
+        left: position * 10,
+        right: position * 10 + 5,
+        top: position === 8 && side === -1 ? 100 : 200,
+        bottom: position === 8 && side === -1 ? 120 : 220,
+      }),
+    );
+    editor.commands.setTextSelection(4);
+    renderPopover(editor, true);
+
+    await screen.findByRole("dialog", { name: "Link preview" });
+    act(() => {
+      editor.commands.setTextSelection(8);
+    });
+
+    await waitFor(() => expect(lastAnchorRect().top).toBe(100));
+  });
+
   it("promotes the compact hover preview to an autosaving editor", async () => {
     vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
@@ -441,6 +766,81 @@ describe("ArtifactLinkPopover", () => {
       "https://traycer.ai",
     );
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+  });
+
+  it("keeps hover ownership when Escape reverts a hover-promoted edit, so pointer leave still hides the card", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+
+    const preview = screen.getByRole("dialog", { name: "Link preview" });
+    fireEvent.pointerLeave(preview);
+    await act(() => vi.advanceTimersByTimeAsync(100));
+
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("hides after Escape reverts a hover-promoted edit when the pointer already left", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editCard = screen.getByRole("dialog", { name: "Edit link" });
+    fireEvent.pointerLeave(editCard);
+    // Caret ownership during edit means leave does not arm hide.
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(screen.getByRole("dialog", { name: "Edit link" })).not.toBeNull();
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    // Revert restores hover ownership and re-arms hide for the prior leave.
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("keeps the preview open when Escape reverts while the pointer is still over the card", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editCard = screen.getByRole("dialog", { name: "Edit link" });
+    fireEvent.pointerEnter(editCard);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
   });
 
   it("cancels a pending hover when selection changes before the delay", async () => {
@@ -480,6 +880,8 @@ describe("ArtifactLinkPopover", () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
     await act(() => vi.advanceTimersByTimeAsync(0));
+    screen.getByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = screen.getByRole<HTMLInputElement>("textbox", {
       name: "Link URL",
     });
@@ -513,8 +915,28 @@ describe("ArtifactLinkPopover", () => {
     editor.commands.setTextSelection(2);
 
     expect(
-      await screen.findByRole("dialog", { name: "Edit link" }),
+      await screen.findByRole("dialog", { name: "Link preview" }),
     ).not.toBeNull();
+  });
+
+  it("opens Cmd/Ctrl+K on a caret inside an existing link directly in edit mode", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(2);
+    renderPopover(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+
+    fireEvent.keyDown(editor.view.dom, { key: "k", ctrlKey: true });
+
+    const url = await screen.findByRole<HTMLInputElement>("textbox", {
+      name: "Link URL",
+    });
+    expect(url.value).toBe("https://example.com");
+    expect(document.activeElement).toBe(url);
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+
+    fireEvent.keyDown(url, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
   it("commits once when focus leaves the whole card after visiting both fields", async () => {
@@ -545,6 +967,8 @@ describe("ArtifactLinkPopover", () => {
       "[Example](https://example.com)",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     const updates = vi.fn();
     doc.on("update", updates);
@@ -567,6 +991,8 @@ describe("ArtifactLinkPopover", () => {
       "[Example](https://example.com)",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const display = await screen.findByRole<HTMLInputElement>("textbox", {
       name: "Link display text",
     });
@@ -594,6 +1020,8 @@ describe("ArtifactLinkPopover", () => {
       "[Example](https://example.com)",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     fireEvent.change(url, { target: { value: "https://traycer.ai" } });
     fireEvent.submit(screen.getByRole("form", { name: "Edit link" }));
@@ -605,7 +1033,7 @@ describe("ArtifactLinkPopover", () => {
     });
 
     expect(
-      await screen.findByRole("dialog", { name: "Edit link" }),
+      await screen.findByRole("dialog", { name: "Link preview" }),
     ).not.toBeNull();
   });
 
@@ -614,6 +1042,8 @@ describe("ArtifactLinkPopover", () => {
       "[Example](https://example.com)",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     fireEvent.change(url, { target: { value: "https://local.example" } });
 
@@ -635,6 +1065,8 @@ describe("ArtifactLinkPopover", () => {
       "[Example](https://example.com)",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const display = await screen.findByRole<HTMLInputElement>("textbox", {
       name: "Link display text",
     });
@@ -661,6 +1093,8 @@ describe("ArtifactLinkPopover", () => {
       "[A](https://same.example) [B](https://same.example)",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     fireEvent.change(url, { target: { value: "https://local.example" } });
 
@@ -678,6 +1112,8 @@ describe("ArtifactLinkPopover", () => {
       "[A](https://same.example)B",
     );
     setCaretAndRender(first, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     fireEvent.change(url, { target: { value: "https://local.example" } });
 
@@ -699,12 +1135,12 @@ describe("ArtifactLinkPopover", () => {
       "[Example](https://example.com)",
     );
     setCaretAndRender(first, true);
-    await screen.findByRole("dialog", { name: "Edit link" });
+    await screen.findByRole("dialog", { name: "Link preview" });
 
     second.chain().setTextSelection({ from: 1, to: 8 }).unsetLink().run();
 
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull(),
     );
     expect(first.getText()).toBe("Example");
   });
@@ -785,6 +1221,8 @@ describe("ArtifactLinkPopover", () => {
       '<p><a href="https://example.com" title="Tooltip">Docs</a></p>',
     );
     setCaretAndRender(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = await screen.findByRole("textbox", { name: "Link URL" });
     const documentTransaction = vi.fn();
     editor.on("transaction", ({ transaction }) => {
@@ -970,7 +1408,7 @@ describe("ArtifactLinkPopover", () => {
       bottom: 170 - scrollOffset,
     }));
     setCaretAndRender(editor, true);
-    const card = await screen.findByRole("dialog", { name: "Edit link" });
+    const card = await screen.findByRole("dialog", { name: "Link preview" });
     await waitFor(() => expect(card.style.transform).toContain("translate3d"));
     const before = transformY(card);
 
@@ -1007,7 +1445,7 @@ describe("ArtifactLinkPopover", () => {
       </>,
     );
 
-    const card = await screen.findByRole("dialog", { name: "Edit link" });
+    const card = await screen.findByRole("dialog", { name: "Link preview" });
     await waitFor(() => expect(card.style.visibility).toBe("hidden"));
     const options = computePosition.mock.calls.at(-1)?.[2];
     const findMiddleware = (name: string) =>
@@ -1041,7 +1479,7 @@ describe("ArtifactLinkPopover", () => {
     };
     window.addEventListener("unhandledrejection", handleRejection);
     const rendered = setCaretAndRender(editor, true);
-    await screen.findByRole("dialog", { name: "Edit link" });
+    await screen.findByRole("dialog", { name: "Link preview" });
 
     rendered.unmount();
     editor.destroy();
@@ -1056,7 +1494,7 @@ describe("ArtifactLinkPopover", () => {
     const second = makeEditor("<p>Replacement editor</p>");
     first.commands.setTextSelection(2);
     const { openLink, onOpenChange, rerender } = renderPopover(first, true);
-    await screen.findByRole("dialog", { name: "Edit link" });
+    await screen.findByRole("dialog", { name: "Link preview" });
 
     rerender(
       <>
@@ -1123,6 +1561,164 @@ describe("ArtifactLinkPopover", () => {
     );
     expect(openLink).toHaveBeenCalledTimes(2);
     expect(anchor.hasAttribute("href")).toBe(false);
+  });
+
+  it("navigates a plain editable click on an external link without moving the caret or opening the card", () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(2);
+    const { openLink } = renderPopover(editor, true);
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    const before = editor.state.selection.from;
+    expect(fireEvent.mouseDown(anchor, { button: 0 })).toBe(false);
+    fireEvent.mouseUp(anchor, { button: 0 });
+    fireEvent.click(anchor);
+
+    expect(editor.state.selection.from).toBe(before);
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).toHaveBeenCalledWith({
+      kind: "external",
+      url: "https://example.com",
+    });
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("lets Shift+click extend selection on an editable link instead of navigating", () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(1);
+    const { openLink } = renderPopover(editor, true);
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    expect(fireEvent.mouseDown(anchor, { button: 0, shiftKey: true })).toBe(
+      true,
+    );
+    fireEvent.mouseUp(anchor, { button: 0, shiftKey: true });
+    fireEvent.click(anchor, { shiftKey: true });
+
+    expect(openLink).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("cancels a pending hover-show when a plain click navigates the link first", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    const { openLink } = renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    fireEvent.mouseDown(anchor, { button: 0 });
+    fireEvent.mouseUp(anchor, { button: 0 });
+    fireEvent.click(anchor);
+    expect(openLink).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+  });
+
+  it("closes an open card when a plain click navigates a different editable link", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(
+      '<p><a href="https://example.com">Example</a> <a href="https://traycer.ai">Traycer</a></p>',
+    );
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    const { openLink, onOpenChange } = renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchors = editor.view.dom.querySelectorAll("a");
+    if (anchors.length < 2) throw new Error("Expected two anchors");
+    const [first, second] = anchors;
+
+    fireEvent.pointerOver(first);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    onOpenChange.mockClear();
+
+    fireEvent.mouseDown(second, { button: 0 });
+    fireEvent.mouseUp(second, { button: 0 });
+    fireEvent.click(second);
+
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).toHaveBeenCalledWith({
+      kind: "external",
+      url: "https://traycer.ai",
+    });
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("commits a dirty edit before a plain click navigates a different link", async () => {
+    const editor = makeEditor(
+      '<p><a href="https://example.com">Example</a> <a href="https://traycer.ai">Traycer</a></p>',
+    );
+    editor.commands.setTextSelection(2);
+    const { openLink } = renderPopover(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    fireEvent.change(url, { target: { value: "https://changed.example" } });
+
+    const anchors = editor.view.dom.querySelectorAll("a");
+    if (anchors.length < 2) throw new Error("Expected two anchors");
+    const second = anchors[1];
+
+    fireEvent.mouseDown(second, { button: 0 });
+    fireEvent.mouseUp(second, { button: 0 });
+    fireEvent.click(second);
+
+    expect(openLink).toHaveBeenCalledWith({
+      kind: "external",
+      url: "https://traycer.ai",
+    });
+    expect(editor.view.dom.querySelector("a")?.dataset.linkHref).toBe(
+      "https://changed.example",
+    );
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("navigates a plain editable click on a file link", () => {
+    const editor = makeEditor({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "Source",
+              marks: [
+                {
+                  type: "link",
+                  attrs: { href: "file:///repo/src/app.ts:12:3" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const { openLink } = renderPopover(editor, true);
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.mouseDown(anchor, { button: 0 });
+    fireEvent.mouseUp(anchor, { button: 0 });
+    fireEvent.click(anchor);
+
+    expect(openLink).toHaveBeenCalledWith({
+      kind: "file",
+      path: "/repo/src/app.ts",
+      line: 12,
+      col: 3,
+    });
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
   it("routes viewer Enter through the raw external mark without mutating the document", async () => {
@@ -1198,7 +1794,7 @@ describe("ArtifactLinkPopover", () => {
 
     expect(anchor.hasAttribute("tabindex")).toBe(false);
     expect(anchor.hasAttribute("href")).toBe(false);
-    await screen.findByRole("dialog", { name: "Edit link" });
+    await screen.findByRole("dialog", { name: "Link preview" });
 
     expect(fireEvent.keyDown(editor.view.dom, { key: "Enter" })).toBe(false);
     expect(editor.view.dom.querySelectorAll("p")).toHaveLength(2);
@@ -1345,7 +1941,11 @@ describe("ArtifactLinkPopover", () => {
     if (editorHashAnchor === null)
       throw new Error("Expected editor hash anchor");
     window.location.hash = "";
-    expect(fireEvent.click(editorHashAnchor)).toBe(false);
+    // A plain click on an editable hash link stays inert (no navigation
+    // target) and is left unprevented so ProseMirror still places the caret.
+    expect(fireEvent.mouseDown(editorHashAnchor, { button: 0 })).toBe(true);
+    fireEvent.mouseUp(editorHashAnchor, { button: 0 });
+    expect(fireEvent.click(editorHashAnchor)).toBe(true);
     expect(window.location.hash).toBe("");
     expect(editorHash.openLink).not.toHaveBeenCalled();
     editorHashEditor.commands.setTextSelection(2);

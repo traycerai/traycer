@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import type { TaskDeleteWorktreeCandidate } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface DeleteTasksDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -72,7 +73,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
 
         {candidates.length > 0 ? (
           <section
-            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-muted/10 px-5 py-4"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-foreground/2 px-5 py-4"
             aria-labelledby="delete-tasks-worktree-heading"
             aria-describedby="delete-tasks-worktree-description"
             data-testid="delete-tasks-worktree-cleanup"
@@ -104,7 +105,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
           </section>
         ) : null}
 
-        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-muted/20 px-5 py-3 sm:flex sm:justify-end">
+        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
           <Button
             type="button"
             variant="ghost"
@@ -228,12 +229,16 @@ function WorktreeCleanupRow(props: {
               {candidate.repoLabel}
             </span>
           </span>
-          <span
-            className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground"
-            title={candidate.worktreePath}
+          <TooltipWrapper
+            label={candidate.worktreePath}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {candidate.worktreePath}
-          </span>
+            <span className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground">
+              {candidate.worktreePath}
+            </span>
+          </TooltipWrapper>
           {hint}
         </span>
       </label>

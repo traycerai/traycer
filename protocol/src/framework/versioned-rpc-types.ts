@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorktreeBusyHolder } from "./worktree-busy-holders";
 
 declare const validatedMethodVersionRegistryBrand: unique symbol;
 declare const validatedVersionedRpcRegistryBrand: unique symbol;
@@ -27,7 +28,50 @@ export const RPC_ERROR_CODES = [
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
   "SENDER_TUI_UNSUPPORTED",
+  // Caller-supplied input is structurally valid but semantically rejected
+  // (e.g. minting the reserved `traycer:system` agent id). Additive and
+  // degrade-safe: the wire `code` is an open string and old clients narrow
+  // unknown codes to RPC_ERROR while keeping the 4xx status.
+  "E_INVALID_ARGUMENT",
+  // Role-surface outcomes (same additive degrade story as E_INVALID_ARGUMENT).
+  // An absent agent and a foreign-account agent share E_AGENT_NOT_FOUND with
+  // one message template - anything more specific would be an existence
+  // oracle across the account boundary.
+  "E_AGENT_NOT_FOUND",
+  // The caller's OWN agent lives on another host; the message names it, so
+  // telling the caller where to go discloses nothing across accounts.
+  "E_AGENT_NOT_LOCAL",
+  // A claim held by ANOTHER of the caller's own agents - a real authorization
+  // error with role-specific copy, distinct from the generic epic-access
+  // FORBIDDEN whose "check Task access" guidance would mislead here.
+  "E_ROLE_FORBIDDEN",
   "TERMINAL_ID_TAKEN",
+  // A durable terminal is mid-delete. 409, not 500: the caller can retry
+  // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.
+  "TERMINAL_DELETING",
+  // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
+  // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
+  "MESSAGE_TOO_LARGE",
+  // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:
+  // "latest"}`, and the A2A `agent.fork`/`forkAgent` tool that shares the same
+  // seed builder) named a source chat with no assistant record to fork from
+  // yet. A precondition on the CALLER's chosen source, not a server fault -
+  // same additive degrade story as E_INVALID_ARGUMENT.
+  "E_FORK_CHECKPOINT_UNAVAILABLE",
+  // A fork named a boundary the source chat's cloud publication does not
+  // cover yet: the host could only reach the source through the cloud (or
+  // doc) tier - a cross-host fork, where the target holds no local
+  // transcript - and the requested assistant message is newer than what the
+  // source host has published. RETRYABLE, and the only fork refusal that is:
+  // the same call succeeds once the source's next publish sweep lands, so
+  // callers should keep the surface open and offer a retry rather than
+  // treating it as a dead end. Distinct from
+  // E_FORK_CHECKPOINT_UNAVAILABLE (no assistant record to fork from at all)
+  // and from the caller-bug slice errors (boundary is not an assistant
+  // message, no turn key, interview block missing), which are permanent and
+  // must never be reported as "still syncing". Same additive degrade story
+  // as E_INVALID_ARGUMENT.
+  "E_FORK_BOUNDARY_NOT_PUBLISHED",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
@@ -39,6 +83,12 @@ export function isRpcErrorCode(value: string): value is RpcErrorCode {
 export type RpcErrorDetails = {
   code: RpcErrorCode;
   message: string;
+  /**
+   * Typed `WORKTREE_BUSY` holder inventory. Optional: omitted on every other
+   * code, and omitted by hosts that predate the holders minor. See
+   * `worktreeBusyHolderSchema`.
+   */
+  holders?: readonly WorktreeBusyHolder[];
 };
 
 export type RpcContract<
@@ -94,6 +144,11 @@ export type RpcResultFor<Contract> =
   | RpcSuccessFor<Contract>
   | RpcErrorFor<Contract>;
 
+export type RpcResponseUpgradeContext<Request> = {
+  readonly request: Request;
+  readonly hostId: string;
+};
+
 type SameMethodPair<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
@@ -103,18 +158,39 @@ type SameMethodPair<
     : false
   : false;
 
-export type UpgradePath<
+type UpgradePathBase<From extends AnyRpcContract, To extends AnyRpcContract> = {
+  from: From["schemaVersion"];
+  to: To["schemaVersion"];
+  upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
+};
+
+export type ContextlessUpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
 > =
   SameMethodPair<From, To> extends true
-    ? {
-        from: From["schemaVersion"];
-        to: To["schemaVersion"];
-        upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
+    ? UpgradePathBase<From, To> & {
         upgradeResponse: (response: ResponseOf<From>) => ResponseOf<To>;
       }
     : never;
+
+export type ContextualUpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> =
+  SameMethodPair<From, To> extends true
+    ? UpgradePathBase<From, To> & {
+        upgradeResponse: (
+          response: ResponseOf<From>,
+          context: RpcResponseUpgradeContext<RequestOf<From>> | undefined,
+        ) => ResponseOf<To>;
+      }
+    : never;
+
+export type UpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> = ContextlessUpgradePath<From, To> | ContextualUpgradePath<From, To>;
 
 export type DowngradeResult<Value> =
   | { ok: true; value: Value }
@@ -198,7 +274,10 @@ export type AnyUpgradePath = {
   from: SchemaVersion;
   to: SchemaVersion;
   upgradeRequest: (request: never) => object;
-  upgradeResponse: (response: never) => object;
+  upgradeResponse: (
+    response: never,
+    context: RpcResponseUpgradeContext<never> | undefined,
+  ) => object;
 };
 
 /**
@@ -221,6 +300,27 @@ export type VersionEntry<
 > = {
   readonly contract: Contract;
   readonly upgradeFromPreviousVersion: Upgrade;
+  /**
+   * Declares that this minor's RESPONSE value growth (new enum values,
+   * new union variants, widened forms relative to the previous minor)
+   * is emission-gated: the host consults the negotiated version and
+   * never emits the new values to older peers (the chat-frame-projection
+   * pattern). Without this, the registry validator rejects response-side
+   * value growth on a minor - an old peer's schema REFUSES such values,
+   * and for state-controlled response data that refusal poisons every
+   * old peer with no opt-out. It also permits replacing a dropped union arm
+   * when that same projection supplies the older arm to older callers.
+   * Declaring it is a reviewed claim about the EMITTER, which the validator
+   * cannot check; other structural reductions remain forbidden.
+   */
+  readonly responseGrowthProjectionGated?: true;
+  /**
+   * Declares that the first contract in a new major changes semantics even
+   * when its isolated request/response schemas remain structurally
+   * compatible. Use only when the method belongs to a coherently negotiated
+   * family whose authority or topology changed across the major boundary.
+   */
+  readonly semanticMajorBreakFromPreviousMajor?: true;
 };
 
 export type AnyVersionEntry = VersionEntry<
@@ -496,6 +596,8 @@ type ValidateVersionEntry<
                 >
               : never
           : never;
+        /** See `VersionEntry.responseGrowthProjectionGated`. */
+        readonly responseGrowthProjectionGated?: true;
       }
     : never
   : never;
@@ -505,9 +607,9 @@ type ValidateLineVersions<
   Registry extends UncheckedMethodVersionRegistry,
   Major extends NumberKeys<Registry>,
 > = {
-  readonly [Minor in NumberKeys<
-    Registry[Major]["versions"]
-  >]: ValidateVersionEntry<Method, Registry, Major, Minor>;
+  readonly [
+    Minor in NumberKeys<Registry[Major]["versions"]>
+  ]: ValidateVersionEntry<Method, Registry, Major, Minor>;
 };
 
 type ValidateLineDowngrades<
@@ -515,8 +617,9 @@ type ValidateLineDowngrades<
   Major extends NumberKeys<Registry>,
   Downgrades extends Readonly<Record<number, AnyDowngradePath>>,
 > = {
-  readonly [TargetMajor in keyof Downgrades &
-    number]: TargetMajor extends NumberKeys<Registry>
+  readonly [
+    TargetMajor in keyof Downgrades & number
+  ]: TargetMajor extends NumberKeys<Registry>
     ? IsLessThan<TargetMajor, Major> extends true
       ? DowngradePath<
           LatestContractForLine<Registry[Major]>,
@@ -649,6 +752,9 @@ export type RuntimeUpgradePath<Registry extends MethodVersionRegistry> = {
   ) => RegistryRequestValue<Registry>;
   upgradeResponse: (
     response: RegistryResponseValue<Registry>,
+    context:
+      | RpcResponseUpgradeContext<RegistryRequestValue<Registry>>
+      | undefined,
   ) => RegistryResponseValue<Registry>;
 };
 

@@ -1,6 +1,5 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
@@ -20,6 +19,17 @@ import type {
   EpicCanvasState,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
+
+// The header rate-limit surfaces read per-harness profile memory scoped to
+// the window's EFFECTIVE host (`useEffectiveHostId()`), which is separate
+// from the focused chat tile's own bound host (`CHAT_TILE.hostId`/
+// `TERMINAL_TILE.hostId` below). No `<TabHostProvider>`/`<HostRuntimeProvider>`
+// is mounted in this suite, so left unmocked the active host resolves `null`
+// and every `recordProfileSelection` write below would land in a bucket this
+// hook never reads. Pin it to a fixed host id the test seeds memory under.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-a",
+}));
 
 const CODEX_TERMINAL_SETTINGS: ChatRunSettings = {
   harnessId: "codex",
@@ -55,6 +65,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label: kind === "ambient" ? "Terminal" : profileId,
@@ -71,6 +82,7 @@ function profile(
     },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -89,12 +101,19 @@ const CLAUDE_PROFILES = [
 ];
 
 function registerChatSession(): ChatSessionStoreHandle {
+  // `hostId` is the SAME host the focused tile ref is bound to - the header
+  // resolves the session by (epic, chat, host), so a different host here would
+  // read as no session at all.
   return __getChatSessionRegistryForTests().acquire(
-    "epic-1",
-    CHAT_TILE.id,
-    "test:epic-1:chat-1",
+    {
+      epicId: "epic-1",
+      chatId: CHAT_TILE.id,
+      hostId: CHAT_TILE.hostId,
+      scopeKey: "test:epic-1:chat-1",
+    },
     (epicId, chatId) =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId,
         chatId,
         userId: null,
@@ -103,6 +122,7 @@ function registerChatSession(): ChatSessionStoreHandle {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => undefined,
         }),
       }),
@@ -156,11 +176,12 @@ afterEach(() => {
 describe("rate-limit profile selection", () => {
   it("uses the focused chat profile for its harness and per-harness memory for the other glyph", () => {
     const memory = useComposerHarnessMemoryStore.getState();
-    memory.recordProfileSelection("codex", "personal-profile");
-    memory.recordProfileSelection("claude", "claude-work");
+    memory.recordProfileSelection("host-a", "codex", "personal-profile");
+    memory.recordProfileSelection("host-a", "claude", "claude-work");
     useComposerRunSettingsStore
       .getState()
       .setGlobalRunSettings(
+        "host-a",
         { ...CODEX_TERMINAL_SETTINGS, profileId: "personal-profile" },
         1,
       );
@@ -209,8 +230,8 @@ describe("rate-limit profile selection", () => {
 
   it("uses per-harness memory when the focused pane is not a chat and falls back to Terminal for stale ids", () => {
     const memory = useComposerHarnessMemoryStore.getState();
-    memory.recordProfileSelection("codex", "personal-profile");
-    memory.recordProfileSelection("claude", "removed-profile");
+    memory.recordProfileSelection("host-a", "codex", "personal-profile");
+    memory.recordProfileSelection("host-a", "claude", "removed-profile");
     registerChatSession()
       .store.getState()
       .setCurrentComposerSettings({

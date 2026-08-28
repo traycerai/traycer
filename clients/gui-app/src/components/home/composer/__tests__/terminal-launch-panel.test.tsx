@@ -1,23 +1,43 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalLaunchPanel } from "@/components/home/composer/terminal-launch-panel";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
+import { modLabel } from "@/lib/keybindings/platform";
 
 const panelMocks = vi.hoisted(() => ({
   providers: [
     { providerId: "claude-code", terminalAgentArgs: "--from-settings" },
   ],
+  // S11 coverage (see the new "forwards a non-null hostId..." test below):
+  // records every argument these mocks receive so a test can assert the
+  // panel's `hostId` prop actually reaches the launch host's client, the
+  // `providers.list` read, and the picker - not just that SOME client/host
+  // was used.
+  hostClientCalls: [] as (string | null)[],
+  providersListClients: [] as (string | null)[],
+  pickerProps: [] as {
+    readonly createProfileHostId: string | null;
+    readonly runTargetHostId: string | null;
+  }[],
 }));
 
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: () => (
-    <button type="button" aria-label="Harness picker">
-      Claude
-    </button>
-  ),
+  HarnessModelPicker: (props: {
+    readonly createProfileHostId: string | null;
+    readonly runTargetHostId: string | null;
+  }) => {
+    panelMocks.pickerProps.push({
+      createProfileHostId: props.createProfileHostId,
+      runTargetHostId: props.runTargetHostId,
+    });
+    return (
+      <button type="button" aria-label="Harness picker">
+        Claude
+      </button>
+    );
+  },
 }));
 
 vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
@@ -32,6 +52,24 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({
     data: { providers: panelMocks.providers },
   }),
+  useProvidersListForClient: (client: string | null) => {
+    panelMocks.providersListClients.push(client);
+    return { data: { providers: panelMocks.providers } };
+  },
+}));
+
+// The panel now resolves its launch host's client via
+// `useHostClientForHostId(hostId)` (previously `useProvidersList()` read the
+// app-wide default unconditionally) - that hook needs a
+// `<HostRuntimeProvider>` this bare-render suite doesn't set up. Returning
+// `hostId` itself as the sentinel "client" (mirroring the picker's own
+// intent-RPC suite) lets a test assert WHICH host's client reached
+// `useProvidersListForClient` without needing a real `HostClient`.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    panelMocks.hostClientCalls.push(hostId);
+    return hostId;
+  },
 }));
 
 function makeToolbarStore() {
@@ -42,16 +80,16 @@ function makeToolbarStore() {
       selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: true,
+    hostId: "host-a",
   });
   // The Start gate reads the selected harness's runtime `modes` from the
-  // catalog (so a schema-TUI harness that advertises only `gui` is blocked in
-  // lockstep with the store's reroute), so seed a loaded catalog where `claude`
-  // is TUI-capable - otherwise Start stays disabled.
+  // catalog, so seed a loaded catalog where `claude` is TUI-capable - otherwise
+  // Start stays disabled.
   store.getState().setCatalog({
+    hostId: "host-a",
     harnesses: [
       {
         id: "claude",
@@ -82,22 +120,22 @@ function makeGuiOnlyToolbarStore() {
     seedKey: "test",
     values: {
       permission: "supervised",
-      selection: { harnessId: "cursor", modelSlug: "", profileId: null },
+      selection: { harnessId: "traycer", modelSlug: "", profileId: null },
       reasoning: "",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: true,
+    hostId: "host-a",
   });
-  // `cursor` is a schema-TUI harness (`isTuiHarnessId("cursor")` is true) whose
-  // adapter advertises only `gui`, so it can't back a terminal agent. The Start
-  // gate must follow the runtime `modes`, not the schema id.
+  // A GUI-only harness cannot back a terminal agent. The Start gate follows
+  // the runtime `modes` advertised by the host.
   store.getState().setCatalog({
+    hostId: "host-a",
     harnesses: [
       {
-        id: "cursor",
-        label: "Cursor",
+        id: "traycer",
+        label: "Traycer",
         enabled: true,
         available: true,
         error: null,
@@ -107,7 +145,7 @@ function makeGuiOnlyToolbarStore() {
         availabilityPending: false,
       },
     ],
-    modelsHarnessId: "cursor",
+    modelsHarnessId: "traycer",
     models: [],
     modelsLoaded: true,
     tuiOnly: true,
@@ -121,6 +159,7 @@ function renderPanel(onStart: (launch: TerminalAgentLaunch) => void) {
       store={makeToolbarStore()}
       pending={false}
       disabledHint={null}
+      hostId={null}
       onStart={onStart}
     />,
   );
@@ -131,10 +170,23 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     panelMocks.providers = [
       { providerId: "claude-code", terminalAgentArgs: "--from-settings" },
     ];
+    panelMocks.hostClientCalls.length = 0;
+    panelMocks.providersListClients.length = 0;
+    panelMocks.pickerProps.length = 0;
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("keeps the Start button visibly filled inside dialogs", () => {
+    renderPanel(vi.fn());
+
+    const start = screen.getByRole("button", { name: "Start agent" });
+    expect(start.getAttribute("data-variant")).toBe("secondary");
+    expect(start.className).toContain(
+      "in-data-[slot=dialog-content]:bg-input/60",
+    );
   });
 
   it("prefills Settings args but sends null when the field is untouched", () => {
@@ -142,13 +194,11 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     renderPanel(onStart);
 
     const input = screen.getByLabelText<HTMLInputElement>(
-      "Terminal agent CLI arguments",
+      "Terminal interface CLI arguments",
     );
     expect(input.value).toBe("--from-settings");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -162,12 +212,13 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
 
-    fireEvent.change(screen.getByLabelText("Terminal agent CLI arguments"), {
-      target: { value: "" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
+    fireEvent.change(
+      screen.getByLabelText("Terminal interface CLI arguments"),
+      {
+        target: { value: "" },
+      },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -180,12 +231,13 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
 
-    fireEvent.change(screen.getByLabelText("Terminal agent CLI arguments"), {
-      target: { value: "--dangerously-skip-permissions" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
+    fireEvent.change(
+      screen.getByLabelText("Terminal interface CLI arguments"),
+      {
+        target: { value: "--dangerously-skip-permissions" },
+      },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -194,7 +246,23 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     );
   });
 
-  it("blocks Start for a schema-TUI harness that advertises only gui (cursor)", () => {
+  it("starts the agent with Cmd+Enter from anywhere on the surface", () => {
+    const onStart = vi.fn();
+    renderPanel(onStart);
+
+    const startButton = screen.getByRole("button", { name: "Start agent" });
+    expect(startButton.textContent).toContain(modLabel());
+    expect(startButton.textContent).toContain("↵");
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessId: "claude" }),
+    );
+  });
+
+  it("blocks Start for a GUI-only harness", () => {
     const onStart = vi.fn();
     render(
       <TooltipProvider>
@@ -202,14 +270,40 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
           store={makeGuiOnlyToolbarStore()}
           pending={false}
           disabledHint={null}
+          hostId={null}
           onStart={onStart}
         />
       </TooltipProvider>,
     );
 
-    const start = screen.getByRole("button", { name: "Start terminal agent" });
+    const start = screen.getByRole("button", { name: "Start agent" });
     expect(start.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(start);
     expect(onStart).not.toHaveBeenCalled();
+  });
+
+  // S11 coverage: a regression back to the app-wide default host would leave
+  // `useHostClientForHostId`, `providers.list`, and the picker all pinned to
+  // `null` regardless of the `hostId` prop - this asserts the non-null host
+  // actually threads through every one of them, not just that the panel
+  // renders without crashing.
+  it("forwards a non-null hostId to the launch host's client, the providers.list read, and the picker's createProfileHostId/runTargetHostId", () => {
+    render(
+      <TerminalLaunchPanel
+        store={makeToolbarStore()}
+        pending={false}
+        disabledHint={null}
+        hostId="host-b"
+        onStart={vi.fn()}
+      />,
+    );
+
+    expect(panelMocks.hostClientCalls).toContain("host-b");
+    expect(panelMocks.hostClientCalls).not.toContain(null);
+    expect(panelMocks.providersListClients.at(-1)).toBe("host-b");
+    expect(panelMocks.pickerProps.at(-1)).toEqual({
+      createProfileHostId: "host-b",
+      runTargetHostId: "host-b",
+    });
   });
 });

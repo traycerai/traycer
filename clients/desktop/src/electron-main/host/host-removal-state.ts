@@ -11,11 +11,12 @@ import { log } from "../app/logger";
  * Persistent "the user removed Traycer's background components" sentinel.
  *
  * Set by the in-app "Remove Traycer" action (Settings → General → Danger
- * Zone). While set, every auto-provision / respawn path
- * (`traycerHostEnsure`, `respawnHost`, the launch-time auto-update
- * reconcile) short-circuits, so a removed host is never silently
- * reinstalled when it goes unreachable - which is exactly what the app does
- * today whenever the host goes down. Cleared by an explicit reinstall.
+ * Zone). While set, every auto-provision / respawn `HostController` intent
+ * (`convergeReady`, `respawn`, `recoverIfDown`, the launch-time
+ * `applyStaged` reconcile) short-circuits, so a removed host is never
+ * silently reinstalled when it goes unreachable - which is exactly what the
+ * app does today whenever the host goes down. Cleared by an explicit
+ * reinstall.
  *
  * Lives under `userData` (a desktop-app-level decision), NOT under
  * `~/.traycer` - removal does not touch the user's data directory.
@@ -24,6 +25,7 @@ const DEFAULT_STATE: HostRemovalState = { removedByUser: false };
 
 let store: JsonFileStore<HostRemovalState> | null = null;
 let cached: HostRemovalState | null = null;
+let loadInFlight: Promise<HostRemovalState> | null = null;
 
 function getStore(): JsonFileStore<HostRemovalState> {
   if (store === null) {
@@ -53,10 +55,29 @@ function parseRemovalState(value: unknown): HostRemovalState {
  * device. Reads the cached value after the first load; the cache is kept in
  * lockstep with `mark` / `clear` below so a synchronous-feeling read after a
  * mutation always reflects it.
+ *
+ * The initial load ADOPTS ONCE and never overwrites. A completed `mark` /
+ * `clear` installs the authoritative value directly, and a first read's disk
+ * load can still be in flight while that happens - its result is then a
+ * pre-mutation snapshot. The previous unconditional `cached = await load()`
+ * let that stale snapshot overwrite a confirmed mark, after which every
+ * gate in the auto-provision paths read removed=false from cache while disk
+ * said true - re-enabling exactly the silent host reinstall this sentinel
+ * exists to prevent, until the next process restart. Concurrent first reads
+ * also share one in-flight load, so the adoption decision happens once.
+ * (`JsonFileStore.load` is non-throwing by contract - it falls back - so the
+ * in-flight promise cannot stick around rejected.)
  */
 export async function isHostRemovedByUser(): Promise<boolean> {
   if (cached === null) {
-    cached = await getStore().load();
+    if (loadInFlight === null) {
+      loadInFlight = getStore().load();
+    }
+    const loaded = await loadInFlight;
+    loadInFlight = null;
+    if (cached === null) {
+      cached = loaded;
+    }
   }
   return cached.removedByUser;
 }
@@ -86,4 +107,17 @@ export async function clearHostRemovedByUser(): Promise<void> {
   cached = { removedByUser: false };
   await getStore().save(cached);
   log.info("[host-removal] cleared removed-by-user");
+}
+
+/**
+ * Test-only: both the in-memory cache and the memoized store handle are
+ * module-level and would otherwise leak across test cases that point
+ * `app.getPath("userData")` at a fresh temp dir per test (e.g. a
+ * `HostController` suite exercising `removeTraycer`/`uninstallHost` against
+ * real on-disk state).
+ */
+export function __resetHostRemovalStateForTest(): void {
+  store = null;
+  cached = null;
+  loadInFlight = null;
 }

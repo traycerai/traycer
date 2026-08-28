@@ -57,6 +57,15 @@ export const useSeededWorkspaceSnapshotStore =
     resetForTests: () => set({ snapshotByKey: {} }),
   }));
 
+/**
+ * The serialized staging keys this store currently holds a snapshot for. A
+ * seeded picker writes here on mount even when nothing was staged, so a sweep
+ * that enumerated only the intent-staging store would miss those slots.
+ */
+export function seededWorkspaceSnapshotKeyIds(): readonly string[] {
+  return Object.keys(useSeededWorkspaceSnapshotStore.getState().snapshotByKey);
+}
+
 /** Non-hook read for imperative (submit-time) callers. */
 export function readSeededWorkspaceSnapshot(
   key: WorktreeStagingKey,

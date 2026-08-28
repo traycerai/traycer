@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { numberValue } from "@/lib/composer/tiptap-json-content";
 import { cn } from "@/lib/utils";
 
 /**
@@ -84,12 +85,17 @@ function renderBlock(node: JsonContent): ReactNode {
           <CommentNodeList nodes={node.content ?? []} />
         </ul>
       );
-    case "orderedList":
+    case "orderedList": {
+      const start = numberValue(node.attrs?.start) ?? 1;
       return (
-        <ol className="my-1 list-decimal pl-5">
+        <ol
+          start={start === 1 ? undefined : start}
+          className="my-1 list-decimal pl-5"
+        >
           <CommentNodeList nodes={node.content ?? []} />
         </ol>
       );
+    }
     case "listItem":
       return (
         <li>
@@ -122,7 +128,9 @@ function renderText(node: JsonContent): ReactNode {
         return <em>{acc}</em>;
       case "code":
         return (
-          <code className="rounded bg-muted px-1 py-0.5 text-ui-xs">{acc}</code>
+          <code className="rounded bg-foreground/8 px-1 py-0.5 text-ui-xs">
+            {acc}
+          </code>
         );
       case "strike":
         return <s>{acc}</s>;

@@ -1,4 +1,4 @@
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
   WindowSummary,
@@ -21,13 +21,12 @@ export interface MenuState {
   readonly canOpenDevTools: boolean;
   // The launch-time host-registry probe surfaces an available version
   // here when an upgrade is queued (Flow 6). `null` means no update is
-  // pending. The tray menu uses it to insert an "Update available - Install"
-  // row; the macOS app menu does not currently surface it.
+  // pending. The tray and macOS app menus use it to insert an update row.
   readonly hostUpdateAvailableVersion: string | null;
 }
 
 export function toMenuHostPresentation(
-  snapshot: DesktopLocalHostSnapshot | null,
+  snapshot: DesktopPublishedHostSnapshot | null,
 ): MenuHostPresentation {
   if (snapshot === null) {
     return { status: "starting", version: null };

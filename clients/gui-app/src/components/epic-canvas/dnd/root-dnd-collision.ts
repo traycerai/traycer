@@ -13,9 +13,12 @@ import {
 } from "@dnd-kit/core";
 import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
+  COMPOSER_ATTACHMENT_DROP_TARGET_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
+  WORKSPACE_FOLDER_DND_TYPE,
   isRecord,
+  readComposerAttachmentDropTargetData,
   readEpicCanvasDragSourceData,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropTargetData,
@@ -29,6 +32,10 @@ import {
   HEADER_TAB_DND_TYPE,
   HEADER_TAB_SLOT_DND_TYPE,
 } from "@/components/layout/tabs/header-tab-dnd";
+import {
+  TOP_LEVEL_EDGE_SPLIT_TARGET,
+  TOP_LEVEL_FILLABLE_TARGET,
+} from "@/components/layout/tabs/top-level-tab-dnd";
 
 /**
  * Resolves the typed canvas source from the active draggable: Pierre hosts
@@ -59,7 +66,11 @@ function readActiveDragKind(active: Active): string | null {
 
 /** Every drop-target kind the root context can resolve a collision against. */
 type EpicRootDropTargetKind =
-  EpicCanvasDropTargetData["kind"] | typeof HEADER_TAB_SLOT_DND_TYPE;
+  | EpicCanvasDropTargetData["kind"]
+  | typeof COMPOSER_ATTACHMENT_DROP_TARGET_TYPE
+  | typeof HEADER_TAB_SLOT_DND_TYPE
+  | typeof TOP_LEVEL_EDGE_SPLIT_TARGET
+  | typeof TOP_LEVEL_FILLABLE_TARGET;
 
 const LEFT_PANEL_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
   "left-panel-rail-item",
@@ -88,15 +99,24 @@ function targetKindsForSourceKind(
   sourceKind: string | null,
 ): ReadonlyArray<EpicRootDropTargetKind> {
   if (sourceKind === null) return [];
-  if (sourceKind === HEADER_TAB_DND_TYPE) return [HEADER_TAB_SLOT_DND_TYPE];
+  if (sourceKind === HEADER_TAB_DND_TYPE) {
+    return [
+      HEADER_TAB_SLOT_DND_TYPE,
+      TOP_LEVEL_EDGE_SPLIT_TARGET,
+      TOP_LEVEL_FILLABLE_TARGET,
+    ];
+  }
   if (sourceKind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
     return LEFT_PANEL_TARGET_KINDS;
   }
   if (sourceKind === SIDEBAR_NODE_DND_TYPE) {
-    return SIDEBAR_NODE_TARGET_KINDS;
+    return [...SIDEBAR_NODE_TARGET_KINDS, COMPOSER_ATTACHMENT_DROP_TARGET_TYPE];
   }
   if (EPIC_CANVAS_DND_SOURCE_TYPES.includes(sourceKind)) {
-    return CANVAS_TARGET_KINDS;
+    return [...CANVAS_TARGET_KINDS, COMPOSER_ATTACHMENT_DROP_TARGET_TYPE];
+  }
+  if (sourceKind === WORKSPACE_FOLDER_DND_TYPE) {
+    return [COMPOSER_ATTACHMENT_DROP_TARGET_TYPE];
   }
   return [];
 }
@@ -110,7 +130,10 @@ function targetKindsForSourceKind(
  * of silently dead-zoning its drops.
  */
 const TARGET_KIND_PRIORITY = {
+  [COMPOSER_ATTACHMENT_DROP_TARGET_TYPE]: 0,
   [HEADER_TAB_SLOT_DND_TYPE]: 0,
+  [TOP_LEVEL_FILLABLE_TARGET]: 0,
+  [TOP_LEVEL_EDGE_SPLIT_TARGET]: 0,
   "artifact-tab": 1,
   "artifact-tab-strip-end": 2,
   "left-panel-rail-item": 3,
@@ -166,6 +189,7 @@ export function clearLastCollisionPointerPoint(): void {
 export const epicRootCollisionDetection: CollisionDetection = (args) => {
   lastCollisionPointerPoint = args.pointerCoordinates;
   const activeKind = readActiveDragKind(args.active);
+  const activeSource = readActiveDragSource(args.active);
   const compatibleKinds = targetKindsForSourceKind(activeKind);
   if (compatibleKinds.length === 0) return [];
   const kindByContainerId = new Map<
@@ -180,6 +204,21 @@ export const epicRootCollisionDetection: CollisionDetection = (args) => {
   const rankedHits = pointerWithin(args).flatMap((hit) => {
     const kind = kindByContainerId.get(hit.id) ?? null;
     if (kind === null || !compatibleKinds.includes(kind)) return [];
+    if (kind === COMPOSER_ATTACHMENT_DROP_TARGET_TYPE) {
+      const container = args.droppableContainers.find(
+        (candidate) => candidate.id === hit.id,
+      );
+      const target = readComposerAttachmentDropTargetData(
+        container?.data.current,
+      );
+      if (
+        activeSource === null ||
+        target === null ||
+        !target.accepts(activeSource)
+      ) {
+        return [];
+      }
+    }
     return [{ hit, rank: TARGET_KIND_PRIORITY[kind] }];
   });
   const topRank = rankedHits.reduce(

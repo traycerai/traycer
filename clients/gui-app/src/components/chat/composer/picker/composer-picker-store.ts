@@ -1,12 +1,38 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   ROOT_MENTION_STEP,
+  sameMentionStepChrome,
   type MentionFlowStep,
   type MentionMenuEntry,
+  type MentionStepChrome,
 } from "@/lib/composer/mentions";
-import type { MentionPreview, SlashCommand } from "@/lib/composer/types";
+import type {
+  MentionPreview,
+  SlashCommand,
+  SlashCommandTrigger,
+} from "@/lib/composer/types";
 
 export type ComposerPickerKind = "mention" | "slash";
+
+/**
+ * Which commands a slash picker offers, and how it treats the ones it cannot.
+ *
+ * - `all` - a leading trigger: every command is selectable.
+ * - `skills` - a trigger past the start: skills are selectable and native
+ *   commands stay listed but disabled, because the user asked for the whole
+ *   catalog and a row vanishing mid-typing reads as a bug.
+ *
+ * Scope follows caret position, never which character was typed: `/` and `$`
+ * open the same catalog.
+ */
+export type ComposerSlashScope = "all" | "skills";
+
+/**
+ * Character that opened a slash picker. One name for what the picker records on
+ * a chip and what the raw-text converters parse off a prompt, so the two paths
+ * cannot drift apart - see {@link SlashCommandTrigger}.
+ */
+export type ComposerSlashTrigger = SlashCommandTrigger;
 
 export interface ComposerPickerRange {
   readonly from: number;
@@ -23,7 +49,42 @@ export type ComposerPickerItem =
       readonly id: string;
       readonly kind: "slash";
       readonly command: SlashCommand;
+      /**
+       * Non-null when the row is shown but not selectable - currently only
+       * native provider commands offered at a non-leading caret, which the
+       * Claude CLI parser only recognizes at the start of the prompt. The
+       * entry stays in the list (so the catalog looks the same everywhere)
+       * and the reason is surfaced in the menu instead of the row silently
+       * disappearing.
+       */
+      readonly disabledReason: string | null;
     };
+
+/**
+ * Single place that decides whether a row can be activated or committed.
+ * Keyboard navigation, hover, and commit all read through this so a disabled
+ * row can never become the active index.
+ */
+export function pickerItemDisabledReason(
+  item: ComposerPickerItem,
+): string | null {
+  if (item.kind === "mention") return item.entry.disabledReason;
+  return item.disabledReason;
+}
+
+/**
+ * Disabled reason for the row the highlight currently sits on, or null when it
+ * is selectable. Key-handling reads this so Enter/Tab on an inert row is
+ * swallowed rather than falling through to the composer's submit handler.
+ */
+export function activePickerItemDisabledReason(state: {
+  readonly items: ReadonlyArray<ComposerPickerItem>;
+  readonly activeIndex: number;
+}): string | null {
+  const { items, activeIndex } = state;
+  if (activeIndex < 0 || activeIndex >= items.length) return null;
+  return pickerItemDisabledReason(items[activeIndex]);
+}
 
 /**
  * Uniform preview lookup for either picker item shape - the side preview
@@ -43,12 +104,22 @@ export type ComposerPickerClientRect = () => DOMRect | null;
 export interface ComposerPickerState {
   readonly open: boolean;
   readonly kind: ComposerPickerKind | null;
+  readonly slashScope: ComposerSlashScope | null;
+  /** Trigger that opened this picker; null for the mention picker. */
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly range: ComposerPickerRange | null;
   readonly query: string;
   readonly step: MentionFlowStep;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly itemsForQuery: string | null;
   readonly itemsForStepId: string | null;
+  /**
+   * Scope the published `items` were built under. Part of item identity, not
+   * just a render input: the scope decides each row's enabled/disabled policy,
+   * so a list built under `all` is wrong the moment the caret makes the
+   * position `skills`-only, even though kind, query, and step all still match.
+   */
+  readonly itemsForSlashScope: ComposerSlashScope | null;
   readonly activeIndex: number;
   readonly loading: boolean;
   /**
@@ -60,6 +131,54 @@ export interface ComposerPickerState {
   readonly fetching: boolean;
   readonly commit: ComposerPickerCommit | null;
   /**
+   * Session-owned dismissal handle: closes the picker AND ends the owning
+   * tiptap suggestion session (via its plugin exit meta), so the dismissal
+   * cannot leak into the next trigger occurrence the way a bare
+   * `closeSession` would - the plugin would stay active and route the next
+   * occurrence's updates into this dead session. Registered by the
+   * suggestion render like `commit`; null when the owner has no such handle
+   * (callers fall back to `closeSession`).
+   */
+  readonly dismiss: (() => void) | null;
+  /**
+   * Returns DOM focus (and the caret) to the composer's editor, inserting
+   * `resumeText` at the caret when it is non-null.
+   *
+   * Registered by the suggestion render beside `commit`/`dismiss`, because the
+   * editor handle only exists there. The one caller is the filter popover's
+   * close: Radix restores focus to its trigger by default, which would leave
+   * the caret outside the composer with the mention menu still open.
+   *
+   * `resumeText` carries the printable character that dismissed the popover.
+   * That keystroke is delivered to the popover's radio group and the editor is
+   * not focused until a microtask later, so without handing it over the first
+   * letter of the resumed query is silently dropped.
+   */
+  readonly focusEditor: ((resumeText: string | null) => void) | null;
+  /**
+   * True when the active kind's catalog query FAILED (currently only the
+   * slash-command catalog reports this). The menu renders a "couldn't load"
+   * row with a Retry action instead of claiming "no matching" results -
+   * repeated provider failures must not be indistinguishable from a
+   * legitimately empty catalog. `retryLoad` is the failed query's refetch,
+   * kept as a closure in the store the same way `commit` / `clientRect` are;
+   * it is non-null only while `loadFailed` is set.
+   */
+  readonly loadFailed: boolean;
+  readonly retryLoad: (() => void) | null;
+  /**
+   * The current step's top-bar chrome (refresh, freshness, notice, filter) and
+   * its two body affordances (degraded-source banner, appended status row), or
+   * null for a step that has none.
+   *
+   * Published by the item hooks for the same reason `retryLoad` and `commit`
+   * are: the values are live query state and closures that only exist in the
+   * hook layer, while the menu that renders them reads the store. The provider
+   * registry stays hook-free and declares only the static capability - see
+   * `MentionStepChromeCapability`.
+   */
+  readonly stepChrome: MentionStepChrome | null;
+  /**
    * Latest viewport rect of the suggestion range (trigger char + query).
    * Tiptap rebuilds the closure on every view update; we keep the function
    * itself in the store so the menu can read the freshest rect via
@@ -68,35 +187,76 @@ export interface ComposerPickerState {
   readonly clientRect: ComposerPickerClientRect | null;
   /**
    * Known slash commands for this composer's harness as a map of lowercased
-   * name → canonical name, or null until the command catalog has loaded.
-   * Populated eagerly by `useComposerPickerItems` so the paste handler can
-   * validate a pasted `/command` against real commands (and reuse the catalog's
-   * canonical casing) without the popover ever opening. This is catalog data,
-   * not transient popover state, so it survives open/close/reset.
+   * name → the catalog option, or null until the command catalog has loaded.
+   * Populated eagerly by `useComposerPickerItems` so the raw-text converters can
+   * validate a written `/command` or `$skill` against real commands without the
+   * popover ever opening. This is catalog data, not transient popover state, so
+   * it survives open/close/reset.
+   *
+   * The whole option, not just the canonical name: a chip built from raw text
+   * has to carry the same `kind`/`path`/`harnessId` the picker would attach, or
+   * the host cannot tell a skill from a native command and the editor's leading
+   * guard deletes it away from the prompt start. See `slashCommandNodeAttrs`.
    */
-  readonly knownSlashCommands: ReadonlyMap<string, string> | null;
+  readonly knownSlashCommands: ReadonlyMap<string, SlashCommand> | null;
+  /**
+   * Which suggestion session currently owns this store.
+   *
+   * Several suggestion plugins (`/`, `$`, `@`) drive one store, and a single
+   * ProseMirror transaction can stop one and start another - replacing `$` with
+   * `/` over a selection does exactly that. Tiptap fires the new session's
+   * `onStart` before the old session's `onExit`, so without an owner the
+   * departing session's teardown closes the picker that just opened, leaving
+   * the store shut while its plugin is still active and the menu invisible
+   * until the range is abandoned. Every session-scoped write carries its id and
+   * is dropped when it no longer matches.
+   */
+  readonly sessionId: number | null;
 }
 
 export interface ComposerPickerActions {
   readonly openPicker: (input: {
+    readonly sessionId: number;
     readonly kind: ComposerPickerKind;
+    readonly slashScope: ComposerSlashScope | null;
+    readonly slashTrigger: ComposerSlashTrigger | null;
     readonly range: ComposerPickerRange;
     readonly query: string;
     readonly commit: ComposerPickerCommit;
+    readonly dismiss: (() => void) | null;
+    readonly focusEditor: ((resumeText: string | null) => void) | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly updateRange: (input: {
+    readonly sessionId: number;
     readonly range: ComposerPickerRange;
     readonly query: string;
+    readonly slashScope: ComposerSlashScope | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly setStep: (step: MentionFlowStep) => void;
   readonly setItems: (input: {
+    readonly sessionId: number;
     readonly kind: ComposerPickerKind;
     readonly query: string;
+    readonly slashScope: ComposerSlashScope | null;
     readonly step: MentionFlowStep;
     readonly items: ReadonlyArray<ComposerPickerItem>;
     readonly loading: boolean;
+    readonly loadFailed: boolean;
+    readonly retryLoad: (() => void) | null;
+  }) => void;
+  /**
+   * Publishes the chrome for `step`. Guarded like `setItems`: a chrome built
+   * for a step or session the store has already moved past would otherwise put
+   * the previous section's refresh button and freshness stamp on the new one.
+   * Value-equal republishes are dropped so a hook that rebuilds its chrome
+   * object each render cannot drive a loop through the store.
+   */
+  readonly setStepChrome: (input: {
+    readonly sessionId: number;
+    readonly step: MentionFlowStep;
+    readonly chrome: MentionStepChrome | null;
   }) => void;
   readonly setLoading: (input: {
     readonly kind: ComposerPickerKind;
@@ -109,9 +269,12 @@ export interface ComposerPickerActions {
   readonly moveActive: (direction: 1 | -1) => void;
   readonly commitActiveItem: () => boolean;
   readonly setKnownSlashCommands: (
-    commands: ReadonlyMap<string, string> | null,
+    commands: ReadonlyMap<string, SlashCommand> | null,
   ) => void;
+  /** Unconditional close, for callers that are not a suggestion session. */
   readonly close: () => void;
+  /** Close only if `sessionId` still owns the store. See {@link ComposerPickerState.sessionId}. */
+  readonly closeSession: (sessionId: number) => void;
   readonly reset: () => void;
 }
 
@@ -122,17 +285,26 @@ export type ComposerPickerStore = StoreApi<ComposerPickerStoreState>;
 
 const INITIAL_STATE: ComposerPickerState = {
   open: false,
+  sessionId: null,
   kind: null,
+  slashScope: null,
+  slashTrigger: null,
   range: null,
   query: "",
   step: ROOT_MENTION_STEP,
   items: [],
   itemsForQuery: null,
   itemsForStepId: null,
+  itemsForSlashScope: null,
   activeIndex: 0,
   loading: false,
   fetching: false,
   commit: null,
+  dismiss: null,
+  focusEditor: null,
+  loadFailed: false,
+  retryLoad: null,
+  stepChrome: null,
   clientRect: null,
   knownSlashCommands: null,
 };
@@ -147,40 +319,113 @@ function clampIndex(index: number, length: number): number {
   return Math.min(Math.max(0, index), length - 1);
 }
 
-function nextIndex(index: number, length: number, direction: 1 | -1): number {
-  if (length === 0) return 0;
-  return (clampIndex(index, length) + direction + length) % length;
+function wrapIndex(index: number, length: number): number {
+  return ((index % length) + length) % length;
+}
+
+/**
+ * Active index to carry across an item-list replacement. A refresh of the same
+ * query can reorder rows as slower sources land (root mention search ranks all
+ * sources into one flat list); once the user has moved the highlight off the
+ * top row, it follows the item they chose - matched by id - rather than the
+ * index it happened to sit at. At index 0 the highlight stays on the top row,
+ * so the best match keeps the selection as better results arrive.
+ */
+function carriedActiveIndex(
+  previous: ComposerPickerState,
+  items: ReadonlyArray<ComposerPickerItem>,
+): number {
+  if (
+    previous.activeIndex > 0 &&
+    previous.activeIndex < previous.items.length
+  ) {
+    const activeId = previous.items[previous.activeIndex].id;
+    // Carry the id match even onto a DISABLED row: navigation deliberately
+    // highlights disabled slash rows (their disabled reason stays visible and
+    // commit refuses), so skipping them here would silently move the highlight
+    // to a different enabled command and a following Enter could commit it.
+    const carried = items.findIndex((item) => item.id === activeId);
+    if (carried >= 0) return carried;
+  }
+  return (
+    findEnabledIndex(items, previous.activeIndex, 1) ??
+    clampIndex(previous.activeIndex, items.length)
+  );
+}
+
+/**
+ * First selectable index starting at `start` and scanning in `direction`,
+ * wrapping once. Null when every row is disabled, which callers treat as
+ * "leave the selection where it is" rather than highlighting a dead row.
+ */
+function findEnabledIndex(
+  items: ReadonlyArray<ComposerPickerItem>,
+  start: number,
+  direction: 1 | -1,
+): number | null {
+  const length = items.length;
+  if (length === 0) return null;
+  const from = clampIndex(start, length);
+  for (let step = 0; step < length; step += 1) {
+    const candidate = wrapIndex(from + direction * step, length);
+    if (pickerItemDisabledReason(items[candidate]) === null) return candidate;
+  }
+  return null;
 }
 
 export function createComposerPickerStore(): ComposerPickerStore {
   return createStore<ComposerPickerStoreState>((set, get) => ({
     ...INITIAL_STATE,
 
-    openPicker: ({ kind, range, query, commit, clientRect }) => {
+    openPicker: ({
+      sessionId,
+      kind,
+      slashScope,
+      slashTrigger,
+      range,
+      query,
+      commit,
+      dismiss,
+      focusEditor,
+      clientRect,
+    }) => {
       set({
         open: true,
+        sessionId,
         kind,
+        slashScope,
+        slashTrigger,
         range,
         query,
         step: ROOT_MENTION_STEP,
         items: [],
         itemsForQuery: null,
         itemsForStepId: null,
+        itemsForSlashScope: null,
         activeIndex: 0,
         loading: false,
         fetching: false,
         commit,
+        dismiss,
+        focusEditor,
+        loadFailed: false,
+        retryLoad: null,
+        stepChrome: null,
         clientRect,
       });
     },
 
-    updateRange: ({ range, query, clientRect }) => {
+    updateRange: ({ sessionId, range, query, slashScope, clientRect }) => {
       const previous = get();
+      // A session that no longer owns the store is winding down; letting it
+      // write would hand the live picker the departing session's range.
+      if (previous.sessionId !== sessionId) return;
       const sameRange =
         previous.range !== null &&
         previous.range.from === range.from &&
         previous.range.to === range.to &&
-        previous.query === query;
+        previous.query === query &&
+        previous.slashScope === slashScope;
       // Always refresh `clientRect`: even when the range is identical the
       // closure may be stale after a view.update, and `autoUpdate` reads
       // through it for live positioning.
@@ -190,11 +435,21 @@ export function createComposerPickerStore(): ComposerPickerStore {
         }
         return;
       }
+      // A scope flip rewrites the enabled/disabled policy for every row, so the
+      // published list is stale until the item hook republishes under the new
+      // scope. Drop it now rather than rendering (and accepting commits on)
+      // rows whose policy no longer holds for this caret position.
+      const scopeChanged = previous.slashScope !== slashScope;
       set({
         range,
         query,
+        slashScope,
         activeIndex: 0,
         clientRect: clientRect ?? previous.clientRect,
+        items: scopeChanged ? [] : previous.items,
+        itemsForQuery: scopeChanged ? null : previous.itemsForQuery,
+        itemsForStepId: scopeChanged ? null : previous.itemsForStepId,
+        itemsForSlashScope: scopeChanged ? null : previous.itemsForSlashScope,
       });
     },
 
@@ -206,18 +461,51 @@ export function createComposerPickerStore(): ComposerPickerStore {
         items: [],
         itemsForQuery: null,
         itemsForStepId: null,
+        itemsForSlashScope: null,
         activeIndex: 0,
         loading: false,
         fetching: false,
+        loadFailed: false,
+        retryLoad: null,
+        stepChrome: null,
       });
     },
 
-    setItems: ({ kind, query, step, items, loading }) => {
+    setStepChrome: ({ sessionId, step, chrome }) => {
       const previous = get();
       if (
         !previous.open ||
+        previous.kind !== "mention" ||
+        previous.sessionId !== sessionId ||
+        stepIdOf(previous.step) !== stepIdOf(step)
+      ) {
+        return;
+      }
+      if (sameMentionStepChrome(previous.stepChrome, chrome)) return;
+      set({ stepChrome: chrome });
+    },
+
+    setItems: ({
+      sessionId,
+      kind,
+      query,
+      slashScope,
+      step,
+      items,
+      loading,
+      loadFailed,
+      retryLoad,
+    }) => {
+      const previous = get();
+      if (
+        !previous.open ||
+        // Rows belong to the session that asked for them. The remaining checks
+        // compare what the list was built for, and a replacement session can
+        // match every one of them, so only the id distinguishes the owner.
+        previous.sessionId !== sessionId ||
         previous.kind !== kind ||
         previous.query !== query ||
+        previous.slashScope !== slashScope ||
         stepIdOf(previous.step) !== stepIdOf(step)
       ) {
         return;
@@ -226,8 +514,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
         items,
         itemsForQuery: query,
         itemsForStepId: stepIdOf(step),
+        itemsForSlashScope: slashScope,
         loading,
-        activeIndex: clampIndex(previous.activeIndex, items.length),
+        loadFailed,
+        retryLoad,
+        activeIndex: carriedActiveIndex(previous, items),
       });
     },
 
@@ -250,8 +541,13 @@ export function createComposerPickerStore(): ComposerPickerStore {
       set({ fetching });
     },
 
+    // Navigation deliberately traverses disabled rows rather than jumping over
+    // them: skipping makes the highlight look like it teleports past entries
+    // the user can still see. Disabled rows highlight as inert instead, and
+    // `commitActiveItem` is what refuses.
     setActiveIndex: (index) => {
       const previous = get();
+      if (previous.items.length === 0) return;
       const clamped = clampIndex(index, previous.items.length);
       if (clamped === previous.activeIndex) return;
       set({ activeIndex: clamped });
@@ -259,10 +555,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
 
     moveActive: (direction) => {
       const previous = get();
-      const next = nextIndex(
-        previous.activeIndex,
-        previous.items.length,
-        direction,
+      const length = previous.items.length;
+      if (length === 0) return;
+      const next = wrapIndex(
+        clampIndex(previous.activeIndex, length) + direction,
+        length,
       );
       if (next === previous.activeIndex) return;
       set({ activeIndex: next });
@@ -274,7 +571,9 @@ export function createComposerPickerStore(): ComposerPickerStore {
       if (state.activeIndex < 0 || state.activeIndex >= state.items.length) {
         return false;
       }
-      state.commit(state.items[state.activeIndex]);
+      const item = state.items[state.activeIndex];
+      if (pickerItemDisabledReason(item) !== null) return false;
+      state.commit(item);
       return true;
     },
 
@@ -286,6 +585,14 @@ export function createComposerPickerStore(): ComposerPickerStore {
     // `close`/`reset` clear transient popover state but preserve the loaded
     // command catalog - it is host/harness data, not per-popover-session state.
     close: () => {
+      set((previous) => ({
+        ...INITIAL_STATE,
+        knownSlashCommands: previous.knownSlashCommands,
+      }));
+    },
+
+    closeSession: (sessionId) => {
+      if (get().sessionId !== sessionId) return;
       set((previous) => ({
         ...INITIAL_STATE,
         knownSlashCommands: previous.knownSlashCommands,

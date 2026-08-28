@@ -3,7 +3,18 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index";
 import {
   hostGetRateLimitUsageDowngradeV2ToV1,
+  hostGetRateLimitUsageDowngradeV3ToV1,
+  hostGetRateLimitUsageDowngradeV3ToV2,
   hostGetRateLimitUsageUpgradeV20ToV21,
+  hostGetRateLimitUsageDowngradeV4ToV1,
+  hostGetRateLimitUsageDowngradeV4ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV3,
+  hostGetRateLimitUsageUpgradeV21ToV30,
+  hostGetRateLimitUsageUpgradeV30ToV40,
+  hostGetRateLimitUsageV12,
+  hostGetRateLimitUsageV20,
+  hostGetRateLimitUsageV21,
+  hostGetRateLimitUsageV30,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -13,9 +24,12 @@ import {
   rateLimitUnavailableReasonSchemaV1,
   rateLimitUnavailableReasonSchemaV2,
   rateLimitUsageRequestSchemaV12,
+  rateLimitUsageRequestSchemaV40,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
+  rateLimitUsageResponseSchemaV30,
+  rateLimitUsageResponseSchemaV40,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -572,5 +586,941 @@ describe("host.getRateLimitUsage v2.0 -> v1.2 downgrade bridge", () => {
       hostRpcRegistry["host.getRateLimitUsage"][1].versions[2].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 2 });
+  });
+});
+
+// `host.getRateLimitUsage` major 3.0 - adds the grok available arm. Frozen
+// v2.1 / v1.2 unions have no grok arm, so the 3 -> 2 and 3 -> 1 downgrade
+// bridges degrade a grok-available snapshot to
+// `{ provider: "grok", available: false, reason: "unsupported_provider" }`
+// (the exact row a pre-grok host returns for grok) and reparse through the
+// frozen response schema. 3 -> 1 also composes the existing
+// `usage_fetch_failed` -> `rate_limits_not_available` mapping.
+describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", () => {
+  const grokAvailableWithPeriod = {
+    provider: "grok" as const,
+    available: true as const,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: 1753142400000,
+    periodEnd: 1753747200000,
+    period: {
+      usedPercent: 12,
+      resetsAt: 1753747200000,
+      durationMinutes: 10080,
+    },
+    monthlyLimit: null,
+    onDemandCap: 0,
+    onDemandUsed: 0,
+    prepaidBalance: 0,
+  };
+
+  const grokAvailablePeriodLess = {
+    provider: "grok" as const,
+    available: true as const,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: 1753142400000,
+    periodEnd: 1753747200000,
+    period: null,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+
+  const grokUnavailable = {
+    provider: "grok" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const codexAvailable = {
+    provider: "codex" as const,
+    available: true as const,
+    planType: "plus",
+    limitId: "plus-primary",
+    limitName: "Plus",
+    primary: {
+      usedPercent: 42,
+      resetsAt: 1735689600000,
+      durationMinutes: 300,
+    },
+    secondary: null,
+    extraWindows: [],
+    credits: null,
+    individualLimit: null,
+    resetCredits: null,
+    rateLimitReachedType: null,
+  };
+
+  it("parses a grok-available snapshot on the live union and rejects it on the frozen v2.1 schema", () => {
+    expect(providerRateLimitsSchema.parse(grokAvailableWithPeriod)).toEqual(
+      grokAvailableWithPeriod,
+    );
+    expect(providerRateLimitsSchema.parse(grokAvailablePeriodLess)).toEqual(
+      grokAvailablePeriodLess,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV30.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokAvailableWithPeriod,
+      }),
+    ).toMatchObject({
+      providerRateLimits: { provider: "grok", available: true },
+    });
+    // The frozen v2.1 response has no grok arm - without the bridge map a
+    // reparse would fail, which is exactly why the bridge exists.
+    expect(
+      rateLimitUsageResponseSchemaV21.safeParse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokAvailableWithPeriod,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a grok period whose reset disagrees with its period end", () => {
+    expect(
+      providerRateLimitsSchema.safeParse({
+        ...grokAvailableWithPeriod,
+        period: {
+          ...grokAvailableWithPeriod.period,
+          resetsAt: grokAvailableWithPeriod.periodEnd + 1,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a grok period with no reset when its period end is known", () => {
+    expect(
+      providerRateLimitsSchema.safeParse({
+        ...grokAvailableWithPeriod,
+        period: {
+          ...grokAvailableWithPeriod.period,
+          resetsAt: null,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("degrades a grok-available (with period) snapshot through the 3.0 -> 2.1 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("degrades a period-less grok-available snapshot through the 3.0 -> 2.1 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailablePeriodLess,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("passes non-grok available arms and null through the 3.0 -> 2.1 bridge unchanged", () => {
+    const withCodex = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(withCodex),
+    ).toEqual({ ok: true, value: withCodex });
+
+    const withNull = {
+      totalTokens: 100,
+      remainingTokens: 50,
+      providerRateLimits: null,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(withNull),
+    ).toEqual({ ok: true, value: withNull });
+  });
+
+  it("passes an already-unavailable grok snapshot through the 3.0 -> 2.1 bridge unchanged", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokUnavailable,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(response),
+    ).toEqual({ ok: true, value: response });
+  });
+
+  it("downgrades the 3.0 -> 2.1 request as the identity", () => {
+    const request = rateLimitUsageRequestSchemaV12.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "grok",
+    });
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeRequest(request),
+    ).toEqual({ ok: true, value: request });
+  });
+
+  it("degrades grok-available through the host registry major 3 -> 2 path", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    });
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        3,
+        2,
+        response,
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("degrades a grok-available snapshot through the 3.0 -> 1.2 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("maps usage_fetch_failed to rate_limits_not_available on the 3.0 -> 1.2 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: {
+        provider: "codex" as const,
+        available: false as const,
+        reason: "usage_fetch_failed" as const,
+      },
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: {
+          provider: "codex",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
+  it("degrades grok-available through the host registry major 3 -> 1 path", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailablePeriodLess,
+    });
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        3,
+        1,
+        response,
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("maps usage_fetch_failed through the host registry major 3 -> 1 path", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: {
+        provider: "claude-code",
+        available: false,
+        reason: "usage_fetch_failed",
+      },
+    });
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        3,
+        1,
+        response,
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: {
+          provider: "claude-code",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
+  it("upgrades a v2.1 response to v3.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV21.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV21ToV30.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV30.parse(upgraded)).toEqual(response);
+  });
+
+  it("registers host.getRateLimitUsage majors 2.1 and 3.0 in the host registry", () => {
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][3].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 3, minor: 0 });
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][2].versions[1].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 1 });
+  });
+});
+
+describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", () => {
+  const huggingFaceAvailable = {
+    provider: "huggingface" as const,
+    available: true as const,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  // The spend-only shape: an account with no included allowance and no spend
+  // limit. Every derived field is null rather than a misleading zero.
+  const huggingFaceSpendOnly = {
+    ...huggingFaceAvailable,
+    includedUsd: null,
+    remainingIncludedUsd: null,
+    limitUsd: null,
+    remainingLimitUsd: null,
+    numRequests: null,
+    periodStart: null,
+    periodEnd: null,
+  };
+
+  const huggingFaceUnavailable = {
+    provider: "huggingface" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const openRouterAvailable = {
+    provider: "openrouter" as const,
+    available: true as const,
+    limit: null,
+    limitRemaining: null,
+    dailySpend: null,
+    weeklySpend: null,
+    monthlySpend: null,
+    totalCredits: 10,
+    totalUsage: 1,
+    balance: 9,
+  };
+
+  // The freeze itself: v3.0 is what cli-v1.1.8 through cli-v1.1.10 shipped, so
+  // it must REJECT the arm the live union accepts. This is the assertion that
+  // fails if anyone repoints v3.0 back at the live union.
+  it("accepts a Hugging Face arm on the live union and rejects it on the frozen v3.0 schema", () => {
+    for (const snapshot of [huggingFaceAvailable, huggingFaceSpendOnly]) {
+      expect(providerRateLimitsSchema.parse(snapshot)).toEqual(snapshot);
+      expect(
+        rateLimitUsageResponseSchemaV40.parse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: snapshot,
+        }),
+      ).toMatchObject({ providerRateLimits: snapshot });
+      expect(() =>
+        rateLimitUsageResponseSchemaV30.parse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: snapshot,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("requires usedUsd - the one field the endpoint always carries", () => {
+    const { usedUsd: _omitted, ...withoutUsed } = huggingFaceAvailable;
+    expect(() => providerRateLimitsSchema.parse(withoutUsed)).toThrow();
+  });
+
+  it("degrades a Hugging-Face-available snapshot through the 4.0 -> 3.0 bridge", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: huggingFaceAvailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    expect(() =>
+      rateLimitUsageResponseSchemaV30.parse(result.value),
+    ).not.toThrow();
+  });
+
+  it("passes non-Hugging-Face arms and null through the 4.0 -> 3.0 bridge unchanged", () => {
+    for (const snapshot of [openRouterAvailable, null]) {
+      const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+        rateLimitUsageResponseSchemaV40.parse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: snapshot,
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(snapshot);
+    }
+  });
+
+  it("passes an already-unavailable Hugging Face snapshot through unchanged", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: huggingFaceUnavailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+  });
+
+  it("degrades Hugging Face down the 4.0 -> 2.1 and 4.0 -> 1.2 bridges too", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: huggingFaceAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeResponse(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+  });
+
+  it("degrades Hugging Face through the host registry major 4 -> 3 / 2 / 1 paths", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: huggingFaceAvailable,
+    });
+    const registry = hostRpcRegistry["host.getRateLimitUsage"];
+    // One call per literal target: a union-typed `target` widens the helper's
+    // return across every major's shape, and major 1's earliest minors carry
+    // no `providerRateLimits` key at all.
+    const toV3 = downgradeResponseAcrossMajors(registry, 4, 3, response);
+    expect(toV3.ok).toBe(true);
+    if (toV3.ok) {
+      expect(toV3.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+    const toV2 = downgradeResponseAcrossMajors(registry, 4, 2, response);
+    expect(toV2.ok).toBe(true);
+    if (toV2.ok) {
+      expect(toV2.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+    const toV1 = downgradeResponseAcrossMajors(registry, 4, 1, response);
+    expect(toV1.ok).toBe(true);
+    if (toV1.ok) {
+      expect(toV1.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+  });
+
+  it("upgrades a v3.0 response to v4.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openRouterAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV30ToV40.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV40.parse(upgraded)).toEqual(response);
+  });
+
+  it("registers host.getRateLimitUsage major 4.0 as a frozen line", () => {
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][4].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
+    expect(
+      Object.keys(
+        hostRpcRegistry["host.getRateLimitUsage"][4]
+          .downgradePathsFromLatest as Record<string, unknown>,
+      ).sort(),
+    ).toEqual(["1", "2", "3"]);
+  });
+});
+
+// OpenCode rides the SAME major as Hugging Face: the release collapsed the
+// unreleased v5.0 into v4.0, so there is no peer that negotiated one arm
+// without the other. The Hugging-Face-specific coverage and the major-4
+// registry assertions live in the v4.0 block above; only the OpenCode-specific
+// behaviour is asserted here.
+describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
+  const openCodeAvailable = {
+    provider: "opencode" as const,
+    available: true as const,
+    credentialGeneration: "gen-opencode-1",
+    fiveHour: {
+      status: "ok" as const,
+      usedPercent: 10,
+      resetsAt: 1_784_678_400_000,
+      durationMinutes: 300,
+    },
+    weekly: {
+      status: "rate-limited" as const,
+      usedPercent: 20,
+      resetsAt: 1_785_283_200_000,
+      durationMinutes: 10_080,
+    },
+    monthly: {
+      status: "ok" as const,
+      usedPercent: 30,
+      resetsAt: 1_787_011_200_000,
+      durationMinutes: null,
+    },
+  };
+
+  const openCodeUnsupported = {
+    provider: "opencode" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const openCodeUnavailable = {
+    provider: "opencode" as const,
+    available: false as const,
+    reason: "usage_fetch_failed" as const,
+    credentialGeneration: "gen-opencode-1",
+  };
+
+  it("accepts an OpenCode arm and generation on the live v4 line", () => {
+    expect(providerRateLimitsSchema.parse(openCodeAvailable)).toEqual(
+      openCodeAvailable,
+    );
+    expect(providerRateLimitsSchema.parse(openCodeUnavailable)).toEqual(
+      openCodeUnavailable,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: openCodeAvailable,
+      }),
+    ).toMatchObject({ providerRateLimits: openCodeAvailable });
+    expect(() =>
+      providerRateLimitsSchema.parse({
+        ...openCodeAvailable,
+        credentialGeneration: undefined,
+      }),
+    ).toThrow();
+  });
+
+  it("degrades an available OpenCode snapshot to unsupported_provider on every v4 downgrade", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV3,
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeResponse(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+  });
+
+  it("keeps an unavailable OpenCode reason through v4 -> v3 / v2 and maps it for v1", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeUnavailable,
+    });
+    const unavailable = {
+      provider: "opencode",
+      available: false,
+      reason: "usage_fetch_failed",
+    };
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV3,
+      hostGetRateLimitUsageDowngradeV4ToV2,
+    ]) {
+      expect(bridge.downgradeResponse(response)).toEqual({
+        ok: true,
+        value: { ...response, providerRateLimits: unavailable },
+      });
+    }
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...response,
+        providerRateLimits: {
+          ...unavailable,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
+  it("degrades OpenCode through the host registry major 4 -> 3 / 2 / 1 paths", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeAvailable,
+    });
+    // Unrolled rather than looped: each target major has its own result type,
+    // and the major-1 line's response shape has no `providerRateLimits` at all
+    // until 1.2 - a loop unions all three and the property read stops
+    // type-checking.
+    const registry = hostRpcRegistry["host.getRateLimitUsage"];
+    const toV3 = downgradeResponseAcrossMajors(registry, 4, 3, response);
+    expect(toV3.ok).toBe(true);
+    if (toV3.ok) {
+      expect(toV3.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+    const toV2 = downgradeResponseAcrossMajors(registry, 4, 2, response);
+    expect(toV2.ok).toBe(true);
+    if (toV2.ok) {
+      expect(toV2.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+    const toV1 = downgradeResponseAcrossMajors(registry, 4, 1, response);
+    expect(toV1.ok).toBe(true);
+    if (toV1.ok) {
+      expect(toV1.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+  });
+});
+
+// `host.getRateLimitUsage@4.0`'s `force` opt-out (see
+// `rateLimitUsageRequestSchemaV40`'s doc comment). ABSENT means force - every
+// released version forced unconditionally, so the field is `.optional()`
+// rather than `.default(true)` specifically so it stays ABSENT (not merely
+// `undefined`) on a request that never opts out.
+describe("rateLimitUsageRequestSchemaV40 force opt-out", () => {
+  it("parses force: true and force: false", () => {
+    expect(
+      rateLimitUsageRequestSchemaV40.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        force: true,
+      }).force,
+    ).toBe(true);
+    expect(
+      rateLimitUsageRequestSchemaV40.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        force: false,
+      }).force,
+    ).toBe(false);
+  });
+
+  it("leaves force ABSENT - not merely undefined - when the caller omits it", () => {
+    const parsed = rateLimitUsageRequestSchemaV40.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    });
+    expect("force" in parsed).toBe(false);
+    expect(parsed.force).toBeUndefined();
+  });
+
+  it("strips an unknown force key on every released version's request schema", () => {
+    for (const contract of [
+      hostGetRateLimitUsageV12,
+      hostGetRateLimitUsageV20,
+      hostGetRateLimitUsageV21,
+      hostGetRateLimitUsageV30,
+    ]) {
+      const parsedWithForceTrue = contract.requestSchema.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        force: true,
+      });
+      expect("force" in parsedWithForceTrue).toBe(false);
+
+      const parsedWithForceFalse = contract.requestSchema.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        force: false,
+      });
+      expect("force" in parsedWithForceFalse).toBe(false);
+    }
+  });
+});
+
+// The downgrade bridges below travel FROM the v4.0 line, so they are the
+// only place `force` can be dropped - a released major never carried it.
+describe("host.getRateLimitUsage v4.0 -> v3.0 / v2.1 / v1.2 force downgrade bridges", () => {
+  const v40RequestWithForceFalse = rateLimitUsageRequestSchemaV40.parse({
+    accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    providerId: "claude-code",
+    profileId: "work",
+    force: false,
+  });
+
+  const releasedShape = {
+    accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    providerId: "claude-code",
+    profileId: "work",
+  };
+
+  it("drops force while preserving accountContext/providerId/profileId on the 4.0 -> 3.0 bridge", () => {
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV3.downgradeRequest(
+        v40RequestWithForceFalse,
+      ),
+    ).toEqual({ ok: true, value: releasedShape });
+  });
+
+  it("drops force while preserving accountContext/providerId/profileId on the 4.0 -> 2.1 bridge", () => {
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV2.downgradeRequest(
+        v40RequestWithForceFalse,
+      ),
+    ).toEqual({ ok: true, value: releasedShape });
+  });
+
+  it("drops force while preserving accountContext/providerId/profileId on the 4.0 -> 1.2 bridge", () => {
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV1.downgradeRequest(
+        v40RequestWithForceFalse,
+      ),
+    ).toEqual({ ok: true, value: releasedShape });
+  });
+
+  it("drops force: true too - every downgrade strips the key regardless of its value", () => {
+    const v40RequestWithForceTrue = rateLimitUsageRequestSchemaV40.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      force: true,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV3,
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeRequest(v40RequestWithForceTrue);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect("force" in result.value).toBe(false);
+    }
+  });
+});
+
+describe("host.getRateLimitUsage v3.0 -> v4.0 request upgrade", () => {
+  it("upgrades a v3.0 request to v4.0 leaving force absent - which the host reads as force", () => {
+    const v30Request = rateLimitUsageRequestSchemaV12.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "claude-code",
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV30ToV40.upgradeRequest(v30Request);
+
+    expect("force" in upgraded).toBe(false);
+    expect(
+      rateLimitUsageRequestSchemaV40.parse(upgraded).force,
+    ).toBeUndefined();
+  });
+});
+
+describe("cursor rate-limit arm", () => {
+  const CYCLE_START = 1786921855000;
+  const CYCLE_END = 1789600255000;
+
+  const CYCLE_MINUTES = (CYCLE_END - CYCLE_START) / 60_000;
+
+  const cursorAvailable = {
+    provider: "cursor",
+    available: true,
+    cycleStart: CYCLE_START,
+    cycleEnd: CYCLE_END,
+    // The two Spending-page buckets; the blended included-usage pool travels
+    // as the money fields below, never as a window.
+    cursorModels: {
+      usedPercent: 6.0925,
+      resetsAt: CYCLE_END,
+      durationMinutes: CYCLE_MINUTES,
+    },
+    otherModels: {
+      usedPercent: 38.446,
+      resetsAt: CYCLE_END,
+      durationMinutes: CYCLE_MINUTES,
+    },
+    includedLimitUsd: 400,
+    usedUsd: 314.08,
+    remainingUsd: 85.92,
+    bonusUsedUsd: null,
+    onDemandLimitType: "user",
+    // Cents on the wire: a $1 on-demand limit arrives as individualLimit 100.
+    onDemandLimitUsd: 1,
+    onDemandUsedUsd: null,
+    onDemandRemainingUsd: 1,
+    displayMessage: "You've used 79% of your included usage",
+  } as const;
+
+  // The exact row a pre-Cursor host returns for cursor today.
+  const cursorUnsupported = {
+    provider: "cursor",
+    available: false,
+    reason: "unsupported_provider",
+  } as const;
+
+  it("rides the live 4.0 line but not the frozen 3.0 one", () => {
+    expect(providerRateLimitsSchema.parse(cursorAvailable)).toEqual(
+      cursorAvailable,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorAvailable,
+      }),
+    ).toMatchObject({ providerRateLimits: cursorAvailable });
+    expect(() =>
+      rateLimitUsageResponseSchemaV30.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorAvailable,
+      }),
+    ).toThrow();
+  });
+
+  // The wire-boundary invariant: the host synthesizes each window's reset
+  // FROM the cycle end, so they can never disagree on the same payload.
+  it("rejects a measured bucket whose resetsAt disagrees with cycleEnd", () => {
+    for (const key of ["cursorModels", "otherModels"] as const) {
+      expect(() =>
+        providerRateLimitsSchema.parse({
+          ...cursorAvailable,
+          [key]: { ...cursorAvailable[key], resetsAt: CYCLE_END + 1 },
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("accepts an unmeasured snapshot that keeps only the cycle bounds", () => {
+    const unmeasured = {
+      ...cursorAvailable,
+      cursorModels: null,
+      otherModels: null,
+      includedLimitUsd: null,
+      usedUsd: null,
+      remainingUsd: null,
+    };
+    expect(providerRateLimitsSchema.parse(unmeasured)).toEqual(unmeasured);
+  });
+
+  it("degrades a cursor-available snapshot through the 4.0 -> 3.0 bridge", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorAvailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
+    expect(() =>
+      rateLimitUsageResponseSchemaV30.parse(result.value),
+    ).not.toThrow();
+  });
+
+  // `"cursor"` is in every frozen provider enum (it long predates Hermes/omp),
+  // so the degraded row must reparse cleanly all the way down - this is what
+  // lets the arm ride 4.0 instead of forcing a new major.
+  it("degrades cursor down the 4.0 -> 2.1 and 4.0 -> 1.2 bridges too", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: cursorAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeResponse(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
+    }
+  });
+
+  it("leaves an already-unavailable cursor snapshot untouched", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorUnsupported,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
   });
 });

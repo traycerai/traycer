@@ -3,11 +3,13 @@ import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { DICTATION_ACTION_ID } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * Presentation-only control bundle the composer hands to the toolbar so the mic
  * button stays a dumb view over the dictation hook's state. The recording timer
@@ -48,27 +50,37 @@ export function ComposerMicButton({
   const isRecording = state === "recording";
   const label = labelFor(state);
   // Surface the (live, rebindable) shortcut in the tooltip when idle so it's
-  // discoverable; omit it if the user has unbound the action.
+  // discoverable; omit it where the action is unbound, or where shortcut hints
+  // are suppressed - the tooltip then carries the plain action label.
   const boundChord = useBindingForAction(DICTATION_ACTION_ID);
-  const hint = boundChord === null ? null : formatChordForDisplay(boundChord);
+  const hint =
+    boundChord === null || !shortcutHintsVisible()
+      ? null
+      : formatChordForDisplay(boundChord);
   const title =
     (state === "idle" || state === "error") && hint !== null
       ? `${label} (${hint})`
       : label;
 
   return (
-    <ToolbarIconButton
-      aria-label={label}
-      title={title}
-      aria-pressed={isRecording}
-      onClick={onToggle}
-      className={cn(
-        isRecording &&
-          "bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
-      )}
+    <TooltipWrapper
+      label={title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <MicButtonIcon isBusy={isBusy} isRecording={isRecording} />
-    </ToolbarIconButton>
+      <ToolbarIconButton
+        aria-label={label}
+        aria-pressed={isRecording}
+        onClick={onToggle}
+        className={cn(
+          isRecording &&
+            "bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
+        )}
+      >
+        <MicButtonIcon isBusy={isBusy} isRecording={isRecording} />
+      </ToolbarIconButton>
+    </TooltipWrapper>
   );
 }
 
@@ -153,15 +165,22 @@ export function ComposerMicPreparing({
   // gets no pointer events). Put the tooltip on a wrapping span and make the
   // button `pointer-events-none` so the hover lands on the span.
   return (
-    <span title={label} className="inline-flex">
-      <ToolbarIconButton
-        aria-label={label}
-        disabled
-        aria-busy
-        className="pointer-events-none text-muted-foreground disabled:opacity-100"
-      >
-        <MicProgressRing progress={progress} />
-      </ToolbarIconButton>
-    </span>
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex">
+        <ToolbarIconButton
+          aria-label={label}
+          disabled
+          aria-busy
+          className="pointer-events-none text-muted-foreground disabled:opacity-100"
+        >
+          <MicProgressRing progress={progress} />
+        </ToolbarIconButton>
+      </span>
+    </TooltipWrapper>
   );
 }

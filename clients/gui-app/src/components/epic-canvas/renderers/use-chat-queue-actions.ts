@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  isChatRunInProgress,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import {
   decideSteerSettings,
   type SteerSettingsDecision,
@@ -53,15 +57,15 @@ export interface ChatQueueActionsInput {
 }
 
 export interface ChatQueueActionsResult {
-  readonly editQueuedItem: (item: ChatQueuedItem) => void;
+  readonly editQueuedItem: (item: ChatQueuedPromptItem) => void;
   readonly cancelQueuedItem: (item: ChatQueuedItem) => void;
-  readonly abortSteerQueuedItem: (item: ChatQueuedItem) => void;
+  readonly abortSteerQueuedItem: (item: ChatQueuedPromptItem) => void;
   readonly cancelQueueEditMode: () => void;
   readonly reorderQueuedItem: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly steerQueuedItemNow: (item: ChatQueuedItem) => void;
+  readonly steerQueuedItemNow: (item: ChatQueuedPromptItem) => void;
   readonly handleComposerSettingsChange: (settings: ChatRunSettings) => void;
   readonly steerRestart: {
     readonly open: boolean;
@@ -123,7 +127,7 @@ export function useChatQueueActions(
   }, [clearDraftContent, nodeId, replaceDraftContent]);
 
   const editQueuedItem = useCallback(
-    (item: ChatQueuedItem): void => {
+    (item: ChatQueuedPromptItem): void => {
       if (item.delivery === "same_turn") {
         const actionId = chatActions.queueCancel(item.queueItemId);
         if (actionId === null) return;
@@ -241,6 +245,9 @@ export function useChatQueueActions(
     (settings: ChatRunSettings): void => {
       const permissionModeChanged =
         settings.permissionMode !== currentComposerSettings.permissionMode;
+      const profileChanged =
+        settings.profileId !== currentComposerSettings.profileId &&
+        settings.harnessId === currentComposerSettings.harnessId;
       setEpicRunSettings(currentEpicId, settings, Date.now());
       handle.store.getState().setCurrentComposerSettings(settings);
       // Durable sync: the host's per-chat settings must not lag the composer,
@@ -250,20 +257,39 @@ export function useChatQueueActions(
       // settings. Exclude the item open for editing (it commits on submit); the
       // store also skips no-op updates and when there are no pending items.
       chatActions.restampQueuedItemSettings(settings, activeEditingQueueItemId);
-      // Read the live turn at call time (see steerQueuedItemNow): closing over the
-      // per-snapshot `state.activeTurn` object would re-create this callback every
-      // streamed token → lowerComposer → composerModel churn → composer re-render.
+      // Both live-turn forwards below read store state at call time (see
+      // steerQueuedItemNow): closing over per-snapshot objects would
+      // re-create this callback every streamed token → lowerComposer →
+      // composerModel churn → composer re-render. Both gate on `runStatus`
+      // rather than `activeTurn`: the pre-spawn window they target begins at
+      // accept, before an activeTurn is broadcast, and the host honors both
+      // updates through that whole window (`turnActivating` onward).
       if (
-        handle.store.getState().activeTurn !== null &&
-        permissionModeChanged
+        permissionModeChanged &&
+        isChatRunInProgress(handle.store.getState().runStatus)
       ) {
         chatActions.updateActivePermissionMode(settings.permissionMode);
+      }
+      // Narrow in-flight profile switch (same shape as the permission-mode
+      // update above): a same-harness profile change while a run is in
+      // progress is forwarded so a turn still parked on worktree setup
+      // adopts the switched profile before it spawns, instead of erroring
+      // on the rate-limited profile the user just moved off. A
+      // cross-harness change is NOT a profile switch (profile ids are
+      // harness-scoped) - the full tuple on the next send covers it.
+      if (
+        profileChanged &&
+        isChatRunInProgress(handle.store.getState().runStatus)
+      ) {
+        chatActions.updateActiveProfile(settings.harnessId, settings.profileId);
       }
     },
     [
       activeEditingQueueItemId,
       chatActions,
       currentComposerSettings.permissionMode,
+      currentComposerSettings.profileId,
+      currentComposerSettings.harnessId,
       currentEpicId,
       handle.store,
       persistChatRunSettings,

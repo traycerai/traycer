@@ -1,22 +1,28 @@
-import { AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
+import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
+import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
+import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
-import { SegmentCard } from "./segment-card";
+import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 
 /**
  * Lean marker at the head of an AUTONOMOUS turn (one with no user message),
- * naming which backgrounded command/Monitor/subagent completion or scheduled
+ * naming which backgrounded command/shell/subagent completion or scheduled
  * wakeup woke the agent - so the resume reads as a consequence, not an abrupt
  * reply.
  *
- * - Command / monitor / wakeup triggers: rendered as cards that lazy-fetch
+ * - Command / shell / wakeup triggers: rendered as cards that lazy-fetch
  *   output on expand when an output file is available.
  * - Subagent triggers with a result summary: rendered as expandable cards
  *   showing the full markdown result.
@@ -95,7 +101,7 @@ function ResumeCompletionCard(props: {
 
   // Non-subagent triggers only have something to reveal when there's a captured
   // output file - without one the body is just "Output file unavailable." every
-  // time, so collapse to a static single-row card. Monitor and wakeup triggers
+  // time, so collapse to a static single-row card. Shell and wakeup triggers
   // do not normally have capturable output files; subagents always have a
   // markdown result to show.
   const expandable = trigger.kind === "subagent" || trigger.outputFile !== null;
@@ -106,7 +112,7 @@ function ResumeCompletionCard(props: {
         open={open}
         onOpenChange={setOpen}
         header={header}
-        headerAction={null}
+        headerAction={<ResumeManagedCommandDoor trigger={props.trigger} />}
         collapsedPreview={preview}
         body={body}
         tone="default"
@@ -140,11 +146,52 @@ function ResumeCompletionCardBody(props: {
   );
 }
 
+/**
+ * Opens the output window for the command whose delivery woke this turn
+ * (`UI.md` §5). Absent on an older trigger that carries no command id - there
+ * is nothing to open, and a dead button would be worse than none.
+ *
+ * The same door the start and restart cards use, presence gate included: this
+ * card outlives its shell too, and a live button on a deleted one would open -
+ * or drag onto the canvas - a tile for output that no longer exists.
+ */
+function ResumeManagedCommandDoor(props: {
+  readonly trigger: AutonomousResumeTrigger;
+}) {
+  const managedCommand = props.trigger.managedCommand;
+  const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
+  const presence = useManagedCommandPresence({
+    epicId,
+    commandId: managedCommand?.commandId ?? "",
+    owner: useMaybeChatTranscript(),
+  });
+  const openOutput = useManagedCommandDoor();
+  if (managedCommand === null || openOutput === null) return null;
+  return (
+    <SegmentCardHeaderActionCell>
+      <ManagedCommandTranscriptDoor
+        commandId={managedCommand.commandId}
+        gone={presence.kind === "absent"}
+        onOpen={openOutput}
+        testId={`resume-managed-command-door-${props.trigger.blockId}`}
+      />
+    </SegmentCardHeaderActionCell>
+  );
+}
+
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
-
-  const noun =
-    trigger.mcp === null ? resumeKindTitle(trigger.kind) : "MCP tool";
+  const noun = resumeNoun(trigger);
+  // A producer that is still running has no terminal outcome: `status` is
+  // carrying its least-wrong placeholder for readers that predate `live`, and
+  // showing it here would tell the user the command finished when it has not.
+  // The NOUN is still accurate though - the generic "Command" is only for a
+  // legacy trigger that names no kind at all, not for every live one.
+  if (trigger.live) {
+    return trigger.managedCommand === null
+      ? "Command still running"
+      : `${noun} still running`;
+  }
   switch (trigger.status) {
     case "completed":
       return `${noun} completed`;
@@ -153,6 +200,19 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
     case "stopped":
       return `${noun} stopped`;
   }
+}
+
+function resumeNoun(trigger: AutonomousResumeTrigger): string {
+  // A trigger WITH a managed-command block names a Traycer shell, so it is
+  // named the way every other shell surface names one - by its monitor flag. A
+  // divider persisted before the flag existed reads as `false`, so an old chat
+  // says Shell rather than guessing at a watcher.
+  const managedCommand = trigger.managedCommand;
+  if (managedCommand !== null) {
+    return managedCommandNoun(managedCommand.monitoring);
+  }
+  if (trigger.mcp !== null) return "MCP tool";
+  return resumeKindTitle(trigger.kind);
 }
 
 function wakeupStatusTitle(status: AutonomousResumeTrigger["status"]): string {
@@ -170,6 +230,13 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
   switch (kind) {
     case "command":
       return "Command";
+    // NOT the Traycer shell entity: a trigger with no `managedCommand` block
+    // that still says "monitor" is the harness's OWN background task - Claude
+    // Code's native Monitor tool - and keeps that tool's real name. Traycer
+    // shells are titled through `resumeNoun`'s `managedCommand` branch, which
+    // now reaches the same word for a watching shell; the two dividers still
+    // differ where it counts, since only a Traycer shell offers a door into
+    // its output window.
     case "monitor":
       return "Monitor";
     case "subagent":
@@ -181,6 +248,8 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
 
 function resumeStatusIcon(trigger: AutonomousResumeTrigger): ReactNode {
   const className = "size-3.5 shrink-0 text-foreground/60";
+  // Neither a success check nor a failure cross: nothing has settled yet.
+  if (trigger.live) return <Activity className={className} aria-hidden />;
   if (trigger.status !== "completed") {
     return <XCircle className={className} aria-hidden />;
   }
@@ -205,6 +274,7 @@ function ResumeResultPanel(props: { readonly result: string }) {
           markdown={props.result}
           proseSize="compact"
           quotable={false}
+          components={null}
         />
       </div>
     </SegmentPanel>

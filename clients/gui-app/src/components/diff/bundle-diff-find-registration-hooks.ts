@@ -49,6 +49,16 @@ export interface BundleDiffFindRegistrationContextValue {
     state: BundleDiffFindCoverageState,
   ) => void;
   readonly registerLoadedPatch: (entry: BundleDiffFindLoadedPatchInput) => void;
+  /**
+   * Drop a retained patch. A loaded patch outlives its section on purpose
+   * (see `registerLoadedPatch`), and takes precedence over any coverage
+   * state in the coverage counts - so a section whose LATER request for the
+   * same content fails ("Load Full" past a truncation, a refetch) must
+   * unregister the bytes it no longer renders, or find keeps matching text
+   * that is not in the DOM and reports the file as truncated instead of
+   * failed. Idempotent: an unknown file id is a no-op.
+   */
+  readonly unregisterLoadedPatch: (fileId: string) => void;
 }
 
 interface BundleDiffFindSessionState {
@@ -61,6 +71,7 @@ const NOOP_CONTEXT: BundleDiffFindRegistrationContextValue = {
   notifySectionMounted: () => undefined,
   registerCoverageState: () => undefined,
   registerLoadedPatch: () => undefined,
+  unregisterLoadedPatch: () => undefined,
 };
 
 export const BundleDiffFindRegistrationContext =
@@ -175,13 +186,38 @@ export function useRegisterBundleDiffTileFindAdapter(args: {
     [args.contentIdentity],
   );
 
+  const unregisterLoadedPatch = useCallback(
+    (fileId: string): void => {
+      setSession((current) =>
+        ensureSession(current, args.contentIdentity, (next) => {
+          // Same identity discipline as registration: only a real removal
+          // may churn `loadedPatches` (the source memo keys on it).
+          if (!next.loadedPatches.has(fileId)) return next;
+          const loadedPatches = new Map(next.loadedPatches);
+          loadedPatches.delete(fileId);
+          return {
+            ...next,
+            loadedPatches,
+          };
+        }),
+      );
+    },
+    [args.contentIdentity],
+  );
+
   return useMemo(
     () => ({
       notifySectionMounted,
       registerCoverageState,
       registerLoadedPatch,
+      unregisterLoadedPatch,
     }),
-    [notifySectionMounted, registerCoverageState, registerLoadedPatch],
+    [
+      notifySectionMounted,
+      registerCoverageState,
+      registerLoadedPatch,
+      unregisterLoadedPatch,
+    ],
   );
 }
 

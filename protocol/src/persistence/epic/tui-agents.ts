@@ -37,8 +37,9 @@ import { worktreeBindingWorkspaceModeSchema } from "../../host/worktree-schemas"
  * non-empty title is itself the "already titled" marker and is never
  * overwritten.
  *
- * No transcript fields: TUI scrollback lives in the host's PTY buffer and
- * is not part of the cloud-synced epic record.
+ * No transcript fields: supported TUI transcripts are read from host-local
+ * provider session history and are not part of the cloud-synced epic record.
+ * Live terminal scrollback is a separate, ephemeral PTY concern.
  */
 
 const baseTuiAgentFields = {
@@ -62,6 +63,54 @@ const baseTuiAgentFields = {
   // runs on. `null` = the ambient/host login, so records persisted before
   // profiles existed still parse cleanly. See the multi-profile decision log.
   profileId: z.string().nullable().default(null).catch(null),
+  // Wall-clock ms when this terminal-agent session was archived, or `null`
+  // while active. Same host-backed archive flag as `chatSchema.archivedAt`;
+  // a single `epic.setChatArchived` RPC keyed by id covers chats and TUI
+  // agents alike. Defaulted so records persisted before archiving existed
+  // parse unchanged.
+  archivedAt: z.number().nullable().default(null),
+  // Durable native-fork provenance: the SOURCE harness session id an
+  // `agent.fork`-created record must resume-and-fork from on its FIRST real
+  // launch (headless A2A send or GUI open), since the fork service persists
+  // this record before any provider fork actually runs - `terminalShellArgs`
+  // above is only a cache of that prepare call, never executed. `null` for
+  // an ordinary (non-fork) agent, and once again once the destination
+  // session's provider transcript is observed to exist on disk - the
+  // provider-observable signal that establishment happened, so a launch
+  // path stops re-forking into an already-diverged session. Retained across
+  // a spawn/provider failure (no transcript yet) so a retry always re-forks
+  // instead of silently starting fresh. Additive/defaulted so records
+  // persisted before this field existed still parse. See the durable-fork
+  // decision log (tech plan governing mechanism 1).
+  pendingForkSourceHarnessSessionId: z
+    .string()
+    .nullable()
+    .default(null)
+    .catch(null),
+  // The user-facing provider handle, pinned once and rendered from this
+  // record forever (see the prompt-freeze decision log). Tristate, and the
+  // two "unset" states are NOT equivalent: ABSENT (the raw persisted key is
+  // missing - records written before this field existed) means "not pinned
+  // yet", read lazily and pinned on the next prompt build; an explicit
+  // `null` means "resolve failed at creation" and is final - render no
+  // handle sentence for this agent, permanently, never retried. A fork
+  // copies the source record's value rather than re-resolving. Defaulted
+  // (not just nullable) so an absent key still parses.
+  pinnedUserProviderHandle: z.string().nullable().default(null).catch(null),
+  // Digest cursor for the role-registry delivery channel (see
+  // roles-snapshot-delivery): the hash of the canonically-serialized claims
+  // last delivered to this agent. Unlike `pinnedUserProviderHandle`, an
+  // absent key and an explicit `null` are equivalent here - both read as
+  // "never delivered" (a brand-new agent, or a record persisted before this
+  // field existed). Compared against the current registry's digest to
+  // decide whether the next prompt pull owes a fresh snapshot. A third
+  // value is possible: the host may stamp a reserved sentinel string that
+  // can never equal a real content digest, meaning "a push was attempted
+  // but not confirmed delivered" - the next pull must treat the cursor as
+  // behind and deliver a fresh truth snapshot before stamping a clean
+  // digest again. The sentinel's literal value is host-owned, not part of
+  // this contract.
+  lastDeliveredRolesDigest: z.string().nullable().default(null).catch(null),
 } as const;
 
 export const claudeTuiAgentSchema = z.object({
@@ -94,13 +143,12 @@ export const opencodeTuiAgentSchema = z.object({
 });
 export type OpencodeTuiAgent = z.infer<typeof opencodeTuiAgentSchema>;
 
+// Reserved for backward compatibility with the previously released persisted
+// union and for planned Cursor TUI support. Current runtime catalogs do not
+// advertise this surface, so normal product flows do not create these records.
 export const cursorTuiAgentSchema = z.object({
   harnessId: z.literal("cursor"),
   ...baseTuiAgentFields,
-  // The chat id minted by `cursor-agent create-chat` and resumed with
-  // `cursor-agent --resume <id>`. Minting is synchronous but can fail
-  // (offline/unauthenticated); null then means "no chat yet - re-mint on the
-  // next launch" rather than persisting a bogus, non-resumable id.
   harnessSessionId: z.string().nullable().catch(null),
 });
 export type CursorTuiAgent = z.infer<typeof cursorTuiAgentSchema>;

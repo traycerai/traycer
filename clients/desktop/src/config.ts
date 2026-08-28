@@ -27,11 +27,19 @@
  * whether or not the build happens to be packaged.
  */
 
+// RELATIVE on purpose, not `@traycer-clients/shared/...`: the Vite renderer
+// config transitively loads this module (vite.renderer.config.ts -> the CSP
+// module -> here), and Vite's config loader inlines relative imports while
+// EXTERNALIZING bare specifiers - which Node's require then cannot resolve to
+// this workspace's TypeScript source. The app builds resolve both forms; the
+// config-loader context resolves only this one.
 import {
   DEV_AUTHN_BASE_URL_ENV,
   DEV_CLOUD_UI_BASE_URL_ENV,
+  DEV_RELAY_BASE_URL_ENV,
   devBackendUrlFromEnv,
-} from "@traycer-clients/shared/platform/dev-backend-urls";
+  devRelayBaseUrlFromEnv,
+} from "../../shared/platform/dev-backend-urls";
 
 export type Environment = string;
 
@@ -45,6 +53,17 @@ const bakedConfig = {
   version: "0.0.0-dev",
   authnBaseUrl: "https://authn.traycer.ai",
   cloudUiBaseUrl: "https://platform.traycer.ai",
+  // Remote Host Support (ticket T14): the relay worker's WebSocket attach
+  // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own
+  // `relayAttachUrl` (`traycer-host/src/config.ts`). Committed directly like
+  // `authnBaseUrl`/`cloudUiBaseUrl` (the OSS build ships production endpoints
+  // in source); not stamped per-environment by the deploy script. Overridable
+  // in dev via `TRAYCER_DEV_RELAY_BASE_URL` (see `devRelayBaseUrlFromEnv`
+  // below) so `make dev-remote` can point it at a local relay worker.
+  // Served via Cloudflare for SaaS custom hostnames: traycer.ai DNS stays on
+  // GCP Cloud DNS (CNAME into the helper zone) and a per-hostname Worker
+  // route delivers the traffic to the relay worker.
+  relayBaseUrl: "wss://relay.traycer.ai/attach",
   // Sentry crash-reporting DSN for the main process. Empty for local
   // (reporting disabled); the deploy script bakes the staging/production DSN.
   sentryDsn: "",
@@ -78,6 +97,12 @@ export const config = {
     bakedConfig.environment,
     DEV_CLOUD_UI_BASE_URL_ENV,
     bakedConfig.cloudUiBaseUrl,
+    process.env,
+  ),
+  relayBaseUrl: devRelayBaseUrlFromEnv(
+    bakedConfig.environment,
+    DEV_RELAY_BASE_URL_ENV,
+    bakedConfig.relayBaseUrl,
     process.env,
   ),
 };

@@ -77,12 +77,28 @@ describe("resolveProviderRateLimitViewState", () => {
     expect(state).toEqual({ kind: "empty" });
   });
 
-  it("is error when the last fetch attempt threw", () => {
+  it("retains cached data when a later refresh attempt throws, marked degraded with no specific reason", () => {
     const state = resolveProviderRateLimitViewState({
       isPending: false,
       isFetching: false,
       isError: true,
       envelope: envelopeOf(READY),
+    });
+    expect(state).toEqual({
+      kind: "data",
+      data: READY,
+      degraded: true,
+      degradedReason: null,
+      lastGoodAt: 1000,
+    });
+  });
+
+  it("is error when a refresh throws before any successful reading", () => {
+    const state = resolveProviderRateLimitViewState({
+      isPending: false,
+      isFetching: false,
+      isError: true,
+      envelope: undefined,
     });
     expect(state).toEqual({ kind: "error" });
   });
@@ -94,21 +110,33 @@ describe("resolveProviderRateLimitViewState", () => {
       isError: false,
       envelope: envelopeOf(READY),
     });
-    expect(state).toEqual({ kind: "data", data: READY });
+    expect(state).toEqual({
+      kind: "data",
+      data: READY,
+      degraded: false,
+      degradedReason: null,
+      lastGoodAt: 1000,
+    });
   });
 
-  it("is data for an authoritative unavailable reason (replaces, not retained)", () => {
+  it("is data for an authoritative unavailable reason (replaces, not retained), with no stale treatment or timestamp", () => {
     const state = resolveProviderRateLimitViewState({
       isPending: false,
       isFetching: false,
       isError: false,
       envelope: envelopeOf(UNAVAILABLE),
     });
-    expect(state).toEqual({ kind: "data", data: UNAVAILABLE });
+    expect(state).toEqual({
+      kind: "data",
+      data: UNAVAILABLE,
+      degraded: false,
+      degradedReason: null,
+      lastGoodAt: null,
+    });
   });
 
   it.each(["usage_fetch_failed", "timeout", "connection_failed"] as const)(
-    "retains the last good reading through a transient failure (%s)",
+    "retains the last good reading through a transient failure (%s), marked degraded with the original lastGoodAt",
     (reason) => {
       const state = resolveProviderRateLimitViewState({
         isPending: false,
@@ -121,11 +149,17 @@ describe("resolveProviderRateLimitViewState", () => {
           lastFailureAt: 2_000,
         },
       });
-      expect(state).toEqual({ kind: "data", data: ANOTHER_READY });
+      expect(state).toEqual({
+        kind: "data",
+        data: ANOTHER_READY,
+        degraded: true,
+        degradedReason: reason,
+        lastGoodAt: 1000,
+      });
     },
   );
 
-  it("shows the transient reason itself when there's no lastGood yet (cold-after-reload)", () => {
+  it("shows the transient reason itself when there's no lastGood yet (cold-after-reload), with no stale treatment", () => {
     const transient: ProviderRateLimits = {
       provider: "codex",
       available: false,
@@ -142,7 +176,37 @@ describe("resolveProviderRateLimitViewState", () => {
         lastFailureAt: 1_000,
       },
     });
-    expect(state).toEqual({ kind: "data", data: transient });
+    expect(state).toEqual({
+      kind: "data",
+      data: transient,
+      degraded: false,
+      degradedReason: null,
+      lastGoodAt: null,
+    });
+  });
+
+  // The Settings half of the still-running suppression. Suppressing `isError`
+  // alone left this resolver falling through to `empty`, so the usage card
+  // rendered BLANK for the whole collection window and then popped to data -
+  // the silent half of the transition the suppression exists to remove.
+  it("is loading, not empty, while a suppressed read is being collected", () => {
+    const state = resolveProviderRateLimitViewState({
+      isPending: false,
+      isFetching: true,
+      isError: false,
+      envelope: undefined,
+    });
+    expect(state.kind).toBe("loading");
+  });
+
+  it("is still empty when nothing is in flight and nothing failed", () => {
+    const state = resolveProviderRateLimitViewState({
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      envelope: undefined,
+    });
+    expect(state.kind).toBe("empty");
   });
 });
 
@@ -177,6 +241,21 @@ describe("resolvePopoverProviderRateLimitState", () => {
     expect(state.kind).toBe("error");
   });
 
+  // The COLD half of the still-running suppression. With no envelope there is
+  // nothing to fall back on, so inferring the failure from "idle with no data"
+  // reported one even though the caller had already suppressed it - and then
+  // went quietly green when the delayed collection landed. That is the exact
+  // visible-failure-then-silent-success transition the suppression removes.
+  it("stays cold when an idle no-data read had its failure suppressed", () => {
+    const state = resolvePopoverProviderRateLimitState({
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      envelope: undefined,
+    });
+    expect(state.kind).toBe("cold");
+  });
+
   it("surfaces the provider's own authoritative unavailable reason, not retained", () => {
     const state = resolvePopoverProviderRateLimitState({
       isPending: false,
@@ -184,7 +263,11 @@ describe("resolvePopoverProviderRateLimitState", () => {
       isError: false,
       envelope: envelopeOf(UNAVAILABLE),
     });
-    expect(state).toEqual({ kind: "unavailable", reason: "cli_not_found" });
+    expect(state).toEqual({
+      kind: "unavailable",
+      provider: "codex",
+      reason: "cli_not_found",
+    });
   });
 
   it("is ready and not degraded for a fresh available snapshot", () => {
@@ -252,7 +335,11 @@ describe("resolvePopoverProviderRateLimitState", () => {
         lastFailureAt: 1_000,
       },
     });
-    expect(state).toEqual({ kind: "unavailable", reason: "timeout" });
+    expect(state).toEqual({
+      kind: "unavailable",
+      provider: "codex",
+      reason: "timeout",
+    });
   });
 });
 
@@ -332,6 +419,72 @@ describe("resolveProviderPlanLabel", () => {
         available: true,
         creditBalance: null,
         passState: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns Grok's subscriptionTier verbatim (not title-cased)", () => {
+    // "SuperGrok" is a branded display token - titleCaseFromToken would lower
+    // the intra-word capital to "Supergrok".
+    expect(
+      resolveProviderPlanLabel({
+        provider: "grok",
+        available: true,
+        subscriptionTier: "SuperGrok",
+        periodType: null,
+        periodStart: null,
+        periodEnd: null,
+        period: null,
+        monthlyLimit: null,
+        onDemandCap: null,
+        onDemandUsed: null,
+        prepaidBalance: null,
+      }),
+    ).toBe("SuperGrok");
+  });
+
+  it("returns Go for an available OpenCode snapshot", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "opencode",
+        available: true,
+        credentialGeneration: "gen-1",
+        fiveHour: {
+          status: "ok",
+          usedPercent: 10,
+          resetsAt: 1,
+          durationMinutes: 300,
+        },
+        weekly: {
+          status: "ok",
+          usedPercent: 20,
+          resetsAt: 1,
+          durationMinutes: 10_080,
+        },
+        monthly: {
+          status: "ok",
+          usedPercent: 30,
+          resetsAt: 1,
+          durationMinutes: null,
+        },
+      }),
+    ).toBe("Go");
+  });
+
+  it("is null when Grok did not report a subscriptionTier", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "grok",
+        available: true,
+        subscriptionTier: null,
+        periodType: null,
+        periodStart: null,
+        periodEnd: null,
+        period: null,
+        monthlyLimit: null,
+        onDemandCap: null,
+        onDemandUsed: null,
+        prepaidBalance: null,
       }),
     ).toBeNull();
   });

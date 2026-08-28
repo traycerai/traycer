@@ -10,7 +10,7 @@
 
 export const PERSIST_PREFIX = "traycer-gui-app";
 
-// Seven stores bucket their key by the signed-in identity; an absent/empty
+// Account-scoped stores bucket their key by the signed-in identity; an absent/empty
 // identity collapses to the shared anonymous bucket. Preserved verbatim from
 // the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
 export const scopeBucket = (value: string | null): string =>
@@ -23,24 +23,29 @@ export const scopedPersistKey = (name: string, ...segments: string[]): string =>
 
 // ── Scoped builders (reproduce today's exact strings) ──────────────────────
 // Each scoped store namespaces its key by the signed-in identity; the bridges
-// pass the account email (or `null` → the shared `anon` bucket). The first
-// three are named `email` because that is literally what their bridges pass;
-// canvas/open-epic take a neutral `identity` (they receive the same email at
-// runtime — the older `userId` name was a misnomer). The registry never changes
-// WHICH value a store passes, so keys stay byte-identical; only construction is
-// centralized. Unifying the parameter naming further is a non-goal.
+// pass the CANONICAL `profile.userId` (or `null` → the shared `anon` bucket).
+// An email is passed to a builder only ONCE per sign-in, as a bridge's
+// `legacyName` argument to `retargetPersistedStore` — a one-shot migration
+// name for adopting a pre-userId-scoping bucket, never an ongoing identity.
+// The registry never changes WHICH value a store passes, so keys stay
+// byte-identical; only construction is centralized.
+//
+// Shared shape: every builder below takes `identity: string | null` — the
+// canonical user id, or `null` for the anonymous bucket. A caller may also
+// pass an email string here, but ONLY as the one-shot `legacyName` described
+// above; it is not a second kind of identity the builder understands.
 
-export const composerRunSettingsKey = (email: string | null): string =>
-  scopedPersistKey("composer-run-settings", scopeBucket(email));
+export const composerRunSettingsKey = (identity: string | null): string =>
+  scopedPersistKey("composer-run-settings", scopeBucket(identity));
 
-export const composerHarnessMemoryKey = (email: string | null): string =>
-  scopedPersistKey("composer-harness-memory", scopeBucket(email));
+export const composerHarnessMemoryKey = (identity: string | null): string =>
+  scopedPersistKey("composer-harness-memory", scopeBucket(identity));
 
-export const worktreeIntentMemoryKey = (email: string | null): string =>
-  scopedPersistKey("worktree-intent-memory", scopeBucket(email));
+export const worktreeIntentMemoryKey = (identity: string | null): string =>
+  scopedPersistKey("worktree-intent-memory", scopeBucket(identity));
 
-export const worktreeIntentStagingKey = (email: string | null): string =>
-  scopedPersistKey("worktree-intent-staging", scopeBucket(email));
+export const worktreeIntentStagingKey = (identity: string | null): string =>
+  scopedPersistKey("worktree-intent-staging", scopeBucket(identity));
 
 export const epicCanvasKey = (identity: string | null): string =>
   scopedPersistKey("epic-canvas", scopeBucket(identity));
@@ -48,14 +53,115 @@ export const epicCanvasKey = (identity: string | null): string =>
 export const landingTerminalsKey = (identity: string | null): string =>
   scopedPersistKey("landing-terminals", scopeBucket(identity));
 
+// Per-surface host pins (git-diff / file-tree / new-terminal / composer).
+// Identity-scoped like composer run settings (G1): a pin names an account's
+// host id, so another account must never inherit it across a user switch.
+export const surfaceHostSelectionKey = (identity: string | null): string =>
+  scopedPersistKey("surface-host-selection", scopeBucket(identity));
+
 // Arg order is `(identity, epicId)` but the emitted string keeps today's
 // `…:open-epic:{identityBucket}:{epicId}` order (the current store's local
 // `persistKey(epicId, userId)` emitted exactly this).
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
 
+// The composer's PR/Issue mention filters, sticky per (task, section).
+// Identity-scoped like the run settings above, NOT like the host picker: a
+// stored repository selection names a GitHub host, owner and repo - private
+// coordinates for a private repository - so an identity-free bucket would
+// leave them readable after sign-out and hand them to the next account on
+// this profile. The lifecycle bridge retargets on sign-in and wipes the
+// bucket on sign-out, same as composer run settings.
+export const githubMentionFiltersKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
+
+// The hostId this machine's OWN local host last published. Unscoped and
+// identity-free like the picker memory: it is a fact about this machine, not
+// about who is signed in. The directory uses it to keep the machine's own
+// host out of the remote arm while the local host is booting - the boot
+// window is exactly when no live local snapshot exists to tell it apart.
+export const lastLocalHostIdKey = (): string =>
+  persistKey("last-local-host-id");
+
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
+
+export const appLocalNotificationDisplayReceiptPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationDisplayReceiptNotificationPrefix = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.notificationId),
+  );
+
+export const appLocalNotificationDisplayReceiptKey = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+  readonly updatedAt: number;
+}): string =>
+  `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
+
+export const appLocalNotificationCompletionReceiptPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationCompletionReceiptHostPrefix = (input: {
+  readonly userId: string;
+  readonly originHostId: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.originHostId),
+  );
+
+export const appLocalNotificationCompletionReceiptKey = (input: {
+  readonly userId: string;
+  readonly originHostId: string;
+  readonly occurrenceKey: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.originHostId),
+    encodeURIComponent(input.occurrenceKey),
+  );
+
+// Interview answer drafts persist ONE localStorage key per (chatId, blockId)
+// instead of a single full-snapshot Zustand blob. Separate keys prevent a
+// full-map write from one window (or a stale store context) from erasing an
+// unrelated chat's draft persisted by another window — the same isolation the
+// app-local display receipts above rely on. Both segments are percent-encoded so
+// a `:` inside an id can never split the key.
+export const interviewDraftKeyPrefix = (): string =>
+  `${persistKey("interview-drafts")}:`;
+
+export const interviewDraftKey = (chatId: string, blockId: string): string =>
+  scopedPersistKey(
+    "interview-drafts",
+    encodeURIComponent(chatId),
+    encodeURIComponent(blockId),
+  );
+
+export const readingPositionKeyPrefix = (accountId: string): string =>
+  `${scopedPersistKey(
+    "reading-position",
+    encodeURIComponent(scopeBucket(accountId)),
+  )}:`;
 
 // Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
 // of per-path activity entries (worktrees-enrichment-persistence.ts). A host
@@ -68,7 +174,6 @@ export const worktreeActivityCacheKey = (hostId: string): string =>
 // launch while the live listing refetches behind it.
 export const worktreeListingCacheKey = (hostId: string): string =>
   scopedPersistKey("worktree-listing-cache", hostId);
-
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
 //   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
@@ -78,8 +183,9 @@ export const worktreeListingCacheKey = (hostId: string): string =>
 //
 // The `leaf` is the DIVERGENCE-CORRECT key leaf, not the store/file name (six
 // stores diverge — see the literals below). Non-zustand `traycer-gui-app:` keys
-// are cataloged for enumeration only; their builders are NOT refactored here.
-// Auth (`traycer.*`) keys are intentionally excluded.
+// are cataloged here too; builders may stay local to their owner unless a
+// centralized builder is useful. Auth (`traycer.*`) keys are intentionally
+// excluded.
 export type PersistStoreKind = "static" | "scoped" | "session" | "channel";
 
 export interface PersistStoreEntry {
@@ -89,7 +195,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (8) ────────────────────────────────────────────
+  // ── Scoped zustand stores (10) ───────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -118,27 +224,51 @@ export const PERSIST_STORES = [
   },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
   {
+    camelName: "surfaceHostSelection",
+    leaf: "surface-host-selection",
+    kind: "scoped",
+  },
+  {
     camelName: "appLocalNotifications",
     leaf: "app-local-notifications",
     kind: "scoped",
   },
+  { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
-  // ── Static zustand stores (18) ───────────────────────────────────────────
+  // ── Scoped non-zustand key families (1) ──────────────────────────────────
+  {
+    camelName: "appLocalNotificationCompletionReceipt",
+    leaf: "app-local-notification-completion-receipt",
+    kind: "scoped",
+  },
+
+  // ── Static zustand stores (29) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
+  // Enumerated under the `interview-drafts` leaf, but persisted as one key per
+  // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
+  // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`
+  // prefix sweep in `wipe.ts` still clears every per-draft key.
+  {
+    camelName: "interviewDraft",
+    leaf: "interview-drafts",
+    kind: "static",
+  },
   {
     camelName: "artifactReadState",
     leaf: "artifact-read-state",
     kind: "static",
   },
   { camelName: "gitPanel", leaf: "git-panel", kind: "static" },
+  { camelName: "prPresence", leaf: "pr-presence", kind: "static" },
   {
     camelName: "initialChatHandoff",
     leaf: "initial-chat-handoffs",
     kind: "static",
   },
   { camelName: "leftPanel", leaf: "left-panel", kind: "static" },
+  { camelName: "commGraphPanel", leaf: "comm-graph-panel", kind: "static" },
   { camelName: "fileTree", leaf: "file-tree", kind: "static" },
   { camelName: "historySearch", leaf: "history-search", kind: "static" },
   { camelName: "landingDraft", leaf: "draft", kind: "static" },
@@ -156,8 +286,18 @@ export const PERSIST_STORES = [
   { camelName: "settings", leaf: "settings", kind: "static" },
   { camelName: "settingsSection", leaf: "settings-section", kind: "static" },
   {
+    camelName: "worktreesSettingsView",
+    leaf: "worktrees-settings-view",
+    kind: "static",
+  },
+  {
     camelName: "rateLimitPopover",
     leaf: "rate-limit-popover",
+    kind: "static",
+  },
+  {
+    camelName: "resourceMonitor",
+    leaf: "resource-monitor",
     kind: "static",
   },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
@@ -166,10 +306,42 @@ export const PERSIST_STORES = [
     leaf: "workspace-folders",
     kind: "static",
   },
+  {
+    camelName: "folderPickerPreferences",
+    leaf: "folder-picker-preferences",
+    kind: "static",
+  },
+  {
+    camelName: "providersWorkspaceSelection",
+    leaf: "providers-workspace-selection",
+    kind: "static",
+  },
+  {
+    camelName: "providerLoginTerminals",
+    leaf: "provider-login-terminals",
+    kind: "static",
+  },
+  {
+    camelName: "setupTerminals",
+    leaf: "setup-terminals",
+    kind: "static",
+  },
+  {
+    camelName: "githubMentionFilters",
+    leaf: "github-mention-filters",
+    kind: "static",
+  },
+  {
+    camelName: "notificationsFilter",
+    leaf: "notifications-filter",
+    kind: "static",
+  },
 
-  // ── Non-zustand keys (enumeration only; builders NOT refactored here) ─────
+  // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
+  // This machine's own local host id (host-directory-service.ts).
+  { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
   {
     camelName: "consumedInitialRoute",
@@ -187,6 +359,20 @@ export const PERSIST_STORES = [
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
     kind: "channel",
+  },
+  // Ephemeral exact-turn completion acks shared across renderer windows.
+  {
+    camelName: "liveChatCompletionAcknowledgementsChannel",
+    leaf: "live-chat-completion-acknowledgements:v1",
+    kind: "channel",
+  },
+  // One monotonic key per displayed app-local notification version. Separate
+  // keys prevent an unrelated full-snapshot Zustand write in another window
+  // from erasing a receipt.
+  {
+    camelName: "appLocalNotificationDisplayReceipt",
+    leaf: "app-local-notification-display-receipt",
+    kind: "scoped",
   },
   // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
   // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.

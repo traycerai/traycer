@@ -1,3 +1,4 @@
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +15,8 @@ import {
   defineRpcContract,
 } from "@traycer/protocol/framework/index";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import {
   manifestFromSurface,
   protocolSurfaceSchema,
@@ -34,7 +37,7 @@ import type {
   WebSocketOpenEvent,
 } from "../ws-factory";
 import { WsRpcClient } from "../ws-rpc-client";
-import { HostRpcError } from "../host-messenger";
+import { HostRpcError, type HostRequestAuthority } from "../host-messenger";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -45,6 +48,7 @@ import type {
   ClientFrame,
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 /**
  * Released-peer handshake smoke: drives the REAL shipped transports
@@ -74,6 +78,17 @@ function loadBaselines(): { label: string; surfacePath: string }[] {
 }
 
 const baselines = loadBaselines();
+
+function authorityForContext(ctx: RequestContext): HostRequestAuthority {
+  return {
+    endpoint: {
+      hostId: mockLocalHostEntry.hostId,
+      websocketUrl: mockLocalHostEntry.websocketUrl,
+    },
+    bearer: ctx.credentials,
+    abortSignal: new AbortController().signal,
+  };
+}
 
 const baselineFallbackV10 = defineRpcContract({
   method: "synthetic.baselineFallback",
@@ -226,6 +241,136 @@ function intersectManifests(
   );
 }
 
+function createReleasedPeerClient(
+  bearer: string,
+  requestId: string,
+): {
+  readonly client: WsRpcClient<typeof hostRpcRegistry>;
+  readonly sockets: StubRpcWebSocket[];
+  readonly authority: HostRequestAuthority;
+} {
+  const sockets: StubRpcWebSocket[] = [];
+  const factory: IWebSocketFactory = {
+    create(): WebSocketLike {
+      const socket = new StubRpcWebSocket();
+      sockets.push(socket);
+      return socket;
+    },
+  };
+  const ctx = makeRequestContext(bearer);
+  return {
+    sockets,
+    authority: authorityForContext(ctx),
+    client: new WsRpcClient<typeof hostRpcRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostRpcRegistry,
+      requestId: () => requestId,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    }),
+  };
+}
+
+describe("host-v1.1.7 permission-mode downgrade protection", () => {
+  it("rejects agent.create@3.0 before sending to released agent.create@2.0", async () => {
+    const { client, sockets, authority } = createReleasedPeerClient(
+      "token-v1.1.7-create",
+      "req-v1.1.7-create",
+    );
+
+    const pending = client.request(
+      "agent.create",
+      {
+        senderAgentId: "agent-parent",
+        epicId: "epic-1",
+        name: null,
+        surface: "gui",
+        harnessId: "cursor",
+        model: "cursor-test",
+        agentMode: null,
+        reasoningEffort: null,
+        fastMode: null,
+        permissionMode: "full_access",
+        workspace: null,
+        profileSelection: { kind: "ambient" },
+      },
+      authority,
+    );
+    await flush();
+    const stub = sockets[0];
+    stub.fireOpen();
+    await flush();
+    const open = stub.sentFrames[0];
+    if (open.kind !== "open") throw new Error("expected open frame");
+    stub.fireMessage({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "agent.create": { major: 2, minor: 0 },
+      },
+      optionalManifest: open.optionalManifest,
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "DOWNGRADE_UNSUPPORTED" &&
+        error.message.includes("Upgrade the host")
+      );
+    });
+    expect(stub.sentFrames.map((frame) => frame.kind)).toEqual(["open"]);
+  });
+
+  it("rejects agent.configure@2.0 before sending to released agent.configure@1.0", async () => {
+    const { client, sockets, authority } = createReleasedPeerClient(
+      "token-v1.1.7-configure",
+      "req-v1.1.7-configure",
+    );
+
+    const pending = client.request(
+      "agent.configure",
+      {
+        epicId: "epic-1",
+        senderAgentId: "agent-parent",
+        agentId: "agent-target",
+        harnessId: "cursor",
+        model: "cursor-test",
+        profileSelection: { kind: "ambient" },
+        reasoningEffort: null,
+        fastMode: false,
+        permissionMode: "full_access",
+      },
+      authority,
+    );
+    await flush();
+    const stub = sockets[0];
+    stub.fireOpen();
+    await flush();
+    const open = stub.sentFrames[0];
+    if (open.kind !== "open") throw new Error("expected open frame");
+    stub.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: {
+        ...open.optionalManifest,
+        "agent.configure": { major: 1, minor: 0 },
+      },
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "DOWNGRADE_UNSUPPORTED" &&
+        error.message.includes("Upgrade the host")
+      );
+    });
+    expect(stub.sentFrames.map((frame) => frame.kind)).toEqual(["open"]);
+  });
+});
+
 describe.skipIf(baselines.length === 0)(
   "released-baseline handshake smoke (real transports vs released manifests)",
   () => {
@@ -242,16 +387,21 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof hostRpcRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: hostRpcRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         });
 
-        const pending = client.request("host.status", {});
+        const pending = client.request(
+          "host.status",
+          {},
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -299,18 +449,23 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineFallbackRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: baselineFallbackRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-fallback-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         });
 
-        const pending = client.request("synthetic.baselineFallback", {
-          label: "x",
-        });
+        const pending = client.request(
+          "synthetic.baselineFallback",
+          {
+            label: "x",
+          },
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -322,7 +477,7 @@ describe.skipIf(baselines.length === 0)(
         if (open.kind === "open") {
           expect(open.manifest["synthetic.baselineFallback"]).toBeUndefined();
           expect(open.optionalManifest?.["synthetic.baselineFallback"]).toEqual(
-            { major: 1, minor: 0 },
+            { major: 1, minor: 0, supportedMajors: [1] },
           );
         }
 
@@ -366,16 +521,21 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineUnsupportedRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: baselineUnsupportedRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-unsupported-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         });
 
-        const pending = client.request("synthetic.baselineUnsupported", {});
+        const pending = client.request(
+          "synthetic.baselineUnsupported",
+          {},
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -390,7 +550,7 @@ describe.skipIf(baselines.length === 0)(
           ).toBeUndefined();
           expect(
             open.optionalManifest?.["synthetic.baselineUnsupported"],
-          ).toEqual({ major: 1, minor: 0 });
+          ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
         }
 
         // No optionalManifest on the old ack means the optional method is
@@ -415,7 +575,10 @@ describe.skipIf(baselines.length === 0)(
         // exercises the open handshake plus a per-method check that must pass.
         const method = "epic.subscribe";
         expect(
-          buildStreamManifest(hostStreamRpcRegistry)[method],
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            SERVES_EVERY_INSTALLED_MAJOR,
+          )[method],
         ).toBeDefined();
         expect(stream[method]).toBeDefined();
 
@@ -429,10 +592,14 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsStreamClient({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: hostStreamRpcRegistry,
           endpoint: () => mockLocalHostEntry,
           bearer: () => ctx.credentials,
           auth: null,
+          hostCredentialMint: null,
+          onHostCredentialState: null,
+          evidence: NO_TRANSPORT_EVIDENCE,
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           openAckTimeoutMs: 1000,
@@ -460,7 +627,10 @@ describe.skipIf(baselines.length === 0)(
         };
         expect(open.kind).toBe("open");
         expect(open.manifest).toEqual(
-          buildStreamManifest(hostStreamRpcRegistry),
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            CLIENT_SERVED_STREAM_MAJORS,
+          ),
         );
         expect(open.optionalManifest).toBeUndefined();
 

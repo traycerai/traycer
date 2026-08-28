@@ -1,43 +1,162 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   displayAppLocalNotification,
+  displayForwardedForegroundNotification,
   playNotificationChime,
 } from "@/lib/notifications/notification-display";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
-import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
-import { useNotificationShow } from "@/hooks/notifications/use-notifications";
-import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import {
+  useMergedNotificationsActions,
+  type MergedNotificationRow,
+} from "@/stores/notifications/merged-notifications";
+import {
+  useNotificationForegroundDisplay,
+  useNotificationShow,
+} from "@/hooks/notifications/use-notifications";
+import {
+  parseForegroundAppLocalNotificationEntry,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
+import type { NotificationForegroundDisplay } from "@traycer-clients/shared/platform/runner-host";
+import {
+  appLocalDisplayDeliveryKey,
+  captureAppLocalDisplayReceiptSession,
+  hasAppLocalDisplayReceipt,
+  isAppLocalDisplayReceiptSessionCurrent,
+  recordAppLocalDisplayReceipt,
+  type AppLocalDisplayReceiptVersion,
+} from "@/lib/notifications/app-local-display-receipts";
+import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 
 export function NotificationEmissionController(): null {
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivation();
+  const actions = useMergedNotificationsActions();
+  const inFlightVersionsRef = useRef(new Set<string>());
+  const drainScheduledRef = useRef(false);
+  const onForegroundDisplay = useCallback(
+    (display: NotificationForegroundDisplay): void => {
+      const foregroundAppLocal = display.foregroundAppLocal;
+      if (foregroundAppLocal !== null) {
+        const state = useAppLocalNotificationsStore.getState();
+        const entry = parseForegroundAppLocalNotificationEntry(
+          foregroundAppLocal.entry,
+        );
+        if (
+          entry === null ||
+          state.activeUserId !== foregroundAppLocal.userId
+        ) {
+          return;
+        }
+        const version: AppLocalDisplayReceiptVersion = {
+          userId: foregroundAppLocal.userId,
+          notificationId: entry.id,
+          updatedAt: entry.updatedAt,
+        };
+        recordAppLocalDisplayReceipt(version);
+        state.mergeForegroundDisplayed(entry);
+      }
+      displayForwardedForegroundNotification(display, {
+        playChime: playNotificationChime,
+        onToastClick: (payload) =>
+          useNotificationEventsStore
+            .getState()
+            .recordInAppClick(payload, Date.now()),
+      });
+    },
+    [],
+  );
+  useNotificationForegroundDisplay(onForegroundDisplay);
   const onToastClick = useCallback(
-    (row: MergedNotificationRow, activatedAt: number): void => {
+    (row: MergedNotificationRow): void => {
       if (row.payload === null) return;
       activate({
         payload: row.payload,
-        receivedAt: activatedAt,
-        onActivated: null,
+        originHostId: row.originHostId,
+        receivedAt: row.createdAt,
+        feedId: row.feedId,
+        onResult: activationResultHandler({
+          row,
+          feedId: row.feedId,
+          surface: "toast",
+          markAsRead: actions.markAsRead,
+          onSuccess: null,
+        }),
       });
     },
-    [activate],
+    [activate, actions],
   );
 
-  useEffect(() => {
-    return useAppLocalNotificationsStore.subscribe((state, previous) => {
-      const newUnreadEntries = state.orderedIds
-        .map((id) => state.byId[id])
-        .filter((entry) => entry.readAt === null)
-        .filter((entry) => !Object.hasOwn(previous.byId, entry.id));
-      for (const entry of newUnreadEntries) {
-        displayAppLocalNotification(entry, {
-          showNotification,
-          playChime: playNotificationChime,
-          onToastClick,
-        });
-      }
-    });
+  const drainPendingNotifications = useCallback((): void => {
+    const state = useAppLocalNotificationsStore.getState();
+    const userId = state.activeUserId;
+    if (userId === null) return;
+
+    state.orderedIds
+      .map((id) => state.byId[id])
+      .filter((entry) => entry.readAt === null)
+      .forEach((entry) => {
+        // Rows persisted before display receipts existed have no field. They
+        // are deliberately silent so upgrading cannot replay an unread backlog.
+        if (entry.displayedUpdatedAt === undefined) return;
+        const version: AppLocalDisplayReceiptVersion = {
+          userId,
+          notificationId: entry.id,
+          updatedAt: entry.updatedAt,
+        };
+        const deliveryKey = appLocalDisplayDeliveryKey(version);
+        if (hasAppLocalDisplayReceipt(version)) {
+          state.markAsDisplayed(entry.id, entry.updatedAt);
+          return;
+        }
+        if (entry.displayedUpdatedAt === entry.updatedAt) {
+          recordAppLocalDisplayReceipt(version);
+          return;
+        }
+        if (inFlightVersionsRef.current.has(deliveryKey)) return;
+        const receiptSession = captureAppLocalDisplayReceiptSession(userId);
+        inFlightVersionsRef.current.add(deliveryKey);
+        void displayAppLocalNotification(
+          entry,
+          {
+            showNotification,
+            playChime: playNotificationChime,
+            onToastClick,
+          },
+          deliveryKey,
+          userId,
+        )
+          .then(() => {
+            if (!isAppLocalDisplayReceiptSessionCurrent(receiptSession)) return;
+            recordAppLocalDisplayReceipt(version);
+            const current = useAppLocalNotificationsStore.getState();
+            if (current.activeUserId === userId) {
+              current.markAsDisplayed(entry.id, entry.updatedAt);
+            }
+          })
+          .catch(() => {
+            // Keep the receipt pending so a later mount can retry native display.
+          })
+          .finally(() => {
+            inFlightVersionsRef.current.delete(deliveryKey);
+          });
+      });
   }, [showNotification, onToastClick]);
+
+  const scheduleDrain = useCallback((): void => {
+    if (drainScheduledRef.current) return;
+    drainScheduledRef.current = true;
+    queueMicrotask(() => {
+      drainScheduledRef.current = false;
+      drainPendingNotifications();
+    });
+  }, [drainPendingNotifications]);
+
+  useEffect(() => {
+    drainPendingNotifications();
+    return useAppLocalNotificationsStore.subscribe(scheduleDrain);
+  }, [drainPendingNotifications, scheduleDrain]);
 
   return null;
 }

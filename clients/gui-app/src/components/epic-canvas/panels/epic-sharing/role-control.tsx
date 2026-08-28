@@ -17,8 +17,9 @@ import {
 } from "@/lib/epic-collaborator-roles";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export const ROLE_PILL_CLASS =
-  "rounded-md bg-muted px-2.5 py-1 text-ui-xs text-muted-foreground";
+  "rounded-md bg-foreground/8 px-2.5 py-1 text-ui-xs text-muted-foreground";
 
 export interface RoleDropdownProps {
   readonly value: PermissionRole;
@@ -106,7 +107,7 @@ export function RoleOrBadge(props: {
         value={props.value}
         testId={`${props.testId}-badge`}
         ariaLabel={undefined}
-        title={undefined}
+        tooltip={undefined}
       />
     );
   }
@@ -116,7 +117,7 @@ export function RoleOrBadge(props: {
       onChange={props.onChange}
       disabled={props.disabled}
       isPending={props.isPending}
-      className="min-w-24 justify-between rounded-md bg-muted px-2.5 py-1 text-ui-sm text-muted-foreground"
+      className="min-w-24 justify-between rounded-md bg-foreground/8 px-2.5 py-1 text-ui-sm text-muted-foreground"
       aria-label={props.ariaLabel}
       data-testid={props.testId}
     />
@@ -127,16 +128,24 @@ export function RoleBadge(props: {
   readonly value: PermissionRole;
   readonly testId: string;
   readonly ariaLabel: string | undefined;
-  readonly title: string | undefined;
+  /** Hover label; `tooltip` rather than `title` so the call site cannot be
+   *  mistaken for the native attribute. */
+  readonly tooltip: string | undefined;
 }) {
   return (
-    <span
-      className={ROLE_PILL_CLASS}
-      title={props.title}
-      aria-label={props.ariaLabel}
-      data-testid={props.testId}
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {EPIC_COLLABORATOR_ROLE_LABELS[props.value]}
-    </span>
+      <span
+        className={ROLE_PILL_CLASS}
+        aria-label={props.ariaLabel}
+        data-testid={props.testId}
+      >
+        {EPIC_COLLABORATOR_ROLE_LABELS[props.value]}
+      </span>
+    </TooltipWrapper>
   );
 }

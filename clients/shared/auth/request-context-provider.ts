@@ -32,6 +32,11 @@
  * Same-user refresh is therefore observably distinct from cross-user
  * sign-in: refresh mutates retained bearer material in place, while
  * sign-in/sign-out swap the live context value.
+ *
+ * All three transitions advance `getCredentialGeneration()`, and every
+ * `onChange` emission carries the {@link AuthEra} it committed. Both exist so
+ * a consumer can name the credential era a request belongs to instead of
+ * re-reading whichever ambient accessor happens to be nearest - see `AuthEra`.
  */
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
@@ -48,14 +53,51 @@ import {
 export type RequestContextSubscription = () => void;
 
 /**
+ * The auth state a transition COMMITTED, captured at emit time and handed to
+ * the listener as one immutable value.
+ *
+ * This exists because the auth state a listener needs does not live in one
+ * place. Identity, the bearer, and the generation are three separate fields
+ * that three different objects update, and every fix that had a listener read
+ * ONE of them ambiently was defeated by another that had not caught up yet:
+ * the emission fires, the listener synchronously starts a fetch, and the
+ * fetch captures a bearer belonging to the account being REPLACED.
+ *
+ * So the emission names the era itself instead of leaving each listener to
+ * reconstruct it. A refresh threads this value through its memo key, its
+ * commit stamp, its destructive fence, AND the credential check at the fetch
+ * layer — one value, so those four cannot disagree with each other.
+ */
+export interface AuthEra {
+  /** The user id this transition committed, or `null` when signed out. */
+  readonly identity: string | null;
+  /**
+   * `getCredentialGeneration()` as of the commit. Advances on EVERY bearer
+   * change — identity transitions AND same-user rotations — so a consumer can
+   * tell "the credential that observed this 401 is still the current one"
+   * apart from "it was replaced while the request was in flight", which a
+   * user-id comparison cannot see.
+   */
+  readonly credentialGeneration: number;
+}
+
+/**
  * Listener signature for `onChange`. The provider always calls this
  * with the NEW current value - `null` on sign-out, or a fresh context
  * on sign-in/cross-user transition. Same-user refresh does NOT fire
  * this listener because the context reference is unchanged; subscribers
  * that need to know the credential lease rotated should observe the
  * lease itself through the existing context.
+ *
+ * The second argument is the {@link AuthEra} the transition committed. Take
+ * it rather than re-deriving identity from `ctx` and the generation from an
+ * accessor: those are separate reads that can land on different sides of a
+ * transition, and this one cannot.
  */
-export type RequestContextListener = (ctx: RequestContext | null) => void;
+export type RequestContextListener = (
+  ctx: RequestContext | null,
+  era: AuthEra,
+) => void;
 
 /**
  * Read-only client-runtime auth surface consumed below the boundary.
@@ -67,6 +109,22 @@ export type RequestContextListener = (ctx: RequestContext | null) => void;
 export interface RequestContextProvider {
   current(): RequestContext | null;
   onChange(listener: RequestContextListener): RequestContextSubscription;
+  /**
+   * Monotonic counter of CREDENTIAL changes: every `setSignedIn`, every
+   * `rotateCurrentBearer`, every `signOut`.
+   *
+   * Distinct from any identity-transition counter, and the distinction is the
+   * whole point. A same-user rotation swaps the bearer without changing the
+   * identity, so an identity counter does not move — and a destructive
+   * decision fenced on it ("this 401 came from a credential that is still
+   * current") passes for a 401 earned by a bearer that was replaced seconds
+   * ago. Fencing on this one moves.
+   *
+   * It counts here rather than in a caller because the provider is the single
+   * object every credential change already goes through: a rotation that
+   * skipped it would not be a rotation of the live lease at all.
+   */
+  getCredentialGeneration(): number;
   /**
    * Fires whenever the active context's bearer is rotated in place (same-user
    * refresh) - the transition `onChange` is deliberately silent about, because
@@ -146,6 +204,13 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
   private currentContext: RequestContext | null = null;
   private readonly listeners = new Set<RequestContextListener>();
   private readonly bearerRotationListeners = new Set<() => void>();
+  /**
+   * Bumped by every method below that changes the live credential, ALWAYS
+   * before that change is announced — see `emitContextChange` /
+   * `rotateCurrentBearer`. A listener therefore never observes a generation
+   * that is about to move for the transition it is already reacting to.
+   */
+  private credentialGeneration = 0;
   private disposed = false;
 
   constructor(options: DefaultRequestContextProviderOptions) {
@@ -154,6 +219,10 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
 
   current(): RequestContext | null {
     return this.currentContext;
+  }
+
+  getCredentialGeneration(): number {
+    return this.credentialGeneration;
   }
 
   onChange(listener: RequestContextListener): RequestContextSubscription {
@@ -195,6 +264,7 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
       externalAbortSignal: options.externalAbortSignal,
     });
     this.currentContext = next;
+    this.credentialGeneration += 1;
     if (previous !== null) {
       const reason =
         previous.identity.userId === next.identity.userId
@@ -202,7 +272,7 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
           : "auth-identity-changed";
       previous.abort(reason);
     }
-    this.emit(next);
+    this.emitContextChange(next);
     return next;
   }
 
@@ -225,6 +295,11 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
       userId: options.userId,
       bearerToken: options.bearerToken,
     });
+    // THE rotation the identity counter cannot see, and therefore the one this
+    // counter exists for. Bumped before the notification, like every other
+    // credential change here: a listener that reads the generation while
+    // reacting to a rotation must read the POST-rotation value.
+    this.credentialGeneration += 1;
     for (const listener of [...this.bearerRotationListeners]) {
       listener();
     }
@@ -242,8 +317,9 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
       return;
     }
     this.currentContext = null;
+    this.credentialGeneration += 1;
     previous.abort("auth-signed-out");
-    this.emit(null);
+    this.emitContextChange(null);
   }
 
   /**
@@ -259,6 +335,10 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
     const previous = this.currentContext;
     this.currentContext = null;
     if (previous !== null) {
+      // Disposal releases the live credential, so it counts like any other
+      // credential change: a request that outlives this provider must not
+      // read its own issue-time generation back as "still current".
+      this.credentialGeneration += 1;
       previous.abort("request-context-provider-disposed");
     }
     this.listeners.clear();
@@ -273,9 +353,29 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
     }
   }
 
-  private emit(value: RequestContext | null): void {
+  /**
+   * THE ORDERING CONTRACT, stated where the emission happens.
+   *
+   * Listeners run SYNCHRONOUSLY inside this call and they fetch: the host
+   * runtime answers a context change by refreshing the host directory, which
+   * reaches all the way to `GET /api/v3/hosts` with a bearer. So every piece
+   * of auth state that any listener can read — here and in the auth service
+   * that drives this provider — must already hold its POST-transition value
+   * when this runs. Assign first, announce second; there is no second chance
+   * once a listener has issued a request.
+   *
+   * The era passed alongside the context is the same rule made structural:
+   * it is read from committed state at emit time, so a listener that threads
+   * it (rather than re-reading an accessor) cannot be handed a mix of two
+   * transitions even if some future edit reorders the assignments above.
+   */
+  private emitContextChange(value: RequestContext | null): void {
+    const era: AuthEra = {
+      identity: value === null ? null : value.identity.userId,
+      credentialGeneration: this.credentialGeneration,
+    };
     for (const listener of [...this.listeners]) {
-      listener(value);
+      listener(value, era);
     }
   }
 }

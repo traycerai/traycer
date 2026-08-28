@@ -5,7 +5,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { LivePulse } from "@/components/ui/live-pulse";
@@ -244,6 +243,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}
@@ -312,7 +312,6 @@ function PromotedSubagentSegment(
     },
     [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
-  const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
   const displayAgentType = cleanSubagentNotificationText(agentType);
   const displayTask = cleanSubagentNotificationText(task);
@@ -326,7 +325,7 @@ function PromotedSubagentSegment(
   return (
     <Collapsible
       open={open}
-      onOpenChange={handleOpenChange}
+      onOpenChange={updateOpen}
       className={cn(
         "rounded-md border text-ui-sm transition-colors",
         open ? "overflow-visible" : "overflow-hidden",
@@ -634,6 +633,7 @@ function SubagentResultPanel(props: {
           markdown={result}
           proseSize="compact"
           quotable={false}
+          components={null}
         />
       </div>
     </SegmentPanel>
@@ -856,6 +856,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}

@@ -31,10 +31,19 @@ export function WorkspaceSummaryTrigger(
     readonly items: ReadonlyArray<WorkspaceRunItem>;
     readonly readOnly: boolean;
     readonly bindingResolved: boolean;
+    readonly draftPending?: boolean;
     readonly ref?: Ref<HTMLButtonElement>;
   },
 ) {
-  const { items, readOnly, bindingResolved, className, ref, ...rest } = props;
+  const {
+    items,
+    readOnly,
+    bindingResolved,
+    draftPending,
+    className,
+    ref,
+    ...rest
+  } = props;
   // Resolve by the marked `isPrimary` row, not array order: the host
   // normalizes binding flags without reordering entries, so the collapsed
   // chip must agree with the primary pin/row rather than always reading
@@ -89,9 +98,16 @@ export function WorkspaceSummaryTrigger(
             />
           </span>
           {extraCount > 0 ? (
-            <span className="shrink-0 rounded-md bg-muted/80 px-1.5 py-0.5 text-overline font-medium text-current">
+            <span className="shrink-0 rounded-md bg-foreground/7 px-1.5 py-0.5 text-overline font-medium text-current">
               +{extraCount}
             </span>
+          ) : null}
+          {draftPending === true ? (
+            <span
+              className="size-1.5 shrink-0 rounded-full bg-foreground"
+              data-testid="workspace-summary-draft"
+              aria-label="Uncommitted workspace draft"
+            />
           ) : null}
         </>
       )}
@@ -133,7 +149,9 @@ export function WorkspaceSummaryTrigger(
           side="bottom"
           align="start"
           collisionPadding={12}
-          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+          // Same desktop-scrolls-here / phone-scrolls-the-list split as the
+          // editable panel in `WorkspaceFolderSummaryControl` - see the note there.
+          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3 max-md:overflow-hidden"
           data-testid="workspace-readonly-folders-popover"
           onOpenAutoFocus={(event) => event.preventDefault()}
         >
@@ -151,6 +169,8 @@ export function WorkspaceSummaryTrigger(
             readOnly
             nestedInPopover={false}
             bindingResolved={bindingResolved}
+            recentWorkspaces={null}
+            moveToRecent={false}
           />
         </PopoverContent>
       </Popover>
@@ -162,7 +182,7 @@ export function WorkspaceSummaryTrigger(
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
   if (props.bindingResolved) {
-    return <span className="text-current/70">No workspace linked</span>;
+    return <span className="text-current/70">No folder attached</span>;
   }
   return (
     <>
@@ -171,7 +191,7 @@ function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
         testId={undefined}
         variant="dots"
       />
-      <span className="text-current/70">Linking workspace…</span>
+      <span className="text-current/70">Linking folder…</span>
     </>
   );
 }

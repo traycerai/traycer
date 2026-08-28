@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   commentThreadStatusFilterSchema,
@@ -12,7 +11,7 @@ import {
 } from "@traycer/protocol/comments/comments-xml-formatting";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -41,7 +40,11 @@ export function buildCommentsListCommand(opts: {
         status,
       }),
     );
-    const parsed = parseHostResponse(commentsListThreadsResponseSchema, result);
+    const parsed = parseCanonicalHostResponse(
+      "comments.listThreads",
+      commentsListThreadsResponseSchema,
+      result,
+    );
     return {
       data: parsed,
       human: formatCommentsListThreadsXml({
@@ -79,7 +82,8 @@ export function buildCommentsSetStatusCommand(opts: {
         ],
       }),
     );
-    const parsed = parseHostResponse(
+    const parsed = parseCanonicalHostResponse(
+      "comments.setThreadStatus",
       commentsSetThreadStatusResponseSchema,
       result,
     );
@@ -91,8 +95,22 @@ export function buildCommentsSetStatusCommand(opts: {
   };
 }
 
+/**
+ * Absolute in, absolute out - unconditionally.
+ *
+ * This used to resolve a relative path only when the result existed on disk,
+ * and otherwise forwarded the caller's relative string untouched. That made the
+ * request shape depend on the filesystem: the same `comments list docs/a.md`
+ * sent an absolute path when the file was there and a relative one when it was
+ * not, and the host has no way to resolve the second - it does not know the
+ * caller's working directory. A typo'd path therefore failed as "no threads"
+ * rather than as the missing artifact it is.
+ *
+ * Resolving every relative path against `process.cwd()` is also what the help
+ * text now promises, so the declared contract and the wire shape agree. No
+ * existence check: whether an artifact exists is the host's answer to give, and
+ * asking here would only reintroduce a filesystem-dependent request.
+ */
 function normalizeCliArtifactPath(value: string): string {
-  if (path.isAbsolute(value)) return value;
-  const resolved = path.resolve(value);
-  return existsSync(resolved) ? resolved : value;
+  return path.resolve(value);
 }

@@ -1,6 +1,8 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -57,6 +59,19 @@ vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <div data-testid="rate-limit-header-button" />,
 }));
 
+// The Windows menu strip routes its popup through a TanStack mutation; this
+// provider-light AppShell test has no QueryClient, so stub it like the other
+// host/query-backed header children above.
+vi.mock("@/components/layout/header/windows-menu-bar", () => ({
+  WindowsMenuBar: () => null,
+}));
+
+// NOTE: there is deliberately NO stub for `use-epic-open-in-new-window` here.
+// `RootDndProvider` used to call that flow, which reaches `useRouterState` and
+// throws without a router, so this provider-light test needed a stub. The flow
+// now lives in `TabDetachOwner`, mounted in the ROUTE tree - so it never mounts
+// here at all. If a stub for it ever becomes necessary again, the dependency
+// has moved back into the provider and the fix has regressed.
 vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => (
     <div data-testid="resource-monitor-header-button" />
@@ -67,9 +82,72 @@ vi.mock("@/components/auth/user-menu", () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+// Rendered unconditionally so the surface row's clipping contract can be
+// asserted; the real host self-gates on a focused/visible draft surface.
+vi.mock("@/components/home/terminal-panel/landing-terminal-host", () => ({
+  LandingTerminalHost: () => <div data-testid="landing-terminal-host" />,
+}));
+
 import { AppShell } from "@/components/layout/app-shell";
+import {
+  hostRpcRegistry,
+  HostRuntimeProvider,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+
+function renderAppShell(): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+
+  render(
+    <RunnerHostProvider runnerHost={runnerHost}>
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={(args: { registry: HostRpcRegistry }) =>
+            new MockHostMessenger<HostRpcRegistry>({
+              registry: args.registry,
+              requestId: () => "app-shell-lifecycle-request",
+              handlers: {},
+            })
+          }
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+          fallback={<div data-testid="runtime-fallback" />}
+        >
+          <AppShell>
+            <div data-testid="app-shell-child" />
+          </AppShell>
+        </HostRuntimeProvider>
+      </QueryClientProvider>
+    </RunnerHostProvider>,
+  );
+
+  return queryClient;
+}
 
 describe("<AppShell />", () => {
+  // Undefined until a test renders, and reset after every one: a teardown that
+  // dereferences this unconditionally throws over the top of the assertion
+  // error that stopped the render, and a binding that survived the test would
+  // let a test that forgets to render clear the PREVIOUS test's client.
+  let queryClient: QueryClient | undefined;
+
   beforeEach(() => {
     windowHost.runnerHost = {};
     useAuthStore
@@ -84,48 +162,72 @@ describe("<AppShell />", () => {
 
   afterEach(() => {
     cleanup();
+    queryClient?.clear();
+    queryClient = undefined;
     delete windowHost.runnerHost;
     useAuthStore.getState().setSignedOut();
     useSettingsStore.setState({ showGlobalResourceMonitor: true });
   });
 
-  it("renders the signed-in app shell around routed children", () => {
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+  it("renders the signed-in app shell around routed children", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     expect(screen.getByTestId("user-menu")).not.toBeNull();
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
+    const routeLayer = screen.getByTestId("route-adapter-layer");
+    expect(routeLayer.className).toContain("pointer-events-none");
+    expect(routeLayer.className).toContain("[&>*]:pointer-events-auto");
+    expect(routeLayer.className).toContain("flex");
+    expect(routeLayer.className).toContain("h-full");
+    expect(routeLayer.className).toContain("min-h-0");
     expect(screen.queryByTestId("legacy-find-in-page-bar")).toBeNull();
     // Host status footer was removed; the combined chip on the
     // composer is now the host-state surface.
     expect(screen.queryByTestId("host-status-footer")).toBeNull();
   });
 
-  it("makes the capped tab strip leftover a desktop drag region", () => {
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+  it("clips the surface row that hosts the landing terminal panel", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    // The terminal panel sits in this row as a sibling of the tab host, and its
+    // 1px resize handle carries a 10px `::after` hit area centred on it. With
+    // the panel collapsed the handle is pinned to the row's right edge, so half
+    // that hit area lands outside the viewport. The panel used to be nested
+    // inside the landing page's own `overflow-hidden` box, which absorbed the
+    // overhang; hoisted up here it needs the row to clip, or the overhang
+    // becomes document-level scrollable width and the landing page grows a
+    // horizontal scrollbar. `TopLevelTabHost` already clips itself for the same
+    // reason - this covers everything mounted beside it.
+    const surfaceRow = screen.getByTestId("route-adapter-layer").parentElement;
+    expect(surfaceRow).not.toBeNull();
+    expect(
+      surfaceRow?.contains(screen.getByTestId("landing-terminal-host")),
+    ).toBe(true);
+    expect(surfaceRow?.className).toContain("overflow-hidden");
+  });
+
+  it("makes the capped tab strip leftover a desktop drag region", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     const tabRegion = screen.getByTestId("tab-strip").parentElement;
     expect(tabRegion).not.toBeNull();
     expect(tabRegion?.className).toContain("[-webkit-app-region:drag]");
   });
 
-  it("hides the global resource monitor button when the preference is off", () => {
+  it("hides the global resource monitor button when the preference is off", async () => {
     useSettingsStore.setState({ showGlobalResourceMonitor: false });
 
-    render(
-      <AppShell>
-        <div data-testid="app-shell-child" />
-      </AppShell>,
-    );
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
 
     expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
   });

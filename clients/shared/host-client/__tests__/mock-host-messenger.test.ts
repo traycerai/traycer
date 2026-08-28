@@ -8,7 +8,10 @@ import {
   MockHostMessenger,
   type MockPhaseEvent,
 } from "../mock/mock-host-messenger";
-import { HostRpcError } from "../../host-transport/host-messenger";
+import {
+  HostRpcError,
+  type HostRequestAuthority,
+} from "../../host-transport/host-messenger";
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -29,6 +32,17 @@ const registry = defineVersionedRpcRegistry({
   },
 });
 
+function authority(): HostRequestAuthority {
+  return {
+    endpoint: { hostId: "test-host", websocketUrl: "ws://test-host/rpc" },
+    bearer: {
+      identity: { userId: "u1" },
+      getBearerToken: () => "token",
+    },
+    abortSignal: new AbortController().signal,
+  };
+}
+
 describe("MockHostMessenger", () => {
   it("returns canonical responses for registered handlers", async () => {
     const messenger = new MockHostMessenger<typeof registry>({
@@ -39,11 +53,21 @@ describe("MockHostMessenger", () => {
       requestId: () => "req-1",
     });
 
-    const result = await messenger.request("host.echo", { message: "hi" });
+    const result = await messenger.request(
+      "host.echo",
+      { message: "hi" },
+      authority(),
+    );
     expect(result).toEqual({ echoed: "HI" });
-    expect(messenger.calls).toEqual([
-      { method: "host.echo", params: { message: "hi" }, requestId: "req-1" },
-    ]);
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]).toMatchObject({
+      method: "host.echo",
+      params: { message: "hi" },
+      requestId: "req-1",
+      authority: {
+        endpoint: { hostId: "test-host", websocketUrl: "ws://test-host/rpc" },
+      },
+    });
   });
 
   it("surfaces missing handlers as HostRpcError", async () => {
@@ -54,7 +78,7 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }),
+      messenger.request("host.echo", { message: "x" }, authority()),
     ).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof HostRpcError &&
@@ -75,7 +99,7 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }),
+      messenger.request("host.echo", { message: "x" }, authority()),
     ).rejects.toSatisfy(
       (err: unknown) => err instanceof HostRpcError && err.message === "boom",
     );
@@ -105,7 +129,7 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }),
+      messenger.request("host.echo", { message: "x" }, authority()),
     ).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof HostRpcError &&
@@ -113,7 +137,8 @@ describe("MockHostMessenger", () => {
         err.message === "handler supplied metadata" &&
         err.requestId === "req-current" &&
         err.method === "host.echo" &&
-        err.fatalDetails === fatalDetails,
+        err.fatalDetails === fatalDetails &&
+        err.holders === null,
     );
 
     const responseEvent = messenger.phases[4];
@@ -122,6 +147,49 @@ describe("MockHostMessenger", () => {
     }
     expect(responseEvent.error?.requestId).toBe("req-current");
     expect(responseEvent.error?.method).toBe("host.echo");
+  });
+
+  it("preserves WORKTREE_BUSY holders when re-stamping a handler HostRpcError", async () => {
+    const holders = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "terminal-agent" as const,
+          ownerId: "agent-1",
+        },
+        holdKind: "terminal-agent-pty" as const,
+        activity: "idle" as const,
+        label: "Claude Code",
+      },
+    ];
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new HostRpcError({
+            code: "WORKTREE_BUSY",
+            message: "in use",
+            requestId: "handler-req",
+            method: "handler.method",
+            fatalDetails: null,
+            holders,
+          });
+        },
+      },
+      requestId: () => "req-holders",
+    });
+
+    await expect(
+      messenger.request("host.echo", { message: "x" }, authority()),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof HostRpcError &&
+        err.code === "WORKTREE_BUSY" &&
+        err.requestId === "req-holders" &&
+        err.method === "host.echo" &&
+        err.holders !== null &&
+        JSON.stringify(err.holders) === JSON.stringify(holders),
+    );
   });
 
   it("emits phase hooks in the WS lifecycle order on the happy path", async () => {
@@ -138,7 +206,7 @@ describe("MockHostMessenger", () => {
       seen.push(event);
     });
 
-    await messenger.request("host.echo", { message: "hi" });
+    await messenger.request("host.echo", { message: "hi" }, authority());
     unsubscribe();
 
     const kinds = seen.map((event) => event.kind);
@@ -180,7 +248,7 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }),
+      messenger.request("host.echo", { message: "x" }, authority()),
     ).rejects.toBeInstanceOf(HostRpcError);
 
     const kinds = messenger.phases.map((event) => event.kind);
@@ -199,5 +267,40 @@ describe("MockHostMessenger", () => {
     }
     expect(responseEvent.error).toBeInstanceOf(HostRpcError);
     expect(responseEvent.result).toBeNull();
+  });
+
+  it("rejects a held handler when request authority is aborted", async () => {
+    const controller = new AbortController();
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => new Promise(() => undefined),
+      },
+      requestId: () => "req-abort",
+    });
+    const request = messenger.request(
+      "host.echo",
+      { message: "x" },
+      {
+        ...authority(),
+        abortSignal: controller.signal,
+      },
+    );
+
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({
+      name: "HostRequestAbortedError",
+      requestId: "req-abort",
+      method: "host.echo",
+    });
+    expect(messenger.phases.map((event) => event.kind)).toEqual([
+      "open",
+      "auth",
+      "manifest",
+      "request",
+      "response",
+      "close",
+    ]);
   });
 });

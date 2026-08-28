@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -26,6 +25,11 @@ import { useTabsStore } from "@/stores/tabs/store";
 // Reconciliation install is owned by `WindowsBridgeProvider` in
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+
+const pinTestState = vi.hoisted(() => ({
+  mutate: vi.fn(),
+}));
+const recordViewed = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
@@ -61,6 +65,26 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
+// The app shell mounts the fork-episode poll (it feeds the `pendingFork`
+// indicator's open/close edge). Stubbed like every other host-runtime consumer
+// in this file: these tests own tab-strip layout and navigation, and the real
+// hook would need a host client this tree deliberately does not build.
+vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
+  useChatForkEventQuery: () => ({ data: undefined }),
+}));
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => new Map(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+  usePendingSetPinnedEpicIds: () => new Set(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
+}));
+
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
@@ -81,8 +105,14 @@ vi.mock("@/components/notifications/notifications-bell", () => ({
   NotificationsBell: () => null,
 }));
 
+// Both header host-scoped surfaces resolve a `HostScope`, which reads the
+// ambient host client - a provider this route harness does not mount.
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => null,
+}));
+
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
 }));
 
 vi.mock("@/components/auth/user-menu", () => ({
@@ -116,6 +146,42 @@ vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
       data-testid="epic-route-session-body"
     />
   ),
+}));
+
+vi.mock("@/components/epic-tabs/epic-surface", () => ({
+  EpicSurface: (props: { readonly epicId: string; readonly tabId: string }) => (
+    <div
+      data-epic-id={props.epicId}
+      data-tab-id={props.tabId}
+      data-testid="epic-route-session-body"
+    />
+  ),
+}));
+
+vi.mock("@/components/home/landing-draft-surface", () => ({
+  LandingDraftSurface: () => <div data-testid="draft-surface" />,
+}));
+
+vi.mock("@/components/epics/history-surface", () => ({
+  HistorySurface: () => <div data-testid="history-surface" />,
+}));
+
+vi.mock("@/components/settings/settings-surface", () => ({
+  SettingsSurface: () => <div data-testid="settings-surface" />,
+}));
+
+// The host wraps the panel in the gesture provider (the single live-value
+// reader); this route test does not exercise the terminal, so the provider is a
+// pass-through and the panel is inert.
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-gesture-provider",
+  () => ({
+    LandingTerminalGestureProvider: (props: { readonly children: ReactNode }) =>
+      props.children,
+  }),
+);
+vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
+  LandingTerminalPanel: () => null,
 }));
 
 vi.mock("@/components/settings/panels/general-settings-panel", () => ({
@@ -158,7 +224,6 @@ function renderAppAt(initialPath: string) {
     context: {
       queryClient,
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });
@@ -182,6 +247,8 @@ async function flushNav(): Promise<void> {
 describe("app route tab-strip navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    pinTestState.mutate.mockClear();
+    recordViewed.mockClear();
     resetStores();
   });
 
@@ -250,8 +317,7 @@ describe("app route tab-strip navigation", () => {
       expect(router.state.location.pathname).toBe(`/draft/${draftId}`);
     });
   });
-
-  it("covers the header baseline beneath the active tab caps", async () => {
+  it("aligns active tab border joins and covers the header baseline", async () => {
     const epicTabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-current", "Current Epic");
@@ -275,11 +341,20 @@ describe("app route tab-strip navigation", () => {
     expect(screen.getByTestId("tab-chrome-center").className).not.toContain(
       "z-10",
     );
+    expect(screen.getByTestId("tab-chrome-center").className).toContain(
+      "border-t",
+    );
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
     ).toContain("M -2 39.5 L 0 39.5");
     expect(
+      screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
+    ).toContain("10.6 0.5 15 0.5 L 20 0.5");
+    expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
     ).toContain("L 22 39.5");
+    expect(
+      screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
+    ).toContain("M 0 0.5 L 5 0.5 C 9.4 0.5");
   });
 });

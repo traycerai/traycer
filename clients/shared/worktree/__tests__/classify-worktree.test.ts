@@ -5,6 +5,7 @@ import type {
   WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 import {
+  GIT_UNREADABLE_REASON,
   WORKTREE_TIER_ORDER,
   classifyWorktree,
   classifyWorktreeTier,
@@ -45,7 +46,11 @@ function subFact(
   };
 }
 
-function entry(over: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
+function entry(
+  over: Partial<WorktreeHostEntryV12> & {
+    readonly gitUnreadable?: boolean;
+  },
+): WorktreeHostEntryV12 {
   return {
     worktreePath: "/wt/x",
     repoLabel: "acme/app",
@@ -92,12 +97,35 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       tier: "in-use",
     },
     {
+      name: "gitUnreadable outranks orphaned even when gitRemovable is false",
+      entry: entry({
+        gitRemovable: false,
+        branch: null,
+        gitUnreadable: true,
+      }),
+      tier: "review",
+    },
+    {
+      name: "inUse still outranks gitUnreadable",
+      entry: entry({
+        inUse: true,
+        gitRemovable: false,
+        gitUnreadable: true,
+      }),
+      tier: "in-use",
+    },
+    {
       name: "orphan (gitRemovable:false) is checked BEFORE the greens, even when merged",
       entry: entry({
         gitRemovable: false,
         prState: "merged",
         mergedHeadShaMatches: true,
       }),
+      tier: "orphaned",
+    },
+    {
+      name: "omitted gitUnreadable (older host) still classifies gitRemovable:false as orphaned",
+      entry: entry({ gitRemovable: false, branch: null }),
       tier: "orphaned",
     },
     {
@@ -328,12 +356,36 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       tier: "merged",
     },
     {
-      name: "submodule proven via local ancestry does not block → at-base-commit",
+      name: "at-base + authored submodule proven via merged PR → merged",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+      tier: "merged",
+    },
+    {
+      name: "at-base + authored submodule proven via local ancestry → merged",
       entry: entry({
         atBaseCommit: true,
         submodules: [subFact({ mergedIntoDefault: true })],
       }),
-      tier: "at-base-commit",
+      tier: "merged",
+    },
+    {
+      name: "at-base + any authored landed submodule → merged when siblings are at-pin",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ mergedIntoDefault: true }),
+          subFact({
+            repoIdentifier: { owner: "acme", repo: "unchanged" },
+            atPinnedCommit: true,
+          }),
+        ],
+      }),
+      tier: "merged",
     },
     {
       name: "submodule proven at its pinned gitlink does not block → at-base-commit",
@@ -342,6 +394,42 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
         submodules: [subFact({ atPinnedCommit: true })],
       }),
       tier: "at-base-commit",
+    },
+    {
+      name: "at-pin overrides merged proof for authored-work promotion → at-base-commit",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({
+            prState: "merged",
+            mergedHeadShaMatches: true,
+            atPinnedCommit: true,
+          }),
+        ],
+      }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "dirty gate blocks authored-submodule promotion → review",
+      entry: entry({
+        uncommittedCount: 1,
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+      tier: "review",
+    },
+    {
+      name: "one unproven sibling blocks authored-submodule promotion → review",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+          subFact({ repoIdentifier: { owner: "acme", repo: "unmerged" } }),
+        ],
+      }),
+      tier: "review",
     },
     {
       name: "submodule atPinnedCommit false proves nothing by itself → review",
@@ -459,6 +547,19 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
     expect(atBase.tier).toBe("at-base-commit");
     expect(atBase.label).toBe("At base commit");
     expect(atBase.facts).toContain("clean");
+
+    const submoduleLanded = classifyWorktree(
+      entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+    );
+    expect(submoduleLanded.tier).toBe("merged");
+    expect(submoduleLanded.label).toBe("Landed");
+    expect(submoduleLanded.prFacts).toContain("submodule acme/lib landed");
+    expect(submoduleLanded.nonPrFacts).toContain("clean");
 
     const dirty = classifyWorktree(entry({ uncommittedCount: 3 }));
     expect(dirty.tier).toBe("review");
@@ -742,5 +843,18 @@ describe("describeReviewReasons", () => {
         entry({ prState: "merged", mergedHeadShaMatches: true }),
       ),
     ).toEqual([]);
+  });
+
+  it("names a gitUnreadable row instead of Detached HEAD or an invented orphan", () => {
+    expect(
+      describeReviewReasons(
+        entry({
+          gitRemovable: false,
+          branch: null,
+          prState: "none",
+          gitUnreadable: true,
+        }),
+      ),
+    ).toEqual([GIT_UNREADABLE_REASON]);
   });
 });

@@ -26,7 +26,6 @@
  * fires exactly ONCE per batch (a per-item loop fires N times) with a target
  * that is a genuine survivor / the unchanged current focus.
  */
-import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -46,7 +45,12 @@ interface TestTreeNode {
   readonly parentId: string | null;
   readonly title: string;
   readonly type:
-    "spec" | "ticket" | "story" | "review" | "chat" | "terminal-agent";
+    | "spec"
+    | "ticket"
+    | "story"
+    | "review"
+    | "chat"
+    | "terminal-agent";
   readonly status: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -136,8 +140,35 @@ const testState = vi.hoisted<TestState>(() => ({
   permissionRole: "owner",
 }));
 
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
+
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => testState.navigateNested,
+}));
+
+// The artifact panel now hosts a search box; keep its host query inert so these
+// tree-focused tests need no QueryClient. An empty query renders no results.
+vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
+  useEpicSearchArtifacts: () => ({
+    isSuccess: false,
+    isError: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    refetch: () => undefined,
+  }),
 }));
 
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
@@ -277,8 +308,8 @@ vi.mock("@/components/ui/sidebar", () => ({
   ),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
@@ -294,7 +325,7 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicArchiveChats: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChatForHostClient: () => ({
     mutate: vi.fn(),
     isPending: false,
@@ -316,6 +347,8 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
@@ -473,9 +506,10 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
     read: "all",
   }),
   useArtifactSort: () => ({ field: "updated", direction: "desc" }),
-  useChatFilter: () => ({ origin: "all" }),
+  useChatFilter: () => ({ origin: "all", ownership: "all" }),
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
+  usePanelVisibilityOverrides: () => ({}),
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       clearAcknowledgedRootCreatePending: vi.fn(),
@@ -498,6 +532,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];

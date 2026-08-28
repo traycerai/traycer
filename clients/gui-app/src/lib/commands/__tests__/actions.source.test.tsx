@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
@@ -69,6 +68,11 @@ describe("actionsSource", () => {
   it("skips the app.palette.open action (loop prevention)", () => {
     const ids = captureItems().map((item) => item.id);
     expect(ids).not.toContain("action:app.palette.open");
+  });
+
+  it("skips composer.stash (owned by the context-gated composer source)", () => {
+    const ids = captureItems().map((item) => item.id);
+    expect(ids).not.toContain("action:composer.stash");
   });
 
   it("reads the live shortcut from the keybinding store", () => {

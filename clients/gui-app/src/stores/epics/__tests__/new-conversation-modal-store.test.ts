@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useNewConversationModalStore } from "../new-conversation-modal-store";
 import { emptyLandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
@@ -10,30 +9,24 @@ const WORKSPACE_A: WorkspaceFolderInfo = {
   path: "/tmp/workspace-a",
   name: "workspace-a",
   repoIdentifier: null,
+  hostId: null,
 };
 const WORKSPACE_B: WorkspaceFolderInfo = {
   path: "/tmp/workspace-b",
   name: "workspace-b",
   repoIdentifier: null,
+  hostId: null,
 };
 
 beforeEach(() => {
   useNewConversationModalStore.getState().resetForTests();
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
 });
 
 afterEach(() => {
   useNewConversationModalStore.getState().resetForTests();
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
 });
 
@@ -92,7 +85,10 @@ describe("useNewConversationModalStore setPrimaryFolder", () => {
       .getState()
       .setPrimaryFolder("epic-1", seed, WORKSPACE_B.path);
 
-    expect(useWorkspaceFoldersStore.getState().primaryPath).toBeNull();
+    // "Never touches" means the byHost map itself stays empty - not merely
+    // that a particular host's bucket reads as empty (which the shared empty
+    // bucket would show trivially regardless).
+    expect(useWorkspaceFoldersStore.getState().byHost).toEqual({});
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === draftId)
         ?.workspace.primaryPath,

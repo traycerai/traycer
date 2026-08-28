@@ -1,8 +1,17 @@
-import type { AgentSummary, ListAgentsResponse } from "@traycer/protocol/host";
+import type {
+  AgentRunConfig,
+  AgentSummary,
+  ListAgentsResponse,
+} from "@traycer/protocol/host";
 
 export function formatAgentListResponse(response: ListAgentsResponse): string {
   const agents = response.agents;
   const showSend = response.caller.canSendMessages;
+  // Only the direct host-enriched listing can ever render an [archived] row, so
+  // the legend entry is gated on the enrichment actually being present rather
+  // than on any row being archived - see `hasArchiveEnrichment`.
+  const showArchived = agents.some(hasArchiveEnrichment);
+  const showRunConfig = agents.some(hasRunConfigEnrichment);
   const body =
     agents.length === 0
       ? `No agents found for scope '${response.scope}'.`
@@ -10,7 +19,7 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
   return `Agents in epic (relative to you):
 ${body}
 
-${formatAgentListLegend(showSend)}`;
+${formatAgentListLegend(showSend, showArchived, showRunConfig)}`;
 }
 
 export function formatAgentSelf(agent: AgentSummary | null): string {
@@ -18,8 +27,10 @@ export function formatAgentSelf(agent: AgentSummary | null): string {
   return [
     agent.id,
     `title: ${agent.title ?? "-"}`,
+    `archived: ${isArchivedAgent(agent) ? "yes" : "no"}`,
     `surface: ${agent.surface}`,
     `harness: ${agent.harnessId ?? "-"}`,
+    ...formatRunConfigSelfLines(agent),
     `host: ${agent.hostId}`,
     formatSelfLocationLine(agent),
   ].join("\n");
@@ -244,10 +255,13 @@ function formatAgentTreeLevel(
 
 function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   const self = agent.isSelf ? " [self]" : "";
+  const archived = isArchivedAgent(agent) ? " [archived]" : "";
   const parts = [
-    `${agent.id}${self}${formatTitleToken(agent)}`,
+    `${agent.id}${self}${archived}${formatTitleToken(agent)}`,
     `${agent.surface}/${agent.harnessId ?? "-"}`,
   ];
+  const runConfig = formatRunConfigToken(agent);
+  if (runConfig.length > 0) parts.push(runConfig);
   // The capability token describes what *the caller* can do to a row, so it is
   // meaningless on the caller's own [self] row (you don't read your own
   // transcript or message yourself). Showing "R/S" there is just misleading -
@@ -304,24 +318,88 @@ function formatCapabilityToken(agent: AgentSummary, showSend: boolean): string {
   return "-";
 }
 
-function formatAgentListLegend(showSend: boolean): string {
+function formatAgentListLegend(
+  showSend: boolean,
+  showArchived: boolean,
+  showRunConfig: boolean,
+): string {
+  const archived = showArchived
+    ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
+    : "";
+  const runConfig = showRunConfig
+    ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nfast: fast mode is enabled"
+    : "";
   if (!showSend) {
     return `Legend:
-[self]: this agent, i.e. the caller of agent.list
+[self]: this agent, i.e. the caller of agent.list${archived}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
 -: the agent has no readable transcript
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}
 Sending is unavailable in this session`;
   }
   return `Legend:
-[self]: this agent, i.e. the caller of agent.list
+[self]: this agent, i.e. the caller of agent.list${archived}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
 S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree`;
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}`;
+}
+
+function hasRunConfigEnrichment(agent: AgentSummary): boolean {
+  return agent.runConfig !== null;
+}
+
+function formatRunConfigModel(model: AgentRunConfig["model"]): string {
+  return model.kind === "concrete" ? model.slug : "provider default";
+}
+
+function formatRunConfigToken(agent: AgentSummary): string {
+  if (agent.runConfig === null) return "";
+  const parts = [`model: ${formatRunConfigModel(agent.runConfig.model)}`];
+  if (agent.runConfig.reasoningEffort !== null) {
+    parts.push(`effort: ${agent.runConfig.reasoningEffort}`);
+  }
+  if (agent.runConfig.fastMode === true) parts.push("fast");
+  return parts.join(" ");
+}
+
+function formatRunConfigSelfLines(agent: AgentSummary): string[] {
+  if (agent.runConfig === null) return [];
+  const lines = [`model: ${formatRunConfigModel(agent.runConfig.model)}`];
+  if (agent.runConfig.reasoningEffort !== null) {
+    lines.push(`effort: ${agent.runConfig.reasoningEffort}`);
+  }
+  if (agent.runConfig.fastMode !== null) {
+    lines.push(`fast: ${agent.runConfig.fastMode ? "yes" : "no"}`);
+  }
+  return lines;
+}
+
+/**
+ * The direct host-side A2A list enriches the released RPC row with an
+ * `archived` flag before calling this formatter. The versioned `agent.list`
+ * wire schema intentionally remains unchanged, so a response that has been
+ * through `listAgentsResponseSchema` (the CLI path) has the key stripped and
+ * carries no archive information at all.
+ *
+ * Presence - not truthiness - is what distinguishes the two: an enriched
+ * listing whose agents are all unarchived still carries `archived: false` on
+ * every row, and must keep explaining the marker, while a stripped listing must
+ * never advertise a marker its schema cannot represent.
+ */
+function hasArchiveEnrichment(agent: AgentSummary): boolean {
+  return "archived" in agent;
+}
+
+/**
+ * Archived rows are only ever marked on the enriched surface: an absent key can
+ * never be `true`, so the row marker needs no separate gate.
+ */
+function isArchivedAgent(agent: AgentSummary): boolean {
+  return "archived" in agent && agent.archived === true;
 }

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ComposerSlotFileEditApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly canAct: boolean;
@@ -115,13 +116,17 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
       {props.approval.paths.length > 0 ? (
         <ul className="m-0 flex min-w-0 flex-col gap-1 p-0">
           {props.approval.paths.map((filePath) => (
-            <li
+            <TooltipWrapper
               key={filePath}
-              className="min-w-0 truncate rounded-sm bg-canvas/70 px-2 py-1 font-mono text-code-sm text-canvas-foreground/80"
-              title={filePath}
+              label={filePath}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              {filePath}
-            </li>
+              <li className="min-w-0 truncate rounded-sm bg-canvas/70 px-2 py-1 font-mono text-code-sm text-canvas-foreground/80">
+                {filePath}
+              </li>
+            </TooltipWrapper>
           ))}
         </ul>
       ) : (

@@ -1,14 +1,18 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { UserMenu } from "@/components/auth/user-menu";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
+import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
@@ -46,11 +50,24 @@ export interface AppHeaderProps {
 }
 
 /**
- * App navigation chrome. Frameless desktop shells use this row as the native
- * title bar: tabs and controls stay interactive, while the empty spacer before
- * the right-side controls remains available for window dragging.
+ * App navigation chrome. On phones this delegates to the hamburger
+ * `MobileAppHeader`; at >=768px it renders the desktop tab-strip header
+ * (`DesktopAppHeader`) exactly as before.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
+  const isMobile = useIsMobileViewport();
+  if (props.variant === "app" && isMobile) {
+    return <MobileAppHeader />;
+  }
+  return <DesktopAppHeader variant={props.variant} />;
+}
+
+/**
+ * Desktop navigation chrome. Frameless desktop shells use this row as the
+ * native title bar: tabs and controls stay interactive, while the empty spacer
+ * before the right-side controls remains available for window dragging.
+ */
+function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
   const showTabStrip = variant === "app";
   // Host-loading renders above the router and above the
@@ -74,7 +91,10 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       data-testid="app-header"
       data-variant={variant}
       className={cn(
-        "relative z-20 flex h-10 shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        // The height is a shared token: the boot surfaces reserve this exact
+        // slot so their card does not move when the header appears under it.
+        APP_HEADER_HEIGHT_CLASS,
+        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
         framelessDesktop
           ? cn(
               "pl-3 pr-3",
@@ -84,6 +104,7 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
+      <WindowsMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end

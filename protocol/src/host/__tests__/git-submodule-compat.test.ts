@@ -37,6 +37,10 @@ import {
   gitListChangedFilesResponseSchemaV11,
   gitSubscribeStatusEventSchema,
   gitSubscribeStatusEventSchemaV11,
+  gitSubscribeStatusEventSchemaV12,
+  gitSubscribeStatusEventSchemaV13,
+  gitSubscribeStatusRequestSchema,
+  gitSubscribeStatusRequestSchemaV12,
   submoduleAvailabilitySchema,
   submoduleChangesetSchema,
   submodulePointerSchema,
@@ -47,6 +51,7 @@ import {
 
 const V10 = { major: 1, minor: 0 } as const;
 const V11 = { major: 1, minor: 1 } as const;
+const V12 = { major: 1, minor: 2 } as const;
 
 // A plain v1.0 file row (no gitlink).
 const v10File: GitChangedFileV10 = {
@@ -119,7 +124,7 @@ describe("git.*@1.1 registry", () => {
     }
   });
 
-  it("registers git.subscribeStatus minors {0,1} on major 1 (nested-snapshot minor)", () => {
+  it("registers git.subscribeStatus minors {0,1,2,3} on major 1", () => {
     // subscribeStatus is a stream method - absence from the unary registry is
     // structural; assert the stream line itself. The unary-v1.1 work froze the
     // stream at 1.0; the watcher-driven-refresh plan DELIBERATELY reversed
@@ -130,8 +135,8 @@ describe("git.*@1.1 registry", () => {
     expect("git.subscribeStatus" in hostRpcRegistry).toBe(false);
 
     const streamLine = hostStreamRpcRegistry["git.subscribeStatus"][1];
-    expect(streamLine.latestMinor).toBe(1);
-    expect(Object.keys(streamLine.versions)).toEqual(["0", "1"]);
+    expect(streamLine.latestMinor).toBe(3);
+    expect(Object.keys(streamLine.versions)).toEqual(["0", "1", "2", "3"]);
   });
 });
 
@@ -309,6 +314,123 @@ describe("subscribeStatus@1.1 nested-snapshot frames", () => {
   });
 });
 
+describe("subscribeStatus@1.2 fresh-nonce correlation", () => {
+  it("requires freshNonce on the open request and snapshot/updated frames", () => {
+    expect(() =>
+      gitSubscribeStatusRequestSchemaV12.parse({
+        hostId: "h",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      }),
+    ).toThrow();
+    expect(
+      gitSubscribeStatusRequestSchemaV12.parse({
+        hostId: "h",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        freshNonce: null,
+      }),
+    ).toMatchObject({ freshNonce: null });
+
+    expect(() =>
+      gitSubscribeStatusEventSchemaV12.parse(v11SnapshotFrame),
+    ).toThrow();
+    const freshFrame = gitSubscribeStatusEventSchemaV12.parse({
+      ...v11SnapshotFrame,
+      freshNonce: "fresh-1",
+    });
+    expect(freshFrame.type === "snapshot" && freshFrame.freshNonce).toBe(
+      "fresh-1",
+    );
+  });
+
+  it("keeps lower-minor parsers byte-compatible by stripping freshNonce", () => {
+    const v12Frame = { ...v11SnapshotFrame, freshNonce: "fresh-1" };
+    const v11 = gitSubscribeStatusEventSchemaV11.parse(v12Frame);
+    const v10 = gitSubscribeStatusEventSchema.parse(v12Frame);
+    const v10Request = gitSubscribeStatusRequestSchema.parse({
+      hostId: "h",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+      freshNonce: "fresh-1",
+    });
+    expect("freshNonce" in v11).toBe(false);
+    expect("freshNonce" in v10).toBe(false);
+    expect("freshNonce" in v10Request).toBe(false);
+    expect(V12.minor).toBeGreaterThan(V11.minor);
+  });
+});
+
+describe("subscribeStatus@1.3 watcher health", () => {
+  const v13SnapshotFrame = {
+    ...v11SnapshotFrame,
+    freshNonce: null,
+    watcher: { state: "degraded-capacity" as const, detail: "raise it" },
+  };
+
+  it("requires watcher on snapshot/updated frames", () => {
+    // A v1.2 frame is NOT a v1.3 frame: the field is required, never defaulted.
+    // Defaulting would let a host that never learned about watcher health
+    // silently claim a state it cannot observe.
+    expect(() =>
+      gitSubscribeStatusEventSchemaV13.parse({
+        ...v11SnapshotFrame,
+        freshNonce: null,
+      }),
+    ).toThrow();
+    const parsed = gitSubscribeStatusEventSchemaV13.parse(v13SnapshotFrame);
+    expect(parsed.type === "snapshot" && parsed.watcher).toEqual({
+      state: "degraded-capacity",
+      detail: "raise it",
+    });
+  });
+
+  it("rejects an unknown watcher state rather than passing it through", () => {
+    expect(() =>
+      gitSubscribeStatusEventSchemaV13.parse({
+        ...v13SnapshotFrame,
+        watcher: { state: "degraded-budget", detail: null },
+      }),
+    ).toThrow();
+  });
+
+  it("keeps the error variant free of watcher across minors", () => {
+    // Git-compute failure and watcher health degrade independently; the error
+    // variant must stay shape-identical on every minor so a client can render
+    // it without a version branch.
+    const error = { type: "error" as const, message: "boom", isFatal: false };
+    expect(gitSubscribeStatusEventSchemaV13.parse(error)).toEqual(error);
+    expect(gitSubscribeStatusEventSchemaV12.parse(error)).toEqual(error);
+    expect(gitSubscribeStatusEventSchema.parse(error)).toEqual(error);
+  });
+
+  it("keeps lower-minor parsers byte-compatible by stripping watcher", () => {
+    // The released-client half of the two projection guards: even if a v1.3
+    // frame reached an older parser, `watcher` is dropped rather than surfacing
+    // as an unrecognized field.
+    const v12 = gitSubscribeStatusEventSchemaV12.parse(v13SnapshotFrame);
+    const v11 = gitSubscribeStatusEventSchemaV11.parse(v13SnapshotFrame);
+    const v10 = gitSubscribeStatusEventSchema.parse(v13SnapshotFrame);
+    expect("watcher" in v12).toBe(false);
+    expect("watcher" in v11).toBe(false);
+    expect("watcher" in v10).toBe(false);
+    // Stripping the additive field leaves the v1.2 frame otherwise intact.
+    expect(v12).toEqual(
+      gitSubscribeStatusEventSchemaV12.parse({
+        ...v11SnapshotFrame,
+        freshNonce: null,
+      }),
+    );
+  });
+
+  it("takes the v1.2 open request verbatim - no new client knob", () => {
+    const line = hostStreamRpcRegistry["git.subscribeStatus"][1];
+    expect(line.versions[3].contract.openRequestSchema).toBe(
+      line.versions[2].contract.openRequestSchema,
+    );
+  });
+});
+
 describe("v1.1 simplified schema shapes", () => {
   it("gitlink is additive: a v1.0 file parses as v1.1 with gitlink:null", () => {
     const parsed = gitChangedFileV11Schema.parse(v10File);
@@ -412,7 +534,10 @@ describe("v1.1 simplified schema shapes", () => {
     const missingReason = submoduleAvailabilitySchema.parse({
       state: "unavailable",
     });
-    expect(missingReason).toEqual({ state: "unavailable", reason: "git-error" });
+    expect(missingReason).toEqual({
+      state: "unavailable",
+      reason: "git-error",
+    });
 
     // End to end: an unknown reason on a nested submodule degrades in place and
     // does NOT fail the whole listChangedFiles@1.1 response.

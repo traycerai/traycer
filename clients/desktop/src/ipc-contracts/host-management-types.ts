@@ -12,27 +12,52 @@
  */
 
 export type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  BusyContinuation,
   CliInstallManifestSnapshot,
+  ConvergeReadyOk,
+  DownloadLaneStatus,
+  DownloadProgress,
+  HostActivationState,
   HostAvailableSnapshot,
   HostAvailableVersionAsset,
   HostAvailableVersionEntry,
   HostAvailableVersionsInput,
+  HostControllerStatus,
   HostDoctorIssue,
   HostDoctorReport,
   HostDoctorSeverity,
-  HostEnsureResult,
-  HostInstallResult,
   HostInstallSourceTag,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
-  HostOperationKind,
-  HostOperationStatus,
-  HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
+  HostRestartRequestResult,
   HostTrayCommand,
   HostUninstallResult,
+  InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
+  MutationKind,
+  MutationLaneStatus,
+  MutationOutcome,
+  MutationProgress,
+  ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
 } from "@traycer-clients/shared/platform/runner-host";
+
+// The `maintenance:*` handlers resolve protocol response shapes verbatim (see
+// `IHostManagement`'s maintenance members for why); re-exported here so main
+// and the preload keep their single ipc-contracts import path.
+export type {
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponseV11,
+} from "@traycer/protocol/host/maintenance/index";

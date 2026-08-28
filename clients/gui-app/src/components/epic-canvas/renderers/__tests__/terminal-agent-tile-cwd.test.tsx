@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeEach,
@@ -63,7 +62,7 @@ vi.mock("@/lib/host", () => {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:1/rpc",
     version: null,
-    status: "available",
+    transportDialability: "dialable",
   };
   return {
     useHostBinding: () => null,
@@ -121,9 +120,38 @@ vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
   useAgentStartTerminalSession: () => mockPrepare,
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
+
+// The real probe mounts the xterm engine, which cannot measure in jsdom (no
+// layout); stub it to report a grid immediately so the measure-gated create
+// dispatches, as it would in the app.
+vi.mock(
+  "@/components/epic-canvas/renderers/terminal-grid-measure-probe",
+  async () => {
+    const { useEffect } = await import("react");
+    return {
+      TerminalGridMeasureProbe: (props: {
+        readonly onMeasured: (cols: number, rows: number) => void;
+      }) => {
+        const { onMeasured } = props;
+        useEffect(() => {
+          onMeasured(120, 40);
+        }, [onMeasured]);
+        return null;
+      },
+    };
+  },
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
@@ -423,6 +451,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       tuiAgentId: "agent-claude",
       harnessSessionId: null,
       forkSourceHarnessSessionId: null,
+      forkSourceTuiAgentId: null,
       terminalAgentArgs: "--permission-mode acceptEdits",
       profileId: null,
     });
@@ -521,6 +550,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       tuiAgentId: "agent-claude",
       harnessSessionId: "claude-session-reopen",
       forkSourceHarnessSessionId: null,
+      forkSourceTuiAgentId: null,
       terminalAgentArgs: "",
       profileId: null,
     });

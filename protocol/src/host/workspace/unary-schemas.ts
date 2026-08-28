@@ -6,7 +6,14 @@
  * suggestions.
  */
 import { z } from "zod";
-import { taskRepoIdentifierSchema } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  preparedWorkspaceFolderSchema,
+  taskRepoIdentifierSchema,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  SEARCH_TEXT_PREVIEW_MAX_BYTES,
+  searchTextPreviewRangeSchema,
+} from "@traycer/protocol/host/search-text-preview-schema";
 
 export const workspaceMentionGitTypeSchema = z.enum([
   "against_uncommitted_changes",
@@ -247,6 +254,12 @@ export type WorkspaceResolvePathsByRepoIdentifiersResponse = z.infer<
   typeof workspaceResolvePathsByRepoIdentifiersResponseSchema
 >;
 
+/**
+ * @deprecated Request of the legacy `workspace.listFileTree` snapshot - see
+ * the deprecation note on `workspaceListFileTreeV10` in `contracts.ts`. Kept
+ * only for the released floor and the old-host fallback; new work uses
+ * `workspace.subscribeFileList` / `workspace.searchPaths`.
+ */
 export const workspaceListFileTreeRequestSchema = z.object({
   workspacePath: z.string(),
   maxFiles: z.number().int().min(1).max(50_000),
@@ -279,9 +292,7 @@ export const workspaceFileTreeNodeSchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),
 });
-export type WorkspaceFileTreeNode = z.infer<
-  typeof workspaceFileTreeNodeSchema
->;
+export type WorkspaceFileTreeNode = z.infer<typeof workspaceFileTreeNodeSchema>;
 
 export const workspaceListFileTreeResponseSchema = z.object({
   workspacePath: z.string(),
@@ -329,6 +340,86 @@ export type WorkspaceListDirectoryResponse = z.infer<
   typeof workspaceListDirectoryResponseSchema
 >;
 
+/**
+ * Absolute in HOST-native terms, which is not the same thing on every host:
+ * POSIX `/srv/app`, a Windows drive `C:\Users\alice` (or `C:/Users/alice`,
+ * which Windows accepts too), or a UNC share `\\server\share`.
+ *
+ * Enforced on the wire rather than left to the endpoints because both
+ * directions can do damage with a relative path: the host resolves a request
+ * against its own working directory, and the picker can submit a response
+ * path straight to `workspace.prepareFolders` without it passing through the
+ * typed-path validation that would otherwise have caught it.
+ */
+const ABSOLUTE_HOST_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
+const absoluteHostPathSchema = z
+  .string()
+  .min(1)
+  .regex(ABSOLUTE_HOST_PATH, "must be an absolute host path");
+
+export const workspaceBrowseFolderEntrySchema = z.object({
+  /** Absolute host-native path of the folder. */
+  path: absoluteHostPathSchema,
+  /** Display basename, computed by the host. */
+  name: z.string().min(1),
+});
+export type WorkspaceBrowseFolderEntry = z.infer<
+  typeof workspaceBrowseFolderEntrySchema
+>;
+
+export const workspaceBrowseFolderEntrySchemaV11 =
+  workspaceBrowseFolderEntrySchema.extend({
+    /** Dot-hidden on POSIX/macOS, or carrying Windows' native Hidden attribute. */
+    hidden: z.boolean(),
+  });
+export type WorkspaceBrowseFolderEntryV11 = z.infer<
+  typeof workspaceBrowseFolderEntrySchemaV11
+>;
+
+/**
+ * Pre-workspace folder browsing for the remote folder picker: unlike
+ * `workspace.listDirectory` (scoped to an already-added workspace), this
+ * lists the host filesystem so a remote client can choose a folder to add.
+ * One level per request; `directoryPath: null` starts at the host user's
+ * home directory (the response reveals the resolved path).
+ *
+ * A folder the OS refuses to list fails the request with a classified error
+ * instead of a fake-empty listing: permission denial, a nonexistent path,
+ * and a listing timeout are each distinct. The host bounds every read with
+ * a timeout, so the RPC always answers; a timeout does not PROVE a consent
+ * prompt (a huge or slow directory can exceed it too), but on a macOS host
+ * one may be waiting on screen (Files & Folders TCC can prompt a
+ * GUI-session host on first touch) - approving it there and retrying here
+ * is the remote consent flow.
+ */
+export const workspaceBrowseFoldersRequestSchema = z.object({
+  directoryPath: absoluteHostPathSchema.nullable(),
+});
+export type WorkspaceBrowseFoldersRequest = z.infer<
+  typeof workspaceBrowseFoldersRequestSchema
+>;
+
+export const workspaceBrowseFoldersResponseSchema = z.object({
+  /** Absolute path that was listed (resolved from a null request). */
+  directoryPath: absoluteHostPathSchema,
+  /** Null only at the filesystem root; even the home directory walks up. */
+  parentPath: absoluteHostPathSchema.nullable(),
+  /** Direct child DIRECTORIES only; files never cross the wire. */
+  entries: z.array(workspaceBrowseFolderEntrySchema),
+});
+export type WorkspaceBrowseFoldersResponse = z.infer<
+  typeof workspaceBrowseFoldersResponseSchema
+>;
+
+export const workspaceBrowseFoldersResponseSchemaV11 =
+  workspaceBrowseFoldersResponseSchema.extend({
+    entries: z.array(workspaceBrowseFolderEntrySchemaV11),
+  });
+export type WorkspaceBrowseFoldersResponseV11 = z.infer<
+  typeof workspaceBrowseFoldersResponseSchemaV11
+>;
+
 export const workspaceReadFileRequestSchema = z.object({
   workspacePath: z.string(),
   filePath: z.string(),
@@ -347,4 +438,548 @@ export const workspaceReadFileResponseSchema = z.object({
 });
 export type WorkspaceReadFileResponse = z.infer<
   typeof workspaceReadFileResponseSchema
+>;
+
+export const WORKSPACE_WRITE_FILE_MAX_CHARS = 1_000_000;
+
+const workspaceFileRevisionSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 revision");
+
+/**
+ * Conflict-safe text-file write. `expectedRevision` is the SHA-256 of the
+ * exact UTF-8 text returned by the read that started the edit session. The
+ * host only saves when the live file still matches it (or already equals the
+ * submitted content, making a lost-ack retry idempotent).
+ */
+export const workspaceWriteFileRequestSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+  expectedRevision: workspaceFileRevisionSchema,
+  content: z.string().max(WORKSPACE_WRITE_FILE_MAX_CHARS),
+});
+export type WorkspaceWriteFileRequest = z.infer<
+  typeof workspaceWriteFileRequestSchema
+>;
+
+const workspaceWriteFileResponseBaseSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+
+export const workspaceWriteFileResponseSchema = z.discriminatedUnion("status", [
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("saved"),
+    revision: workspaceFileRevisionSchema,
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("conflict"),
+    currentRevision: workspaceFileRevisionSchema,
+    error: z.string(),
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("error"),
+    error: z.string(),
+  }),
+]);
+export type WorkspaceWriteFileResponse = z.infer<
+  typeof workspaceWriteFileResponseSchema
+>;
+
+// -----------------------------------------------------------------------------
+// Workspace root picking (T14, Journey 3; re-homed onto `workspace.prepareFolders`
+// v1.1 by T18 - see the RPC backward-compat decision log) - the pre-workspace
+// operations a remote client needs before it has a workspace to browse at all:
+// the folder lives on the host, so a client can only enter/paste a path, never
+// open a native OS dialog. Distinct from the mention/tree/read RPCs above,
+// which all assume a workspace root is already chosen.
+// -----------------------------------------------------------------------------
+
+export const workspacePathRejectionReasonSchema = z.enum([
+  "NOT_ABSOLUTE",
+  "NOT_FOUND",
+  "NOT_A_DIRECTORY",
+  "NO_PERMISSION",
+]);
+export type WorkspacePathRejectionReason = z.infer<
+  typeof workspacePathRejectionReasonSchema
+>;
+
+/**
+ * Shared outcome shape for both the `validatePath` operation (live,
+ * as-you-type probing - safe to call on every keystroke, never records
+ * anything) and a newly-opened `recordRecentWorkspace` commit. A
+ * `bumpRecency: false` move transfers an already-prepared Active path without
+ * probing the filesystem again, so its response leaves `validation` null.
+ * `resolvedPath` is the realpath-canonicalized absolute directory the client
+ * should bind the workspace to.
+ */
+export const workspaceValidatePathResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), resolvedPath: z.string() }),
+  z.object({
+    ok: z.literal(false),
+    reason: workspacePathRejectionReasonSchema,
+  }),
+]);
+export type WorkspaceValidatePathResponse = z.infer<
+  typeof workspaceValidatePathResponseSchema
+>;
+
+export const workspaceRecentEntrySchema = z.object({
+  path: z.string(),
+  lastOpenedAt: z.string(),
+});
+export type WorkspaceRecentEntry = z.infer<typeof workspaceRecentEntrySchema>;
+
+// -----------------------------------------------------------------------------
+// `workspace.prepareFolders` v1.1 - additive `operation` discriminator folding
+// the 4 standalone workspace-picker methods (`workspace.getHomeDir`,
+// `workspace.validatePath`, `workspace.recordRecentWorkspace`,
+// `workspace.listRecentWorkspaces`) onto the existing method name (T18). Kept
+// as a flat object rather than a discriminated union at the top level: the
+// versioned-RPC framework's minor-line additivity check requires the same
+// JSON-Schema "kind" across a minor bump, and v1.0's request/response are
+// plain objects.
+//
+// `folderPaths` stays a plain (non-nullable) array ONLY for `operation:
+// "prepare"` - every other operation sends `folderPaths: null`, which v1.0's
+// `z.array(z.string())` request schema rejects. That is deliberate: it makes
+// the framework's automatic same-major downgrade (Zod-parsing a newer
+// request through the older schema when a v1.1 client talks to a v1.0 host)
+// fail closed with a per-call `RPC_ERROR` for the 4 genuinely-new operations,
+// instead of silently succeeding with a nonsensical "prepared 0 folders"
+// response. A real `prepare` call still degrades transparently against a
+// v1.0 host - the whole point of folding onto this method instead of a new
+// name.
+// -----------------------------------------------------------------------------
+
+export const workspacePrepareFoldersOperationSchema = z.enum([
+  "prepare",
+  "getHomeDir",
+  "validatePath",
+  "recordRecentWorkspace",
+  "listRecentWorkspaces",
+]);
+export type WorkspacePrepareFoldersOperation = z.infer<
+  typeof workspacePrepareFoldersOperationSchema
+>;
+
+export const workspacePrepareFoldersRequestSchemaV11 = z.object({
+  operation: workspacePrepareFoldersOperationSchema,
+  /** Set only for `operation: "prepare"`. */
+  folderPaths: z.array(z.string()).nullable(),
+  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+  path: z.string().nullable(),
+});
+export type WorkspacePrepareFoldersRequestV11 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV11
+>;
+
+export const workspacePrepareFoldersResponseSchemaV11 = z.object({
+  operation: workspacePrepareFoldersOperationSchema,
+  /** Set for `operation: "prepare"`; `[]` otherwise. */
+  folders: z.array(preparedWorkspaceFolderSchema),
+  /** Set for `operation: "prepare"`; `[]` otherwise. */
+  repoIdentifiers: z.array(taskRepoIdentifierSchema),
+  /** Set only for `operation: "getHomeDir"`. */
+  homeDir: z.string().nullable(),
+  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+  validation: workspaceValidatePathResponseSchema.nullable(),
+  /** Set for `operation: "listRecentWorkspaces"` and successful recent writes. */
+  recentWorkspaces: z.array(workspaceRecentEntrySchema).nullable(),
+});
+export type WorkspacePrepareFoldersResponseV11 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV11
+>;
+
+// v1.2 keeps the v1.1 operation envelope and adds the one mutation needed by
+// the creation pickers' integrated Recent tier. `bumpRecency` distinguishes a
+// successful attach/reactivation (`true`) from moving an already-active folder
+// out of context (`false`), which must not make an old workspace look newly
+// used. v1.1 callers upgrade with `true`, preserving their released behavior.
+export const workspacePrepareFoldersOperationSchemaV12 = z.enum([
+  ...workspacePrepareFoldersOperationSchema.options,
+  "forgetRecentWorkspace",
+]);
+
+export const workspacePrepareFoldersRequestSchemaV12 =
+  workspacePrepareFoldersRequestSchemaV11.extend({
+    operation: workspacePrepareFoldersOperationSchemaV12,
+    /** Set only for `operation: "recordRecentWorkspace"`. */
+    bumpRecency: z.boolean().nullable(),
+  });
+export type WorkspacePrepareFoldersRequestV12 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV12
+>;
+
+export const workspacePrepareFoldersResponseSchemaV12 =
+  workspacePrepareFoldersResponseSchemaV11.extend({
+    operation: workspacePrepareFoldersOperationSchemaV12,
+  });
+export type WorkspacePrepareFoldersResponseV12 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV12
+>;
+
+// v1.3 adds the one filesystem mutation the folder picker needs when its
+// final typed segment does not exist. The existing `path` field carries the
+// target; the response uses the ordinary prepared-folder fields so creation
+// and workspace preparation stay one host operation.
+export const workspacePrepareFoldersOperationSchemaV13 = z.enum([
+  ...workspacePrepareFoldersOperationSchemaV12.options,
+  "createAndPrepare",
+]);
+
+export const workspacePrepareFoldersRequestSchemaV13 =
+  workspacePrepareFoldersRequestSchemaV12
+    .extend({
+      operation: workspacePrepareFoldersOperationSchemaV13,
+    })
+    .superRefine((request, context) => {
+      if (request.operation !== "createAndPrepare") return;
+      if (request.path === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "createAndPrepare requires path",
+          path: ["path"],
+        });
+        return;
+      }
+      const absolutePath = absoluteHostPathSchema.safeParse(request.path);
+      if (!absolutePath.success) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "createAndPrepare requires an absolute host path",
+          path: ["path"],
+        });
+      }
+    });
+export type WorkspacePrepareFoldersRequestV13 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV13
+>;
+
+export const workspacePrepareFoldersResponseSchemaV13 =
+  workspacePrepareFoldersResponseSchemaV12.extend({
+    operation: workspacePrepareFoldersOperationSchemaV13,
+  });
+export type WorkspacePrepareFoldersResponseV13 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV13
+>;
+
+// v1.4 gives the existing `bumpRecency` field meaning on `prepare` and
+// `createAndPrepare`: true records every canonical prepared folder in one
+// host-side recents mutation. The shape is unchanged; the minor version gates
+// the new behavior so v1.3 hosts never silently ignore the request.
+export const workspacePrepareFoldersRequestSchemaV14 =
+  workspacePrepareFoldersRequestSchemaV13;
+export type WorkspacePrepareFoldersRequestV14 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV14
+>;
+
+export const workspacePrepareFoldersResponseSchemaV14 =
+  workspacePrepareFoldersResponseSchemaV13;
+export type WorkspacePrepareFoldersResponseV14 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV14
+>;
+
+/**
+ * Scoped file/folder name search over a SINGLE Epic-attached root.
+ *
+ * `epicId` is explicit and required (the decision log forbids an omitted Epic
+ * or a cross-Epic sentinel). `reference.root` names the client-selected
+ * workspace-folder or worktree root - it is the same on-disk path the Epic
+ * workspace pickers already expose (a binding `runningDir` or a resolved
+ * workspace-folder path). It is a SELECTOR, not authority: the host resolves
+ * the Epic's attached folders/bindings for THIS host, canonicalizes both
+ * sides, and rejects any root that is not in that allow-list (unknown, moved,
+ * escaped, or cross-host). The host never accepts an arbitrary absolute path
+ * as search authority - this is the boundary that `workspace.listFileTree`
+ * (which trusts the client `workspacePath`) does not enforce.
+ */
+export const workspaceSearchPathsReferenceSchema = z.object({
+  root: z.string(),
+});
+export type WorkspaceSearchPathsReference = z.infer<
+  typeof workspaceSearchPathsReferenceSchema
+>;
+
+/**
+ * An opaque, Epic-scoped source selector. The renderer may name this source,
+ * but never the host-local mirror directory behind it; the resolver derives
+ * that directory from the required request `epicId` after authorizing access.
+ */
+export const workspaceEpicArtifactsSourceSchema = z.object({
+  kind: z.literal("epic-artifacts"),
+});
+export type WorkspaceEpicArtifactsSource = z.infer<
+  typeof workspaceEpicArtifactsSourceSchema
+>;
+
+/**
+ * A search source is either the original attached-root selector or the
+ * additive, host-derived Epic artifact source. Keep the `{ root }` branch
+ * intact: already-built renderers continue to send and receive its legacy
+ * shape without learning about artifact mirrors.
+ */
+export const workspaceSearchSourceSchema = z.union([
+  workspaceEpicArtifactsSourceSchema,
+  workspaceSearchPathsReferenceSchema,
+]);
+export type WorkspaceSearchSource = z.infer<typeof workspaceSearchSourceSchema>;
+
+/**
+ * Which candidate kinds a caller wants back. The host filters candidates to
+ * this set BEFORE ranking and applying `limit`, so a `folders` request spends
+ * every one of its `limit` slots on folders (files never crowd them out) and a
+ * `files` request never pays to rank/serialize folders. `both` ranks the union.
+ */
+export const workspaceSearchPathsKindFilterSchema = z.enum([
+  "files",
+  "folders",
+  "both",
+]);
+export type WorkspaceSearchPathsKindFilter = z.infer<
+  typeof workspaceSearchPathsKindFilterSchema
+>;
+
+export const workspaceSearchPathsRequestSchema = z.object({
+  epicId: z.string(),
+  reference: workspaceSearchSourceSchema,
+  query: z.string(),
+  limit: z.number().int().min(1).max(100),
+  kinds: workspaceSearchPathsKindFilterSchema,
+});
+export type WorkspaceSearchPathsRequest = z.infer<
+  typeof workspaceSearchPathsRequestSchema
+>;
+
+export const workspaceSearchPathResultKindSchema = z.enum(["file", "folder"]);
+export type WorkspaceSearchPathResultKind = z.infer<
+  typeof workspaceSearchPathResultKindSchema
+>;
+
+/**
+ * A single ranked result. `relPath` is host-canonical: POSIX-relative to the
+ * authorized root, `/`-separated, no leading slash, and (for folders) no
+ * trailing slash. `name` is the host-computed display basename so the renderer
+ * never parses the path. The renderer reconstructs any absolute/open target by
+ * joining `relPath` onto the reference root it already holds - the host does
+ * NOT return a host-absolute path as search authority.
+ */
+export const workspaceSearchPathResultSchema = z.object({
+  kind: workspaceSearchPathResultKindSchema,
+  relPath: z.string(),
+  name: z.string(),
+});
+export type WorkspaceSearchPathResult = z.infer<
+  typeof workspaceSearchPathResultSchema
+>;
+
+/**
+ * Distinguishes a genuine search from a refused root:
+ * - `ready`: the root was authorized and searched. `results` is the (possibly
+ *   empty) match set - an empty `ready` means "searched, nothing matched".
+ * - `root_unavailable`: the selected root is not authorized/attached/resolvable
+ *   for this Epic on this host (unknown, moved, escaped, or cross-host). No
+ *   search ran; `results` is empty. This is deliberately a status, NOT a reason
+ *   or a path, so it never leaks WHY a root was refused. Callers treat it like
+ *   an unsupported/errored request: the file-tree panel falls back to its local
+ *   filter, and mention callers re-issue that root through the legacy RPC.
+ */
+export const workspaceSearchPathsOutcomeSchema = z.enum([
+  "ready",
+  "root_unavailable",
+]);
+export type WorkspaceSearchPathsOutcome = z.infer<
+  typeof workspaceSearchPathsOutcomeSchema
+>;
+
+/**
+ * Echoes the authorized `epicId` and `root` so a late response that crosses an
+ * Epic/host/workspace/worktree selection change is detectable and discardable
+ * by the caller. `truncated` marks that enumeration hit an internal cap.
+ */
+export const workspaceSearchPathsAttachedRootResponseSchema = z.object({
+  epicId: z.string(),
+  root: z.string(),
+  outcome: workspaceSearchPathsOutcomeSchema,
+  results: z.array(workspaceSearchPathResultSchema),
+  truncated: z.boolean(),
+});
+export type WorkspaceSearchPathsAttachedRootResponse = z.infer<
+  typeof workspaceSearchPathsAttachedRootResponseSchema
+>;
+
+/**
+ * Additive response branch for the opaque artifact source. It echoes the typed
+ * selector rather than a mirror path, so a stale response is still detectable
+ * without making the host filesystem layout part of the wire contract.
+ */
+export const workspaceSearchPathsEpicArtifactsResponseSchema = z.object({
+  epicId: z.string(),
+  source: workspaceEpicArtifactsSourceSchema,
+  outcome: workspaceSearchPathsOutcomeSchema,
+  results: z.array(workspaceSearchPathResultSchema),
+  truncated: z.boolean(),
+});
+export type WorkspaceSearchPathsEpicArtifactsResponse = z.infer<
+  typeof workspaceSearchPathsEpicArtifactsResponseSchema
+>;
+
+export const workspaceSearchPathsResponseSchema = z.union([
+  workspaceSearchPathsAttachedRootResponseSchema,
+  workspaceSearchPathsEpicArtifactsResponseSchema,
+]);
+export type WorkspaceSearchPathsResponse = z.infer<
+  typeof workspaceSearchPathsResponseSchema
+>;
+
+/**
+ * Scoped code TEXT (file-content) search over one attached root or the
+ * host-derived Epic artifact source.
+ *
+ * Same authorization boundary as {@link workspaceSearchPathsRequestSchema}:
+ * `epicId` is explicit/required. For `reference: { root }`, the host authorizes
+ * that selector against the Epic's attached folders/bindings for THIS host
+ * (never an arbitrary absolute path). For `reference: { kind: "epic-artifacts" }`,
+ * the host authorizes the Epic first, then derives its mirror root internally.
+ * An unavailable source yields the typed `root_unavailable` outcome without
+ * ever reaching ripgrep.
+ *
+ * Where path search fuzzy-ranks file NAMES, text search matches file CONTENTS
+ * with ripgrep. Matching semantics are literal by default; `options.regex`
+ * enables explicit regex (a bad pattern returns the typed `invalid_regex`
+ * outcome, distinct from a zero-match `ready`). Arguments are passed directly to
+ * `rg` as an argv array - the host never builds a shell string.
+ */
+export const workspaceSearchTextOptionsSchema = z.object({
+  // `false` (default) matches the query literally (`rg --fixed-strings`); `true`
+  // treats it as a regular expression. An invalid regex is reported as the
+  // `invalid_regex` outcome rather than throwing.
+  regex: z.boolean(),
+  // `false` (default) is case-insensitive; `true` forces a case-sensitive
+  // match. This mirrors the renderer's "Match case" toggle directly.
+  caseSensitive: z.boolean(),
+  // `true` requires the match to fall on word boundaries (`rg --word-regexp`).
+  wholeWord: z.boolean(),
+  // ripgrep `--glob` include / exclude filters (relative to the selected
+  // source). Include globs restrict the walked set; exclude globs are sent as
+  // negated globs (`!<glob>`). For the artifact source, a terminal `.md` is a
+  // virtual alias for its extensionless logical artifact path; the private
+  // `index.md` mirror layout is never exposed. Empty arrays impose no filter.
+  includeGlobs: z.array(z.string()),
+  excludeGlobs: z.array(z.string()),
+});
+export type WorkspaceSearchTextOptions = z.infer<
+  typeof workspaceSearchTextOptionsSchema
+>;
+
+export const workspaceSearchTextRequestSchema = z.object({
+  epicId: z.string(),
+  reference: workspaceSearchSourceSchema,
+  query: z.string(),
+  options: workspaceSearchTextOptionsSchema,
+  limit: z.number().int().min(1).max(1_000),
+});
+export type WorkspaceSearchTextRequest = z.infer<
+  typeof workspaceSearchTextRequestSchema
+>;
+
+/**
+ * Maximum size, in UTF-8 bytes, of a single match `preview.text`. ripgrep
+ * returns the FULL matched line in `--json` mode (its `--max-columns` does NOT
+ * bound the JSON `lines.text` payload), so the host truncates the preview to
+ * this bound on a UTF-8 character boundary and clamps/drops highlight ranges so
+ * every returned range still addresses the returned text. Bounds response weight
+ * against a pathological single-line file.
+ */
+export const WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES =
+  SEARCH_TEXT_PREVIEW_MAX_BYTES;
+
+/**
+ * One preview line for a match. `text` is bounded to
+ * {@link WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES} UTF-8 bytes host-side. `ranges`
+ * are BYTE offsets into the UTF-8 encoding of `text` (ripgrep submatch offsets),
+ * not UTF-16/JS string indices, so a consumer that wants character indices
+ * converts deliberately; a highlight past the truncation bound is dropped.
+ */
+export const workspaceSearchTextPreviewSchema = z.object({
+  text: z.string(),
+  ranges: z.array(searchTextPreviewRangeSchema),
+});
+export type WorkspaceSearchTextPreview = z.infer<
+  typeof workspaceSearchTextPreviewSchema
+>;
+
+/**
+ * A single content match. `relPath` is host-canonical: POSIX-relative to the
+ * authorized root, `/`-separated, no leading slash - the renderer opens it by
+ * joining onto the reference root it already holds (the host never returns an
+ * absolute path as authority). `lineNumber` is 1-based; `column` is the 1-based
+ * CHARACTER column of the first submatch on the line (for editor navigation),
+ * computed over the full line before preview truncation.
+ */
+export const workspaceSearchTextMatchSchema = z.object({
+  relPath: z.string(),
+  lineNumber: z.number().int().positive(),
+  column: z.number().int().positive(),
+  preview: workspaceSearchTextPreviewSchema,
+});
+export type WorkspaceSearchTextMatch = z.infer<
+  typeof workspaceSearchTextMatchSchema
+>;
+
+/**
+ * Distinguishes a genuine search from a refused root and from a bad pattern:
+ * - `ready`: the root was authorized and searched. `results` is the (possibly
+ *   empty) match set - an empty `ready` means "searched, nothing matched".
+ * - `root_unavailable`: the selected root is not authorized/attached/resolvable
+ *   for this Epic on this host. No search ran; deliberately a bare status that
+ *   never leaks WHY. Callers fall back exactly as for `workspace.searchPaths`.
+ * - `invalid_regex`: `options.regex` was set and the query is not a valid
+ *   regular expression. No matches; a distinct typed condition so the UI can
+ *   show "invalid pattern" rather than a misleading empty result.
+ */
+export const workspaceSearchTextOutcomeSchema = z.enum([
+  "ready",
+  "root_unavailable",
+  "invalid_regex",
+]);
+export type WorkspaceSearchTextOutcome = z.infer<
+  typeof workspaceSearchTextOutcomeSchema
+>;
+
+/**
+ * Echoes the authorized `epicId` and `root` so a late response that crosses an
+ * Epic/host/workspace/worktree/query change is detectable and discardable by the
+ * caller. `truncated` marks that the search hit an internal result/byte/timeout
+ * cap.
+ */
+export const workspaceSearchTextAttachedRootResponseSchema = z.object({
+  epicId: z.string(),
+  root: z.string(),
+  outcome: workspaceSearchTextOutcomeSchema,
+  results: z.array(workspaceSearchTextMatchSchema),
+  truncated: z.boolean(),
+});
+export type WorkspaceSearchTextAttachedRootResponse = z.infer<
+  typeof workspaceSearchTextAttachedRootResponseSchema
+>;
+
+export const workspaceSearchTextEpicArtifactsResponseSchema = z.object({
+  epicId: z.string(),
+  source: workspaceEpicArtifactsSourceSchema,
+  outcome: workspaceSearchTextOutcomeSchema,
+  results: z.array(workspaceSearchTextMatchSchema),
+  truncated: z.boolean(),
+});
+export type WorkspaceSearchTextEpicArtifactsResponse = z.infer<
+  typeof workspaceSearchTextEpicArtifactsResponseSchema
+>;
+
+export const workspaceSearchTextResponseSchema = z.union([
+  workspaceSearchTextAttachedRootResponseSchema,
+  workspaceSearchTextEpicArtifactsResponseSchema,
+]);
+export type WorkspaceSearchTextResponse = z.infer<
+  typeof workspaceSearchTextResponseSchema
 >;

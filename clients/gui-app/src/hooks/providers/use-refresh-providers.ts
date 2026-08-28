@@ -7,8 +7,9 @@ import { useCallback } from "react";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
 type ProvidersListRequest = RequestOfMethod<HostRpcRegistry, "providers.list">;
 type ProvidersListResponse = ResponseOfMethod<
@@ -39,23 +40,21 @@ export function useRefreshProviders(): () => Promise<void> {
     options: {
       mutationKey: providersMutationKeys.refresh(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (data: ProvidersListResponse, _variables, ctx) => {
+      onSuccess: async (data: ProvidersListResponse, _variables, ctx) => {
         if (ctx.hostId === null) return;
-        queryClient.setQueryData(
-          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            ctx.hostId,
-            "providers.list",
-            {},
-          ),
-          data,
-        );
-        for (const method of PROVIDER_INVALIDATIONS.filter(
-          (entry) => entry !== "providers.list",
-        )) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(ctx.hostId, method),
-          });
-        }
+        // Drops the harness catalogs alongside the list, which is what makes
+        // good on this hook's contract under auto-enablement: a refresh can
+        // now change which providers are available at all - a terminal
+        // sign-in completing is observed exactly here - so the catalogs must
+        // move with it. `PROVIDER_INVALIDATIONS` already names both, and the
+        // commit helper invalidates every entry except `providers.list`, so
+        // this single call covers it. Invalidating them again here would
+        // re-stale what it just refetched.
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: ctx.hostId,
+          update: () => data,
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh providers."),
@@ -68,7 +67,15 @@ export function useRefreshProviders(): () => Promise<void> {
   // refresh control on each provider-fetch tick.
   const { mutateAsync } = mutation;
   return useCallback(async () => {
-    if (client.getActiveHostId() === null) return;
-    await mutateAsync({ forceAuthRefresh: true });
-  }, [client, mutateAsync]);
+    const hostId = client.getActiveHostId();
+    if (hostId === null) return;
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
+      hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        hostId,
+        "providers.list",
+        { native: null },
+      ),
+    );
+    await mutateAsync({ forceAuthRefresh: true, native: null });
+  }, [client, mutateAsync, queryClient]);
 }

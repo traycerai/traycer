@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronsUpDown, X } from "lucide-react";
-import type { TraycerDetectedShell } from "@traycer-clients/shared/platform/runner-host";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, ChevronsUpDown, RotateCcw, X } from "lucide-react";
+import type {
+  ConfigDetectedShell,
+  ConfigShellProbeResponse,
+} from "@traycer/protocol/host/config/index";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import {
-  traycerShellProbeQueryOptions,
-  useRunnerTraycerShellProbeQuery,
-} from "@/hooks/runner/use-runner-traycer-shell-probe-query";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import type { ShellProbeSource } from "@/components/settings/panels/shell/shell-config-controller";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +38,28 @@ function isAbsolutePath(path: string): boolean {
 }
 
 /**
+ * One options builder for both probe callers — the live status line's query and
+ * the imperative `fetchQuery` after a Browse pick — so the two can never land on
+ * different cache slots for the same path. The key comes from the source, not
+ * from here: a local-bridge answer and a per-host RPC answer are different
+ * facts about different machines.
+ */
+function shellProbeQueryOptions(
+  source: ShellProbeSource,
+  path: string,
+  enabled: boolean,
+) {
+  return queryOptions<ConfigShellProbeResponse>({
+    queryKey: source.queryKeyFor(path),
+    queryFn: ({ signal }) => source.probe(path, signal),
+    enabled,
+    // A given path's existence/executability doesn't change under the user's
+    // feet mid-session, so cache the answer and never refetch on focus.
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/**
  * The concrete rows below "System default": detected ∪ added, plus a transient
  * row for a `value` that is neither (e.g. set via the CLI by hand) so the picker
  * never shows an unrepresented choice. Sorted purely alphabetically - the
@@ -47,10 +68,10 @@ function isAbsolutePath(path: string): boolean {
  * pins to.
  */
 function buildEntryList(
-  shells: readonly TraycerDetectedShell[],
+  shells: readonly ConfigDetectedShell[],
   value: string,
-): { entries: TraycerDetectedShell[]; matched: TraycerDetectedShell | null } {
-  const entries: TraycerDetectedShell[] = [...shells];
+): { entries: ConfigDetectedShell[]; matched: ConfigDetectedShell | null } {
+  const entries: ConfigDetectedShell[] = [...shells];
   if (!entries.some((entry) => samePath(entry.path, value))) {
     entries.push({
       name: basenameOf(value),
@@ -86,26 +107,35 @@ function buildEntryList(
 export function ShellProgramCombobox(props: {
   readonly value: string;
   readonly synthesised: boolean;
-  readonly shells: readonly TraycerDetectedShell[];
+  readonly shells: readonly ConfigDetectedShell[];
   readonly disabled: boolean;
+  /**
+   * Where "does this path exist and can it run?" is asked — the machine being
+   * configured, which is not necessarily this one. See `ShellProbeSource`.
+   */
+  readonly probeSource: ShellProbeSource;
   readonly onSelect: (path: string) => void;
   readonly onAdd: (path: string) => void;
   readonly onRemove: (path: string) => void;
   readonly onUseSystemDefault: () => void;
+  /** Re-runs detection on the target machine; see `refreshShells`. */
+  readonly onRefresh: () => void;
+  readonly refreshing: boolean;
 }) {
   const {
     value,
     synthesised,
     shells,
     disabled,
+    probeSource,
     onSelect,
     onAdd,
     onRemove,
     onUseSystemDefault,
+    onRefresh,
+    refreshing,
   } = props;
-  const runnerHost = useRunnerHost();
-  const traycerCli = runnerHost.traycerCli;
-  const pickProgramFile = traycerCli?.pickShellProgramFile ?? null;
+  const pickProgramFile = probeSource.pickProgramFile;
   const queryClient = useQueryClient();
 
   const [open, setOpen] = useState(false);
@@ -130,10 +160,13 @@ export function ShellProgramCombobox(props: {
   const trimmedInput = input.trim();
   const inputIsAbsolute =
     trimmedInput.length > 0 && isAbsolutePath(trimmedInput);
-  const probeQuery = useRunnerTraycerShellProbeQuery({
-    path: debounced,
-    enabled: open && debounced.length > 0 && isAbsolutePath(debounced),
-  });
+  const probeQuery = useQuery(
+    shellProbeQueryOptions(
+      probeSource,
+      debounced,
+      open && debounced.length > 0 && isAbsolutePath(debounced),
+    ),
+  );
   // Only trust the probe result when it describes the value currently typed,
   // so a stale (pre-debounce) result never colours the status line.
   const probe =
@@ -175,7 +208,7 @@ export function ShellProgramCombobox(props: {
       // Same gate as a typed path: only an executable file is added outright; a
       // non-executable pick is left in the input so its amber status explains why.
       const result = await queryClient.fetchQuery(
-        traycerShellProbeQueryOptions(traycerCli, picked, true),
+        shellProbeQueryOptions(probeSource, picked, true),
       );
       if (result.exists && result.executable) commitAdd(picked);
     } catch (error) {
@@ -205,7 +238,7 @@ export function ShellProgramCombobox(props: {
           ref={triggerRef}
           type="button"
           disabled={disabled}
-          className="inline-flex w-[min(60vw,22rem)] items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-sm transition-colors hover:bg-muted/50 disabled:opacity-50"
+          className="inline-flex w-[min(60vw,22rem)] items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-left text-ui-sm transition-colors hover:bg-foreground/5 disabled:opacity-50"
         >
           <TriggerLabel
             synthesised={synthesised}
@@ -235,7 +268,12 @@ export function ShellProgramCombobox(props: {
               label="System default"
               labelMono={false}
               detail={`${defaultEntry.name} · ${defaultEntry.path}`}
-              missing={false}
+              // The OS default is `%COMSPEC%` on Windows, which a user can
+              // point at wsl.exe - so this row can be a broken WSL too, and
+              // must refuse exactly like its concrete twin rather than
+              // resetting the config to a shell that cannot start.
+              notice={shellRowNotice(defaultEntry)}
+              selectable={defaultEntry.wslHealth === undefined}
               testId="settings-shell-reset"
               onSelect={() => {
                 onUseSystemDefault();
@@ -253,7 +291,12 @@ export function ShellProgramCombobox(props: {
               label={entry.name}
               labelMono
               detail={entry.path}
-              missing={entry.missing}
+              notice={shellRowNotice(entry)}
+              // A missing added row stays selectable (reinstalling the shell
+              // heals it in place), but a broken-WSL row is refused outright:
+              // selecting it yields a terminal that prints wsl.exe usage text
+              // and dies, which reads as "terminals don't start at all".
+              selectable={entry.wslHealth === undefined}
               testId={null}
               onSelect={() => commitSelect(entry.path)}
               onRemove={
@@ -264,13 +307,19 @@ export function ShellProgramCombobox(props: {
           ))}
         </div>
 
+        <RedetectShellsFooter
+          disabled={disabled}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+        />
+
         <div className="border-t border-border/60" />
 
         <div className="px-2 py-2">
           <div className="px-1 pb-1 text-ui-xs uppercase tracking-wide text-muted-foreground/70">
             Add a shell
           </div>
-          <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 focus-within:border-border">
+          <div className="flex items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-2 py-1.5 focus-within:border-border">
             <span className="shrink-0 font-mono text-[var(--term-ansi-green)]">
               ❯
             </span>
@@ -330,8 +379,8 @@ export function ShellProgramCombobox(props: {
 function TriggerLabel(props: {
   readonly synthesised: boolean;
   readonly value: string;
-  readonly matched: TraycerDetectedShell | null;
-  readonly defaultEntry: TraycerDetectedShell | null;
+  readonly matched: ConfigDetectedShell | null;
+  readonly defaultEntry: ConfigDetectedShell | null;
 }) {
   const { synthesised, value, matched, defaultEntry } = props;
   const storedName = matched !== null ? matched.name : basenameOf(value);
@@ -351,10 +400,55 @@ function TriggerLabel(props: {
 }
 
 /**
+ * The explicit freshness control under the shell list. Detection is otherwise
+ * per-panel-visit, deliberately never focus-driven (unreliable desktop focus
+ * signals, a wsl.exe probe spawn per run, and window focus says nothing about
+ * a remote host) - this button is what lets a user who just ran `wsl --install`
+ * verify the picker now agrees.
+ */
+function RedetectShellsFooter(props: {
+  readonly disabled: boolean;
+  readonly refreshing: boolean;
+  readonly onRefresh: () => void;
+}) {
+  return (
+    <div className="flex justify-end border-t border-border/60 px-2 py-1">
+      <button
+        type="button"
+        disabled={props.disabled || props.refreshing}
+        onClick={props.onRefresh}
+        data-testid="settings-shell-refresh"
+        className="inline-flex items-center gap-1.5 rounded px-1.5 py-1 text-ui-xs text-muted-foreground transition-colors hover:enabled:text-foreground disabled:opacity-50"
+      >
+        <RotateCcw
+          className={cn("size-3", props.refreshing && "animate-spin")}
+        />
+        {props.refreshing ? "Detecting…" : "Re-detect shells"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The amber annotation on a row, when it has one: a vanished added shell reads
+ * "not found" (echoing the add-time probe), a WSL that cannot host a terminal
+ * names why. One slot - `missing` and `wslHealth` never coincide, since only
+ * detected rows carry health and detected rows are never missing.
+ */
+function shellRowNotice(entry: ConfigDetectedShell): string | null {
+  if (entry.missing) return "not found";
+  if (entry.wslHealth === "not-installed") return "WSL not installed";
+  if (entry.wslHealth === "no-distro") return "no Linux distribution";
+  return null;
+}
+
+/**
  * A single selectable option row (the System default row and every concrete
  * shell share this shape). A row that commits a selection and a nested remove
  * control cannot both be `<button>`, so the row is a `div[role=option]` (click +
- * Enter/Space) and the ✕ is a real `<button>` with `stopPropagation`.
+ * Enter/Space) and the ✕ is a real `<button>` with `stopPropagation`. An
+ * unselectable row (broken WSL) stays listed with its notice - hiding it would
+ * read as "Traycer doesn't support WSL" - but commits nothing.
  */
 function ShellOptionRow(props: {
   readonly checked: boolean;
@@ -362,7 +456,8 @@ function ShellOptionRow(props: {
   readonly label: string;
   readonly labelMono: boolean;
   readonly detail: string;
-  readonly missing: boolean;
+  readonly notice: string | null;
+  readonly selectable: boolean;
   readonly testId: string | null;
   readonly onSelect: () => void;
   readonly onRemove: (() => void) | null;
@@ -374,32 +469,37 @@ function ShellOptionRow(props: {
     label,
     labelMono,
     detail,
-    missing,
+    notice,
+    selectable,
     testId,
     onSelect,
     onRemove,
     removeLabel,
   } = props;
+  const inert = disabled || !selectable;
   return (
     <div
       role="option"
       aria-selected={checked}
-      tabIndex={disabled ? -1 : 0}
+      aria-disabled={!selectable || undefined}
+      tabIndex={inert ? -1 : 0}
       data-testid={testId ?? undefined}
       data-checked={checked ? "true" : "false"}
       onClick={() => {
-        if (!disabled) onSelect();
+        if (!inert) onSelect();
       }}
       onKeyDown={(event) => {
-        if (disabled) return;
+        if (inert) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect();
         }
       }}
       className={cn(
-        "group flex cursor-pointer items-center gap-2 px-3 py-1.5 text-ui-sm outline-none",
-        "hover:bg-accent/50 focus-visible:bg-accent/50 data-[checked=true]:bg-accent/30",
+        "group flex items-center gap-2 px-3 py-1.5 text-ui-sm outline-none",
+        selectable
+          ? "cursor-pointer hover:bg-accent/50 focus-visible:bg-accent/50 data-[checked=true]:bg-accent/30"
+          : "cursor-default opacity-70",
       )}
     >
       <Check
@@ -411,19 +511,19 @@ function ShellOptionRow(props: {
       <span className={cn("shrink-0 font-medium", labelMono && "font-mono")}>
         {label}
       </span>
-      {/* A vanished (uninstalled) shell keeps its removable row but takes the
-          amber validation tone, echoing the add-time probe's "not found". */}
       <StartTruncatedText
         className={cn(
           "min-w-0 flex-1 font-mono text-code-xs",
-          missing ? "text-[var(--term-ansi-yellow)]" : "text-muted-foreground",
+          notice !== null
+            ? "text-[var(--term-ansi-yellow)]"
+            : "text-muted-foreground",
         )}
       >
         {detail}
       </StartTruncatedText>
-      {missing ? (
+      {notice !== null ? (
         <span className="shrink-0 text-ui-xs text-[var(--term-ansi-yellow)]/80">
-          not found
+          {notice}
         </span>
       ) : null}
       {onRemove !== null ? (
@@ -453,7 +553,8 @@ function ProbeStatus(props: {
   readonly input: string;
   readonly isAbsolute: boolean;
   readonly probe:
-    { readonly exists: boolean; readonly executable: boolean } | undefined;
+    | { readonly exists: boolean; readonly executable: boolean }
+    | undefined;
 }) {
   const { input, isAbsolute, probe } = props;
   let content: { text: string; tone: "muted" | "ok" | "warn" } | null = null;

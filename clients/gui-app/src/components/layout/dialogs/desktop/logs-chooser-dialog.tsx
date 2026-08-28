@@ -329,7 +329,7 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
     const content = props.state.result.lines.join("\n");
     if (content.length === 0) {
       return (
-        <p className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground">
+        <p className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-center text-ui-xs text-muted-foreground">
           Log file is empty.
         </p>
       );
@@ -351,7 +351,7 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
             disabled={false}
           />
         </div>
-        <pre className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground">
+        <pre className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground">
           {content}
         </pre>
       </div>
@@ -360,7 +360,7 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
 
   if (props.state.status === "error") {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground">
+      <div className="flex items-center justify-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-center text-ui-xs text-muted-foreground">
         <span>{props.state.message}</span>
         <ReportIssueAction
           context={createReportIssueContext({
@@ -377,7 +377,7 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
   }
 
   return (
-    <p className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground">
+    <p className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-center text-ui-xs text-muted-foreground">
       {props.state.message}
     </p>
   );

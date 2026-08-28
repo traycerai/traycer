@@ -11,6 +11,20 @@ import {
   stubStdin,
 } from "./hook-test-helpers";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+}));
+
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/host-rpc")
@@ -65,7 +79,7 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     expect(result.data).toEqual({ accepted: true, reason: null });
   });
 
-  it("prefers --epic-id and --agent-id flags over env", async () => {
+  it("allows explicit command context to override env", async () => {
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ session_id: "sess-flag" })],

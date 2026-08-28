@@ -8,9 +8,12 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
 import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import { stashActivePrompt } from "@/lib/commands/active-prompt-stash-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
-import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 import type {
   NavigateNestedFocus,
   PrepareNestedFocusTarget,
@@ -19,7 +22,10 @@ import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
   ACTION_IDS,
   ACTION_META,
+  resolveActionDefaultChord,
+  resolveActionSecondaryChord,
   type ActionId,
+  type TerminalPolicy,
 } from "@/lib/keybindings/actions";
 import {
   digitFromCode,
@@ -42,12 +48,16 @@ import {
   type FocusDirection,
 } from "@/lib/keybindings/tile-geometry";
 import {
-  SETTINGS_SECTIONS,
+  visibleSettingsSections,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 
-const GROUP_EDITOR_FOCUS_TARGET_SELECTOR =
-  "[data-composer-editor], [data-artifact-editor]";
+const SELECTED_GROUP_TAB_SELECTOR =
+  '[data-tab-instance-id][data-selected="true"]';
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 // ---------------------------------------------------------------------------
 // Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
@@ -66,13 +76,14 @@ export interface KeybindingRouter {
   readonly navigateToEpicList: () => void;
   readonly navigateSettingsSection: (sectionId: SettingsSectionId) => void;
   /**
-   * Canonical tab activation seam. Routes a `TabNavigationIntent`
+   * Canonical tab activation seam. Routes a `TabActivationIntent`
    * through `navigateToTabIntent` so every keybinding-triggered tab
    * switch performs the same activate-then-navigate dance as a UI
    * click - see `lib/tab-navigation.ts`.
    */
-  readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
+  readonly navigateToTabIntent: (intent: TabActivationIntent) => void;
   readonly navigateNestedFocus?: NavigateNestedFocus;
+  readonly navigateNestedFocusToPrimaryEditor?: NavigateNestedFocus;
   /**
    * In-app history back/forward. Delegate to the shared
    * `goBack`/`goForward` actions on the CURRENT router (the live
@@ -121,13 +132,45 @@ export function registerDynamicActionHandler(
 // Chord lookup
 // ---------------------------------------------------------------------------
 
-export function findActionForChord(chord: ChordString): ActionId | null {
+export interface ActionChordMatch {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+export function findActionMatchForChord(
+  chord: ChordString,
+): ActionChordMatch | null {
   const bindings = useKeybindingStore.getState().bindings;
   for (const id of ACTION_IDS) {
-    if (ACTION_META[id].kind !== "chord") continue;
-    if (bindings[id] === chord) return id;
+    const meta = ACTION_META[id];
+    if (meta.kind !== "chord") continue;
+    const binding = bindings[id];
+    if (binding === null) continue;
+    if (binding === chord) {
+      const terminalPolicy =
+        binding === resolveActionDefaultChord(meta)
+          ? meta.terminalPolicy
+          : "app";
+      return { actionId: id, terminalPolicy };
+    }
+  }
+
+  for (const id of ACTION_IDS) {
+    const meta = ACTION_META[id];
+    if (meta.kind !== "chord" || bindings[id] === null) continue;
+    const secondaryChord = resolveActionSecondaryChord(meta);
+    if (secondaryChord === chord) {
+      return {
+        actionId: id,
+        terminalPolicy: meta.secondaryTerminalPolicy ?? meta.terminalPolicy,
+      };
+    }
   }
   return null;
+}
+
+export function findActionForChord(chord: ChordString): ActionId | null {
+  return findActionMatchForChord(chord)?.actionId ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,9 +189,11 @@ export interface DigitActionMatch {
   readonly digit: number;
   readonly run: () => boolean;
   readonly dispatchSequence:
-    ((digits: ReadonlyArray<number>) => boolean) | null;
+    | ((digits: ReadonlyArray<number>) => boolean)
+    | null;
   readonly sequenceState:
-    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
+    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
+    | null;
 }
 
 export function matchDigitAction(
@@ -270,10 +315,15 @@ export function registerBaseLeaderScope(router: KeybindingRouter): () => void {
 }
 
 function isSettingsScope(pathname: string): boolean {
-  return (
-    isSettingsPath(pathname) ||
-    (getSystemTabModalApi()?.isOverlayActive("settings") ?? false)
-  );
+  // The settings overlay owns the whole screen regardless of strip layout, so
+  // its section digits stay live.
+  if (getSystemTabModalApi()?.isOverlayActive("settings") ?? false) return true;
+  if (!isSettingsPath(pathname)) return false;
+  // Otherwise gate on the ACTUAL focused ref, not just the pathname. With
+  // `[Settings | empty]` focused on the empty side, `routeBackingSide` keeps the
+  // URL on /settings but the Settings tab does not own focus - an Alt-digit
+  // section command must no-op instead of stealing focus back to Settings.
+  return selectHostFocusedRef(useTabsStore.getState())?.kind === "settings";
 }
 
 function digitToIndex(digit: number): number {
@@ -343,6 +393,16 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
   "tile.find.replace": () => openActiveTileFindWithReplace(),
+  "nav.back": (r) => {
+    if (!r.isHistoryNavAvailable() || !r.canGoBack()) return false;
+    r.goBack();
+    return true;
+  },
+  "nav.forward": (r) => {
+    if (!r.isHistoryNavAvailable() || !r.canGoForward()) return false;
+    r.goForward();
+    return true;
+  },
   "app.history.open": (r) => {
     r.navigateToEpicList();
     return true;
@@ -356,9 +416,7 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // No-op (false) when no composer is active, matching the "hidden/disabled"
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
-  // No `nav.back` / `nav.forward` entries: in-app back/forward has no keyboard
-  // chord (see ACTION_META). The palette + header buttons call the shared
-  // `goBack`/`goForward` actions directly via the router seam.
+  "composer.stash": () => stashActivePrompt(),
 };
 
 export function dispatchAction(
@@ -397,6 +455,7 @@ export function isExternallyHandled(id: ActionId): boolean {
 // canvas (the store reuses an active blank tab), but on the landing page it
 // shares the new-terminal handler, so it needs the same protection.
 const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
+  "composer.stash",
   "composer.model-picker.toggle",
   "app.terminal.toggle",
   "app.terminal.new",
@@ -431,12 +490,17 @@ function moveHeaderTabFocus(router: KeybindingRouter, delta: -1 | 1): boolean {
   return true;
 }
 
+// Indexes the OFFERED sections, which is the same list the sidebar renders and
+// badges - a digit means "the nth row of the rail", so a build that offers
+// fewer sections must resolve the digit against the shorter list or the badge
+// and the shortcut name different rows.
 function switchToSettingsSection(
   router: KeybindingRouter,
   index: number,
 ): boolean {
-  if (index < 0 || index >= SETTINGS_SECTIONS.length) return false;
-  router.navigateSettingsSection(SETTINGS_SECTIONS[index].id);
+  const sections = visibleSettingsSections();
+  if (index < 0 || index >= sections.length) return false;
+  router.navigateSettingsSection(sections[index].id);
   return true;
 }
 
@@ -449,13 +513,26 @@ function getActiveEpicTabId(router: KeybindingRouter): string | null {
     return null;
   }
   if (useLandingDraftStore.getState().activeDraftId !== null) return null;
+  const focusedRef = selectHostFocusedRef(useTabsStore.getState());
+  if (focusedRef?.kind !== "epic") return null;
   const parts = router.getPathname().split("/");
   if (parts.length !== 4) return null;
   const [_root, scope, epicId, tabId] = parts;
   if (scope !== "epics" || epicId === "" || tabId === "") return null;
   const tab = useEpicCanvasStore.getState().tabsById[tabId];
-  if (tab === undefined || tab.epicId !== epicId) return null;
+  if (
+    tab === undefined ||
+    tab.epicId !== epicId ||
+    tab.tabId !== focusedRef.id ||
+    isPhaseMigrationSurface(tab)
+  ) {
+    return null;
+  }
   return tab.tabId;
+}
+
+function isPhaseMigrationSurface(tab: EpicViewTab): boolean {
+  return tab.surfaceMode?.kind === "phase-migration";
 }
 
 function getActiveTab(router: KeybindingRouter): EpicViewTab | null {
@@ -693,11 +770,15 @@ function focusGroupInDirection(
   if (active === undefined) return false;
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
-  runNestedFocus(router, tab, () =>
+  const prepare = () =>
     useEpicCanvasStore
       .getState()
-      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId),
-  );
+      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId);
+  if (router.navigateNestedFocusToPrimaryEditor === undefined) {
+    runNestedFocus(router, tab, prepare);
+  } else {
+    router.navigateNestedFocusToPrimaryEditor(tab.epicId, tab.tabId, prepare);
+  }
   focusGroupEditor(nextId);
   return true;
 }
@@ -705,12 +786,40 @@ function focusGroupInDirection(
 function focusGroupEditor(groupId: string): boolean {
   if (typeof document === "undefined") return false;
   const group = document.querySelector<HTMLElement>(groupIdSelector(groupId));
-  const editor = group?.querySelector<HTMLElement>(
-    GROUP_EDITOR_FOCUS_TARGET_SELECTOR,
+  const selectedTab = group?.querySelector<HTMLElement>(
+    SELECTED_GROUP_TAB_SELECTOR,
   );
-  if (editor === undefined || editor === null) return false;
+  const editor =
+    findComposerOrArtifactEditor(selectedTab) ??
+    findComposerOrArtifactEditor(hostedRecordForSelectedTab(selectedTab));
+  if (editor === null) return false;
   editor.focus({ preventScroll: true });
   return true;
+}
+
+function findComposerOrArtifactEditor(
+  scope: HTMLElement | null | undefined,
+): HTMLElement | null {
+  if (scope === null || scope === undefined) return null;
+  return (
+    scope.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+    scope.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR)
+  );
+}
+
+/**
+ * A hosted chat's own composer/editor lives in `StableTileSurfaceHost`'s
+ * plane - `selectedTab` (the pane's tab-body wrapper) only ever contains
+ * `TileSurfaceSlot`'s empty geometry anchor for it. `selectedTab` still
+ * carries the tab's own `data-tab-instance-id`, so no extra plumbing is
+ * needed to locate the hosted record for the same instance.
+ */
+function hostedRecordForSelectedTab(
+  selectedTab: HTMLElement | null | undefined,
+): HTMLElement | null {
+  const instanceId = selectedTab?.dataset.tabInstanceId;
+  if (instanceId === undefined) return null;
+  return findHostedTileElement(document, instanceId);
 }
 
 function focusActiveGroupEditor(router: KeybindingRouter): boolean {

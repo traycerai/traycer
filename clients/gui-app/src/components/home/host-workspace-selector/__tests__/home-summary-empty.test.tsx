@@ -1,17 +1,49 @@
-import "../../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
-import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
+import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { useHostClient } from "@/lib/host";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 
 interface MockSummariesQuery {
   readonly data:
     | {
-        readonly workspaces: readonly WorktreeWorkspaceSummary[];
+        readonly workspaces: readonly WorktreeWorkspaceSummaryV15[];
       }
     | undefined;
   readonly isFetching: boolean;
@@ -26,34 +58,43 @@ interface MockHostClient {
     readonly kind: "local";
     readonly websocketUrl: string;
     readonly version: string;
-    readonly status: "available";
+    readonly transportDialability: "dialable";
   };
   getActiveHostId(): string;
   getRequestContextUserId(): string;
-  request(): Promise<never>;
+  // Read at render by `useHostClientFor`, which every host-scoped surface now
+  // routes through (`useHostClientForHostId`).
+  getRequestContext(): object;
+  request(method: string, payload: unknown): Promise<unknown>;
   onChange(): () => void;
 }
 
-function createMockHostClient(): MockHostClient {
+function createMockHostClient(
+  request: (method: string, payload: unknown) => Promise<unknown>,
+  getHostId: () => string,
+): MockHostClient {
   return {
     getActiveHost: () => ({
-      hostId: "host-home",
+      hostId: getHostId(),
       label: "Home Mac",
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
       version: "0.0.0-test",
-      status: "available",
+      transportDialability: "dialable",
     }),
-    getActiveHostId: () => "host-home",
+    getActiveHostId: getHostId,
     getRequestContextUserId: () => "user-home",
-    request: () => Promise.reject(new Error("unexpected request")),
+    getRequestContext: () => ({}),
+    request,
     onChange: () => () => undefined,
   };
 }
 
 const mocks = vi.hoisted(() => {
+  const request =
+    vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
   const hostClient: { current: MockHostClient | null } = {
-    current: createMockHostClient(),
+    current: createMockHostClient(request, () => "host-home"),
   };
   const resolvedWorkspace: {
     current: { readonly folders: readonly ResolvedFolder[] };
@@ -68,20 +109,42 @@ const mocks = vi.hoisted(() => {
       isLoading: false,
     },
   };
+  const negotiatedVersion: {
+    current: { readonly major: number; readonly minor: number } | null;
+  } = { current: null };
+  const recentsQuery: {
+    current: {
+      readonly data: {
+        readonly recentWorkspaces: ReadonlyArray<{
+          readonly path: string;
+          readonly lastOpenedAt: string;
+        }>;
+      };
+    };
+  } = { current: { data: { recentWorkspaces: [] } } };
+  const effectiveHostListeners = new Set<() => void>();
   return {
     pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
     selectHost: vi.fn(),
     listByWorkspacePathsForClient: vi.fn(),
+    hostQueries: vi.fn(),
+    navigate: vi.fn(),
+    request,
     hostClient,
     resolvedWorkspace,
     summariesQuery,
+    negotiatedVersion,
+    recentsQuery,
+    effectiveHostListeners,
   };
 });
 
-const GIT_SUMMARY: WorktreeWorkspaceSummary = {
+const GIT_REPO_IDENTIFIER = { owner: "acme", repo: "app" };
+
+const GIT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
   workspacePath: "/workspace/app",
   isGitRepo: true,
-  repoIdentifier: { owner: "acme", repo: "app" },
+  repoIdentifier: GIT_REPO_IDENTIFIER,
   mainBranch: "development",
   worktrees: [
     {
@@ -93,15 +156,33 @@ const GIT_SUMMARY: WorktreeWorkspaceSummary = {
     },
   ],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
+  resolvedAt: 1,
+  presence: "present",
 };
 
-const NON_GIT_SUMMARY: WorktreeWorkspaceSummary = {
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
   workspacePath: "/workspace/app",
   isGitRepo: false,
   repoIdentifier: null,
   mainBranch: null,
   worktrees: [],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
+  resolvedAt: 1,
+  presence: "present",
+};
+
+const ABSENT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
+  workspacePath: "/workspace/app",
+  isGitRepo: false,
+  repoIdentifier: null,
+  mainBranch: null,
+  worktrees: [],
+  scripts: null,
+  repoBranchPrefix: { status: "absent" },
+  resolvedAt: 1,
+  presence: "absent",
 };
 
 vi.mock("@/components/ui/select", () => ({
@@ -142,10 +223,69 @@ vi.mock("@/lib/host", () => ({
     directory: { selectById: mocks.selectHost },
   }),
   useHostClient: () => mocks.hostClient.current,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.hostClient.current,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-home",
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => mocks.navigate,
+}));
+
+vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
+  useCreateTuiAgentForClient: () => ({
+    create: () => Promise.resolve(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/lib/composer/landing-image-store", () => ({
+  sessionImageBytes: () => null,
+  getImageBytes: () => Promise.resolve(undefined),
+  imageHashKeys: () => Promise.resolve([]),
+}));
+
+vi.mock("@/lib/composer/landing-image-gc", () => ({
+  markLandingDraftsReady: () => undefined,
+  scheduleLandingImageReconcile: () => undefined,
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-home",
+}));
+
+// Every host-scoped surface resolves its client through this hook now
+// (redesign P1.2). Mocked at that boundary rather than standing up a real
+// `<HostRuntimeProvider>`, matching how this suite already fakes the host
+// list and the workspace queries.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mocks.hostClient.current,
+}));
+
+// The composer's picker resolves `pin ?? effective` now (redesign P1.2). This
+// suite is about workspace/folder handling, not selection derivation, so the
+// effective host is mocked at the same boundary as the host list above.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => {
+    const getSnapshot = () =>
+      mocks.hostClient.current?.getActiveHostId() ?? "host-home";
+    const subscribe = (listener: () => void) => {
+      mocks.effectiveHostListeners.add(listener);
+      return () => mocks.effectiveHostListeners.delete(listener);
+    };
+    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  },
+}));
+
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => mocks.negotiatedVersion.current,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-list-recent-workspaces-query", () => ({
+  useWorkspaceListRecentWorkspaces: () => mocks.recentsQuery.current,
+  recentWorkspacesQueryKey: (hostId: string | null) => [
+    "recent-workspaces",
+    hostId,
+  ],
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -157,9 +297,41 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "local",
         websocketUrl: "ws://127.0.0.1:4917/rpc",
         version: "0.0.0-test",
-        status: "available",
+        transportDialability: "dialable",
       },
     ],
+  }),
+}));
+
+// This suite is about the composer's workspace/folder handling, not the host
+// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
+// suites use for `useHostScope`) rather than standing up the six hooks it
+// composes.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [
+          hostScopeOptionFixture({ hostId: "host-home", name: "Home Mac" }),
+        ],
+        activeHostId: "host-home",
+      }),
+  };
+});
+
+// `HostSection`'s embedded `HostSwitcher` ends its list with "Manage
+// hosts…", which calls this instead of navigating a real router. This suite
+// never opens that list, so a no-op stub is enough - standing up a
+// `RouterProvider` would pull the whole route tree in for a control this
+// suite never exercises.
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: vi.fn(),
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
   }),
 }));
 
@@ -185,18 +357,25 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-queries", () => ({
-  useHostQueries: () => [],
+  useHostQueries: (args: unknown) => {
+    mocks.hostQueries(args);
+    return [];
+  },
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
-  preparedWorkspaceFolderToWorkspaceFolderInfo: (folder: {
-    readonly workspacePath: string;
-    readonly workspaceName: string;
-    readonly repoIdentifier: unknown;
-  }) => ({
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (
+    folder: {
+      readonly workspacePath: string;
+      readonly workspaceName: string;
+      readonly repoIdentifier: unknown;
+    },
+    hostId: string | null,
+  ) => ({
     path: folder.workspacePath,
     name: folder.workspaceName,
     repoIdentifier: folder.repoIdentifier,
+    hostId,
   }),
   useWorkspaceFolderActions: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,
@@ -204,6 +383,12 @@ vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   useWorkspaceFolderActionsForClient: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,
   }),
+}));
+
+// Deterministic auto-default branch names so next-use prefix assertions can
+// pin exact composed values instead of matching a random friendly slug.
+vi.mock("@/lib/worktree/random-friendly-name", () => ({
+  pickFriendlyBranchSuffix: () => "swift-otter",
 }));
 
 function renderControl(layout: "inline" | "stacked") {
@@ -214,7 +399,12 @@ function renderControl(layout: "inline" | "stacked") {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
-          stagingKey={{ surface: "landing", draftId: null }}
+          disabled={false}
+          stagingKey={{
+            surface: "landing",
+            hostId: "host-home",
+            draftId: null,
+          }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}
@@ -227,12 +417,153 @@ function renderControl(layout: "inline" | "stacked") {
   return queryClient;
 }
 
+/** The composer's resolved placement (P1.2), pointed at the mocked host. */
+function useTestPlacementTarget(): LandingPlacementTarget {
+  return {
+    resolvedHostId: "host-home",
+    client: useHostClient(),
+    hostLabel: "Home Mac",
+    isPinned: false,
+    namedHostDead: false,
+  };
+}
+
+function DelayedBranchValidationHarness() {
+  const actions = useLandingComposerActions(useTestPlacementTarget());
+  return (
+    <>
+      <ActiveHostWorkspaceControls
+        disabled={false}
+        stagingKey={{ surface: "landing", hostId: "host-home", draftId: null }}
+        workspaceSeed={null}
+        seedIntent={null}
+        seedIntentOverride={null}
+        layout="stacked"
+        hostScope={{ kind: "active" }}
+      />
+      <button
+        type="button"
+        onClick={() => {
+          actions.submit({
+            draftId: null,
+            editor: editorHandleForPrompt("Investigate the worktree race"),
+            slashCatalog: null,
+            toolbar: {
+              selection: {
+                harnessId: "codex",
+                modelSlug: "gpt-5-codex",
+                profileId: null,
+              },
+              reasoning: "high",
+              serviceTier: "",
+              permission: "supervised",
+            },
+          });
+        }}
+      >
+        Create task
+      </button>
+    </>
+  );
+}
+
+function renderDelayedBranchValidationHarness(): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  queryClient.setQueryData(
+    hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
+      "host-home",
+      "worktree.listByWorkspacePaths",
+      {
+        workspacePaths: [GIT_SUMMARY.workspacePath],
+        scriptRefs: [],
+        forceRefresh: false,
+      },
+    ),
+    { workspaces: [GIT_SUMMARY], scriptsAtRefs: [] },
+  );
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <DelayedBranchValidationHarness />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  return queryClient;
+}
+
+function seedActiveWorkspaceForRecentTest(workspacePath: string): void {
+  mocks.negotiatedVersion.current = { major: 1, minor: 2 };
+  mocks.resolvedWorkspace.current = {
+    folders: [{ kind: "local-only", path: workspacePath, name: "app" }],
+  };
+  mocks.summariesQuery.current = {
+    data: { workspaces: [{ ...NON_GIT_SUMMARY, workspacePath }] },
+    isFetching: false,
+    isPending: false,
+    isLoading: false,
+  };
+  useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+    {
+      path: workspacePath,
+      name: "app",
+      repoIdentifier: null,
+      hostId: "host-home",
+    },
+  ]);
+}
+
+function mockRecentRequests(recordRecent: () => Promise<unknown>): void {
+  mocks.request.mockImplementation((_method, payload) => {
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "operation" in payload
+    ) {
+      if (payload.operation === "recordRecentWorkspace") {
+        return recordRecent();
+      }
+      if (payload.operation === "listRecentWorkspaces") {
+        return Promise.resolve({
+          operation: "listRecentWorkspaces",
+          folders: [],
+          repoIdentifiers: [],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: [],
+        });
+      }
+    }
+    return Promise.resolve({ roomInfo: null });
+  });
+}
+
+function successfulRecentRecordResponse(): unknown {
+  return {
+    operation: "recordRecentWorkspace",
+    folders: [],
+    repoIdentifiers: [],
+    homeDir: null,
+    validation: { ok: true },
+    recentWorkspaces: null,
+  };
+}
+
 describe("landing workspace summary empty state", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     mocks.pickAndPrepareFolders.mockClear();
     mocks.selectHost.mockClear();
     mocks.listByWorkspacePathsForClient.mockClear();
-    mocks.hostClient.current = createMockHostClient();
+    mocks.hostQueries.mockClear();
+    mocks.navigate.mockClear();
+    mocks.request.mockReset();
+    mocks.request.mockResolvedValue({ roomInfo: null });
+    mocks.hostClient.current = createMockHostClient(
+      mocks.request,
+      () => "host-home",
+    );
     mocks.resolvedWorkspace.current = { folders: [] };
     mocks.summariesQuery.current = {
       data: { workspaces: [] },
@@ -240,17 +571,54 @@ describe("landing workspace summary empty state", () => {
       isPending: false,
       isLoading: false,
     };
+    mocks.negotiatedVersion.current = null;
+    mocks.recentsQuery.current = { data: { recentWorkspaces: [] } };
+    useInitialChatHandoffStore.getState().resetForTests();
+    useComposerRunSettingsStore.getState().resetForTests();
+    draftRuntimeRegistry.resetForTesting();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      openTabOrder: [],
+      activeTabId: null,
+      mostRecentTabIdByEpicId: {},
+    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useSettingsStore.setState({
+      worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+    });
   });
 
   afterEach(() => {
     cleanup();
+    useInitialChatHandoffStore.getState().resetForTests();
+    useComposerRunSettingsStore.getState().resetForTests();
+    draftRuntimeRegistry.resetForTesting();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      openTabOrder: [],
+      activeTabId: null,
+      mostRecentTabIdByEpicId: {},
+    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useSettingsStore.setState({
+      worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+    });
+    window.localStorage.clear();
   });
 
   it("shows Add folder directly instead of a no-folder summary trigger", () => {
     const queryClient = renderControl("inline");
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
-    expect(screen.getByTestId("composer-host-trigger")).toBeTruthy();
+    const hostTrigger = screen.getByRole("button", { name: /^Host:/ });
+    expect(hostTrigger.className).toContain("h-7");
+    expect(hostTrigger.className).toContain("hover:bg-foreground/5");
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",
@@ -259,6 +627,240 @@ describe("landing workspace summary empty state", () => {
     fireEvent.click(screen.getByTestId("folder-add"));
     expect(mocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
 
+    queryClient.clear();
+  });
+
+  it("keeps a folder active when moving it to Recent fails", async () => {
+    const workspacePath = "/workspace/app";
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    mockRecentRequests(() => Promise.reject(new Error("host unavailable")));
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    fireEvent.click(await screen.findByTestId("folder-remove"));
+
+    await waitFor(() => {
+      expect(mocks.request).toHaveBeenCalledWith(
+        "workspace.prepareFolders",
+        expect.objectContaining({
+          operation: "recordRecentWorkspace",
+          path: workspacePath,
+        }),
+      );
+    });
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([workspacePath]);
+
+    queryClient.clear();
+  });
+
+  it("disables Move to Recent during its record RPC and ignores a second click", async () => {
+    const workspacePath = "/workspace/app";
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    let resolveRecord: (value: unknown) => void = () => undefined;
+    const recordResponse = new Promise<unknown>((resolve) => {
+      resolveRecord = resolve;
+    });
+    mockRecentRequests(() => recordResponse);
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const remove = await screen.findByTestId("folder-remove");
+    fireEvent.click(remove);
+
+    await waitFor(() => {
+      expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(true);
+    });
+    fireEvent.click(remove);
+    expect(
+      mocks.request.mock.calls.filter(
+        ([, payload]) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          "operation" in payload &&
+          payload.operation === "recordRecentWorkspace",
+      ),
+    ).toHaveLength(1);
+
+    resolveRecord(successfulRecentRecordResponse());
+    await waitFor(() => {
+      expect(
+        selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          "host-home",
+        ).folders,
+      ).toEqual([]);
+    });
+    queryClient.clear();
+  });
+
+  it("keeps the active folder when the host changes during Move to Recent", async () => {
+    const workspacePath = "/workspace/app";
+    let hostId = "host-home";
+    mocks.hostClient.current = createMockHostClient(
+      mocks.request,
+      () => hostId,
+    );
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    let resolveRecord: (value: unknown) => void = () => undefined;
+    const recordResponse = new Promise<unknown>((resolve) => {
+      resolveRecord = resolve;
+    });
+    mockRecentRequests(() => recordResponse);
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const remove = await screen.findByTestId("folder-remove");
+    fireEvent.click(remove);
+    await waitFor(() => {
+      expect(
+        mocks.request.mock.calls.some(
+          ([, payload]) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            "operation" in payload &&
+            payload.operation === "recordRecentWorkspace",
+        ),
+      ).toBe(true);
+    });
+
+    act(() => {
+      hostId = "host-other";
+      for (const listener of mocks.effectiveHostListeners) listener();
+    });
+    resolveRecord(successfulRecentRecordResponse());
+    await act(async () => {
+      await recordResponse;
+    });
+    await waitFor(() => {
+      expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(
+        false,
+      );
+    });
+
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([workspacePath]);
+    queryClient.clear();
+  });
+
+  it("restores a stale alias when canonical cleanup fails", async () => {
+    const recentPath = "/alias/app";
+    const canonicalPath = "/workspace/app";
+    let rejectForget: (error: Error) => void = () => undefined;
+    const forgetResponse = new Promise<unknown>((_resolve, reject) => {
+      rejectForget = reject;
+    });
+    mocks.negotiatedVersion.current = { major: 1, minor: 2 };
+    mocks.recentsQuery.current = {
+      data: {
+        recentWorkspaces: [
+          {
+            path: recentPath,
+            lastOpenedAt: "2026-08-18T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+    mocks.request.mockImplementation((_method, payload) => {
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("operation" in payload)
+      ) {
+        return Promise.resolve({ roomInfo: null });
+      }
+      if (payload.operation === "listRecentWorkspaces") {
+        return Promise.resolve({
+          operation: "listRecentWorkspaces",
+          folders: [],
+          repoIdentifiers: [],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: [
+            {
+              path: recentPath,
+              lastOpenedAt: "2026-08-18T00:00:00.000Z",
+            },
+          ],
+        });
+      }
+      if (payload.operation === "prepare") {
+        return Promise.resolve({
+          operation: "prepare",
+          folders: [
+            {
+              workspacePath: canonicalPath,
+              workspaceName: "app",
+              repoIdentifier: null,
+            },
+          ],
+          repoIdentifiers: [],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: null,
+        });
+      }
+      if (payload.operation === "forgetRecentWorkspace") {
+        return forgetResponse;
+      }
+      return Promise.resolve({
+        operation: payload.operation,
+        folders: [],
+        repoIdentifiers: [],
+        homeDir: null,
+        validation: { ok: true },
+        recentWorkspaces: null,
+      });
+    });
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("folder-add"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add app to context" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        mocks.request.mock.calls.some(
+          ([, payload]) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            "operation" in payload &&
+            payload.operation === "forgetRecentWorkspace" &&
+            "path" in payload &&
+            payload.path === recentPath,
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Add app to context" }),
+      ).toBeNull();
+    });
+    await act(async () => {
+      rejectForget(new Error("host unavailable"));
+      await forgetResponse.catch(() => undefined);
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Recent folders, 1" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Add app to context" }),
+    ).toBeTruthy();
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([canonicalPath]);
     queryClient.clear();
   });
 
@@ -315,7 +917,7 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("stacked");
     const trigger = screen.getByTestId("folder-location-trigger");
 
-    expect(screen.queryByText("Unavailable")).toBeNull();
+    expect(screen.queryByTestId("folder-row-not-available")).toBeNull();
     expect(screen.queryByTestId("folder-row-locate")).toBeNull();
     expect(trigger.textContent).toContain("Local");
     expect(trigger.getAttribute("aria-disabled")).toBe("true");
@@ -324,6 +926,71 @@ describe("landing workspace summary empty state", () => {
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Worktrees require a Git repository",
     );
+
+    queryClient.clear();
+  });
+
+  it("renders absent presence as not-available with Locate, not the non-git tooltip", () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "unresolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: { workspaces: [ABSENT_SUMMARY] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on");
+    expect(screen.getByTestId("folder-row-locate").textContent).toContain(
+      "Locate on this host",
+    );
+    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
+
+    queryClient.clear();
+  });
+
+  it("keeps {presence:absent, resolvedAt:null} pending, not definitive not-available", () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "unresolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: {
+        workspaces: [
+          {
+            ...ABSENT_SUMMARY,
+            resolvedAt: null,
+          },
+        ],
+      },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+
+    // Wire cross-field: absence without a resolve time is not a verdict.
+    expect(screen.queryByTestId("folder-row-not-available")).toBeNull();
+    expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
 
     queryClient.clear();
   });
@@ -356,6 +1023,142 @@ describe("landing workspace summary empty state", () => {
     queryClient.clear();
   });
 
+  it("keeps create and import affordances disabled while a schema-safe row is unresolved", () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "resolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: {
+        workspaces: [{ ...GIT_SUMMARY, resolvedAt: null }],
+      },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+
+    expect(screen.getByTestId("folder-row-loading").textContent).toContain(
+      "Loading folder metadata",
+    );
+    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
+
+    queryClient.clear();
+  });
+
+  it("submits the displayed New worktree intent while remembered-branch validation is delayed", async () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "resolved",
+          path: GIT_SUMMARY.workspacePath,
+          name: "app",
+          repoIdentifier: GIT_REPO_IDENTIFIER,
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: { workspaces: [GIT_SUMMARY] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        "host-home": {
+          folders: [GIT_SUMMARY.workspacePath],
+          folderInfoByPath: {
+            [GIT_SUMMARY.workspacePath]: {
+              path: GIT_SUMMARY.workspacePath,
+              name: "app",
+              repoIdentifier: GIT_SUMMARY.repoIdentifier,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: GIT_SUMMARY.workspacePath,
+        },
+      },
+    });
+    useWorktreeIntentMemoryStore.getState().setFolderIntent(
+      "host-home",
+      {
+        kind: "worktree",
+        scripts: null,
+        workspacePath: GIT_SUMMARY.workspacePath,
+        repoIdentifier: GIT_SUMMARY.repoIdentifier,
+        isPrimary: true,
+        branch: {
+          type: "new",
+          name: "investigate-worktree-race",
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+      1,
+    );
+
+    const queryClient = renderDelayedBranchValidationHarness();
+
+    expect(screen.getByTestId("folder-location-trigger").textContent).toContain(
+      "New worktree",
+    );
+    expect(mocks.hostQueries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requests: [
+          {
+            method: "worktree.listBranches",
+            params: {
+              workspacePath: GIT_SUMMARY.workspacePath,
+              includeRemote: true,
+            },
+          },
+        ],
+      }),
+    );
+    expect(
+      readStagedWorktreeIntent({
+        surface: "landing",
+        hostId: "host-home",
+        draftId: null,
+      }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+
+    await waitFor(() => {
+      expect(
+        mocks.request.mock.calls.some(([method]) => method === "epic.create"),
+      ).toBe(true);
+    });
+    const createEpicCall = mocks.request.mock.calls.find(
+      ([method]) => method === "epic.create",
+    );
+    const createEpicPayload = createEpicCall?.[1];
+    expect(createEpicPayload).toBeDefined();
+    if (
+      typeof createEpicPayload !== "object" ||
+      createEpicPayload === null ||
+      !("chat" in createEpicPayload) ||
+      typeof createEpicPayload.chat !== "object" ||
+      createEpicPayload.chat === null ||
+      !("worktreeIntent" in createEpicPayload.chat)
+    ) {
+      throw new Error(
+        "epic.create payload did not include chat.worktreeIntent",
+      );
+    }
+    expect(createEpicPayload.chat.worktreeIntent).not.toBeNull();
+
+    queryClient.clear();
+  });
+
   it("shows unavailable, not loading, when unresolved metadata query is disabled by a missing host client", () => {
     mocks.hostClient.current = null;
     mocks.resolvedWorkspace.current = {
@@ -378,11 +1181,216 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("stacked");
 
     expect(screen.queryByTestId("folder-row-loading")).toBeNull();
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on");
     expect(screen.getByTestId("folder-row-locate").textContent).toContain(
-      "Locate folder",
+      "Locate on this host",
     );
 
     queryClient.clear();
   });
+
+  // Next-use-only contract for worktreeBranchPrefix:
+  // 1) a folder that resolves under the default seeds with traycer/<suffix>
+  // 2) changing the setting mid-session does NOT retrofit already-seeded names
+  // 3) a folder that resolves AFTER the change seeds with the new prefix
+  it("applies worktree branch prefix next-use-only across mid-session resolves", async () => {
+    const folderAPath = GIT_SUMMARY.workspacePath;
+    const folderBPath = "/workspace/lib";
+    const folderBRepo = { owner: "acme", repo: "lib" };
+    const folderBSummary: WorktreeWorkspaceSummaryV15 = {
+      workspacePath: folderBPath,
+      isGitRepo: true,
+      repoIdentifier: folderBRepo,
+      mainBranch: "development",
+      worktrees: [
+        {
+          worktreePath: folderBPath,
+          branch: "development",
+          head: null,
+          isMain: true,
+          isLocked: false,
+        },
+      ],
+      scripts: null,
+      repoBranchPrefix: { status: "absent" },
+      resolvedAt: 1,
+      presence: "present",
+    };
+
+    // Mount with default prefix; only folder A is resolved.
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "resolved",
+          path: folderAPath,
+          name: "app",
+          repoIdentifier: GIT_REPO_IDENTIFIER,
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: { workspaces: [GIT_SUMMARY] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        "host-home": {
+          folders: [folderAPath],
+          folderInfoByPath: {
+            [folderAPath]: {
+              path: folderAPath,
+              name: "app",
+              repoIdentifier: GIT_REPO_IDENTIFIER,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: folderAPath,
+        },
+      },
+    });
+
+    const queryClient = renderControl("stacked");
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: "host-home",
+      draftId: null,
+    };
+
+    await waitFor(() => {
+      const staged = readStagedWorktreeIntent(stagingKey);
+      expect(staged?.entries).toHaveLength(1);
+      expect(staged?.entries[0]).toMatchObject({
+        kind: "worktree",
+        workspacePath: folderAPath,
+        branch: {
+          type: "new",
+          name: "traycer/swift-otter",
+        },
+      });
+    });
+
+    // Mid-session prefix change must leave folder A's staged name alone.
+    act(() => {
+      useSettingsStore.setState({ worktreeBranchPrefix: "anurag/" });
+    });
+
+    expect(readStagedWorktreeIntent(stagingKey)?.entries[0]).toMatchObject({
+      kind: "worktree",
+      workspacePath: folderAPath,
+      branch: {
+        type: "new",
+        name: "traycer/swift-otter",
+      },
+    });
+
+    // Folder B resolves after the change → seeds under the new prefix.
+    // With two git folders present, composition inserts the repo slug
+    // (`lib-swift-otter`); folder A stays on its original single-folder seed.
+    act(() => {
+      mocks.resolvedWorkspace.current = {
+        folders: [
+          {
+            kind: "resolved",
+            path: folderAPath,
+            name: "app",
+            repoIdentifier: GIT_REPO_IDENTIFIER,
+          },
+          {
+            kind: "resolved",
+            path: folderBPath,
+            name: "lib",
+            repoIdentifier: folderBRepo,
+          },
+        ],
+      };
+      mocks.summariesQuery.current = {
+        data: { workspaces: [GIT_SUMMARY, folderBSummary] },
+        isFetching: false,
+        isPending: false,
+        isLoading: false,
+      };
+      useWorkspaceFoldersStore.setState({
+        byHost: {
+          "host-home": {
+            folders: [folderAPath, folderBPath],
+            folderInfoByPath: {
+              [folderAPath]: {
+                path: folderAPath,
+                name: "app",
+                repoIdentifier: GIT_REPO_IDENTIFIER,
+                hostId: "host-home",
+              },
+              [folderBPath]: {
+                path: folderBPath,
+                name: "lib",
+                repoIdentifier: folderBRepo,
+                hostId: "host-home",
+              },
+            },
+            primaryPath: folderAPath,
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const staged = readStagedWorktreeIntent(stagingKey);
+      expect(staged?.entries).toHaveLength(2);
+      const entryA = staged?.entries.find(
+        (entry) => entry.workspacePath === folderAPath,
+      );
+      const entryB = staged?.entries.find(
+        (entry) => entry.workspacePath === folderBPath,
+      );
+      expect(entryA).toMatchObject({
+        branch: { type: "new", name: "traycer/swift-otter" },
+      });
+      expect(entryB).toMatchObject({
+        kind: "worktree",
+        workspacePath: folderBPath,
+        branch: {
+          type: "new",
+          name: "anurag/lib-swift-otter",
+        },
+      });
+    });
+
+    queryClient.clear();
+  });
 });
+
+function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
+  const content: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: prompt }],
+      },
+    ],
+  };
+  const editorIncarnation = createComposerEditorIncarnation();
+  return {
+    isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
+    focus: () => undefined,
+    focusAtEnd: () => undefined,
+    getJSON: () => content,
+    isEmpty: () => prompt.length === 0,
+    clear: () => undefined,
+    setContent: () => undefined,
+    syncContent: () => undefined,
+    insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
+    beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
+    removeImageAttachmentById: () => undefined,
+    insertDictatedText: () => undefined,
+    dismissActiveSuggestion: () => false,
+  };
+}

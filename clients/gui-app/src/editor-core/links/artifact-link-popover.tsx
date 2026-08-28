@@ -32,6 +32,10 @@ import * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
+import {
+  isPresentationLossBlur,
+  usePanePortalContainer,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { Input } from "@/components/ui/input";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
@@ -42,6 +46,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { isSingleTextblockLinkRange } from "./artifact-link-selection";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const HOVER_SHOW_DELAY_MS = 300;
 const HOVER_HIDE_DELAY_MS = 100;
 
@@ -69,11 +74,34 @@ interface LinkTargetBase {
   readonly attrs: Readonly<Record<string, unknown>>;
   readonly anchor: VirtualElement;
   readonly yBookmark: YRangeBookmark | null;
+  /**
+   * Document position this target visually anchors to - the caret's own
+   * position for a caret trigger, or wherever `posAtCoords` resolved the
+   * pointer for a hover trigger (clamped into `range`). `rangeAnchor` re-reads
+   * `coordsAtPos` of THIS position live on every floating-ui reposition
+   * (`autoUpdate`, which fires on scroll/resize), so the anchor never goes
+   * stale - unlike a frozen viewport pixel point, a ProseMirror document
+   * position is scroll-independent and always resolves to wherever that
+   * character currently renders. Re-mapped through each transaction (locally
+   * via `transaction.mapping`, or across remote edits via `yBookmark`) so it
+   * keeps tracking the SAME character rather than resetting to the link's
+   * start.
+   */
+  readonly anchorDocPosition: number;
 }
 
 interface EditLinkTarget extends LinkTargetBase {
   readonly mode: "edit";
   readonly trigger: "hover" | "caret";
+  /**
+   * Display substate for an already-open edit-mode target: `false` is the
+   * default READ state (text + URL shown read-only, with Open/Copy/Edit
+   * actions); `true` is the editable state (URL/text fields, Apply/Remove)
+   * reached via the card's Edit action. Both hover-open and caret-open start
+   * `false` - only `beginEditing` flips it to `true`, and reverting via
+   * Escape flips it back without closing the card.
+   */
+  readonly editing: boolean;
 }
 
 interface CreateLinkTarget extends LinkTargetBase {
@@ -85,6 +113,12 @@ type LinkTarget = EditLinkTarget | CreateLinkTarget;
 interface YRangeBookmark {
   readonly from: Y.RelativePosition;
   readonly to: Y.RelativePosition;
+  readonly anchor: Y.RelativePosition;
+}
+
+interface ResolvedYBookmark {
+  readonly range: Range;
+  readonly anchor: number;
 }
 
 interface YSyncState {
@@ -111,22 +145,79 @@ function linkElementAtRange(editor: Editor, range: Range): HTMLElement {
   return element?.closest<HTMLElement>("a[data-link-href]") ?? editor.view.dom;
 }
 
+/**
+ * Resolves the ProseMirror document position under viewport coordinates
+ * (`event.clientX`/`clientY`), falling back to `fallback` when the point
+ * doesn't land inside the document (rare - e.g. a coordinate right at a
+ * scrollbar edge). Called ONCE at hover-entry: the returned position is a
+ * STABLE document identity, unlike the raw pixel coordinates, so capturing it
+ * early and re-resolving its on-screen rect later (via `coordsAtPos` in
+ * `rangeAnchor`) never goes stale across a scroll.
+ */
+function pointerDocPosition(
+  editor: Editor,
+  event: PointerEvent,
+  fallback: number,
+): number {
+  const result = editor.view.posAtCoords({
+    left: event.clientX,
+    top: event.clientY,
+  });
+  return result === null ? fallback : result.pos;
+}
+
+function clampToRange(position: number, range: Range): number {
+  return Math.min(Math.max(position, range.from), range.to);
+}
+
+/**
+ * The `coordsAtPos` side to resolve `position` on: `range.to` is the
+ * end-EXCLUSIVE boundary of the mark, so the default positive side (biased
+ * toward the character AFTER the position) would report coordinates for
+ * whatever follows the link - at a line-wrap boundary, that's the start of
+ * the NEXT visual line, landing the card a line low. Every other position
+ * (including `range.from`, the boundary BEFORE the mark's first character)
+ * wants the default positive side.
+ */
+function anchorSide(position: number, range: Range): number {
+  return position === range.to ? -1 : 1;
+}
+
+/**
+ * Builds the floating-ui reference for a link target, anchored to a single
+ * ProseMirror document position re-resolved LIVE on every call via
+ * `coordsAtPos`.
+ *
+ * Anchoring must resolve to a SINGLE visual line, never a box spanning
+ * several: a link (or a create-mode selection) that wraps across lines, or
+ * sits inside a table cell, exposes multiple client rects. Unioning
+ * `coordsAtPos(range.from)`/`coordsAtPos(range.to)` - an earlier approach -
+ * builds a box enclosing every fragment, so `placement: "top-start"` lands
+ * the card above the topmost line at the leftmost edge, which can be far from
+ * the line the pointer is actually over. Because `coordsAtPos` is invoked
+ * FRESH every time floating-ui's `autoUpdate` calls this (scroll, resize,
+ * mutation), the anchor also can't go stale the way a frozen viewport pixel
+ * point could - there's no cached rect to invalidate. `side` carries the
+ * endpoint bias from `anchorSide` so a boundary position resolves to the
+ * correct side of the wrap.
+ */
 function rangeAnchor(
   editor: Editor,
-  range: Range,
   contextElement: HTMLElement,
+  position: number,
+  side: number,
 ): VirtualElement {
   return {
     contextElement,
     getBoundingClientRect: () => {
       if (editor.isDestroyed) return new DOMRect();
-      const start = editor.view.coordsAtPos(range.from);
-      const end = editor.view.coordsAtPos(range.to);
-      const left = Math.min(start.left, end.left);
-      const right = Math.max(start.right, end.right);
-      const top = Math.min(start.top, end.top);
-      const bottom = Math.max(start.bottom, end.bottom);
-      return new DOMRect(left, top, right - left, bottom - top);
+      const coords = editor.view.coordsAtPos(position, side);
+      return new DOMRect(
+        coords.left,
+        coords.top,
+        Math.max(coords.right - coords.left, 0),
+        coords.bottom - coords.top,
+      );
     },
   };
 }
@@ -174,7 +265,11 @@ function typedRelativePosition(
   return relativePosition;
 }
 
-function createYBookmark(editor: Editor, range: Range): YRangeBookmark | null {
+function createYBookmark(
+  editor: Editor,
+  range: Range,
+  anchorPositionValue: number,
+): YRangeBookmark | null {
   const syncState = ySyncState(editor);
   if (syncState === null) return null;
   return {
@@ -188,13 +283,18 @@ function createYBookmark(editor: Editor, range: Range): YRangeBookmark | null {
       syncState.type,
       syncState.binding.mapping,
     ),
+    anchor: typedRelativePosition(
+      anchorPositionValue,
+      syncState.type,
+      syncState.binding.mapping,
+    ),
   };
 }
 
 function resolveYBookmark(
   editor: Editor,
   bookmark: YRangeBookmark,
-): Range | null {
+): ResolvedYBookmark | null {
   const syncState = ySyncState(editor);
   if (syncState === null) return null;
   const from = relativePositionToAbsolutePosition(
@@ -209,15 +309,26 @@ function resolveYBookmark(
     bookmark.to,
     syncState.binding.mapping,
   );
-  if (from === null || to === null || from >= to) return null;
-  return { from, to };
+  const anchor = relativePositionToAbsolutePosition(
+    syncState.doc,
+    syncState.type,
+    bookmark.anchor,
+    syncState.binding.mapping,
+  );
+  if (from === null || to === null || anchor === null || from >= to) {
+    return null;
+  }
+  return { range: { from, to }, anchor };
 }
 
 function linkTargetAtPosition(
   editor: Editor,
   position: number,
-  trigger: "hover" | "caret",
-  contextElement: HTMLElement | null,
+  options: {
+    readonly trigger: "hover" | "caret";
+    readonly contextElement: HTMLElement | null;
+    readonly anchorDocPosition: number | null;
+  },
 ): EditLinkTarget | null {
   const safePosition = Math.max(
     0,
@@ -231,17 +342,29 @@ function linkTargetAtPosition(
   const mark = markAtRange(editor, range);
   const href = typeof mark?.attrs.href === "string" ? mark.attrs.href : "";
   if (mark === null || href.length === 0) return null;
-  const liveContext = contextElement ?? linkElementAtRange(editor, range);
+  const liveContext =
+    options.contextElement ?? linkElementAtRange(editor, range);
+  const anchorDocPosition = clampToRange(
+    options.anchorDocPosition ?? safePosition,
+    range,
+  );
   return {
     range,
     href,
     text: editor.state.doc.textBetween(range.from, range.to),
     identityText: editor.state.doc.textBetween(range.from, range.to),
     attrs: mark.attrs,
-    anchor: rangeAnchor(editor, range, liveContext),
+    anchor: rangeAnchor(
+      editor,
+      liveContext,
+      anchorDocPosition,
+      anchorSide(anchorDocPosition, range),
+    ),
     mode: "edit",
-    trigger,
-    yBookmark: createYBookmark(editor, range),
+    trigger: options.trigger,
+    editing: false,
+    yBookmark: createYBookmark(editor, range, anchorDocPosition),
+    anchorDocPosition,
   };
 }
 
@@ -263,13 +386,20 @@ function refreshCreateTarget(
   editor: Editor,
   target: CreateLinkTarget,
   mappedRange: Range,
+  mappedAnchor: number,
 ): LinkTarget | null {
   if (!isSingleTextblockLinkRange(editor, mappedRange)) return null;
   return {
     ...target,
     range: mappedRange,
     text: editor.state.doc.textBetween(mappedRange.from, mappedRange.to),
-    anchor: rangeAnchor(editor, mappedRange, editor.view.dom),
+    anchorDocPosition: mappedAnchor,
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      mappedAnchor,
+      anchorSide(mappedAnchor, mappedRange),
+    ),
   };
 }
 
@@ -277,6 +407,7 @@ function refreshEditTarget(
   editor: Editor,
   target: EditLinkTarget,
   mappedRange: Range,
+  mappedAnchor: number,
 ): LinkTarget | null {
   const { from, to } = mappedRange;
   const linkType = editor.schema.marks.link;
@@ -305,10 +436,12 @@ function refreshEditTarget(
     attrs: mark.attrs,
     text: mappedText,
     identityText: mappedText,
+    anchorDocPosition: mappedAnchor,
     anchor: rangeAnchor(
       editor,
-      mappedRange,
       linkElementAtRange(editor, mappedRange),
+      mappedAnchor,
+      anchorSide(mappedAnchor, mappedRange),
     ),
   };
 }
@@ -318,34 +451,73 @@ function refreshMappedTarget(
   target: LinkTarget,
   transaction: Transaction,
 ): LinkTarget | null {
-  const yRange =
+  const yResolved =
     target.yBookmark === null
       ? null
       : resolveYBookmark(editor, target.yBookmark);
-  if (target.yBookmark !== null && yRange === null) return null;
+  if (target.yBookmark !== null && yResolved === null) return null;
   const mappedFrom =
-    yRange?.from ?? transaction.mapping.map(target.range.from, 1);
-  const mappedTo = yRange?.to ?? transaction.mapping.map(target.range.to, -1);
+    yResolved?.range.from ?? transaction.mapping.map(target.range.from, 1);
+  const mappedTo =
+    yResolved?.range.to ?? transaction.mapping.map(target.range.to, -1);
   if (mappedFrom >= mappedTo) return null;
   const mappedRange = { from: mappedFrom, to: mappedTo };
+  const mappedAnchor = clampToRange(
+    yResolved?.anchor ?? transaction.mapping.map(target.anchorDocPosition, 1),
+    mappedRange,
+  );
   if (target.mode === "create") {
-    return refreshCreateTarget(editor, target, mappedRange);
+    return refreshCreateTarget(editor, target, mappedRange, mappedAnchor);
   }
-  return refreshEditTarget(editor, target, mappedRange);
+  return refreshEditTarget(editor, target, mappedRange, mappedAnchor);
+}
+
+/**
+ * Moves the anchor to `position` (the caret's new spot, still within
+ * `target.range`) without touching `href`/`text`/`identityText` or any of
+ * the dirty-edit-field bookkeeping the caller owns - unlike `open`, this
+ * must not reset an in-progress edit just because the caret moved to a
+ * different visual fragment of the same wrapped link.
+ */
+function refreshCaretAnchor(
+  editor: Editor,
+  target: EditLinkTarget,
+  position: number,
+): EditLinkTarget {
+  return {
+    ...target,
+    anchorDocPosition: position,
+    anchor: rangeAnchor(
+      editor,
+      linkElementAtRange(editor, target.range),
+      position,
+      anchorSide(position, target.range),
+    ),
+    yBookmark: createYBookmark(editor, target.range, position),
+  };
 }
 
 function createTargetFromSelection(editor: Editor): LinkTarget | null {
   const { from, to } = editor.state.selection;
+  const caretOptions = {
+    trigger: "caret" as const,
+    contextElement: null,
+    anchorDocPosition: null,
+  };
   if (from === to) {
-    return linkTargetAtPosition(editor, from, "caret", null);
+    // Cmd/Ctrl+K (and the BubbleMenu Link action) on a caret inside an
+    // existing link is the keyboard edit affordance: open the form directly
+    // rather than the compact read preview that caret/hover use.
+    const existing = linkTargetAtPosition(editor, from, caretOptions);
+    return existing === null ? null : { ...existing, editing: true };
   }
-  const existing = linkTargetAtPosition(editor, from, "caret", null);
+  const existing = linkTargetAtPosition(editor, from, caretOptions);
   if (
     existing !== null &&
     existing.range.from <= from &&
     existing.range.to >= to
   ) {
-    return existing;
+    return { ...existing, editing: true };
   }
   const range = { from, to };
   if (!isSingleTextblockLinkRange(editor, range)) return null;
@@ -355,9 +527,15 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
     text: editor.state.doc.textBetween(from, to),
     identityText: editor.state.doc.textBetween(from, to),
     attrs: {},
-    anchor: rangeAnchor(editor, range, editor.view.dom),
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      range.from,
+      anchorSide(range.from, range),
+    ),
     mode: "create",
-    yBookmark: createYBookmark(editor, range),
+    yBookmark: createYBookmark(editor, range, range.from),
+    anchorDocPosition: range.from,
   };
 }
 
@@ -414,48 +592,68 @@ function LinkPreview(props: LinkPreviewProps) {
         href={props.href}
       />
       {openable ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label={`Open link: ${props.href}`}
-          title={props.href}
-          className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
-          disabled={props.href.trim().length === 0 || externalOpenPending}
-          onClick={props.onOpen}
+        <TooltipWrapper
+          label={props.href}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <span className="truncate">{props.href}</span>
-          {externalOpenPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId="artifact-link-open-pending"
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-label={`Open link: ${props.href}`}
+              className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
+              disabled={props.href.trim().length === 0 || externalOpenPending}
+              onClick={props.onOpen}
+            >
+              <span className="truncate">{props.href}</span>
+              {externalOpenPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="artifact-link-open-pending"
+                  variant={undefined}
+                />
+              ) : null}
+            </Button>
+          </span>
+        </TooltipWrapper>
       ) : (
-        <span
-          title={props.href}
-          className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground"
+        <TooltipWrapper
+          label={props.href}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {props.href}
-        </span>
+          <span className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground">
+            {props.href}
+          </span>
+        </TooltipWrapper>
       )}
-      <Button
-        type="button"
-        size="icon-xs"
-        variant="ghost"
-        disabled={props.href.trim().length === 0}
-        aria-label={props.copied ? "Copied" : "Copy link"}
-        title={props.copied ? "Copied" : "Copy link"}
-        onClick={props.onCopy}
+      <TooltipWrapper
+        label={props.copied ? "Copied" : "Copy link"}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        {props.copied ? (
-          <Check aria-hidden="true" />
-        ) : (
-          <Copy aria-hidden="true" />
-        )}
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            disabled={props.href.trim().length === 0}
+            aria-label={props.copied ? "Copied" : "Copy link"}
+            onClick={props.onCopy}
+          >
+            {props.copied ? (
+              <Check aria-hidden="true" />
+            ) : (
+              <Copy aria-hidden="true" />
+            )}
+          </Button>
+        </span>
+      </TooltipWrapper>
       {props.editable ? (
         <Button
           type="button"
@@ -475,8 +673,11 @@ function LinkPreview(props: LinkPreviewProps) {
  * One trigger-aware floating surface for authored ProseMirror links.
  *
  * Viewer links participate in Tab order and activate with Enter. Editable
- * links deliberately use caret ownership instead: arrow/click navigation opens
- * this card, whose controls then provide the tabbable editing affordances.
+ * links deliberately use caret ownership instead: a plain or Cmd/Ctrl click
+ * navigates (matching a viewer click) without moving the caret, so this card
+ * only opens via hover or arrow-key caret entry - always starting in a
+ * read-only state with an Edit action that promotes it to the editable
+ * fields.
  */
 export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const {
@@ -492,13 +693,34 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const [displayText, setDisplayText] = useState("");
   const targetRef = useRef<LinkTarget | null>(null);
   const hrefDirtyRef = useRef(false);
+  // Render into the pane's portal host so this kept-mounted link editor (its
+  // typed URL/title survive focus changes) hides with the pane instead of
+  // covering a focused split partner. `null` outside a pane → `document.body`.
+  // Declared here (before the positioning effects) so those effects can depend
+  // on it and rebind to the live node once the host ref settles.
+  const paneContainer = usePanePortalContainer();
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
   const focusEditUrlRef = useRef(false);
+  // The trigger the current edit promotion started from, captured by
+  // `beginEditing` so Escape can revert the card to a read state that keeps
+  // its original ownership: a hover-opened card must return to
+  // `trigger: "hover"` (so `scheduleHoverHide` still closes it on pointer
+  // leave) even though editing itself runs under caret ownership. `null`
+  // means the open editor was not promoted from a read card (create mode or
+  // Cmd+K on an existing link), so Escape dismisses instead of reverting.
+  const revertTriggerRef = useRef<"hover" | "caret" | null>(null);
+  // Tracks whether the pointer is over the open card or a document link so
+  // hover-hide re-arm after Escape can decide without relying on CSS :hover
+  // (unreliable under jsdom synthetic pointer events).
+  const pointerOverHoverSurfaceRef = useRef(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  // Filled after `commit` is declared so `routeAnchor` can flush a dirty
+  // draft before close without reading commit before initialization.
+  const commitRef = useRef<() => void>(() => undefined);
   const fieldId = useId();
   const urlFieldId = `${fieldId}-url`;
   const displayFieldId = `${fieldId}-display`;
@@ -534,6 +756,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const close = useCallback((): void => {
     cancelShow();
     cancelHide();
+    pointerOverHoverSurfaceRef.current = false;
     if (targetRef.current === null) return;
     setLiveTarget(null);
     onOpenChange(false);
@@ -545,6 +768,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       cancelHide();
       hrefDirtyRef.current = false;
       textDirtyRef.current = false;
+      // Cmd/Ctrl+K and create-mode opens are not promoted-from-read edits, so
+      // Escape dismisses rather than reverting to a read card.
+      revertTriggerRef.current = null;
+      if (nextTarget.mode === "edit" && nextTarget.editing) {
+        focusEditUrlRef.current = true;
+      }
       setLiveTarget(nextTarget);
       setHref(nextTarget.href);
       setDisplayText(nextTarget.text);
@@ -553,13 +782,57 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     [cancelHide, cancelShow, onOpenChange, setLiveTarget],
   );
 
+  const scheduleHoverHide = useCallback((): void => {
+    cancelHide();
+    const current = targetRef.current;
+    if (current?.mode !== "edit" || current.trigger !== "hover") return;
+    if (cardRef.current?.contains(document.activeElement)) return;
+    hideTimerRef.current = window.setTimeout(() => {
+      const liveTarget = targetRef.current;
+      if (liveTarget?.mode !== "edit" || liveTarget.trigger !== "hover") return;
+      if (cardRef.current?.contains(document.activeElement)) return;
+      close();
+    }, HOVER_HIDE_DELAY_MS);
+  }, [cancelHide, close]);
+
   const beginEditing = useCallback((): void => {
     const current = targetRef.current;
     if (!editable || current?.mode !== "edit") return;
     cancelHide();
     focusEditUrlRef.current = true;
-    setLiveTarget({ ...current, trigger: "caret" });
+    revertTriggerRef.current = current.trigger;
+    setLiveTarget({ ...current, trigger: "caret", editing: true });
   }, [cancelHide, editable, setLiveTarget]);
+
+  const revertDraft = useCallback((): void => {
+    const current = targetRef.current;
+    if (current === null || current.mode !== "edit") return;
+    hrefDirtyRef.current = false;
+    textDirtyRef.current = false;
+    setHref(current.href);
+    setDisplayText(current.text);
+    const trigger = revertTriggerRef.current ?? current.trigger;
+    revertTriggerRef.current = null;
+    setLiveTarget({ ...current, trigger, editing: false });
+    if (trigger !== "hover") return;
+    // Editing ran under caret ownership, so a pointer leave during the
+    // edit did not arm hide. After restoring hover ownership, re-arm the
+    // normal hide path when the pointer is already outside the card/link.
+    // Defer so the compact-card commit can drop edit-field focus that would
+    // otherwise suppress scheduleHoverHide via the activeElement gate.
+    queueMicrotask(() => {
+      const live = targetRef.current;
+      if (
+        live?.mode !== "edit" ||
+        live.trigger !== "hover" ||
+        live.editing ||
+        pointerOverHoverSurfaceRef.current
+      ) {
+        return;
+      }
+      scheduleHoverHide();
+    });
+  }, [scheduleHoverHide, setLiveTarget]);
 
   const expectCaretPosition = useCallback((position: number): void => {
     expectedCaretPositionRef.current = position;
@@ -583,36 +856,34 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     [openLink, openLinkPending],
   );
 
-  const scheduleHoverHide = useCallback((): void => {
-    cancelHide();
-    const current = targetRef.current;
-    if (current?.mode !== "edit" || current.trigger !== "hover") return;
-    if (cardRef.current?.contains(document.activeElement)) return;
-    hideTimerRef.current = window.setTimeout(() => {
-      const liveTarget = targetRef.current;
-      if (liveTarget?.mode !== "edit" || liveTarget.trigger !== "hover") return;
-      if (cardRef.current?.contains(document.activeElement)) return;
-      close();
-    }, HOVER_HIDE_DELAY_MS);
-  }, [cancelHide, close]);
-
   const handlePointerOver = useEffectEvent((event: PointerEvent): void => {
+    const anchor = linkAnchor(event.target);
+    if (anchor !== null) pointerOverHoverSurfaceRef.current = true;
     if (!editor.state.selection.empty) return;
     if (targetRef.current !== null) return;
     if (cardRef.current?.contains(document.activeElement)) return;
-    const anchor = linkAnchor(event.target);
     if (anchor === null) return;
     cancelShow();
+    const fallbackPosition = anchorPosition(editor, anchor);
+    // Captured at hover-entry so the card anchors to the character the
+    // pointer actually entered through, even if the link itself spans
+    // several visual lines (a wrapped link) by the time the show delay
+    // elapses - a document position stays valid across that delay, unlike a
+    // frozen viewport pixel point.
+    const anchorDocPosition = pointerDocPosition(
+      editor,
+      event,
+      fallbackPosition,
+    );
     showTimerRef.current = window.setTimeout(() => {
       showTimerRef.current = null;
       if (!anchor.isConnected) return;
       if (!editor.state.selection.empty) return;
-      const nextTarget = linkTargetAtPosition(
-        editor,
-        anchorPosition(editor, anchor),
-        "hover",
-        anchor,
-      );
+      const nextTarget = linkTargetAtPosition(editor, fallbackPosition, {
+        trigger: "hover",
+        contextElement: anchor,
+        anchorDocPosition,
+      });
       if (nextTarget !== null) open(nextTarget);
     }, HOVER_SHOW_DELAY_MS);
   });
@@ -621,12 +892,43 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const from = linkAnchor(event.target);
     const to = linkAnchor(event.relatedTarget);
     if (from !== null && from === to) return;
+    const related = event.relatedTarget;
+    if (related instanceof Node && cardRef.current?.contains(related)) {
+      pointerOverHoverSurfaceRef.current = true;
+    } else if (from !== null) {
+      pointerOverHoverSurfaceRef.current = false;
+    }
     cancelShow();
     scheduleHoverHide();
   });
 
+  const dismissCardAfterRoutedClick = useEffectEvent((): void => {
+    // Drop any open card / pending hover-show after a handled click. If an
+    // editable form is open, mousedown suppression also prevented field blur,
+    // so commit the live draft first (blur-parity) rather than silently
+    // discarding via close(). Create mode always has a form; edit mode only
+    // when `editing`.
+    const current = targetRef.current;
+    if (current !== null && (current.mode !== "edit" || current.editing)) {
+      commitRef.current();
+      return;
+    }
+    close();
+  });
+
   const routeAnchor = useEffectEvent(
     (event: MouseEvent, routeAuxiliary: boolean): void => {
+      // Shift+click extends ProseMirror selection; never navigate from it on
+      // editable surfaces (Cmd/Ctrl+Shift still routes like a modifier click).
+      if (
+        editable &&
+        !routeAuxiliary &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey
+      ) {
+        return;
+      }
       const anchor = linkAnchor(event.target);
       if (anchor === null) return;
       const rawHref = linkHrefAtPosition(
@@ -634,10 +936,15 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         anchorPosition(editor, anchor),
       );
       if (rawHref === null) return;
-      if (!routeAuxiliary && editable && !event.metaKey && !event.ctrlKey) {
-        if (classifyHref(rawHref).kind === "default") event.preventDefault();
-        return;
-      }
+      // Plain and modifier clicks route identically now: a navigable href
+      // (external/file) always drives the opener via `routeHref` below; a
+      // hash or empty href falls through as "default" and, outside the
+      // editable+modifier+hash carve-out just below, does nothing - letting
+      // ProseMirror's own mousedown handling (unblocked by `handleMouseDown`
+      // for those hrefs) place the caret. An `ignore`-classified href
+      // (unrecognized scheme) is deliberately suppressed instead: clicks
+      // neither navigate nor move the caret, and the link stays reachable
+      // for editing through the hover card.
       const result = routeHref(rawHref);
       if (result === "default") {
         const normalizedHref = rawHref.trim();
@@ -653,6 +960,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         }
         return;
       }
+      dismissCardAfterRoutedClick();
       event.preventDefault();
       event.stopPropagation();
     },
@@ -670,10 +978,17 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const handleMouseDown = useEffectEvent((event: MouseEvent): void => {
     const anchor = linkAnchor(event.target);
     if (anchor === null) return;
-    const modifierPrimary =
-      event.button === 0 && (event.metaKey || event.ctrlKey);
+    const primaryClick = event.button === 0;
+    const modifierPrimary = primaryClick && (event.metaKey || event.ctrlKey);
     const middleClick = event.button === 1;
-    if (!modifierPrimary && !middleClick) return;
+    // A plain (unmodified) primary click on an editable link now navigates
+    // just like a Cmd/Ctrl click, so it needs the SAME capture-phase
+    // caret-preservation: block ProseMirror's own bubble-phase mousedown
+    // handler from placing the caret before `routeAnchor` decides to open
+    // the link on `click`. Shift+click is excluded so selection can extend.
+    const plainEditableClick =
+      editable && primaryClick && !modifierPrimary && !event.shiftKey;
+    if (!modifierPrimary && !middleClick && !plainEditableClick) return;
     const rawHref = linkHrefAtPosition(editor, anchorPosition(editor, anchor));
     if (rawHref === null) return;
     const classified = classifyHref(rawHref);
@@ -722,8 +1037,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const nextTarget = linkTargetAtPosition(
       editor,
       anchorPosition(editor, anchor),
-      "caret",
-      anchor,
+      { trigger: "caret", contextElement: anchor, anchorDocPosition: null },
     );
     if (nextTarget === null) return;
     const current = targetRef.current;
@@ -747,8 +1061,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       const nextTarget = linkTargetAtPosition(
         editor,
         editor.state.selection.from,
-        "caret",
-        null,
+        { trigger: "caret", contextElement: null, anchorDocPosition: null },
       );
       if (nextTarget !== null) {
         open(nextTarget);
@@ -768,6 +1081,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       }
       const position = editor.state.selection.from;
       if (current !== null && rangeContainsPosition(current.range, position)) {
+        // The caret moved to a different visual fragment of the SAME
+        // wrapped link (still inside current.range): keep the open target
+        // (don't reset href/text/dirty-edit state via `open`), but refresh
+        // where it anchors so the card follows the caret across the wrap
+        // instead of staying pinned to the position it first opened at.
+        if (position !== current.anchorDocPosition) {
+          setLiveTarget(refreshCaretAnchor(editor, current, position));
+        }
         return;
       }
       const expectedPosition = expectedCaretPositionRef.current;
@@ -776,7 +1097,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         return;
       }
       expectedCaretPositionRef.current = null;
-      const nextTarget = linkTargetAtPosition(editor, position, "caret", null);
+      const nextTarget = linkTargetAtPosition(editor, position, {
+        trigger: "caret",
+        contextElement: null,
+        anchorDocPosition: null,
+      });
       if (nextTarget === null) {
         if (current !== null) close();
         return;
@@ -853,6 +1178,15 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const handleCardKeyDown = useEffectEvent((event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
     event.preventDefault();
+    const current = targetRef.current;
+    if (
+      current?.mode === "edit" &&
+      current.editing &&
+      revertTriggerRef.current !== null
+    ) {
+      revertDraft();
+      return;
+    }
     dismissAndFocusEditor();
   });
 
@@ -956,20 +1290,39 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       active = false;
       stopAutoUpdate();
     };
-  }, [editor, scrollContainer, target]);
+    // `paneContainer` dep: the portal remounts the card into the live node once
+    // the host ref settles, so rebind `autoUpdate` to it, not the first node.
+  }, [editor, scrollContainer, target, paneContainer]);
 
   useEffect(() => {
     const card = cardRef.current;
     if (target === null || card === null) return;
-    card.addEventListener("pointerenter", cancelHide);
-    card.addEventListener("pointerleave", scheduleHoverHide);
+    const handleCardPointerEnter = (): void => {
+      pointerOverHoverSurfaceRef.current = true;
+      cancelHide();
+    };
+    const handleCardPointerLeave = (event: PointerEvent): void => {
+      const related = event.relatedTarget;
+      if (related instanceof Node && linkAnchor(related) !== null) {
+        pointerOverHoverSurfaceRef.current = true;
+      } else {
+        pointerOverHoverSurfaceRef.current = false;
+      }
+      scheduleHoverHide();
+    };
+    card.addEventListener("pointerenter", handleCardPointerEnter);
+    card.addEventListener("pointerleave", handleCardPointerLeave);
     card.addEventListener("keydown", handleCardKeyDown);
     return () => {
-      card.removeEventListener("pointerenter", cancelHide);
-      card.removeEventListener("pointerleave", scheduleHoverHide);
+      card.removeEventListener("pointerenter", handleCardPointerEnter);
+      card.removeEventListener("pointerleave", handleCardPointerLeave);
       card.removeEventListener("keydown", handleCardKeyDown);
     };
-  }, [cancelHide, scheduleHoverHide, target]);
+    // `paneContainer` dep for the same reason as the positioning effect above:
+    // this reads `cardRef.current` under identical conditions, so without it
+    // the hover-hide and keyboard handlers stay bound to the pre-remount node
+    // while the card the user sees has none.
+  }, [cancelHide, scheduleHoverHide, target, paneContainer]);
 
   useLayoutEffect(() => {
     if (target?.mode === "create" || focusEditUrlRef.current) {
@@ -981,6 +1334,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const commit = useCallback((): void => {
     const current = targetRef.current;
     if (current === null || !editable) return;
+    // Read-state edit targets must not commit: Escape revert restores
+    // `editing: false` while the unmounting form can still emit blur with
+    // stale draft values from the pre-revert render.
+    if (current.mode === "edit" && !current.editing) return;
     const nextHref = href.trim();
     const nextText =
       displayText.trim().length === 0 && nextHref.length > 0
@@ -1030,6 +1387,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     setLiveTarget,
   ]);
 
+  useLayoutEffect(() => {
+    commitRef.current = commit;
+  }, [commit]);
+
   const remove = useCallback((): void => {
     const current = targetRef.current;
     if (current === null || !editable) return;
@@ -1051,19 +1412,25 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const classifiedDraftHref = classifyHref(href);
   const unusualScheme =
     href.trim().length > 0 && classifiedDraftHref.kind === "ignore";
-  const compact =
-    target.mode === "edit" && (target.trigger === "hover" || !editable);
+  const compact = target.mode === "edit" && (!editable || !target.editing);
   const surfaceLabel = compact ? "Link preview" : "Edit link";
 
   const handleSurfaceBlur = (event: ReactFocusEvent<HTMLFormElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
+    // A pane backgrounding forcibly blurs this field to relinquish keyboard
+    // ownership; that is not a user-approved commit. Keep the draft mounted (the
+    // typed URL/title survive) and let the card reappear on refocus.
+    if (isPresentationLossBlur()) return;
     commit();
   };
 
   const handlePreviewBlur = (event: ReactFocusEvent<HTMLDivElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
+    // Presentation-loss blur (pane backgrounded) must not close the card; it
+    // hides with the pane and returns on refocus.
+    if (isPresentationLossBlur()) return;
     close();
   };
 
@@ -1161,6 +1528,6 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         </form>
       )}
     </div>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }

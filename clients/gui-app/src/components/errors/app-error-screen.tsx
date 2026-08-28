@@ -3,11 +3,22 @@ import { AlertTriangle, House, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { createReportIssueContext } from "@/lib/report-issue-context";
+import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import type { ReportIssueErrorCapture } from "@/lib/report-issue-error-capture";
 
 export interface AppErrorScreenProps {
   /** The thrown value, surfaced as a short technical detail for support. */
   readonly error: unknown;
+  /**
+   * Captured ONCE by the caller at catch time (a class boundary's
+   * `componentDidCatch`, or an idempotent function-component adapter) via
+   * `captureReportIssueError` - never derived here, since
+   * that call mints an id and reports to Sentry, both of which must not
+   * repeat on every re-render. `null` only when nothing was ever caught (this
+   * component is never rendered in that state by either real caller, but the
+   * type allows a synthetic/test render).
+   */
+  readonly capture: ReportIssueErrorCapture | null;
   /** Reload the renderer window (`window.location.reload()`). */
   readonly onRefresh: () => void;
   /** Navigate back to the home route and clear the error. */
@@ -28,7 +39,7 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
     <div
       data-testid="app-error-screen"
       role="alert"
-      className="flex min-h-svh w-full items-center justify-center bg-background p-6 text-foreground"
+      className="flex min-h-safe-svh w-full items-center justify-center bg-background p-6 text-foreground"
     >
       <Card className="w-full max-w-md">
         <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
@@ -45,7 +56,11 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
             </p>
           </div>
           {detail === null ? null : (
-            <p className="max-h-24 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs break-words whitespace-pre-wrap text-muted-foreground">
+            <p
+              // muted-fill-ok: weak tint delimited by its own border-border/60,
+              // so a collapse degrades the panel rather than erasing it
+              className="max-h-24 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs break-words whitespace-pre-wrap text-muted-foreground"
+            >
               {detail}
             </p>
           )}
@@ -70,11 +85,14 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
               Return to Home
             </Button>
             <ReportIssueAction
-              context={createReportIssueContext({
+              context={createReportIssueDraftContext({
                 title: "Something went wrong",
+                // Real error text goes ONLY into `capture.cause`, never here -
+                // this is the public GitHub-issue prefill.
                 message: "The app hit an unexpected error.",
                 code: null,
                 source: "Traycer app",
+                capture: props.capture,
               })}
               presentation="text"
               className="w-full"

@@ -3,14 +3,8 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": [
-      "ESNext",
-      "DOM",
-      "DOM.Iterable"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -19,19 +13,10 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "@traycer/protocol/utils/*": [
-        "./utils/*"
-      ],
-      "@traycer/protocol/*": [
-        "./src/*"
-      ]
+      "@traycer/protocol/utils/*": ["./utils/*"],
+      "@traycer/protocol/*": ["./src/*"]
     }
   },
-  "include": [
-    "."
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+  "include": ["."],
+  "exclude": ["node_modules", "dist", "oxlint.config.ts"]
 }

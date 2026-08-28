@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import {
   cleanup,
   fireEvent,

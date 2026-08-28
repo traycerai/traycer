@@ -9,7 +9,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { ListTerminalsResponseV20 } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { ListTerminalsResponseV23 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
@@ -20,7 +20,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 export interface RenameTerminalMutationContext {
   readonly hostId: string | null;
   readonly previous: ReadonlyArray<
-    readonly [QueryKey, ListTerminalsResponseV20 | undefined]
+    readonly [QueryKey, ListTerminalsResponseV23 | undefined]
   >;
 }
 
@@ -45,7 +45,9 @@ export interface RenameTerminalMutationContext {
  * the patch is rolled back with a compare-and-swap guard plus a one-shot
  * mutation-boundary refetch as the authoritative repair.
  *
- * `useTerminalRename` is the default-host convenience wrapper over this hook.
+ * Every caller passes the client of the host that OWNS the session (a tile's
+ * or the Epic session's); the app-wide convenience wrapper that used to
+ * sit beside this hook had no caller left and was removed (PR #1243).
  */
 export function useTerminalRenameFor(
   client: HostClient<HostRpcRegistry> | null,
@@ -71,10 +73,10 @@ export function useTerminalRenameFor(
         if (hostId === null) return { hostId: null, previous: [] };
         const queryKey = hostQueryKeys.methodScope(hostId, "terminal.list");
         await queryClient.cancelQueries({ queryKey });
-        const previous = queryClient.getQueriesData<ListTerminalsResponseV20>({
+        const previous = queryClient.getQueriesData<ListTerminalsResponseV23>({
           queryKey,
         });
-        queryClient.setQueriesData<ListTerminalsResponseV20>(
+        queryClient.setQueriesData<ListTerminalsResponseV23>(
           { queryKey },
           (data) => {
             if (data === undefined) return undefined;
@@ -84,7 +86,10 @@ export function useTerminalRenameFor(
             if (target === undefined || target.title === variables.title) {
               return data;
             }
+            // Preserve top-level response metadata (e.g. `homeCwd`); only
+            // the sessions array is replaced.
             return {
+              ...data,
               sessions: data.sessions.map((session) =>
                 session.sessionId === variables.sessionId
                   ? { ...session, title: variables.title }
@@ -102,7 +107,7 @@ export function useTerminalRenameFor(
         // superseded this one - writing this title into the persisted
         // snapshots would preserve a stale fallback name.
         const superseded = queryClient
-          .getQueriesData<ListTerminalsResponseV20>({
+          .getQueriesData<ListTerminalsResponseV23>({
             queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
           })
           .some(([, data]) => {
@@ -139,7 +144,7 @@ export function useTerminalRenameFor(
             (session) => session.sessionId === variables.sessionId,
           );
           if (previousRow === undefined) return;
-          queryClient.setQueryData<ListTerminalsResponseV20>(
+          queryClient.setQueryData<ListTerminalsResponseV23>(
             queryKey,
             (current) => {
               if (current === undefined) return undefined;
@@ -151,7 +156,10 @@ export function useTerminalRenameFor(
               if (target === undefined || target.title !== variables.title) {
                 return current;
               }
+              // Preserve top-level response metadata (e.g. `homeCwd`); only
+              // the sessions array is replaced.
               return {
+                ...current,
                 sessions: current.sessions.map((session) =>
                   session.sessionId === variables.sessionId
                     ? { ...session, title: previousRow.title }

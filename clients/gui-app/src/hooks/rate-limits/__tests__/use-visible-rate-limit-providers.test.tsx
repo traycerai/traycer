@@ -3,6 +3,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
+  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
   AvailableProviderRateLimits,
@@ -30,6 +31,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => null,
 }));
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueriesWithResponseMap: (args: {
@@ -78,7 +81,17 @@ function providerState(args: {
     availabilityPending: args.availabilityPending,
     providerId: args.providerId,
     auth: auth(args.status),
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
     profiles: [],
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
   };
 }
 
@@ -163,7 +176,12 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
     ]);
   });
 
@@ -181,7 +199,12 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
     ]);
   });
 
@@ -200,7 +223,12 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
     ]);
   });
 
@@ -220,7 +248,7 @@ describe("useVisibleRateLimitProviders", () => {
     expect(result.current).toEqual([]);
   });
 
-  it("does not keep showing a signed-out provider from stale cached usage", () => {
+  it("keeps a signed-out provider visible from its last cached usage without making it poll-eligible", () => {
     mocks.providers = [
       providerState({
         providerId: "codex",
@@ -235,8 +263,132 @@ describe("useVisibleRateLimitProviders", () => {
       isError: false,
     });
 
+    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const configured = renderHook(() => useConfiguredRateLimitProviders());
+
+    expect(visible.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ]);
+    expect(configured.result.current).toEqual([]);
+  });
+
+  it("keeps an authenticated managed profile visible and queue-eligible while excluding its unauthenticated ambient target", () => {
+    const ambient: ProviderProfile = {
+      profileId: "ambient",
+      enabled: true,
+      kind: "ambient",
+      authType: "oauth",
+      label: "Terminal",
+      auth: auth("unauthenticated"),
+      identity: null,
+      usageUpdatedAt: null,
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      duplicateOfProfileId: null,
+      accentColor: null,
+      ambientDriftNotice: null,
+    };
+    const managed: ProviderProfile = {
+      ...ambient,
+      profileId: "work-profile",
+      kind: "managed",
+      label: "Work",
+      auth: auth("authenticated"),
+    };
+    mocks.providers = [
+      {
+        ...providerState({
+          providerId: "codex",
+          status: "unauthenticated",
+          enabled: true,
+          authPending: true,
+          availabilityPending: false,
+        }),
+        profiles: [ambient, managed],
+      },
+    ];
+
+    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const configured = renderHook(() => useConfiguredRateLimitProviders());
+
+    expect(visible.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [ambient, managed],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ]);
+    expect(configured.result.current).toEqual(visible.result.current);
+  });
+
+  it("hides OpenCode when the latest snapshot is rate_limits_not_available", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "opencode",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+    mocks.results.set("opencode", {
+      data: {
+        latest: {
+          provider: "opencode",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+        lastGood: null,
+        lastGoodAt: null,
+        lastFailureAt: NOW,
+      },
+      isError: false,
+    });
+
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([]);
+  });
+
+  it("keeps OpenCode visible for insufficient_permissions", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "opencode",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+    mocks.results.set("opencode", {
+      data: {
+        latest: {
+          provider: "opencode",
+          available: false,
+          reason: "insufficient_permissions",
+        },
+        lastGood: null,
+        lastGoodAt: null,
+        lastFailureAt: NOW,
+      },
+      isError: false,
+    });
+
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+
+    expect(result.current).toEqual([
+      {
+        providerId: "opencode",
+        lane: "httpFetch",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ]);
   });
 });

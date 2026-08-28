@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import type { ReactElement, ReactNode } from "react";
 import {
   act,
@@ -13,13 +12,20 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
-import { RestartUpdateDialog } from "@/components/layout/dialogs/restart-update-dialog";
 import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guidance-dialog";
+import {
+  HostReadinessControllerContext,
+  type DefaultHostReadinessPresentation,
+  type HostReadinessController,
+  type SurfaceReadiness,
+} from "@/components/layout/host-readiness-controller-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateGuidance,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
@@ -70,10 +76,13 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   sequence: 0,
   status: "idle",
   currentVersion: "1.0.0",
+  allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
+  installInFlight: false,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
@@ -94,6 +103,21 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   snapshot: DesktopAppUpdateSnapshot;
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
+  // Annotated with the full change type. Inference from this default narrows
+  // `outcome` to the literal `"changed"`, which then rejects a
+  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
+  // refusal, which is exactly the case worth testing.
+  readonly setAllowPrerelease = vi.fn(
+    (): Promise<DesktopAppUpdateChannelChange> =>
+      Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
+  );
+  readonly resolveCompatRecovery = vi.fn(() =>
+    Promise.resolve({
+      route: "manual" as const,
+      rcCandidateVersion: null,
+      stagedVersion: null,
+    }),
+  );
   private readonly handlers = new Set<
     (snapshot: DesktopAppUpdateSnapshot) => void
   >();
@@ -137,7 +161,8 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
 
 class DelayedSnapshotAppUpdatesBridge extends FakeAppUpdatesBridge {
   private resolveSnapshot:
-    ((snapshot: DesktopAppUpdateSnapshot) => void) | null = null;
+    | ((snapshot: DesktopAppUpdateSnapshot) => void)
+    | null = null;
 
   override getSnapshot(): Promise<DesktopAppUpdateSnapshot> {
     return new Promise((resolve) => {
@@ -160,10 +185,13 @@ function readySnapshot(sequence: number): DesktopAppUpdateSnapshot {
     sequence,
     status: "ready",
     currentVersion: "1.0.0",
+    allowPrerelease: false,
     latestVersion: "1.2.3",
+    latestCompatibilityEpoch: null,
     downloadProgress: null,
     installBlockedReason: null,
     installGuidance: null,
+    installInFlight: false,
     errorMessage: null,
     lastCheckedAt: "2026-06-15T00:00:00.000Z",
     lastCheckIntent: "automatic",
@@ -224,6 +252,7 @@ function availableSnapshot(sequence: number): DesktopAppUpdateSnapshot {
     sequence,
     status: "available",
     latestVersion: "1.2.3",
+    latestCompatibilityEpoch: null,
     lastCheckedAt: "2026-06-15T00:00:00.000Z",
     lastCheckIntent: "automatic",
   };
@@ -237,6 +266,76 @@ function downloadingSnapshot(
     ...availableSnapshot(sequence),
     status: "downloading",
     downloadProgress,
+  };
+}
+
+const READY_READINESS: SurfaceReadiness = { kind: "ready" };
+const LOADING_HOST_READINESS: SurfaceReadiness = { kind: "loading-host" };
+
+const READINESS_STUB_PRESENTATION: DefaultHostReadinessPresentation = {
+  targetKind: "unknown",
+  localBootIntent: false,
+  localHostState: "unknown",
+  stage: "loading",
+  progress: null,
+  lastProgress: null,
+  provisioningError: null,
+  provisioning: false,
+  removed: false,
+  hostBusy: false,
+  canManageHost: false,
+  retryProvisioning: () => undefined,
+  forceProvisioning: () => undefined,
+  reinstall: () => undefined,
+  configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openSettings: () => undefined,
+  compatibility: {
+    status: "compatible",
+    degraded: false,
+    unreachable: false,
+    hostStatus: null,
+  },
+};
+
+function readinessController(
+  readiness: SurfaceReadiness,
+): HostReadinessController {
+  return {
+    readinessFor: () => readiness,
+    defaultHostPresentation: READINESS_STUB_PRESENTATION,
+    hasBeenDefaultHostReady: false,
+  };
+}
+
+interface ReadinessHarness {
+  readonly rerenderReadiness: (next: SurfaceReadiness) => void;
+}
+
+function renderWithReadiness(
+  ui: ReactElement,
+  appUpdates: DesktopAppUpdatesBridge,
+  readiness: SurfaceReadiness,
+): ReadinessHarness {
+  const host = makeHost(appUpdates);
+  function tree(forReadiness: SurfaceReadiness): ReactElement {
+    return (
+      <RunnerHostProvider runnerHost={host}>
+        <TooltipProvider>
+          <HostReadinessControllerContext.Provider
+            value={readinessController(forReadiness)}
+          >
+            {ui}
+          </HostReadinessControllerContext.Provider>
+        </TooltipProvider>
+      </RunnerHostProvider>
+    );
+  }
+  const view = render(tree(readiness));
+  return {
+    rerenderReadiness: (next) => {
+      view.rerender(tree(next));
+    },
   };
 }
 
@@ -287,7 +386,7 @@ describe("desktop app update UI", () => {
     expect(bridge.downloadUpdate).not.toHaveBeenCalled();
   });
 
-  it("disables the restart tick (no confirm modal) when a ready update is blocked", async () => {
+  it("keeps the restart tick inert when a ready update is blocked", async () => {
     const bridge = new FakeAppUpdatesBridge({
       ...readySnapshot(1),
       installBlockedReason:
@@ -301,24 +400,113 @@ describe("desktop app update UI", () => {
     expect(button.hasAttribute("disabled")).toBe(true);
 
     fireEvent.click(button);
+    expect(bridge.installUpdate).not.toHaveBeenCalled();
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
   });
 
-  it("opens the restart-confirmation modal when the ready tick is clicked", async () => {
+  it("restarts to install directly when the ready tick is clicked, without a second confirmation", async () => {
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
+    const track = vi.spyOn(Analytics.getInstance(), "track");
     renderWithHost(<AppUpdateHeaderButton />, bridge);
 
     const button = await screen.findByRole("button", {
       name: /Restart to update/i,
     });
-    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
 
     fireEvent.click(button);
 
-    // The tick opens the shared confirmation modal rather than restarting.
-    expect(useDesktopDialogStore.getState().activeDialog).toBe(
-      "confirm-restart-update",
+    // The click IS the confirmation - no modal is opened in between. AWAITED
+    // because the install door now asks MAIN for the unsyncable set across
+    // every window before it authorizes a restart that quits the whole app.
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+    // The event the deleted modal used to own now rides the gesture.
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.UpdateRestartRequested, {
+      source: "direct_ui",
+    });
+  });
+
+  it("disarms the ready tick while an install is in flight", async () => {
+    const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
+    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    // Main publishes the in-flight install; the quit it triggers drains first,
+    // so the tick is still on screen and must not fire a second install.
+    act(() => {
+      bridge.emit({ ...readySnapshot(2), installInFlight: true });
+    });
+
+    const button = screen.getByTestId("app-update-header-button");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(bridge.installUpdate).not.toHaveBeenCalled();
+    // `disabled` alone is silent - the pending state is announced.
+    screen.getByRole("status", { name: /Restarting to install the update/i });
+  });
+
+  it("re-arms the ready tick when the install fails back to an error", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...readySnapshot(1),
+      installInFlight: true,
+    });
+    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+    expect(
+      screen.getByTestId("app-update-header-button").hasAttribute("disabled"),
+    ).toBe(true);
+
+    act(() => {
+      bridge.emit(errorSnapshot(2));
+    });
+
+    // A failed install drops out of "ready" entirely, so the affordance goes
+    // away rather than wedging disabled forever.
+    expect(screen.queryByTestId("app-update-header-button")).toBeNull();
+  });
+
+  it("disarms the header tick after the toast's Restart starts the install", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(
+      <>
+        <AppUpdateHeaderButton />
+        <AppUpdateToastController />
+      </>,
+      bridge,
     );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(readySnapshot(1));
+    });
+    const [message] = toastMock.mock.lastCall ?? [];
+    if (message === undefined) {
+      throw new Error("Expected update ready toast content");
+    }
+    render(<>{message}</>);
+
+    // Both restart affordances are on screen at once: the toast dismisses
+    // itself on click, but the header tick does not - main has to disarm it.
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      bridge.emit({ ...readySnapshot(2), installInFlight: true });
+    });
+
+    const tick = screen.getByTestId("app-update-header-button");
+    expect(tick.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(tick);
+    expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("opens install guidance instead of the restart confirmation when the ready update needs a manual step", async () => {
@@ -341,60 +529,6 @@ describe("desktop app update UI", () => {
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "install-guidance",
     );
-  });
-
-  it("runs the restart action only after the modal is confirmed", () => {
-    const onConfirm = vi.fn();
-    const onOpenChange = vi.fn();
-    const { rerender } = render(
-      <RestartUpdateDialog
-        open
-        onOpenChange={onOpenChange}
-        latestVersion="1.2.3"
-        onConfirm={onConfirm}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
-    expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(
-      screen
-        .getByRole("button", { name: /Restart now/i })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen.getByRole("status", {
-        name: /Restart request in progress/i,
-      }),
-    ).toBeTruthy();
-    rerender(
-      <RestartUpdateDialog
-        open={false}
-        onOpenChange={onOpenChange}
-        latestVersion="1.2.3"
-        onConfirm={onConfirm}
-      />,
-    );
-    rerender(
-      <RestartUpdateDialog
-        open
-        onOpenChange={onOpenChange}
-        latestVersion="1.2.3"
-        onConfirm={onConfirm}
-      />,
-    );
-
-    expect(
-      screen.getByRole("button", { name: "Later" }).hasAttribute("disabled"),
-    ).toBe(false);
-    expect(
-      screen
-        .getByRole("button", { name: /Restart now/i })
-        .hasAttribute("disabled"),
-    ).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
-    expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 
   it("renders the manual-install steps and command, and opens the release page", () => {
@@ -626,7 +760,7 @@ describe("desktop app update UI", () => {
     });
   });
 
-  it("offers Restart on the ready toast, opening the confirmation modal", async () => {
+  it("offers Restart on the ready toast, installing without a confirmation modal", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(<AppUpdateToastController />, bridge);
     await waitFor(() => {
@@ -653,12 +787,48 @@ describe("desktop app update UI", () => {
     screen.getByText("Update ready to install");
     screen.getByText("Restart Traycer to finish updating.");
 
+    const track = vi.spyOn(Analytics.getInstance(), "track");
     const restart = screen.getByRole("button", { name: "Restart" });
-    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     fireEvent.click(restart);
-    expect(useDesktopDialogStore.getState().activeDialog).toBe(
-      "confirm-restart-update",
-    );
+    fireEvent.click(restart);
+    // The toast button is the confirmation - it installs once, with no modal.
+    // ONCE still holds now that the door is async, and not by luck: the
+    // content's `actionHandledRef` latch is set synchronously before
+    // `onAction()`, so the second click returns before any round trip starts.
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+    expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.UpdateRestartRequested, {
+      source: "direct_ui",
+    });
+  });
+
+  it("replaces the ready toast with progress once the install is in flight", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit({ ...readySnapshot(1), installInFlight: true });
+    });
+
+    // Not the action toast: a second "Restart" button here could fire a
+    // duplicate install, and the drain would otherwise show no feedback.
+    await waitFor(() => {
+      expect(toastMock.message).toHaveBeenCalledWith(
+        "Restarting to install update…",
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: "Traycer will reopen once the update is applied.",
+        }),
+      );
+    });
+    render(<>{toastMock.mock.lastCall?.[0]}</>);
+    expect(screen.queryByRole("button", { name: "Restart" })).toBeNull();
   });
 
   it("offers View instructions on the ready toast when a manual step is needed", async () => {
@@ -850,5 +1020,126 @@ describe("desktop app update UI", () => {
       expect(bridge.subscriptionCount()).toBe(1);
     });
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the update toast while the window narrator owns the frame", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    const harness = renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      READY_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    // Positive baseline first: the harness can show a toast at all when the
+    // narrator does not own the frame, so the assertion below isn't passing
+    // on a broken harness.
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+
+    toastMock.mockClear();
+    harness.rerenderReadiness(LOADING_HOST_READINESS);
+
+    act(() => {
+      bridge.emit(availableSnapshot(2));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("re-emits the deferred update once the narrator releases the frame, with no new snapshot or sequence bump", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    const harness = renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      LOADING_HOST_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+
+    // Release: readiness flips to `ready` with no new snapshot arriving and
+    // no sequence bump - the effect's `narrated` dependency is the only thing
+    // that changes.
+    harness.rerenderReadiness(READY_READINESS);
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    expect(options?.id).toBe("traycer-app-update");
+
+    // The whole point of re-emitting rather than unfreezing in place is that
+    // the user gets an affordance at a moment they can act on it - the toast
+    // carries `cancel: null` everywhere in this controller, so Sonner's own
+    // close button does not exist on it, and the only way to clear it is the
+    // control this element renders itself. If the re-emitted payload didn't
+    // carry a working one, the premise behind choosing "re-emit" over
+    // "unfreeze" would be false even though the toast reappeared.
+    if (message === undefined) {
+      throw new Error("Expected the re-emitted toast to carry content");
+    }
+    render(<>{message}</>);
+    const laterButton = screen.getByRole("button", { name: "Later" });
+    fireEvent.click(laterButton);
+    expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
+  });
+
+  it("shows the toast exactly as before when the narrator never owns the frame", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithReadiness(<AppUpdateToastController />, bridge, READY_READINESS);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+    const [, options] = toastMock.mock.lastCall ?? [];
+    expect(options?.id).toBe("traycer-app-update");
+  });
+
+  it("does not double-emit after a deferred update has already been re-emitted on release", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    const harness = renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      LOADING_HOST_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+
+    harness.rerenderReadiness(READY_READINESS);
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+
+    toastMock.mockClear();
+    // An unrelated re-render at the same readiness must not re-fire it.
+    harness.rerenderReadiness(READY_READINESS);
+    // Neither should the same snapshot arriving again.
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
   });
 });

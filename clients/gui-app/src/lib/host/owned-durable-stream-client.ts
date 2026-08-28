@@ -1,4 +1,4 @@
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
@@ -14,7 +14,7 @@ import { appLogger } from "@/lib/logger";
 export function openOwnedDurableStreamClient<TClient extends { close(): void }>(
   openTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
-  build: (wsStreamClient: WsStreamClient<HostStreamRpcRegistry>) => TClient,
+  build: (wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>) => TClient,
 ): { readonly client: TClient; readonly close: () => void } {
   const transport = openTransport(hostId);
   try {

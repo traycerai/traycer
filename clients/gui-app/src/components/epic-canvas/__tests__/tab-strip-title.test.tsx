@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 const useHostNotificationIndicatorsMock = vi.hoisted(() =>
   vi.fn(() => ({
     data: { epics: {}, chats: {} },
@@ -19,11 +17,15 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  publishAgentActivity,
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -31,11 +33,13 @@ import type { SplitDirection } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
 
 vi.mock("@/lib/host", () => ({
+  useHostBinding: () => null,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
@@ -52,12 +56,23 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => openTransportStub,
 }));
 
+// `null` support is "still negotiating", which keeps the notification feed -
+// and therefore the tab's indicator derivation - on the local host path these
+// tests already stub.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  useStreamMethodSupport: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
+}));
+
+// The Epic session resolves its host through the selection authority's derived
+// pointer (selection model §1), not the active-host projection above - seed the
+// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-test",
 }));
 
 // Terminal titles resolve through the tab's bound-host client; these tests
@@ -177,11 +192,22 @@ async function flushEpicSnapshot(): Promise<void> {
 }
 
 function markChatWorking(): void {
+  publishAgentActivity([
+    {
+      hostId: "host-a",
+      byEpic: { [EPIC_ID]: { working: [CHAT_ID], turn: [CHAT_ID] } },
+    },
+  ]);
+}
+
+function setChatArchived(archivedAt: number | null): void {
   const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
   if (handle === null) throw new Error("expected open epic handle");
-  handle.awareness.setLocalState({
-    [AGENT_WORKING_AWARENESS_FIELD]: [CHAT_ID],
-  });
+  const chats: unknown = handle.doc.getMap("epic").get("chats");
+  if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+  const chat: unknown = chats.get(CHAT_ID);
+  if (!(chat instanceof Y.Map)) throw new Error("expected chat map");
+  chat.set("archivedAt", archivedAt);
 }
 
 describe("TabStrip title", () => {
@@ -205,6 +231,7 @@ describe("TabStrip title", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
+    resetAgentActivity();
     harness.teardown();
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   });
@@ -241,6 +268,37 @@ describe("TabStrip title", () => {
     expect(title.getAttribute("data-slot")).toBe("tooltip-trigger");
   });
 
+  it("keeps an archived chat tab open with a faded icon and archive title prefix", async () => {
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+
+    const title = screen.getByTestId(`tab-title-${TAB.instanceId}`);
+    expect(within(title).queryByText("Archived")).toBeNull();
+
+    act(() => {
+      setChatArchived(123);
+    });
+
+    await waitFor(() => {
+      expect(within(title).getByText("Archived")).toBeTruthy();
+    });
+    const archivedIcon = screen.getByTestId("archived-tab-icon");
+    expect(archivedIcon.className).toContain("opacity-50");
+    expect(within(title).getByText("Archived").className).toContain(
+      "font-semibold",
+    );
+    expect(screen.getByTestId(`tab-item-${TAB.instanceId}`)).toBeTruthy();
+
+    act(() => {
+      setChatArchived(null);
+    });
+
+    await waitFor(() => {
+      expect(within(title).queryByText("Archived")).toBeNull();
+    });
+    expect(screen.getByTestId(`tab-item-${TAB.instanceId}`)).toBeTruthy();
+  });
+
   it("shows a spinner while chat title generation is pending", async () => {
     useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
 
@@ -271,7 +329,7 @@ describe("TabStrip title", () => {
         screen.getByTestId(`chat-tab-spinner-activity-${CHAT_ID}`),
       ).toBeTruthy();
     });
-    expect(screen.getByTitle("Chat in progress")).toBeTruthy();
+    expect(anyTooltipHasText("Agent in progress")).toBe(true);
     expect(
       screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeNull();
@@ -286,6 +344,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: true,
             pendingInterview: false,
+            pendingFork: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -317,6 +376,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: false,
             pendingInterview: true,
+            pendingFork: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -348,6 +408,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: false,
             pendingInterview: false,
+            pendingFork: false,
             unreadFailure: true,
             unreadDone: false,
           },
@@ -365,9 +426,11 @@ describe("TabStrip title", () => {
     expect(
       screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeNull();
-    expect(
-      screen.getByTestId(`chat-tab-spinner-failure-${CHAT_ID}`),
-    ).toBeTruthy();
+    const failure = screen.getByTestId(`chat-tab-spinner-failure-${CHAT_ID}`);
+    expect(failure.getAttribute("class")).toContain("lucide-message-square-x");
+    expect(failure.getAttribute("class")).not.toContain(
+      "lucide-square-terminal",
+    );
   });
 
   it("shows the chat's unread-done status instead of the title spinner", async () => {
@@ -379,6 +442,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: false,
             pendingInterview: false,
+            pendingFork: false,
             unreadFailure: false,
             unreadDone: true,
           },

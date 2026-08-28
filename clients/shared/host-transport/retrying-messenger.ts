@@ -1,6 +1,8 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
+  HostRequestAbortedError,
   RetryableTransportError,
+  type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -53,16 +55,15 @@ export const NO_RETRY_TRANSPORT_POLICY: TransportRetryPolicy = {
 
 /**
  * Wraps an `IHostMessenger` so a `RetryableTransportError` - a transient
- * transport failure that the transport proved happened *before* the request
- * frame was sent (dial timeout, handshake drop, `openAck` timeout) - is
- * retried on a fresh dial with jittered exponential backoff, up to
+ * transport failure for which the host is known not to have dispatched the
+ * request (dial/handshake failure, or an explicit post-open request timeout) -
+ * is retried on a fresh dial with jittered exponential backoff, up to
  * `policy.maxRetries` times.
  *
- * Only `RetryableTransportError` is retried: a post-send drop, a malformed
- * frame, an `UNAUTHORIZED`, or any other host-originated `HostRpcError` is a
- * plain `HostRpcError` and propagates on the first attempt. The "pre-send"
- * guarantee is what makes the retry safe even for non-idempotent methods - the
- * host never observed the original call.
+ * Only `RetryableTransportError` is retried: an ambiguous post-send drop, a
+ * malformed frame, an `UNAUTHORIZED`, or any other host-originated
+ * `HostRpcError` propagates on the first attempt. The no-dispatch guarantee is
+ * what makes the retry safe even for non-idempotent methods.
  *
  * Compose this *outside* `createAuthAwareMessenger`: the auth wrapper only acts
  * on `UNAUTHORIZED` (never a `RetryableTransportError`), so the two layers
@@ -74,27 +75,35 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
   policy: TransportRetryPolicy,
 ): IHostMessenger<Registry> {
   const runWithRetries = async <Response>(
+    authority: HostRequestAuthority,
+    method: string,
     attemptCall: () => Promise<Response>,
   ): Promise<Response> => {
     for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
+      throwIfAuthorityAborted(authority, method);
       try {
         return await attemptCall();
       } catch (cause) {
         if (!(cause instanceof RetryableTransportError)) {
           throw cause;
         }
-        await policy.sleep(
-          jitteredBackoffFor(
-            attempt,
-            policy.initialDelayMs,
-            policy.maxDelayMs,
-            policy.random,
+        await waitForRetryDelay(
+          authority,
+          method,
+          policy.sleep(
+            jitteredBackoffFor(
+              attempt,
+              policy.initialDelayMs,
+              policy.maxDelayMs,
+              policy.random,
+            ),
           ),
         );
       }
     }
     // Final attempt: out of the retry budget, so let whatever it throws -
     // retryable or not - propagate to the caller unchanged.
+    throwIfAuthorityAborted(authority, method);
     return attemptCall();
   };
 
@@ -102,17 +111,75 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     request<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
+      authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      return runWithRetries(() => inner.request(method, params));
+      return runWithRetries(authority, method, () =>
+        inner.request(method, params, authority),
+      );
     },
     requestWithResponseTimeout<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
       responseTimeoutMs: number,
+      authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      return runWithRetries(() =>
-        inner.requestWithResponseTimeout(method, params, responseTimeoutMs),
+      return runWithRetries(authority, method, () =>
+        inner.requestWithResponseTimeout(
+          method,
+          params,
+          responseTimeoutMs,
+          authority,
+        ),
       );
     },
   };
+}
+
+function throwIfAuthorityAborted(
+  authority: HostRequestAuthority,
+  method: string,
+): void {
+  if (!authority.abortSignal.aborted) {
+    return;
+  }
+  throw new HostRequestAbortedError({
+    message: "Host request authority was aborted before transport dispatch",
+    requestId: "authority-aborted",
+    method,
+  });
+}
+
+function waitForRetryDelay(
+  authority: HostRequestAuthority,
+  method: string,
+  delay: Promise<void>,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      authority.abortSignal.removeEventListener("abort", onAbort);
+      reject(
+        new HostRequestAbortedError({
+          message:
+            "Host request authority was aborted during transport retry backoff",
+          requestId: "authority-aborted",
+          method,
+        }),
+      );
+    };
+    authority.abortSignal.addEventListener("abort", onAbort, { once: true });
+    if (authority.abortSignal.aborted) {
+      onAbort();
+      return;
+    }
+    void delay.then(
+      () => {
+        authority.abortSignal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      (error: unknown) => {
+        authority.abortSignal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }

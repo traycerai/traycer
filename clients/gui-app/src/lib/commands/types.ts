@@ -81,6 +81,68 @@ export interface CommandItem {
   readonly actionId: ActionId | null;
   readonly run: CommandRun;
   readonly subpage: CommandSubpage | null;
+  /**
+   * Trailing badge text for an "open existing" row whose resolved host
+   * differs from the active host (e.g. a chat/terminal listed from a
+   * non-active host) - `SubpageView` renders it, everything else ignores it.
+   * Deliberately optional (unlike every other field here) rather than
+   * `string | null` so the ~20 unrelated command sources that build plain
+   * `CommandItem` literals don't need a no-op `hostBadge: null` added.
+   */
+  readonly hostBadge?: string;
+  /**
+   * Trailing context text, rendered by sub-pages as a badge.
+   *
+   * Two uses, and they are not the same thing. On a NON-ACTIONABLE row it is
+   * the reason ("resolving", "unavailable"), so a workspace that cannot be
+   * opened is not mistaken for a selectable directory — `disabled` is what
+   * makes the row inert, this only says why. On an ACTIONABLE row it is the
+   * qualifier that makes an ambiguous label readable: Settings has two sections
+   * named "Diagnostics", one per scope, and this sub-page renders a flat list
+   * with none of the group headings the sidebar uses to tell them apart.
+   */
+  readonly statusBadge?: string;
+  /**
+   * Prevent selection in cmdk while retaining the row as contextual feedback.
+   */
+  readonly disabled?: boolean;
+  /** Agent-tree presentation metadata used by the unified Agents opener. */
+  readonly agentTreeRow?: {
+    readonly nodeId: string;
+    readonly depth: number;
+    readonly ancestorIds: ReadonlyArray<string>;
+    readonly hasChildren: boolean;
+    readonly interface: "chat" | "terminal";
+    readonly activity: "turn" | "background" | "idle";
+  };
+  /** Artifact-tree presentation metadata used by the Artifacts opener. */
+  readonly artifactTreeRow?: {
+    readonly nodeId: string;
+    readonly depth: number;
+    readonly ancestorIds: ReadonlyArray<string>;
+    readonly hasChildren: boolean;
+    readonly kind: "spec" | "ticket" | "story" | "review";
+    readonly status: number | null;
+  };
+  /** Directory/file presentation metadata for Files and Git Diff results. */
+  readonly pathTreeRow?: {
+    readonly treeId: string;
+    readonly nodeId: string;
+    readonly depth: number;
+    readonly ancestorIds: ReadonlyArray<string>;
+    readonly hasChildren: boolean;
+    readonly kind: "directory" | "file";
+    readonly path: string;
+    readonly displayPath: string;
+    readonly gitStatus?:
+      | "modified"
+      | "added"
+      | "deleted"
+      | "renamed"
+      | "copied"
+      | "untracked"
+      | "conflicted";
+  };
 }
 
 /**

@@ -11,7 +11,7 @@ export const mockLocalHostEntry: HostDirectoryEntry = {
   kind: "local",
   websocketUrl: "ws://127.0.0.1:4917/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 export const mockRemoteHostEntry: HostDirectoryEntry = {
@@ -20,7 +20,7 @@ export const mockRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://mock-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 export const mockInProcessHostEntry: HostDirectoryEntry = {
@@ -29,7 +29,7 @@ export const mockInProcessHostEntry: HostDirectoryEntry = {
   kind: "mock",
   websocketUrl: null,
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 export const mockHostDirectoryEntries: readonly HostDirectoryEntry[] = [

@@ -1,34 +1,59 @@
-type FocusCallback = () => void;
+import {
+  registerPrimaryFocusEndpoint,
+  requestPrimaryFocus,
+  type PrimaryFocusEndpoint,
+  type PrimaryFocusTarget,
+} from "@/lib/focus/primary-focus-coordinator";
 
 interface Entry {
-  readonly focus: FocusCallback;
+  readonly target: PrimaryFocusTarget;
   readonly isActive: boolean;
 }
 
 const entries = new Set<Entry>();
 
 export function registerComposerFocus(
-  focus: FocusCallback,
+  surfaceId: string,
+  endpoint: PrimaryFocusEndpoint,
   isActive: boolean,
 ): () => void {
-  const entry: Entry = { focus, isActive };
+  const entry: Entry = {
+    target: { kind: "composer", surfaceId },
+    isActive,
+  };
   entries.add(entry);
+  const unregister = registerPrimaryFocusEndpoint(entry.target, endpoint);
   return () => {
     entries.delete(entry);
+    unregister();
   };
 }
 
 export function focusActiveComposer(): boolean {
-  let fallback: FocusCallback | null = null;
+  let fallback: Entry | null = null;
   for (const entry of entries) {
     if (entry.isActive) {
-      entry.focus();
+      requestPrimaryFocus(entry.target);
       return true;
     }
-    fallback = entry.focus;
+    fallback = entry;
   }
-  if (fallback !== null) {
-    fallback();
+  if (fallback === null) return false;
+  requestPrimaryFocus(fallback.target);
+  return true;
+}
+
+/**
+ * Focuses a composer only when one has explicitly registered as active.
+ *
+ * Mount-time autofocus must not use `focusActiveComposer`'s inactive fallback:
+ * the newly active Tiptap editor registers asynchronously, so a retained split
+ * partner may temporarily be the only endpoint in the registry.
+ */
+export function focusRegisteredActiveComposer(): boolean {
+  for (const entry of entries) {
+    if (!entry.isActive) continue;
+    requestPrimaryFocus(entry.target);
     return true;
   }
   return false;

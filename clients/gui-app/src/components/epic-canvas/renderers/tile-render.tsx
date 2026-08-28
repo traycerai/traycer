@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
+import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
@@ -23,6 +24,11 @@ import { TicketTile } from "./ticket-tile";
 import { WorkspaceFileTile } from "./workspace-file-tile";
 import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
+import { ManagedCommandOutputTile } from "./managed-command-output-tile";
+import { CommGraphTile } from "./comm-graph-tile";
+import { PublishedChatTile } from "./published-chat-tile";
+import { PrDetailTile } from "./pr-detail-tile";
+import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -108,6 +114,47 @@ const TILE_RENDERERS: TileRendererRegistry = {
   "snapshot-diff": ({ node, viewTabId }) => (
     <SnapshotDiffTile node={node} viewTabId={viewTabId} />
   ),
+  "managed-command-output": ({ node, viewTabId, tileId, epicId }) => (
+    <ManagedCommandOutputTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      epicId={epicId}
+    />
+  ),
+  // Epic-scoped, not host-scoped: the tile fans a subscription out per host.
+  // The surrounding `TabHostProvider` carries the ref's inert placeholder host
+  // and this body never reads it.
+  "comm-graph": ({ node, viewTabId }) => (
+    <CommGraphTile node={node} viewTabId={viewTabId} />
+  ),
+  // The ordinary chat surface fed from a published copy - see the tile's own
+  // note. Bound, like every tile, to the tab's host: that host SERVES the cloud
+  // read, and the chat's owning host is metadata the locked composer names.
+  "published-chat": ({ node, epicId, viewTabId, isActive }) => (
+    <PublishedChatTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
+  ),
+  "pr-detail": ({ node, epicId, viewTabId, isActive }) => (
+    <PrDetailTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
+  ),
+  "pr-diff": ({ node, epicId, viewTabId, isActive }) => (
+    <PrDiffTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
+  ),
   // A blank tab's body IS the inline opener; picking content replaces it in
   // place (via openTileInPane). `tileId` is the group id; `isActive` drives
   // the opener's autofocus.
@@ -142,7 +189,9 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
         epicId={args.epicId}
         isActive={args.isActive}
       >
-        {tileRenderer(args.node.type)(args)}
+        <TileMinimapScope tileInstanceId={args.node.instanceId}>
+          {tileRenderer(args.node.type)(args)}
+        </TileMinimapScope>
       </TileFindScope>
     </TabHostProvider>
   );

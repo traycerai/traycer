@@ -8,6 +8,7 @@ import { chatFindSegmentUnitId } from "./chat-find";
 import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
+import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 
@@ -44,6 +45,7 @@ export interface ChatMessageEditing {
   readonly canSubmit: boolean;
   readonly slashProviderId: GuiHarnessId;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   readonly onSnapshot: (
     content: JsonContent,
@@ -77,10 +79,12 @@ export interface ChatMessageUserActions {
 export interface ChatMessageAssistantActions {
   readonly type: "assistant";
   readonly fork: ChatMessageForkAction | null;
+  readonly interviewDeliveryRetry?: InterviewDeliveryRetryAction | null;
 }
 
 export type ChatMessageActions =
-  ChatMessageUserActions | ChatMessageAssistantActions;
+  | ChatMessageUserActions
+  | ChatMessageAssistantActions;
 
 const ROLE_LABELS: Record<ChatMessageModel["role"], string> = {
   user: "You",
@@ -134,39 +138,51 @@ function renderSingleSpecialSegment(
   return null;
 }
 
-function ChatMessageImpl(props: ChatMessageProps) {
+// Assistant rows no longer carry a provider/model label above the bubble -
+// that moved into the elapsed footer's info tooltip (see AssistantMessageBody).
+function renderAssistantMessage(props: ChatMessageProps): ReactElement {
   const { actions, backgroundToolBlockIds, message, nextStepActions } = props;
+  const assistantActions = actions?.type === "assistant" ? actions : null;
+  return (
+    <div
+      className={cn(
+        "group/message flex w-full flex-col gap-1.5",
+        messageAlignmentClass(message),
+      )}
+    >
+      <AssistantMessageBody
+        segments={message.segments}
+        backgroundToolBlockIds={backgroundToolBlockIds}
+        runState={message.runState}
+        messageId={message.id}
+        elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
+        turnHasOnlyAutonomousResumeSegments={
+          message.turnHasOnlyAutonomousResumeSegments ?? false
+        }
+        showCompletionFooter={message.showCompletionFooter ?? true}
+        pausedDurationMs={message.pausedDurationMs ?? 0}
+        pausedSinceMs={message.pausedSinceMs ?? null}
+        completedAt={message.completedAt}
+        stopped={message.stopped}
+        meta={message.assistantMeta}
+        nextStepActions={nextStepActions}
+        forkAction={assistantActions?.fork ?? null}
+        interviewDeliveryRetry={
+          assistantActions?.interviewDeliveryRetry ?? null
+        }
+      />
+    </div>
+  );
+}
+
+function ChatMessageImpl(props: ChatMessageProps) {
+  const { actions, message } = props;
   const specialSegment = renderSingleSpecialSegment(message);
   if (specialSegment !== null) {
     return specialSegment;
   }
-  // Assistant rows no longer carry a provider/model label above the bubble -
-  // that moved into the elapsed footer's info tooltip (see AssistantMessageBody).
   if (message.role === "assistant") {
-    const assistantActions = actions?.type === "assistant" ? actions : null;
-    return (
-      <div
-        className={cn(
-          "group/message flex w-full flex-col gap-1.5",
-          messageAlignmentClass(message),
-        )}
-      >
-        <AssistantMessageBody
-          segments={message.segments}
-          backgroundToolBlockIds={backgroundToolBlockIds}
-          runState={message.runState}
-          messageId={message.id}
-          createdAt={message.createdAt}
-          pausedDurationMs={message.pausedDurationMs ?? 0}
-          pausedSinceMs={message.pausedSinceMs ?? null}
-          completedAt={message.completedAt}
-          stopped={message.stopped}
-          meta={message.assistantMeta}
-          nextStepActions={nextStepActions}
-          forkAction={assistantActions?.fork ?? null}
-        />
-      </div>
-    );
+    return renderAssistantMessage(props);
   }
 
   const senderLabel = message.senderLabel ?? ROLE_LABELS[message.role];

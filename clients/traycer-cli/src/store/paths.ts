@@ -1,6 +1,15 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { hostStopIntentPath as sharedHostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
+import {
+  cliInstallHomeDir as sharedCliInstallHomeDir,
+  cliManifestPath as sharedCliManifestPath,
+  hostInstallDir as sharedHostInstallDir,
+  hostInstallRecordPath as sharedHostInstallRecordPath,
+  hostStagedDir as sharedHostStagedDir,
+  hostStagedRecordPath as sharedHostStagedRecordPath,
+} from "@traycer/protocol/config/installation";
 import type { Environment } from "../runner/environment";
 import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 
@@ -23,9 +32,11 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 //   ~/.traycer/host/                         - prod host runtime root
 //   ~/.traycer/host/host.log               - prod host stdout + bootstrap markers
 //   ~/.traycer/host/pid.json                 - prod host pid metadata
+//   ~/.traycer/host/update-progress.json     - prod cross-process `host update` outcome marker
 //   ~/.traycer/host/install/                 - prod host install dir (atomic-swap target)
 //   ~/.traycer/host/install/install.json     - prod host install record
 //   ~/.traycer/host/staging/                 - prod host staging root (verify-before-replace)
+//   ~/.traycer/host/download-cache/          - prod resumable archive partials (cross-invocation)
 //   ~/.traycer/host/dev/                     - legacy/no-slot dev host runtime root
 //   ~/.traycer/host/dev-runs/<slot>/         - multi-run dev host runtime root
 //   ~/.traycer/host/dev-runs/<slot>/install/install.json - multi-run dev install record
@@ -33,11 +44,30 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
 const HOST_HOME = join(TRAYCER_HOME, "host");
-const HOST_INSTALL_SUBDIR = "install";
 // The host install temp/extract area (verify-before-replace), kept distinct
-// from the host root. Named "install-staging" for clarity.
+// from the host root. Named "install-staging" for clarity. Also the root
+// under which `host download`'s owner-tokened download/extract temp dirs
+// live (see `installer/stage-reconcile.ts`'s temp-sweep step) - both are
+// transient, verify-before-replace scratch space for the same install
+// tree, so they share one root.
 const HOST_STAGING_SUBDIR = "install-staging";
-const HOST_INSTALL_RECORD_FILENAME = "install.json";
+// The single-slot staged-download area: a fully extracted, verified host
+// tree ready to promote into `install/` (Host Update Layer Redesign Tech
+// Plan, "CLI: two-phase split with a staged store"). Distinct from
+// `install-staging/`, which is scratch space that never itself becomes the
+// final install dir.
+// Where a registry archive is streamed to disk while it downloads. Unlike
+// `install-staging/`, this area is deliberately NOT per-invocation: the
+// archive path is derived from the version + sha256 so a re-spawned CLI
+// finds the previous invocation's partial file and resumes it with a Range
+// request instead of starting from zero (traycer#585/#588 - a 700MB host
+// archive over a throttled link never survives a single process). Contents
+// are owner-tokened and swept by `registry/download-cache.ts`, not by the
+// `install-staging/` temp sweep.
+// Exported so `registry/download-cache.ts` can recognize its own private
+// slot directories structurally (`<...>/download-cache/private-*/`) rather
+// than by directory name alone - see `claimedPathFor` there.
+export const HOST_DOWNLOAD_CACHE_SUBDIR = "download-cache";
 const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
 // Single retained generation of the host log. One is enough: it exists so the
@@ -45,6 +75,28 @@ const HOST_LOG_FILENAME = "host.log";
 // an archive (see `host-log-rotation.ts`).
 const HOST_LOG_BACKUP_FILENAME = "host.log.1";
 const HOST_PID_FILENAME = "pid.json";
+// The host's delegated-credential store, under the host runtime root. Spelled
+// out here rather than imported: the host owns these names, and this repo has
+// no import path to it - the same arrangement as every other host-written
+// contract read below.
+const HOST_CREDENTIAL_SUBDIR = "auth";
+const HOST_CREDENTIAL_FILENAME = "credentials.json";
+const HOST_NEEDS_REAUTH_FILENAME = "needs-reauth.json";
+// The host's IDENTITY subtree - a different plane from `auth/` above, holding
+// the coordination keypair, the enrollment record, and its own sticky
+// needs-reauth marker, which happens to share the auth marker's filename.
+// Spelled out here for the same reason: host-owned names, no import path.
+const HOST_IDENTITY_SUBDIR = "identity";
+// The dev identity pool's root (`~/.traycer/host/dev/identities/<name>`), the
+// ONLY thing that can make a host's identity home differ from its host home.
+const HOST_DEV_SUBDIR = "dev";
+const HOST_DEV_IDENTITIES_SUBDIR = "identities";
+const HOST_UPDATE_PROGRESS_FILENAME = "update-progress.json";
+const HOST_SUBSTRATE_FILENAME = "substrate.json";
+const HOST_TRANSITION_FILENAME = "transition.json";
+const HOST_TRANSITION_PROBE_FILENAME = "transition-probe.json";
+const HOST_ACTIVATION_FILENAME = "activation.json";
+const HOST_PENDING_ACTIVATION_FILENAME = "pending-activation.json";
 
 function environmentSubdir(base: string, environment: Environment): string {
   // production → base; dev → base/dev (the slot dir name is the environment
@@ -83,13 +135,28 @@ export function cliHomeDir(environment: Environment | undefined): string {
 }
 
 export function cliInstallHomeDir(environment: Environment): string {
-  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
-  if (devSlot !== null) return devRunSubdir(CLI_HOME, devSlot);
-  return cliHomeDir(environment);
+  return sharedCliInstallHomeDir(environment);
+}
+
+/**
+ * Content-addressed store for published chat parts.
+ *
+ * Under the SHARED CLI home rather than the per-install one, and that is the
+ * point of it: an entry is named by the sha256 of its own bytes, so it cannot
+ * be stale for a newer CLI, a different environment, or a different signed-in
+ * user - only absent. Scoping it per install would throw the cache away on
+ * every upgrade for no property gained.
+ *
+ * Nothing here is authoritative and nothing needs backing up: every entry is a
+ * copy of bytes the cloud still holds, and losing the directory costs one cold
+ * read. See `chat-part-cache.ts` for why deleting it is always safe.
+ */
+export function cliChatPartCacheDir(): string {
+  return join(CLI_HOME, "chat-parts");
 }
 
 export function cliManifestPath(environment: Environment): string {
-  return join(cliInstallHomeDir(environment), "manifest.json");
+  return sharedCliManifestPath(environment);
 }
 export function cliLockPath(environment: Environment): string {
   return join(cliInstallHomeDir(environment), ".lock");
@@ -137,6 +204,136 @@ export function hostLogBackupPath(
 ): string {
   return join(hostHomeDir(environment), HOST_LOG_BACKUP_FILENAME);
 }
+/**
+ * The host's OWN delegated credential - the one a connected owner client mints
+ * FOR the host so it can keep working after that client disconnects. Not the
+ * signed-in human's credentials (`~/.traycer/cli/credentials`), which the CLI
+ * owns and this one is deliberately separate from.
+ *
+ * Read here by string path, like every other host-written on-disk contract in
+ * this module: the host is an external component, and its store module is not
+ * importable from this repo at all.
+ */
+export function hostCredentialPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_CREDENTIAL_SUBDIR,
+    HOST_CREDENTIAL_FILENAME,
+  );
+}
+/**
+ * The host's sticky "this credential family is dead and refreshing cannot fix
+ * it - ask the next connected owner" marker.
+ *
+ * Written when the host burns a credential and removed by the next successful
+ * adopt/refresh, so its PRESENCE is the whole verdict; the contents are
+ * diagnostics. Doctor reads only whether it is there and, when it is, the
+ * `reason`/`recordedAt` it carries.
+ */
+export function hostNeedsReauthPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_CREDENTIAL_SUBDIR,
+    HOST_NEEDS_REAUTH_FILENAME,
+  );
+}
+/**
+ * The host's IDENTITY-plane sticky re-auth marker, in the DEFAULT identity
+ * home - and the qualifier is the whole point of this function's existence.
+ *
+ * The host resolves its identity home as `devIdentityHomeOverride ?? <host
+ * home>`. That override is installed IN THE HOST PROCESS by the dev identity
+ * pool walk and roots under {@link hostDevIdentityPoolRoot}; nothing the CLI
+ * can read says which identity a given host acquired, or whether it acquired
+ * one at all. So this path is right for every host that is not a pool
+ * participant and simply looks elsewhere for one that is - which is why the
+ * probe reading it is never allowed to report the identity plane "clean", and
+ * defers to the host's own `host.doctor` (see `doctor/engine.ts`).
+ *
+ * Distinct from {@link hostNeedsReauthPath}, which is the AUTH plane's marker
+ * of the same filename under `auth/`. Different plane, different recovery.
+ */
+export function hostIdentityNeedsReauthPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_IDENTITY_SUBDIR,
+    HOST_NEEDS_REAUTH_FILENAME,
+  );
+}
+/**
+ * Root of the dev identity pool (`~/.traycer/host/dev/identities`), whose
+ * per-identity subdirectories are the identity homes a dev host can acquire in
+ * place of its own host home.
+ *
+ * Deliberately NOT `hostHomeDir("dev")`-derived: that resolves a dev-desktop
+ * RUN slot (`host/dev-runs/<slot>`) when one is configured, while the pool is
+ * one per machine and always sits at the plain `dev` home. Reading it through
+ * the slot-aware helper would look for the pool inside a single run's tree and
+ * conclude there is none - the failure direction that turns "cannot verify"
+ * back into a false "clean".
+ *
+ * Read for EXISTENCE only. What it can establish is narrow and negative: with
+ * no pool on this machine, no host here can have an overridden identity home,
+ * so the default one is the only one and silence is honest. Its contents are
+ * never attributed to a host - which identity a running host holds is
+ * knowledge that exists only inside that process.
+ */
+export function hostDevIdentityPoolRoot(): string {
+  return join(HOST_HOME, HOST_DEV_SUBDIR, HOST_DEV_IDENTITIES_SUBDIR);
+}
+/** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
+export function hostSubstratePath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_SUBSTRATE_FILENAME);
+}
+/** Durable lifecycle transition journal, including the governor snapshot. */
+export function hostTransitionJournalPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_TRANSITION_FILENAME);
+}
+/** Dedicated correlated probe marker; intentionally not appended to host.log. */
+export function hostTransitionProbeMarkerPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_TRANSITION_PROBE_FILENAME);
+}
+/** Durable activation journal; distinct from the substrate transition journal. */
+export function hostActivationJournalPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_ACTIVATION_FILENAME);
+}
+/** Busy activation intent, retained until activation reaches a terminal journal. */
+export function hostPendingActivationPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_PENDING_ACTIVATION_FILENAME);
+}
+/**
+ * Deliberate-stop intent, written by whoever is about to stop the host and read
+ * by the supervisor before it relaunches a dead child. Cross-process by
+ * necessity: the stopper (`traycer host stop`, an installer, Desktop's
+ * `host restart`) is never the supervisor process itself, and on Windows the
+ * supervisor survives the stop it is being asked not to fight.
+ */
+// Single-sourced with the host: the filename lives in
+// `@traycer/protocol/config/host-stop-intent` because the host reads this exact
+// record at SIGTERM (to tell a deliberate restart from death), and it resolves
+// its own home through the `--host-data-dir` override rather than through this
+// module's slot rules. Same file, one spelling.
+export function hostStopIntentPath(
+  environment: Environment | undefined,
+): string {
+  return sharedHostStopIntentPath(hostHomeDir(environment));
+}
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);
 }
@@ -148,13 +345,33 @@ export function bootstrapLogPath(environment: Environment | undefined): string {
 // the swap. Both environments stay isolated under the single ~/.traycer/
 // root per the Tech Plan; there is no cross-environment sharing.
 export function hostInstallDir(environment: Environment): string {
-  return join(hostHomeDir(environment), HOST_INSTALL_SUBDIR);
+  return sharedHostInstallDir(environment);
 }
 export function hostStagingRoot(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_STAGING_SUBDIR);
 }
 export function hostInstallRecordPath(environment: Environment): string {
-  return join(hostInstallDir(environment), HOST_INSTALL_RECORD_FILENAME);
+  return sharedHostInstallRecordPath(environment);
+}
+// Cross-process handoff marker `traycer host update` writes before it
+// touches anything and clears/rewrites on outcome - see
+// `host/update-progress-marker.ts`. Deliberately mirrored (by contract, not
+// by import) at `traycer-host/src/paths.ts::hostHomeDir` so the daemon
+// polls the exact same path this CLI writes.
+export function hostUpdateProgressMarkerPath(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_UPDATE_PROGRESS_FILENAME);
+}
+
+export function hostDownloadCacheDir(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_DOWNLOAD_CACHE_SUBDIR);
+}
+
+// Single-slot staged store - see the installation-layout comment above.
+export function hostStagedDir(environment: Environment): string {
+  return sharedHostStagedDir(environment);
+}
+export function hostStagedRecordPath(environment: Environment): string {
+  return sharedHostStagedRecordPath(environment);
 }
 
 export async function ensureTraycerHomeDir(): Promise<void> {
@@ -182,6 +399,61 @@ export async function ensureHostStagingRoot(
   await mkdir(hostStagingRoot(environment), { recursive: true });
 }
 
+export async function ensureHostDownloadCacheDir(
+  environment: Environment,
+): Promise<void> {
+  // 0o700: the cache holds a partially-written archive at a PREDICTABLE
+  // path (that predictability is the whole point - it is what lets the next
+  // invocation resume it). Under ~/.traycer it is already user-owned, and
+  // an explicit private mode keeps it that way even if the parent's mode is
+  // later relaxed, so no other local account can pre-create or swap the
+  // file we are about to append to.
+  await mkdir(hostDownloadCacheDir(environment), {
+    recursive: true,
+    mode: 0o700,
+  });
+}
+
+export async function ensureHostHomeDirForStaged(
+  environment: Environment,
+): Promise<void> {
+  // The staged dir's PARENT (hostHomeDir) must exist before an atomic
+  // rename can place `staged/` there - mirrors `atomicSwap`'s
+  // `mkdir(hostHomeDir(...))` call for `install/`. Deliberately does not
+  // create `staged/` itself: the promote step renames a temp dir into
+  // that exact path, so a pre-created empty dir would collide with the
+  // rename.
+  await ensureHostHomeDir(environment);
+}
+
+// Create a directory at 0700, and REPAIR one that already exists.
+//
+// The repair is the point. `mkdir`'s `mode` applies only to directories it
+// actually creates, so an existing directory silently keeps whatever mode it
+// was first made with - and on any install predating the 0700 default, or one
+// whose home was first created by a sibling writer at the process umask, that
+// is 0755. Without a repair the hardening below only ever reaches machines
+// with no Traycer install yet, which is close to the opposite of the
+// population that needs it: these directories hold the credentials file.
+//
+// Narrowed to directories that are actually too open, so the common path
+// costs a `stat` and no write, and best-effort throughout - a home owned by
+// another user must not turn every CLI command into a hard failure.
+//
+// POSIX only. Windows has no mode bits worth setting (`chmod` there toggles
+// the read-only flag and nothing else); access is governed by an ACL
+// inherited from the user profile directory, which is already user-scoped.
+export async function ensurePrivateDir(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") return;
+  try {
+    const current = await stat(path);
+    if ((current.mode & 0o077) !== 0) await chmod(path, 0o700);
+  } catch {
+    return;
+  }
+}
+
 // Environment-aware CLI home mkdir. Non-environment callers pass undefined to
 // get the shared root; environment-aware callers pass the runtime environment.
 export async function ensureCliHomeDir(
@@ -190,11 +462,11 @@ export async function ensureCliHomeDir(
   // 0o700 keeps the credentials file readable only by the current user
   // even if the file's own mode is later relaxed. Environment subdir
   // inherits these permissions.
-  await mkdir(cliHomeDir(environment), { recursive: true, mode: 0o700 });
+  await ensurePrivateDir(cliHomeDir(environment));
 }
 
 export async function ensureCliInstallHomeDir(
   environment: Environment,
 ): Promise<void> {
-  await mkdir(cliInstallHomeDir(environment), { recursive: true, mode: 0o700 });
+  await ensurePrivateDir(cliInstallHomeDir(environment));
 }

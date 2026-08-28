@@ -1,9 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { useHostClient } from "@/lib/host";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import {
   MarkdownLinkContext,
@@ -17,8 +17,6 @@ import { toast } from "sonner";
 interface ChatMarkdownLinkProviderProps {
   /** The chat tab whose group a file link opens its new tab into. */
   readonly tabId: string;
-  /** Host the chat is bound to; file tabs are stamped with it for life. */
-  readonly hostId: string | null;
   /** The chat's working directories, used to resolve a link path to a file. */
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly children: ReactNode;
@@ -35,7 +33,6 @@ interface ChatMarkdownLinkProviderProps {
  */
 export function ChatMarkdownLinkProvider({
   tabId,
-  hostId,
   workspaceRoots,
   children,
 }: ChatMarkdownLinkProviderProps) {
@@ -47,9 +44,9 @@ export function ChatMarkdownLinkProvider({
     [tileNavigation],
   );
   const queryClient = useQueryClient();
-  const client = useHostClient();
+  const tabHostId = useTabHostId();
+  const tabHostClient = useTabHostClient();
   const navigate = useNavigate();
-  const activeHostId = useReactiveActiveHostId();
   const openEpicId = useOpenEpicId();
   const epicHandle = useOpenEpicHandle();
 
@@ -81,33 +78,32 @@ export function ChatMarkdownLinkProvider({
     return clickTokenRef.current;
   }, []);
 
-  const runChatLink = useMemo(
-    () =>
-      buildChatLinkPolicy({
-        tabId,
-        hostId,
-        workspaceRoots,
-        activeHostId,
-        openEpicId,
-        epicHandle,
-        queryClient,
-        client,
-        navigate,
-        previewTileInTab,
-      }),
-    [
-      activeHostId,
-      client,
-      epicHandle,
-      hostId,
-      navigate,
-      openEpicId,
-      previewTileInTab,
-      queryClient,
+  const runChatLink = useMemo(() => {
+    if (tabHostClient === null) return null;
+    return buildChatLinkPolicy({
       tabId,
+      hostId: tabHostId,
       workspaceRoots,
-    ],
-  );
+      activeHostId: tabHostId,
+      openEpicId,
+      epicHandle,
+      queryClient,
+      client: tabHostClient,
+      workspaceClient: tabHostClient,
+      navigate,
+      previewTileInTab,
+    });
+  }, [
+    epicHandle,
+    navigate,
+    openEpicId,
+    previewTileInTab,
+    queryClient,
+    tabHostClient,
+    tabHostId,
+    tabId,
+    workspaceRoots,
+  ]);
 
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
@@ -117,8 +113,12 @@ export function ChatMarkdownLinkProvider({
       // event context) — never during render. That keeps `buildChatLinkPolicy`
       // a pure, hookless function while the cancel handle + disposed flag stay
       // owned by this component's refs and unmount effect.
-      openFileLink: (link) =>
-        runChatLink(link, {
+      openFileLink: (link) => {
+        if (runChatLink === null) {
+          toast("Couldn't open link");
+          return true;
+        }
+        return runChatLink(link, {
           isDisposed: () => disposedRef.current,
           getPendingProjectedOpenCancel: () =>
             pendingProjectedOpenCancelRef.current,
@@ -128,7 +128,8 @@ export function ChatMarkdownLinkProvider({
           beginClick: supersedePendingFileLink,
           isCurrent: (token) => token === clickTokenRef.current,
           onAsyncFailure: () => toast("Couldn't open link"),
-        }),
+        });
+      },
     }),
     [runChatLink, supersedePendingFileLink],
   );

@@ -8,8 +8,12 @@ import type { ReactNode } from "react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
+  RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
-import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
+import {
+  classifyProviderRateLimitWindow,
+  isOpenCodeGoRateLimitWindowLimited,
+} from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -24,6 +28,10 @@ import {
 } from "@/components/ui/tooltip";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
+import {
+  OpenCodeGoManageLink,
+  OpenModelProvidersButton,
+} from "@/components/settings/panels/opencode-go-actions";
 import { contextUsageTone } from "@/components/chat/context-usage";
 import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
 import {
@@ -34,6 +42,7 @@ import {
 import {
   formatResetFullDateTime,
   useIsFarReset,
+  useRelativeTimestamp,
   useResetCountdown,
   useSampledNow,
 } from "@/lib/relative-time";
@@ -65,7 +74,9 @@ import {
  *   the single-provider tab.
  */
 export type RateLimitViewVariant =
-  "settings" | "popover-detail" | "popover-overview";
+  | "settings"
+  | "popover-detail"
+  | "popover-overview";
 
 /**
  * The condensed Overview surface. Fields the single-provider detail keeps but
@@ -106,6 +117,16 @@ type OpenRouterRateLimits = Extract<
   { provider: "openrouter" }
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
+type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
+type HuggingFaceRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "huggingface" }
+>;
+type OpenCodeRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "opencode"; available: true }
+>;
 
 const MINUTES_PER_HOUR = 60;
 // A manual reset expiring inside this window is tinted `text-destructive` in the
@@ -333,6 +354,30 @@ function ProviderNumberRow({
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono text-ui-xs text-foreground">
         {format(value)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The string analogue of `ProviderNumberRow`: a neutral labeled value (no bar,
+ * no severity color) for provider fields that are already display strings - a
+ * plan tier, a formatted date range. Renders nothing when the provider didn't
+ * report the value.
+ */
+function ProviderTextRow({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string | null;
+}): ReactNode {
+  if (value === null) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 text-ui-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate font-mono text-ui-xs text-foreground">
+        {value}
       </span>
     </div>
   );
@@ -948,6 +993,146 @@ function OpenRouterCreditBar({
 }
 
 /**
+ * Hugging Face's usage detail: a credits bar built from the included allowance,
+ * plus the spend figures as plain neutral rows. All figures are $-denominated.
+ *
+ * Two shapes, because the endpoint reports two genuinely different accounts:
+ * one WITH an included allowance (the bar is remaining-included, the primary
+ * number the user cares about), and one with none at all - a pay-as-you-go
+ * account that only ever reports what it has spent. In the second case there is
+ * no denominator, so no bar and no fabricated "0 of unknown" row; spend stands
+ * alone (Core Flows: "Windows without a percentage"). No plan chip either -
+ * Hugging Face reports no tier on this endpoint.
+ */
+export function HuggingFaceRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: HuggingFaceRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  // Overview keeps the credits bar and the headline remaining/spent figure;
+  // the spend limit, request count and billing period are single-provider-tab
+  // detail.
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      <HuggingFaceCreditBar
+        includedUsd={data.includedUsd}
+        usedUsd={data.usedUsd}
+      />
+      {data.includedUsd === null ? (
+        <ProviderNumberRow
+          label="Spent this period"
+          value={data.usedUsd}
+          format={formatProviderCurrency}
+        />
+      ) : (
+        <ProviderNumberRow
+          label="Included credits left"
+          value={data.remainingIncludedUsd}
+          format={formatProviderCurrency}
+        />
+      )}
+      {!overview ? (
+        <>
+          {data.includedUsd === null ? null : (
+            <ProviderNumberRow
+              label="Included credits"
+              value={data.includedUsd}
+              format={formatProviderCurrency}
+            />
+          )}
+          {data.includedUsd === null ? null : (
+            <ProviderNumberRow
+              label="Used this period"
+              value={data.usedUsd}
+              format={formatProviderCurrency}
+            />
+          )}
+          <ProviderNumberRow
+            label="Spend limit"
+            value={data.limitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Spend limit left"
+            value={data.remainingLimitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Requests"
+            value={data.numRequests}
+            format={(value) => value.toLocaleString()}
+          />
+          <HuggingFacePeriodRow
+            periodStart={data.periodStart}
+            periodEnd={data.periodEnd}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// Hugging Face dates the usage window it reports, so the detail view says which
+// period the figures cover - the same orientation grok's billing-period row
+// gives. Rendered only when both bounds are present and parseable: the endpoint
+// is schema-less, so an unparseable value degrades to no row rather than to
+// "Invalid Date". The wire carries ISO strings here, not the epoch ms grok
+// uses, hence the separate formatter.
+function HuggingFacePeriodRow({
+  periodStart,
+  periodEnd,
+}: {
+  readonly periodStart: string | null;
+  readonly periodEnd: string | null;
+}): ReactNode {
+  if (periodStart === null || periodEnd === null) return null;
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const format = (value: Date): string =>
+    value.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  return (
+    <div className="flex items-center justify-between text-ui-sm">
+      <span className="text-muted-foreground">Billing period</span>
+      <span className="font-medium text-foreground">{`${format(start)} - ${format(end)}`}</span>
+    </div>
+  );
+}
+
+// The included allowance is the only Hugging Face pair that yields a real
+// percentage, and it is the one the user reads as "how much of my free credit
+// is gone". Absent an included allowance (a pay-as-you-go account) there is no
+// denominator, so no bar renders and the spend row stands alone. `usedUsd` can
+// exceed the allowance once an account spends past it, so the fill is clamped
+// rather than allowed to overflow the meter.
+function HuggingFaceCreditBar({
+  includedUsd,
+  usedUsd,
+}: {
+  readonly includedUsd: number | null;
+  readonly usedUsd: number;
+}): ReactNode {
+  if (includedUsd === null || includedUsd <= 0) return null;
+  const consumed = Math.min(Math.max(0, usedUsd), includedUsd);
+  const usedPercent = (consumed / includedUsd) * 100;
+  return (
+    <MeterRow
+      label="Included credits"
+      usedPercent={usedPercent}
+      severity={creditUsageSeverity(usedPercent)}
+      detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(includedUsd)}`}
+    />
+  );
+}
+
+/**
  * Kilo Code's usage detail: a credit balance and Kilo Pass state, both as plain
  * neutral rows. No computable percentage exists for Kilo Code, so it never
  * renders a bar (Core Flows: "Windows without a percentage").
@@ -981,9 +1166,347 @@ export function KiloCodeRateLimitView({
   );
 }
 
+function OpenCodeGoWindowRow({
+  label,
+  window,
+  now,
+}: {
+  readonly label: string;
+  readonly window: OpenCodeRateLimits["fiveHour"];
+  readonly now: number;
+}): ReactNode {
+  return (
+    <MeterRow
+      label={label}
+      usedPercent={window.usedPercent}
+      severity={
+        isOpenCodeGoRateLimitWindowLimited(window, now)
+          ? "limited"
+          : classifyProviderRateLimitWindow(window)
+      }
+      detail={
+        <WindowMeterDetail
+          resetsAt={window.resetsAt}
+          usedPercent={window.usedPercent}
+        />
+      }
+    />
+  );
+}
+
+export function OpenCodeRateLimitView({
+  data,
+}: {
+  readonly data: OpenCodeRateLimits;
+}): ReactNode {
+  const now = useSampledNow();
+  const limited = [data.fiveHour, data.weekly, data.monthly].some((window) =>
+    isOpenCodeGoRateLimitWindowLimited(window, now),
+  );
+  return (
+    <div className="flex flex-col gap-3">
+      {limited ? (
+        <div className="flex flex-col items-start gap-1.5">
+          <Badge variant="destructive">Go limit reached</Badge>
+          <p className="text-ui-xs text-muted-foreground">
+            Go quota is exhausted. Free models or Zen balance may still work.
+          </p>
+        </div>
+      ) : null}
+      <OpenCodeGoWindowRow label="5-hour" window={data.fiveHour} now={now} />
+      <OpenCodeGoWindowRow label="Weekly" window={data.weekly} now={now} />
+      <OpenCodeGoWindowRow label="Monthly" window={data.monthly} now={now} />
+      <OpenCodeGoManageLink />
+    </div>
+  );
+}
+
+/**
+ * Grok's period bar label: the billing period's cadence taken from the
+ * provider's `periodType` token (e.g. `"USAGE_PERIOD_TYPE_WEEKLY"` -> "Weekly"),
+ * falling back to the synthesized window's own duration when the type token is
+ * absent. Only the last `_`-segment carries the cadence, so the leading
+ * `USAGE_PERIOD_TYPE_` scaffolding is dropped before title-casing.
+ */
+function formatGrokPeriodLabel(
+  periodType: string | null,
+  durationMinutes: number | null,
+): string {
+  if (periodType !== null) {
+    const parts = periodType.split("_").filter((part) => part.length > 0);
+    if (parts.length > 0) return titleCaseFromToken(parts[parts.length - 1]);
+  }
+  return formatWindowDuration(durationMinutes);
+}
+
+/**
+ * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
+ * grok's billing period and Cursor's billing cycle - both render a plain epoch
+ * range, so neither provider owns this formatter.
+ */
+function formatBillingRangeDate(epochMs: number): string {
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/**
+ * The billing period's start-end range ("Jul 22, 2026 - Jul 29, 2026"), shown
+ * in grok's unmeasured-period fallback where there's no usage bar to carry a
+ * reset date. `null` unless both bounds are known.
+ */
+function formatBillingRange(
+  periodStart: number | null,
+  periodEnd: number | null,
+): string | null {
+  if (periodStart === null || periodEnd === null) return null;
+  return `${formatBillingRangeDate(periodStart)} - ${formatBillingRangeDate(periodEnd)}`;
+}
+
+/**
+ * Grok's unmeasured-period fallback: an available subscription may report its
+ * tier and billing-period bounds without a measurable usage window. Surfacing
+ * the plan and the period dates keeps the card meaningful instead of blank.
+ * Each row drops out on its own when the field is absent.
+ *
+ * The `Plan` row is suppressed on `popover-detail`, where the popover header
+ * already renders the same tier as a chip (`resolveProviderPlanLabel`) - the
+ * same reason Codex/Claude keep the tier out of their card bodies. The Settings
+ * card and the Overview tab render no such chip, so there the `Plan` row is the
+ * only tier surface and stays. The billing-period row shows on every surface.
+ */
+function GrokPeriodFallback({
+  subscriptionTier,
+  periodStart,
+  periodEnd,
+  variant,
+}: {
+  readonly subscriptionTier: string | null;
+  readonly periodStart: number | null;
+  readonly periodEnd: number | null;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  return (
+    <>
+      {variant !== "popover-detail" ? (
+        <ProviderTextRow label="Plan" value={subscriptionTier} />
+      ) : null}
+      <ProviderTextRow
+        label="Billing period"
+        value={formatBillingRange(periodStart, periodEnd)}
+      />
+    </>
+  );
+}
+
+/**
+ * Grok's usage detail. Grok reports a billing-period credit picture rather than
+ * rolling-utilization windows, so three shapes are handled:
+ *
+ * - `period` present -> the period usage bar, reusing the shared `RateLimitWindowRow`
+ *   so its "% used · Resets <date>" reads identically to codex/claude; the bar's
+ *   label is the period cadence ("Weekly").
+ * - `period` null -> the unmeasured-period fallback (`GrokPeriodFallback`): the
+ *   plan tier and the billing period's dates.
+ * - the raw credit figures (prepaid balance, monthly limit, on-demand
+ *   used/limit) render only where xAI actually reported them - it omits fields
+ *   freely by account type - as neutral `$`-denominated rows, the same
+ *   percentage-free treatment OpenRouter/Kilo Code credits get.
+ */
+export function GrokRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: GrokRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  // Overview keeps only the period usage (bar or fallback) and the prepaid
+  // balance; the monthly limit and on-demand figures are single-provider-tab
+  // detail, matching how OpenRouter/Kilo Code trim their Overview.
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      {data.period !== null ? (
+        <RateLimitWindowRow
+          label={formatGrokPeriodLabel(
+            data.periodType,
+            data.period.durationMinutes,
+          )}
+          window={data.period}
+        />
+      ) : (
+        <GrokPeriodFallback
+          subscriptionTier={data.subscriptionTier}
+          periodStart={data.periodStart}
+          periodEnd={data.periodEnd}
+          variant={variant}
+        />
+      )}
+      <ProviderNumberRow
+        label="Prepaid balance"
+        value={data.prepaidBalance}
+        format={formatProviderCurrency}
+      />
+      {!overview ? (
+        <>
+          <ProviderNumberRow
+            label="Monthly limit"
+            value={data.monthlyLimit}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="On-demand used"
+            value={data.onDemandUsed}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="On-demand limit"
+            value={data.onDemandCap}
+            format={formatProviderCurrency}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Cursor's usage detail. Structurally grok's twin - synthesized billing-cycle
+ * windows plus money rows - so it reuses the same `RateLimitWindowRow`, and
+ * its "% used · Resets <date>" reads identically to codex/claude.
+ *
+ * The two bars are the two buckets Cursor's own Spending page renders -
+ * "Cursor Models" (Cursor Grok + Composer) and "Other Models" (named
+ * third-party models) - deliberately NOT the blended included-usage
+ * percentage, which appears nowhere on that dashboard and contradicted it in
+ * a live comparison. When neither bucket was reported the cycle dates still
+ * render, keeping the card meaningful rather than blank - the same fallback
+ * grok uses.
+ *
+ * The dollars ride their OWN meter, not the bucket bars. Each bucket bar is
+ * measured against its own (unpublished, bonus-inflated) limit, while
+ * `usedUsd`/`includedLimitUsd`/`remainingUsd` describe Cursor's BLENDED $400
+ * purchased pool - a third denominator, ~81% consumed on the same live
+ * payload that read 6% / 40% on the buckets. A bare "$76.69 left of $400"
+ * row under those bars therefore presented as a broken calculation even
+ * though every number is Cursor's own (server-computed `remaining`). Pairing
+ * the dollars with a credit meter that shows THEIR percentage - the exact
+ * pattern the Hugging Face card uses - keeps the money visible on every
+ * surface while making its denominator visible with it.
+ */
+export function CursorRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: CursorRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      {data.cursorModels === null && data.otherModels === null ? (
+        <ProviderTextRow
+          label="Billing cycle"
+          value={formatBillingRange(data.cycleStart, data.cycleEnd)}
+        />
+      ) : (
+        <>
+          {data.cursorModels !== null ? (
+            <RateLimitWindowRow
+              label="Cursor Models"
+              window={data.cursorModels}
+            />
+          ) : null}
+          {data.otherModels !== null ? (
+            <RateLimitWindowRow
+              label="Other Models"
+              window={data.otherModels}
+            />
+          ) : null}
+        </>
+      )}
+      <CursorIncludedUsageBar
+        includedLimitUsd={data.includedLimitUsd}
+        usedUsd={data.usedUsd}
+      />
+      <ProviderNumberRow
+        label="Included usage left"
+        // Once spend crosses the purchased allowance the wire's remaining may
+        // run negative; "-$12 left" is meaningless to a reader, and the
+        // overflow already shows in the meter's detail and the bonus row.
+        value={
+          data.remainingUsd === null ? null : Math.max(0, data.remainingUsd)
+        }
+        format={formatProviderCurrency}
+      />
+      <ProviderNumberRow
+        label="Bonus usage"
+        value={data.bonusUsedUsd}
+        format={formatProviderCurrency}
+      />
+      {!overview ? (
+        <>
+          {data.displayMessage !== null ? (
+            <p className="text-ui-xs text-muted-foreground">
+              {data.displayMessage}
+            </p>
+          ) : null}
+          <ProviderNumberRow
+            label="On-demand limit"
+            value={data.onDemandLimitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="On-demand used"
+            value={data.onDemandUsedUsd}
+            format={formatProviderCurrency}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// Cursor's blended purchased pool as a credit meter, mirroring
+// `HuggingFaceCreditBar`: the fill percentage and the dollar detail share one
+// denominator by construction, so the money can sit under the bucket bars
+// without reading as a wrong computation of them.
+//
+// Deliberately NOT `creditUsageSeverity`, and never red: for the credit
+// providers, exhausting the allowance means real billing, so red is earned.
+// Cursor's purchased pool is a VALUE meter - spend runs past it onto the
+// bonus grant ("free usage beyond what you've purchased") with nothing cut
+// off and nothing billed; the enforcing gates are the bucket bars above,
+// which own the red. Past the allowance the fill pins at 100% (MeterRow
+// clamps) while the detail keeps the REAL spend ("$412.10 / $400.00"), so
+// the overflow stays visible instead of dressing up as a limit event.
+function CursorIncludedUsageBar({
+  includedLimitUsd,
+  usedUsd,
+}: {
+  readonly includedLimitUsd: number | null;
+  readonly usedUsd: number | null;
+}): ReactNode {
+  if (includedLimitUsd === null || includedLimitUsd <= 0 || usedUsd === null) {
+    return null;
+  }
+  const usedPercent = (Math.max(0, usedUsd) / includedLimitUsd) * 100;
+  return (
+    <MeterRow
+      label="Included usage"
+      usedPercent={usedPercent}
+      severity={usedPercent > 85 ? "running_low" : "healthy"}
+      detail={`${formatProviderCurrency(Math.max(0, usedUsd))} / ${formatProviderCurrency(includedLimitUsd)}`}
+    />
+  );
+}
+
 export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState & {
     readonly codexResetAction: CodexResetCreditActionRenderer | null;
+    readonly openModelProvidersAction: (() => void) | null;
   },
 ): ReactNode {
   const state = resolveProviderRateLimitViewState(props);
@@ -1020,23 +1543,80 @@ export function ProviderRateLimitBody(
   const data = state.data;
   if (!data.available) {
     return (
-      <p className="text-ui-xs text-muted-foreground">
-        Usage limits unavailable - {formatUnavailableReason(data.reason)}
-      </p>
+      <div className="flex flex-col items-start gap-1.5">
+        <p className="text-ui-xs text-muted-foreground">
+          Usage limits unavailable - {formatUnavailableReason(data.reason)}
+        </p>
+        {data.provider === "opencode" &&
+        data.reason === "insufficient_permissions" &&
+        props.openModelProvidersAction !== null ? (
+          <OpenModelProvidersButton onClick={props.openModelProvidersAction} />
+        ) : null}
+      </div>
     );
   }
-  return (
+  const detail = (
     <ProviderRateLimitDetail
       data={data}
       variant="settings"
       codexResetAction={props.codexResetAction}
     />
   );
+  // Fresh reading: render as-is. The Providers panel header already carries a
+  // "Checked Xm ago" for provider status, so a healthy usage card needs no
+  // second timestamp.
+  if (!state.degraded) return detail;
+  // Degraded: a retained last-known-good reading is being shown after the
+  // latest poll failed. Surface the ORIGINAL update time plus a failed-refresh
+  // note and dim the reading in place - the same treatment the header popover
+  // gives this state, so the stale numbers can't be mistaken for fresh.
+  return (
+    <div className="flex flex-col gap-2">
+      <StaleUsageRefreshNote
+        lastGoodAt={state.lastGoodAt}
+        degradedReason={state.degradedReason}
+      />
+      <div className="opacity-60">{detail}</div>
+    </div>
+  );
+}
+
+/**
+ * The failed-refresh / stale line the Settings usage card shows while it's
+ * displaying a retained last-known-good reading after the latest poll failed
+ * (Core Flows degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
+ * (never the failed attempt's time, so it can't read as fresh) followed by a
+ * note - the specific transient reason's plain-language copy when the envelope
+ * itself is why (`degradedReason` non-null), otherwise the generic "refresh
+ * failed" for a thrown query-level exception with no specific reason. Mirrors
+ * the header popover's `UsageLimitUpdatedLabel` copy verbatim; kept a local
+ * component so neither component-only file has to import the other. Renders the
+ * note alone in the (production-unreachable) case where an available degraded
+ * reading somehow carries no timestamp, keeping the single relative-time hook
+ * call unconditional.
+ */
+function StaleUsageRefreshNote({
+  lastGoodAt,
+  degradedReason,
+}: {
+  readonly lastGoodAt: number | null;
+  readonly degradedReason: RateLimitUnavailableReason | null;
+}): ReactNode {
+  const ago = useRelativeTimestamp(lastGoodAt ?? 0);
+  const note =
+    degradedReason !== null
+      ? formatUnavailableReason(degradedReason)
+      : "refresh failed";
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      {lastGoodAt !== null ? `Updated ${ago} · ${note}` : note}
+    </p>
+  );
 }
 
 /**
  * Renders one provider's available-arm detail. Exhaustive over every
- * `available: true` arm (`data.provider` is now four-way, not the old binary
+ * `available: true` arm (`data.provider` is now five-way, not the old binary
  * codex/claude split), so a new provider arm added to the wire union fails the
  * build here until it gets a view. Exported so the header popover reuses the
  * exact same per-provider bodies the Settings card shows (Core Flows: "both
@@ -1070,5 +1650,22 @@ export function ProviderRateLimitDetail({
       return <OpenRouterRateLimitView data={data} variant={variant} />;
     case "kilocode":
       return <KiloCodeRateLimitView data={data} variant={variant} />;
+    // Grok reports no rolling usage *windows* either - only a synthesized
+    // billing-period bar plus credit figures - so, like OpenRouter/Kilo Code,
+    // `variant` drives just the Overview-vs-detail trim.
+    case "grok":
+      return <GrokRateLimitView data={data} variant={variant} />;
+    // Hugging Face is a credit provider like OpenRouter/Kilo Code: the only
+    // percentage it can report is against an included allowance, and accounts
+    // without one render spend figures alone.
+    case "huggingface":
+      return <HuggingFaceRateLimitView data={data} variant={variant} />;
+    case "opencode":
+      return <OpenCodeRateLimitView data={data} />;
+    // Cursor is windowed, not credit-shaped: its money fields back a real
+    // billing-cycle percentage, so it renders a usage bar like grok rather than
+    // the spend-only layout OpenRouter/Kilo Code/Hugging Face use.
+    case "cursor":
+      return <CursorRateLimitView data={data} variant={variant} />;
   }
 }

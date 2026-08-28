@@ -10,6 +10,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { config } from "../../config";
 
 // Native Packaging legacy-JSON migration
 // (ticket:e86b8372-…/a9fa5e4c-…). The previously plain-JSON commands -
@@ -27,6 +28,14 @@ import {
 // what the entry-point wires up via `withRunner`, capturing stdout
 // to assert the envelope shape.
 
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
@@ -39,20 +48,30 @@ let stderrChunks: string[];
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-legacy-json-test-"));
+  osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
   stderrChunks = [];
+  // `write`'s completion callback is load-bearing, not decoration: the
+  // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
+  // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
+  // way to Desktop. A stub that swallows the callback would leave that
+  // flush waiting on a write that never reports completion, so invoke it.
   stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   // The runner owns process.exit - translate to a throw so the test
@@ -77,6 +96,11 @@ afterEach(() => {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
   rmSync(workHome, { recursive: true, force: true });
+  // The runner now signals failure by SETTING `process.exitCode` rather than
+  // calling `process.exit`, so a test driving a failing command leaves it set
+  // on this very process. Left behind, vitest exits non-zero with every test
+  // green - a red suite with nothing to point at.
+  process.exitCode = undefined;
   stdoutSpy.mockRestore();
   stderrSpy.mockRestore();
   exitSpy.mockRestore();
@@ -98,16 +122,31 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
-  let exitCode = 0;
+  // The runner records its code on `process.exitCode` and lets the loop drain
+  // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
+  // RESTORE it around the run: a leaked non-zero value would otherwise make
+  // the vitest process itself exit non-zero with every test green.
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
   try {
     await fn();
   } catch (err) {
+    process.exitCode = priorExitCode;
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-      exitCode = Number.parseInt(err.message.replace("__test_exit_", ""), 10);
-    } else {
-      throw err;
+      // Deliberately fatal rather than translated. This harness USED to report
+      // the thrown code as the run's exit code, which meant every
+      // `expect(out.exitCode)` below passed under either implementation - so
+      // none of them was evidence for int#4840's drain fix. Reaching
+      // `process.exit` is now the failure, because on win32 that is the
+      // teardown abort coming back.
+      throw new Error(
+        `${err.message.replace("__test_exit_", "process.exit(")}) was called: the runner must record process.exitCode and let the loop drain, never exit abruptly`,
+      );
     }
+    throw err;
   }
+  const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
+  process.exitCode = priorExitCode;
   const stdout = joined(stdoutChunks);
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
   const envelopes: Record<string, unknown>[] = [];
@@ -182,7 +221,6 @@ describe("whoami runner migration", () => {
         kind: "valid",
         credentials: {
           token: "tok",
-          authnBaseUrl: "https://authn.example.com",
           savedAt: "2026-05-15T00:00:00Z",
           user: { id: "u1", email: "user@example.com", name: "User One" },
         },
@@ -198,7 +236,8 @@ describe("whoami runner migration", () => {
       data: {
         status: "valid",
         user: { id: "u1", email: "user@example.com", name: "User One" },
-        authnBaseUrl: "https://authn.example.com",
+        // whoami reports the CONFIGURED authn origin - the file carries no URL.
+        authnBaseUrl: config.authnBaseUrl,
       },
     });
     // No free-form stdout other than NDJSON.
@@ -260,7 +299,6 @@ describe("whoami runner migration", () => {
         kind: "valid",
         credentials: {
           token: "tok",
-          authnBaseUrl: "https://authn.example.com",
           savedAt: "2026-05-15T00:00:00Z",
           user: { id: "u1", email: "user@example.com", name: "User One" },
         },

@@ -6,7 +6,9 @@ import {
   DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
   isDeviceExpired,
   pollDeviceToken,
+  resetPollInterval,
   startDeviceAuthorization,
+  withReturnScheme,
   type DeviceAuthorizationResult,
   type DevicePollSchedule,
 } from "@traycer-clients/shared/auth/device-auth";
@@ -118,26 +120,6 @@ class PollWaker {
 interface AttemptHandle {
   readonly abortController: AbortController;
   readonly waker: PollWaker;
-}
-
-/**
- * Appends this build's registered deep-link scheme to the browser verification
- * URL as `return_scheme`, so the cloud's /device approval page can deep-link
- * back to THE APP THAT ASKED - per-environment (`traycer` / `traycer-dev`) and
- * slot-suffixed under multi-run dev - instead of a hardcoded production scheme
- * (which launches an installed prod Traycer when a dev build signs in). The
- * page validates the value against a strict allowlist and fires nothing when
- * it is absent or malformed, so a manually typed verification URL simply gets
- * no return deep link. Defensive: an unparseable URL passes through untouched.
- */
-function withReturnScheme(uri: string, scheme: string): string {
-  try {
-    const url = new URL(uri);
-    url.searchParams.set("return_scheme", scheme);
-    return url.toString();
-  } catch {
-    return uri;
-  }
 }
 
 export class DeviceFlowController {
@@ -312,6 +294,10 @@ async function runDevicePollLoop(
         schedule = applySlowDown(schedule, poll.retryAfterSeconds);
         break;
       case "authorization-pending":
+        // The server accepted this poll's pacing - drop any slow_down widening
+        // (a premature browser-return nudge earns one) back to the base
+        // interval instead of carrying it for the rest of the attempt.
+        schedule = resetPollInterval(schedule);
         break;
       case "network-error":
         // Transient (transport/5xx): keep polling until the device_code TTL.

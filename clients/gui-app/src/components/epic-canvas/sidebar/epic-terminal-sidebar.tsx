@@ -1,13 +1,19 @@
 /**
- * Host-driven raw-terminal list rendered as a left-panel rail entry.
- * The list source of truth is `terminal.list@1.0` filtered by `epicId`
- * on the host side (terminals do not live in the Y.Doc). Click a row
- * to open or focus that session as a canvas tab; the "+" action opens a
- * fresh terminal whose tile creates the underlying PTY on mount.
+ * Host-driven raw-terminal list rendered as a left-panel rail entry. Durable
+ * rows come from the authoritative `terminal.plain.list` collection stream;
+ * `terminal.list` supplies compatibility rows such as setup/provider-login
+ * shells (terminals do not live in the Y.Doc). Click a row to open or focus
+ * that session as a canvas tab; the "+" action opens a fresh terminal whose
+ * tile creates the underlying PTY on mount.
+ *
+ * Rows, states and per-row mutations all come from `useEpicTerminalsPanel` /
+ * `useEpicTerminalRowActions`, which the phone switcher's Terminals category
+ * mounts too; this file owns only the desktop chrome around them (drag to a
+ * pane, hover "…", context menu, inline rename).
  *
  * Exports `TerminalsPanelBody` and `TerminalsPanelActions` consumed by
  * `epic-sidebar.tsx`'s `PANEL_COMPONENTS["terminals"]`. Agent terminals
- * (`terminal-agent` artifacts) live in the Chats panel instead.
+ * (`terminal-agent` artifacts) live in the Agents panel instead.
  */
 import {
   useCallback,
@@ -19,16 +25,7 @@ import {
 } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useDraggable } from "@dnd-kit/core";
-import {
-  MoreHorizontal,
-  Pencil,
-  Terminal as TerminalIcon,
-  Trash2,
-} from "lucide-react";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { createReportIssueContext } from "@/lib/report-issue-context";
+import { MoreHorizontal, Terminal as TerminalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -48,42 +45,56 @@ import {
 } from "@/components/ui/sidebar";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { NewTerminalPicker } from "@/components/epic-canvas/sidebar/new-terminal-picker";
-import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { SnapshotGate } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
 import {
   getTerminalTileDragId,
+  getPaneScopedDndId,
   TERMINAL_TILE_DND_TYPE,
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
-import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
-import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useHostClient } from "@/lib/host";
-import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
-import {
-  deriveTitleSourceFromSessionTitle,
-  terminalSessionTitle,
-} from "@/lib/terminals/terminal-title";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
 import {
-  findOpenArtifactInTab,
+  findOpenTileInTab,
   useEpicCanvasStore,
-  useIsActiveEpicArtifact,
+  useIsActiveTile,
 } from "@/stores/epics/canvas/store";
+import {
+  useEpicLeftPanelStore,
+  useLeftPanelSectionCollapsed,
+} from "@/stores/epics/left-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
-  type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
+import { terminalRowMenuEntries } from "@/components/epic-canvas/sidebar/terminal-row-menu-entries";
+import {
+  useEpicTerminalRowActions,
+  useEpicTerminalsPanel,
+  type EpicTerminalRowAuthority,
+  type EpicTerminalsPanel,
+} from "@/components/epic-canvas/sidebar/use-epic-terminals-panel";
+import {
+  FailedTerminalCreateRow,
+  TerminalsEmptyState,
+  TerminalsErrorState,
+  TerminalsLoadingState,
+} from "@/components/epic-canvas/sidebar/terminal-list-states";
+import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
+import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
+import type {
+  ListedTerminalSidebarSession,
+  TerminalSidebarSessionRow,
+} from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 
 const TERMINALS_PANEL_SKELETON = <TerminalsPanelSkeleton />;
+
+/** Every test id this panel's shared states and rows are grabbed by. */
+const TERMINALS_TEST_ID_PREFIX = "epic-terminal-sidebar";
 
 /**
  * Body for the "terminals" left-panel rail entry. Lists raw host
@@ -105,8 +116,7 @@ function TerminalsPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const { epicId, tabId } = props;
-  const hostClient = useHostClient();
-  const list = useTerminalList({ kind: "epic", epicId }, hostClient);
+  const panel = useEpicTerminalsPanel({ epicId });
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -114,11 +124,13 @@ function TerminalsPanelBodyLive(props: {
   const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareSetActiveTileTabFocusTarget,
   );
-  const activeHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
+  const prepareOpenRow = panel.prepareOpenRow;
   const openExisting = useCallback(
-    (session: CanonicalTerminalSessionInfo) => {
-      const found = findOpenArtifactInTab(tabId, session.sessionId);
+    (row: TerminalSidebarSessionRow) => {
+      const tile = prepareOpenRow(row);
+      if (tile === null) return;
+      const found = findOpenTileInTab(tabId, tile);
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
           prepareSetActiveTileTabFocusTarget(
@@ -130,26 +142,17 @@ function TerminalsPanelBodyLive(props: {
         return;
       }
       navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(
-          tabId,
-          makeTerminalRef(session, activeHostId, uuidv4()),
-        ),
+        prepareOpenTileInTabFocusTarget(tabId, tile),
       );
     },
     [
-      activeHostId,
       epicId,
       navigateNested,
+      prepareOpenRow,
       prepareOpenTileInTabFocusTarget,
       prepareSetActiveTileTabFocusTarget,
       tabId,
     ],
-  );
-
-  // Host keeps exited sessions for a 60s grace window; filter so a
-  // single kill click feels like "remove" instead of "mark dead".
-  const sessions = (list.data?.sessions ?? []).filter((session) =>
-    isVisibleEpicTerminalSession(session, epicId),
   );
 
   return (
@@ -157,13 +160,9 @@ function TerminalsPanelBodyLive(props: {
       <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
         <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
           <TerminalSidebarBody
-            isLoading={list.isPending}
-            isError={list.isError}
-            errorMessage={list.error?.message ?? null}
-            sessions={sessions}
+            panel={panel}
             epicId={epicId}
             tabId={tabId}
-            hostId={activeHostId}
             onOpen={openExisting}
           />
         </SidebarGroupContent>
@@ -180,64 +179,47 @@ function TerminalsPanelBodyLive(props: {
  * every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
-  return <NewTerminalPicker epicId={props.epicId} tabId={props.tabId} />;
+  const collapsed = useLeftPanelSectionCollapsed("terminals");
+  const setPanelSectionCollapsed = useEpicLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
+  const expandBeforeOpen = useCallback(() => {
+    if (collapsed) setPanelSectionCollapsed("terminals", false);
+  }, [collapsed, setPanelSectionCollapsed]);
+  return (
+    <NewTerminalPicker
+      epicId={props.epicId}
+      tabId={props.tabId}
+      onLaunched={null}
+      onBeforeOpen={expandBeforeOpen}
+    />
+  );
 }
 
 interface TerminalSidebarBodyProps {
-  readonly isLoading: boolean;
-  readonly isError: boolean;
-  readonly errorMessage: string | null;
-  readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
+  readonly panel: EpicTerminalsPanel;
   readonly epicId: string;
   readonly tabId: string;
-  readonly hostId: string;
-  readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
+  readonly onOpen: (row: TerminalSidebarSessionRow) => void;
 }
 
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
-  if (props.isLoading) {
-    return (
-      <div className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-muted-foreground">
-        <AgentSpinningDots
-          className="shrink-0 text-muted-foreground/70"
-          testId={undefined}
-          variant={undefined}
-        />
-        <span>Loading terminals…</span>
-      </div>
-    );
+  const { panel } = props;
+  if (panel.isLoading) {
+    return <TerminalsLoadingState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
   }
-  if (props.isError) {
+  if (panel.isError) {
     return (
-      <div
-        className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-destructive"
-        data-testid="epic-terminal-sidebar-error"
-      >
-        <span className="min-w-0 flex-1">
-          {props.errorMessage ?? "Failed to load terminals."}
-        </span>
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Failed to load terminals",
-            message: "The terminal list could not be loaded.",
-            code: null,
-            source: "Terminals",
-          })}
-          presentation="icon"
-          className="text-current"
-        />
-      </div>
-    );
-  }
-  if (props.sessions.length === 0) {
-    return (
-      <SidebarPanelEmptyState
-        icon={TerminalIcon}
-        title="No terminals yet."
-        description={null}
-        testId="epic-terminal-sidebar-empty"
+      <TerminalsErrorState
+        message={panel.errorMessage}
+        isRetrying={panel.isRetrying}
+        onRetry={panel.retry}
+        testIdPrefix={TERMINALS_TEST_ID_PREFIX}
       />
     );
+  }
+  if (panel.rows.length === 0 && panel.failedCreates.length === 0) {
+    return <TerminalsEmptyState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
   }
   return (
     <ul
@@ -245,15 +227,36 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
     >
-      {props.sessions.map((session) => (
+      {panel.rows.map((row) => (
         <TerminalRow
-          key={session.sessionId}
+          key={epicTerminalUiIdentityKey(
+            "session",
+            row.hostId,
+            row.session.sessionId,
+          )}
           epicId={props.epicId}
           tabId={props.tabId}
-          hostId={props.hostId}
-          session={session}
-          onOpen={props.onOpen}
+          hostId={row.hostId}
+          session={row.session}
+          runtimeStatus={row.runtimeStatus}
+          durable={row.durable}
+          onOpen={() => props.onOpen(row)}
+          authority={panel}
         />
+      ))}
+      {panel.failedCreates.map((job) => (
+        <li
+          key={epicTerminalUiIdentityKey(
+            "failed",
+            job.request.hostId,
+            job.request.terminalId,
+          )}
+        >
+          <FailedTerminalCreateRow
+            job={job}
+            testIdPrefix={TERMINALS_TEST_ID_PREFIX}
+          />
+        </li>
       ))}
     </ul>
   );
@@ -263,32 +266,51 @@ interface TerminalRowProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string;
-  readonly session: CanonicalTerminalSessionInfo;
-  readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
+  readonly session: ListedTerminalSidebarSession;
+  readonly runtimeStatus: "running" | "dormant" | "unknown";
+  readonly durable: boolean;
+  readonly onOpen: () => void;
+  readonly authority: EpicTerminalRowAuthority;
 }
 
 function TerminalRow(props: TerminalRowProps) {
-  const { hostId, epicId, tabId, session, onOpen } = props;
+  const {
+    authority,
+    durable,
+    epicId,
+    hostId,
+    onOpen,
+    runtimeStatus,
+    session,
+    tabId,
+  } = props;
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
-  const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
-  const kill = useTerminalKill();
-  const rename = useTerminalRename();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareCloseCanvasTabFocusTarget,
-  );
+  const isActive = useIsActiveTile(tabId, session.sessionId, hostId);
+  const actions = useEpicTerminalRowActions({
+    epicId,
+    tabId,
+    hostId,
+    session,
+    durable,
+    authority,
+  });
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
   );
-
-  const label = deriveTerminalLabel(session);
+  const label = actions.label;
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
   const tile = useMemo(
-    () => makeTerminalRef(session, hostId, uuidv4()),
-    [hostId, session],
+    () =>
+      makeListedEpicTerminalRef({
+        session,
+        hostId,
+        instanceId: uuidv4(),
+        durable,
+      }),
+    [durable, hostId, session],
   );
   const dragData = useMemo<EpicCanvasTerminalTileDragData>(
     () => ({
@@ -299,15 +321,19 @@ function TerminalRow(props: TerminalRowProps) {
     }),
     [epicId, tabId, tile],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getTerminalTileDragId(session.sessionId),
+    id: getPaneScopedDndId(
+      tabId,
+      getTerminalTileDragId(session.sessionId, hostId),
+    ),
     data: dragData,
-    disabled: isRenaming,
+    disabled: isRenaming || dragDisabled,
   });
 
   useEffect(() => {
@@ -316,76 +342,59 @@ function TerminalRow(props: TerminalRowProps) {
     renameInputRef.current?.select();
   }, [isRenaming]);
 
-  const startRename = useCallback(() => {
+  const startRename = () => {
+    if (!actions.canRename) return;
     setRenameValue(label);
     setIsRenaming(true);
-  }, [label]);
+  };
 
-  const commitRename = useCallback(() => {
-    if (rename.isPending) return;
-    const trimmed = renameValue.trim();
-    if (trimmed.length === 0 || trimmed === label) {
+  const commitRename = () => {
+    // Settle the editor on COMMIT, not on the ack - the same contract as the
+    // two epic sidebar trees and `useInlineRename`. The optimistic cache patch
+    // is the feedback. Waiting to be called back held this editor open for the
+    // whole round trip, and open FOREVER on a failure or a refusal, neither of
+    // which called anything back.
+    //
+    // But a REFUSAL still has to hold the editor open, or the typed title is
+    // gone with nothing sent: rename can go unavailable while this editor is
+    // up (the host stops being mutable, or another row's rename is in flight -
+    // that pending flag is panel-wide). This reads a synchronous return, not a
+    // `mutate`-scoped callback, so it keeps the settle on the gesture.
+    // `onBlur` routes here too, and holding the editor through a blur is the
+    // point: the text survives until the rename can actually be sent, and
+    // Escape still discards it.
+    if (actions.submitRename(renameValue)) setIsRenaming(false);
+  };
+
+  const handleRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitRename();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
       setIsRenaming(false);
-      return;
     }
-    // The mutation optimistically patches the cached `terminal.list` rows,
-    // so this row AND any open canvas tab for the session update before the
-    // host round-trip (with rollback on error).
-    rename.mutate(
-      { sessionId: session.sessionId, title: trimmed },
-      {
-        onSuccess: () => setIsRenaming(false),
-      },
-    );
-  }, [label, rename, renameValue, session.sessionId]);
+  };
 
-  const handleRenameKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (rename.isPending) return;
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitRename();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        setIsRenaming(false);
-      }
-    },
-    [commitRename, rename.isPending],
-  );
-
-  // "Close" terminates the PTY AND closes its open canvas tab. Killing alone
-  // only drops the host session (and its sidebar row); the open tile would
-  // otherwise linger until the exit frame round-trips - and not at all if the
-  // tile is currently unmounted. Closing the tab here makes the action
-  // immediate and mount-independent. `findOpenArtifactInTab` returns null when
-  // no tab is open for this session, so a sidebar-only session just gets killed.
-  const requestClose = useCallback(() => {
-    if (kill.isPending) return;
-    const found = findOpenArtifactInTab(tabId, session.sessionId);
-    if (found !== null) {
-      navigateNested(epicId, tabId, () =>
-        prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
-      );
-    }
-    kill.mutate({ sessionId: session.sessionId });
-  }, [
-    epicId,
-    kill,
-    navigateNested,
-    prepareCloseCanvasTabFocusTarget,
-    session.sessionId,
-    tabId,
-  ]);
-
-  const handleDoubleClick = useCallback(() => {
-    if (isRenaming) return;
+  const handleDoubleClick = () => {
+    if (isRenaming || !actions.canRename) return;
     startRename();
-  }, [isRenaming, startRename]);
+  };
   const rowMenuEntries = terminalRowMenuEntries({
-    sessionId: session.sessionId,
-    closePending: kill.isPending,
+    closeDisabled: actions.closeDisabled,
     onStartRename: startRename,
-    onRequestClose: requestClose,
+    renameDisabled: !actions.canRename,
+    onRequestClose: actions.requestClose,
+    testIds: {
+      rename: {
+        dropdown: `epic-terminal-sidebar-rename-${session.sessionId}`,
+        context: `epic-terminal-sidebar-context-rename-${session.sessionId}`,
+      },
+      close: {
+        dropdown: `epic-terminal-sidebar-kill-menu-${session.sessionId}`,
+        context: `epic-terminal-sidebar-context-kill-${session.sessionId}`,
+      },
+    },
   });
 
   return (
@@ -405,7 +414,6 @@ function TerminalRow(props: TerminalRowProps) {
                   ref={renameInputRef}
                   data-testid={`epic-terminal-sidebar-rename-input-${session.sessionId}`}
                   value={renameValue}
-                  disabled={rename.isPending}
                   onChange={(event) => setRenameValue(event.target.value)}
                   onBlur={commitRename}
                   onKeyDown={handleRenameKeyDown}
@@ -420,7 +428,8 @@ function TerminalRow(props: TerminalRowProps) {
                   {...listeners}
                   type="button"
                   data-testid={`epic-terminal-sidebar-item-${session.sessionId}`}
-                  data-terminal-status={session.status}
+                  data-terminal-host-id={hostId}
+                  data-terminal-status={runtimeStatus}
                   className={cn(
                     "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-8 text-left text-ui-sm transition-colors",
                     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
@@ -429,18 +438,24 @@ function TerminalRow(props: TerminalRowProps) {
                       ? "bg-accent font-medium text-accent-foreground"
                       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
                   )}
-                  onClick={() => onOpen(session)}
+                  onClick={() => onOpen()}
                   onDoubleClick={handleDoubleClick}
                 >
                   <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
                   <div className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate">{label}</span>
+                    {runtimeStatus === "unknown" ? (
+                      <span className="truncate text-ui-xs text-muted-foreground">
+                        Runtime status unavailable
+                      </span>
+                    ) : null}
                   </div>
                   {showNavigatorResourceStats ? (
                     <OwnerResourceChip
                       epicId={epicId}
                       kind="terminal"
                       ownerId={session.sessionId}
+                      hostId={hostId}
                       className={undefined}
                     />
                   ) : null}
@@ -476,68 +491,4 @@ function TerminalRow(props: TerminalRowProps) {
       </ContextMenu>
     </li>
   );
-}
-
-interface TerminalRowMenuEntriesProps {
-  readonly sessionId: string;
-  readonly closePending: boolean;
-  readonly onStartRename: () => void;
-  readonly onRequestClose: () => void;
-}
-
-function terminalRowMenuEntries(
-  props: TerminalRowMenuEntriesProps,
-): ReadonlyArray<SidebarRowMenuEntry> {
-  return [
-    {
-      kind: "item",
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil className="size-3.5" />,
-      disabled: false,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-terminal-sidebar-rename-${props.sessionId}`,
-        context: `epic-terminal-sidebar-context-rename-${props.sessionId}`,
-      },
-      onSelect: props.onStartRename,
-    },
-    { kind: "separator", id: "before-close" },
-    {
-      kind: "item",
-      id: "close",
-      label: "Close",
-      icon: <Trash2 className="size-3.5" />,
-      disabled: props.closePending,
-      variant: "destructive",
-      testIds: {
-        dropdown: `epic-terminal-sidebar-kill-menu-${props.sessionId}`,
-        context: `epic-terminal-sidebar-context-kill-${props.sessionId}`,
-      },
-      onSelect: props.onRequestClose,
-    },
-  ];
-}
-
-function deriveTerminalLabel(session: CanonicalTerminalSessionInfo): string {
-  return terminalSessionTitle({
-    title: session.title,
-    activeProcessName: session.activeProcessName,
-  });
-}
-
-function makeTerminalRef(
-  session: CanonicalTerminalSessionInfo,
-  hostId: string,
-  instanceId: string,
-): EpicTerminalRef {
-  return {
-    id: session.sessionId,
-    instanceId,
-    type: "terminal",
-    name: deriveTerminalLabel(session),
-    titleSource: deriveTitleSourceFromSessionTitle(session.title),
-    hostId,
-    cwd: session.cwd,
-  };
 }

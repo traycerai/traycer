@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schemas";
@@ -34,6 +33,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 function claudeStateWithoutProfile(): ProviderCliState {
   const ambient: ProviderProfile = {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -46,6 +46,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -69,6 +70,16 @@ function claudeStateWithoutProfile(): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [ambient],
   };
 }
@@ -84,6 +95,7 @@ function anchor(accentColor: string | null): ChatSessionAnchor {
       secondaryWorkspaces: [],
     },
     claudeMessageUuid: "uuid-1",
+    turnTailUuid: null,
     createdAt: 100,
     coveredUntilMessageId: null,
     profileId: "removed-uuid",
@@ -119,7 +131,10 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
 
 function renderTombstoned(accentColor: string | null) {
   return render(
-    <TombstonedProfileProvider providers={[claudeStateWithoutProfile()]}>
+    <TombstonedProfileProvider
+      providers={[claudeStateWithoutProfile()]}
+      hostId="host-1"
+    >
       <ChatExpansionTestProviders tileInstanceId="tombstone-accent-tile">
         <TooltipProvider>
           <UserMessageBody

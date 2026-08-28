@@ -1,223 +1,392 @@
 /**
- * Filter dropdowns rendered in the chat and artifact panel headers.
+ * Stable, nested view menus for the Agents and Artifacts section headers.
  *
- * Chat: a single origin choice (GUI chats vs TUI terminal agents).
- * Artifact: multi-select status + kind, plus a read/unread choice.
- *
- * The trigger reflects active state so a filter that hides nodes is never
- * silent. Multi-select items keep the menu open on toggle.
+ * The trigger is always visible and always last in its header action cluster.
+ * Root rows summarize the current view; supported details open to the right via
+ * Radix submenus. When there is not enough room for two menu columns, the same
+ * root drills into a detail page with Back instead of flipping left.
  */
-import {
-  ArrowDownWideNarrow,
-  ArrowUpNarrowWide,
-  ListFilter,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, ListFilter, RotateCcw } from "lucide-react";
+import { useCallback, useState, type ReactNode } from "react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { SortField } from "@/lib/epic-sort";
+import { STATUS_LABELS } from "./epic-sidebar-tree-shared";
 import {
-  ARTIFACT_SORT_FIELDS,
-  CHAT_SORT_FIELDS,
-  SORT_DIRECTION,
-  SORT_FIELD_LABELS,
-  type SortField,
-  type SortMode,
-} from "@/lib/epic-sort";
+  ArtifactDetailContent,
+  ChatDetailContent,
+  ViewMenuBadge,
+} from "./epic-sidebar-view-menu-details";
 import {
-  PANEL_HEADER_ACTION_REVEAL_CLASS,
-  STATUS_DOT_CLASSES,
-  STATUS_LABELS,
-} from "./epic-sidebar-tree-shared";
+  ARTIFACT_DETAIL_LABELS,
+  ARTIFACT_READ_OPTIONS,
+  archiveVisibilityLabel,
+  CHAT_DETAIL_LABELS,
+  CHAT_ORIGIN_OPTIONS,
+  CHAT_OWNERSHIP_OPTIONS,
+  selectedSummary,
+  sortSummary,
+  viewTriggerLabel,
+  type ArtifactViewDetail,
+  type ChatViewDetail,
+} from "./epic-sidebar-view-menu-shared";
 import {
-  ARTIFACT_READ,
-  ARTIFACT_STATUS,
   artifactFilterCount,
-  CHAT_ORIGIN,
+  chatFilterCount,
+  DEFAULT_CHAT_ARCHIVE_VISIBILITY,
   isArtifactFilterActive,
   isChatFilterActive,
+  isSortModeActive,
   useArtifactFilter,
   useArtifactSort,
+  useChatArchiveVisibility,
   useChatFilter,
   useChatSort,
   useLeftPanelStore,
   type ArtifactReadFilter,
   type ArtifactStatusFilter,
+  type ChatArchiveVisibility,
+  type ChatOwnershipFilter,
   type ChatOriginFilter,
+  type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
+import {
+  usePanelHeaderMenuOpen,
+  usePanelHeaderMenuStore,
+} from "@/stores/epics/panel-header-menu-store";
 
-const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
-  value: ChatOriginFilter;
-  label: string;
-}> = [
-  { value: CHAT_ORIGIN.All, label: "All" },
-  { value: CHAT_ORIGIN.Gui, label: "Chats" },
-  { value: CHAT_ORIGIN.Tui, label: "Terminal Agents" },
-];
+const TWO_COLUMN_MENU_MIN_AVAILABLE_PX = 520;
+const VIEW_MENU_CONTENT_CLASS =
+  "w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto";
+const VIEW_MENU_MAX_HEIGHT = "min(70vh, 28rem)";
 
-const ARTIFACT_STATUS_OPTIONS: ReadonlyArray<ArtifactStatusFilter> = [
-  ARTIFACT_STATUS.Todo,
-  ARTIFACT_STATUS.InProgress,
-  ARTIFACT_STATUS.Done,
-];
+interface ViewMenuState<TDetail extends string> {
+  readonly open: boolean;
+  readonly drillIn: boolean;
+  readonly detail: TDetail | null;
+  readonly setTriggerElement: (element: HTMLButtonElement | null) => void;
+  readonly handleOpenChange: (open: boolean) => void;
+  readonly openDetail: (detail: TDetail) => void;
+  readonly closeDetail: () => void;
+}
 
-const ARTIFACT_KIND_OPTIONS: ReadonlyArray<EpicArtifactKind> = [
-  "spec",
-  "ticket",
-  "story",
-  "review",
-];
+function useViewMenuState<TDetail extends string>(
+  tabId: string,
+  panelId: LeftPanelId,
+  collapsed: boolean,
+): ViewMenuState<TDetail> {
+  const open = usePanelHeaderMenuOpen(tabId, panelId, "filter");
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const [drillIn, setDrillIn] = useState(false);
+  const [detail, setDetail] = useState<TDetail | null>(null);
+  const [triggerElement, setTriggerElement] =
+    useState<HTMLButtonElement | null>(null);
+  const setPanelSectionCollapsed = useLeftPanelStore(
+    (state) => state.setPanelSectionCollapsed,
+  );
 
-const ARTIFACT_READ_OPTIONS: ReadonlyArray<{
-  value: ArtifactReadFilter;
-  label: string;
-}> = [
-  { value: ARTIFACT_READ.All, label: "All" },
-  { value: ARTIFACT_READ.Unread, label: "Unread" },
-  { value: ARTIFACT_READ.Read, label: "Read" },
-];
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        if (collapsed) setPanelSectionCollapsed(panelId, false);
+        const triggerRight = triggerElement?.getBoundingClientRect().right ?? 0;
+        setDrillIn(
+          window.innerWidth - triggerRight < TWO_COLUMN_MENU_MIN_AVAILABLE_PX,
+        );
+      } else {
+        setDetail(null);
+      }
+      setMenuOpen(tabId, panelId, "filter", nextOpen);
+    },
+    [
+      collapsed,
+      panelId,
+      setMenuOpen,
+      setPanelSectionCollapsed,
+      tabId,
+      triggerElement,
+    ],
+  );
 
-function FilterTrigger(props: {
-  readonly active: boolean;
-  readonly disabled: boolean;
+  const openDetail = useCallback((nextDetail: TDetail) => {
+    setDetail(nextDetail);
+  }, []);
+  const closeDetail = useCallback(() => setDetail(null), []);
+
+  return {
+    open,
+    drillIn,
+    detail,
+    setTriggerElement,
+    handleOpenChange,
+    openDetail,
+    closeDetail,
+  };
+}
+
+function ViewMenuTrigger(props: {
+  readonly filterCount: number;
   readonly label: string;
+  readonly setTriggerElement: (element: HTMLButtonElement | null) => void;
 }) {
+  const { filterCount, label, setTriggerElement } = props;
   return (
-    <DropdownMenuTrigger asChild>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={props.label}
-        disabled={props.disabled}
-        className={cn(
-          "relative text-muted-foreground transition-opacity hover:text-foreground aria-expanded:opacity-100",
-          props.active ? "text-foreground" : PANEL_HEADER_ACTION_REVEAL_CLASS,
-        )}
-      >
-        <ListFilter className="size-4" />
-        {props.active ? (
-          <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
-        ) : null}
-      </Button>
-    </DropdownMenuTrigger>
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          ref={setTriggerElement}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={label}
+          className="relative shrink-0 text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+        >
+          <ListFilter className="size-4" />
+          <ViewMenuBadge filterCount={filterCount} />
+        </Button>
+      </DropdownMenuTrigger>
+    </TooltipWrapper>
   );
 }
 
-/**
- * Shared "Sort by" block for both panel filter dropdowns: a radio list of
- * the panel's allowed fields plus an ascending/descending toggle. The
- * toggle keeps the menu open (`onSelect` preventDefault) so direction and
- * field can be adjusted in one visit.
- */
-function SortMenuSection(props: {
-  fields: ReadonlyArray<SortField>;
-  sort: SortMode;
-  onFieldChange: (field: SortField) => void;
-  onToggleDirection: () => void;
+function ViewDetailEntry<TDetail extends string>(props: {
+  readonly detail: TDetail;
+  readonly drillIn: boolean;
+  readonly label: string;
+  readonly summary: string;
+  readonly onOpenDetail: (detail: TDetail) => void;
+  readonly children: ReactNode;
 }) {
-  const { fields, sort } = props;
-  const isAscending = sort.direction === SORT_DIRECTION.Asc;
+  const [subOpen, setSubOpen] = useState(false);
+  if (props.drillIn) {
+    return (
+      <DropdownMenuItem
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5"
+        onSelect={(event) => {
+          event.preventDefault();
+          props.onOpenDetail(props.detail);
+        }}
+      >
+        <span className="min-w-0 truncate">{props.label}</span>
+        <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-focus/dropdown-menu-item:text-accent-foreground">
+          {props.summary}
+        </span>
+        <ChevronRight className="size-3.5 justify-self-end" />
+      </DropdownMenuItem>
+    );
+  }
+
+  return (
+    <DropdownMenuSub open={subOpen} onOpenChange={setSubOpen}>
+      <DropdownMenuSubTrigger
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
+        onClick={() => setSubOpen(true)}
+      >
+        <span className="min-w-0 truncate">{props.label}</span>
+        <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+          {props.summary}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        sideOffset={8}
+        alignOffset={-4}
+        avoidCollisions={false}
+        className="min-w-52"
+      >
+        {props.children}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+function DrillInHeader(props: {
+  readonly title: string;
+  readonly onBack: () => void;
+}) {
   return (
     <>
-      <DropdownMenuSeparator />
-      <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-        Sort by
-      </DropdownMenuLabel>
-      <DropdownMenuRadioGroup
-        value={sort.field}
-        onValueChange={(next) => {
-          const match = fields.find((field) => field === next);
-          if (match !== undefined) props.onFieldChange(match);
-        }}
-      >
-        {fields.map((field) => (
-          <DropdownMenuRadioItem key={field} value={field}>
-            {SORT_FIELD_LABELS[field]}
-          </DropdownMenuRadioItem>
-        ))}
-      </DropdownMenuRadioGroup>
-      <DropdownMenuSeparator />
       <DropdownMenuItem
+        className="font-medium"
         onSelect={(event) => {
-          // Keep the menu open so field and direction can be tuned together.
           event.preventDefault();
-          props.onToggleDirection();
+          props.onBack();
         }}
       >
-        {isAscending ? (
-          <ArrowUpNarrowWide className="size-4" />
-        ) : (
-          <ArrowDownWideNarrow className="size-4" />
-        )}
-        {isAscending ? "Ascending" : "Descending"}
+        <ChevronLeft className="size-4" />
+        Back
+        <DropdownMenuShortcut>{props.title}</DropdownMenuShortcut>
       </DropdownMenuItem>
+      <DropdownMenuSeparator />
     </>
   );
 }
 
 export function ChatFilterMenu(props: {
   readonly epicId: string;
-  readonly disabled: boolean;
+  readonly tabId: string;
+  readonly collapsed: boolean;
+  readonly canArchive: boolean;
 }) {
   const { epicId } = props;
   const filter = useChatFilter(epicId);
   const sort = useChatSort(epicId);
-  const setChatOrigin = useLeftPanelStore((s) => s.setChatOrigin);
-  const setChatSortField = useLeftPanelStore((s) => s.setChatSortField);
-  const toggleChatSortDirection = useLeftPanelStore(
-    (s) => s.toggleChatSortDirection,
+  const archiveVisibility = useChatArchiveVisibility(epicId);
+  const setChatOrigin = useLeftPanelStore((state) => state.setChatOrigin);
+  const setChatOwnership = useLeftPanelStore((state) => state.setChatOwnership);
+  const setChatArchiveVisibility = useLeftPanelStore(
+    (state) => state.setChatArchiveVisibility,
   );
-  const active = isChatFilterActive(filter);
+  const setChatSortField = useLeftPanelStore((state) => state.setChatSortField);
+  const toggleChatSortDirection = useLeftPanelStore(
+    (state) => state.toggleChatSortDirection,
+  );
+  const resetChatView = useLeftPanelStore((state) => state.resetChatView);
+  const filterActive = isChatFilterActive(filter);
+  const filterCount = chatFilterCount(filter);
+  const archiveVisibilityChanged =
+    archiveVisibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+  const active =
+    filterActive || archiveVisibilityChanged || isSortModeActive(sort);
+  const menu = useViewMenuState<ChatViewDetail>(
+    props.tabId,
+    "chats",
+    props.collapsed,
+  );
+
+  const detailProps = {
+    filterOrigin: filter.origin,
+    filterOwnership: filter.ownership,
+    sort,
+    archiveVisibility,
+    setChatOrigin: (origin: ChatOriginFilter) => setChatOrigin(epicId, origin),
+    setChatOwnership: (ownership: ChatOwnershipFilter) =>
+      setChatOwnership(epicId, ownership),
+    setArchiveVisibility: (visibility: ChatArchiveVisibility) =>
+      setChatArchiveVisibility(epicId, visibility),
+    setSortField: (field: SortField) => setChatSortField(epicId, field),
+    toggleSortDirection: () => toggleChatSortDirection(epicId),
+  };
+  const currentInterface =
+    CHAT_ORIGIN_OPTIONS.find((option) => option.value === filter.origin)
+      ?.label ?? "All";
+  const currentOwnership =
+    CHAT_OWNERSHIP_OPTIONS.find((option) => option.value === filter.ownership)
+      ?.label ?? "All";
+  const triggerLabel = viewTriggerLabel({
+    base: "Filter agents",
+    filterCount,
+    sort,
+    // Gated on `canArchive` alongside the Show detail itself: a stored
+    // preference outlives the permission that set it, and announcing a setting
+    // the menu can no longer expose names something the user cannot go change.
+    visibilityLabel:
+      props.canArchive && archiveVisibilityChanged
+        ? archiveVisibilityLabel(archiveVisibility)
+        : null,
+  });
 
   return (
-    <DropdownMenu>
-      <FilterTrigger
-        active={active}
-        disabled={props.disabled}
-        label="Filter chats"
+    <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
+      <ViewMenuTrigger
+        filterCount={filterCount}
+        label={triggerLabel}
+        setTriggerElement={menu.setTriggerElement}
       />
       <DropdownMenuContent
-        align="end"
-        className="min-w-44 overflow-y-auto"
-        style={{ maxHeight: "min(70vh, 24rem)" }}
+        side="right"
+        align="start"
+        sideOffset={8}
+        avoidCollisions={false}
+        className={VIEW_MENU_CONTENT_CLASS}
+        style={{ maxHeight: VIEW_MENU_MAX_HEIGHT }}
+        data-testid="epic-sidebar-agent-view-menu"
       >
-        <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Show
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuRadioGroup
-          value={filter.origin}
-          onValueChange={(next) => {
-            const match = CHAT_ORIGIN_OPTIONS.find(
-              (option) => option.value === next,
-            );
-            if (match !== undefined) setChatOrigin(epicId, match.value);
-          }}
-        >
-          {CHAT_ORIGIN_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value}>
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        <SortMenuSection
-          fields={CHAT_SORT_FIELDS}
-          sort={sort}
-          onFieldChange={(field) => setChatSortField(epicId, field)}
-          onToggleDirection={() => toggleChatSortDirection(epicId)}
-        />
+        {menu.drillIn && menu.detail !== null ? (
+          <>
+            <DrillInHeader
+              title={CHAT_DETAIL_LABELS[menu.detail]}
+              onBack={menu.closeDetail}
+            />
+            <ChatDetailContent detail={menu.detail} {...detailProps} />
+          </>
+        ) : (
+          <>
+            <ViewDetailEntry
+              detail="ordering"
+              drillIn={menu.drillIn}
+              label="Ordering"
+              summary={sortSummary(sort)}
+              onOpenDetail={menu.openDetail}
+            >
+              <ChatDetailContent detail="ordering" {...detailProps} />
+            </ViewDetailEntry>
+            {props.canArchive ? (
+              <ViewDetailEntry
+                detail="show"
+                drillIn={menu.drillIn}
+                label="Show"
+                summary={archiveVisibilityLabel(archiveVisibility)}
+                onOpenDetail={menu.openDetail}
+              >
+                <ChatDetailContent detail="show" {...detailProps} />
+              </ViewDetailEntry>
+            ) : null}
+            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
+              Filters
+            </DropdownMenuLabel>
+            <ViewDetailEntry
+              detail="interface"
+              drillIn={menu.drillIn}
+              label="Interface"
+              summary={currentInterface}
+              onOpenDetail={menu.openDetail}
+            >
+              <ChatDetailContent detail="interface" {...detailProps} />
+            </ViewDetailEntry>
+            <ViewDetailEntry
+              detail="ownership"
+              drillIn={menu.drillIn}
+              label="Ownership"
+              summary={currentOwnership}
+              onOpenDetail={menu.openDetail}
+            >
+              <ChatDetailContent detail="ownership" {...detailProps} />
+            </ViewDetailEntry>
+            {active ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    resetChatView(epicId);
+                  }}
+                >
+                  <RotateCcw className="size-4" />
+                  Reset view
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -225,103 +394,153 @@ export function ChatFilterMenu(props: {
 
 export function ArtifactFilterMenu(props: {
   readonly epicId: string;
-  readonly disabled: boolean;
+  readonly tabId: string;
+  readonly collapsed: boolean;
+  readonly onMarkAllRead: () => void;
+  readonly markAllReadDisabled: boolean;
 }) {
   const { epicId } = props;
   const filter = useArtifactFilter(epicId);
   const sort = useArtifactSort(epicId);
-  const toggleArtifactStatus = useLeftPanelStore((s) => s.toggleArtifactStatus);
-  const toggleArtifactKind = useLeftPanelStore((s) => s.toggleArtifactKind);
-  const setArtifactRead = useLeftPanelStore((s) => s.setArtifactRead);
-  const clearArtifactFilter = useLeftPanelStore((s) => s.clearArtifactFilter);
-  const setArtifactSortField = useLeftPanelStore((s) => s.setArtifactSortField);
-  const toggleArtifactSortDirection = useLeftPanelStore(
-    (s) => s.toggleArtifactSortDirection,
+  const toggleArtifactStatus = useLeftPanelStore(
+    (state) => state.toggleArtifactStatus,
   );
-  const active = isArtifactFilterActive(filter);
-  const count = artifactFilterCount(filter);
+  const toggleArtifactKind = useLeftPanelStore(
+    (state) => state.toggleArtifactKind,
+  );
+  const setArtifactRead = useLeftPanelStore((state) => state.setArtifactRead);
+  const setArtifactSortField = useLeftPanelStore(
+    (state) => state.setArtifactSortField,
+  );
+  const toggleArtifactSortDirection = useLeftPanelStore(
+    (state) => state.toggleArtifactSortDirection,
+  );
+  const resetArtifactView = useLeftPanelStore(
+    (state) => state.resetArtifactView,
+  );
+  const filterActive = isArtifactFilterActive(filter);
+  const filterCount = artifactFilterCount(filter);
+  const active = filterActive || isSortModeActive(sort);
+  const menu = useViewMenuState<ArtifactViewDetail>(
+    props.tabId,
+    "artifacts",
+    props.collapsed,
+  );
+
+  const detailProps = {
+    filterStatuses: filter.statuses,
+    filterKinds: filter.kinds,
+    filterRead: filter.read,
+    sort,
+    toggleStatus: (status: ArtifactStatusFilter) =>
+      toggleArtifactStatus(epicId, status),
+    toggleKind: (kind: EpicArtifactKind) => toggleArtifactKind(epicId, kind),
+    setRead: (read: ArtifactReadFilter) => setArtifactRead(epicId, read),
+    setSortField: (field: SortField) => setArtifactSortField(epicId, field),
+    toggleSortDirection: () => toggleArtifactSortDirection(epicId),
+  };
+  const statusSummary = selectedSummary(
+    filter.statuses.map((status) => STATUS_LABELS[status]),
+  );
+  const kindSummary = selectedSummary(
+    filter.kinds.map((kind) => EPIC_NODE_LABELS[kind]),
+  );
+  const readSummary =
+    ARTIFACT_READ_OPTIONS.find((option) => option.value === filter.read)
+      ?.label ?? "All";
+  const triggerLabel = viewTriggerLabel({
+    base: "Filter artifacts",
+    filterCount,
+    sort,
+    // The artifacts panel has no archive-visibility control.
+    visibilityLabel: null,
+  });
 
   return (
-    <DropdownMenu>
-      <FilterTrigger
-        active={active}
-        disabled={props.disabled}
-        label="Filter artifacts"
+    <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
+      <ViewMenuTrigger
+        filterCount={filterCount}
+        label={triggerLabel}
+        setTriggerElement={menu.setTriggerElement}
       />
       <DropdownMenuContent
-        align="end"
-        className="min-w-48 overflow-y-auto"
-        style={{ maxHeight: "min(70vh, 24rem)" }}
+        side="right"
+        align="start"
+        sideOffset={8}
+        avoidCollisions={false}
+        className={VIEW_MENU_CONTENT_CLASS}
+        style={{ maxHeight: VIEW_MENU_MAX_HEIGHT }}
+        data-testid="epic-sidebar-artifact-view-menu"
       >
-        <DropdownMenuLabel className="flex items-center justify-between px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          <span>Status</span>
-          {active ? (
-            <button
-              type="button"
-              className="text-ui-xs normal-case text-muted-foreground hover:text-foreground"
-              onClick={() => clearArtifactFilter(epicId)}
-            >
-              Clear ({count})
-            </button>
-          ) : null}
-        </DropdownMenuLabel>
-        {ARTIFACT_STATUS_OPTIONS.map((status) => (
-          <DropdownMenuCheckboxItem
-            key={status}
-            checked={filter.statuses.includes(status)}
-            onCheckedChange={() => toggleArtifactStatus(epicId, status)}
-            onSelect={(event) => event.preventDefault()}
-          >
-            <span
-              className={cn(
-                "size-2 shrink-0 rounded-full",
-                STATUS_DOT_CLASSES[status],
-              )}
+        {menu.drillIn && menu.detail !== null ? (
+          <>
+            <DrillInHeader
+              title={ARTIFACT_DETAIL_LABELS[menu.detail]}
+              onBack={menu.closeDetail}
             />
-            {STATUS_LABELS[status]}
-          </DropdownMenuCheckboxItem>
-        ))}
-
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Type
-        </DropdownMenuLabel>
-        {ARTIFACT_KIND_OPTIONS.map((kind) => (
-          <DropdownMenuCheckboxItem
-            key={kind}
-            checked={filter.kinds.includes(kind)}
-            onCheckedChange={() => toggleArtifactKind(epicId, kind)}
-            onSelect={(event) => event.preventDefault()}
-          >
-            {EPIC_NODE_LABELS[kind]}
-          </DropdownMenuCheckboxItem>
-        ))}
-
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Read state
-        </DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={filter.read}
-          onValueChange={(next) => {
-            const match = ARTIFACT_READ_OPTIONS.find(
-              (option) => option.value === next,
-            );
-            if (match !== undefined) setArtifactRead(epicId, match.value);
-          }}
-        >
-          {ARTIFACT_READ_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value}>
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        <SortMenuSection
-          fields={ARTIFACT_SORT_FIELDS}
-          sort={sort}
-          onFieldChange={(field) => setArtifactSortField(epicId, field)}
-          onToggleDirection={() => toggleArtifactSortDirection(epicId)}
-        />
+            <ArtifactDetailContent detail={menu.detail} {...detailProps} />
+          </>
+        ) : (
+          <>
+            <ViewDetailEntry
+              detail="ordering"
+              drillIn={menu.drillIn}
+              label="Ordering"
+              summary={sortSummary(sort)}
+              onOpenDetail={menu.openDetail}
+            >
+              <ArtifactDetailContent detail="ordering" {...detailProps} />
+            </ViewDetailEntry>
+            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
+              Filters
+            </DropdownMenuLabel>
+            <ViewDetailEntry
+              detail="status"
+              drillIn={menu.drillIn}
+              label="Status"
+              summary={statusSummary}
+              onOpenDetail={menu.openDetail}
+            >
+              <ArtifactDetailContent detail="status" {...detailProps} />
+            </ViewDetailEntry>
+            <ViewDetailEntry
+              detail="type"
+              drillIn={menu.drillIn}
+              label="Type"
+              summary={kindSummary}
+              onOpenDetail={menu.openDetail}
+            >
+              <ArtifactDetailContent detail="type" {...detailProps} />
+            </ViewDetailEntry>
+            <ViewDetailEntry
+              detail="read"
+              drillIn={menu.drillIn}
+              label="Read state"
+              summary={readSummary}
+              onOpenDetail={menu.openDetail}
+            >
+              <ArtifactDetailContent detail="read" {...detailProps} />
+            </ViewDetailEntry>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              disabled={props.markAllReadDisabled}
+              onSelect={props.onMarkAllRead}
+            >
+              Mark all as read
+            </DropdownMenuItem>
+            {active ? (
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  resetArtifactView(epicId);
+                }}
+              >
+                <RotateCcw className="size-4" />
+                Reset view
+              </DropdownMenuItem>
+            ) : null}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

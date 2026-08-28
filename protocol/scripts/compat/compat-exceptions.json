@@ -1,5 +1,5 @@
 {
-  "$comment": "Static policy encoding which host→client payload paths are catalog-gated (id-agnostic — future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host→client payloads — growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
+  "$comment": "Static policy encoding which host\u2192client payload paths are catalog-gated (id-agnostic \u2014 future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host\u2192client payloads \u2014 growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
   "exceptions": [
     {
       "family": "unary",
@@ -118,8 +118,24 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.triggers.items.properties.live",
+      "reason": "Parsed-stream liveness flag on autonomous-resume triggers, .default(false): false IS the pre-feature semantic, because a host that predates the field only ever emitted digests for work it treated as finished - a new client reading false from an old host's frame renders exactly the terminal card it always did, and old clients strip the key on parse. Deliberately an additive field instead of a new `status` enum value, so an older host's whole-chat safeParse of persisted triggers survives (the same wakeTriggers constraint the sibling `mcp` entry cites). It exists because a still-running monitor - or a backgrounded shell streaming mid-run output - has NO terminal outcome, so `status` alone forced the resume divider to claim the command completed; scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.triggers.items.properties.mcp",
       "reason": "Parsed-stream MCP identity on autonomous-resume triggers, nullable/.default(null): null renders the plain command trigger card - exactly what a pre-mcp host produces, and old clients strip the key on parse. Deliberately an additive field instead of a new `kind` enum value so an older host's whole-chat safeParse of persisted triggers survives (the wakeTriggers constraint); scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.triggers.items.properties.managedCommand",
+      "reason": "Parsed-stream shell identity (commandId + notifying) on autonomous-resume triggers, nullable/.default(null): null IS the pre-feature semantic, because a host that predates the field recorded no linkage between a resume divider and the shell that woke it - a new client reading null from an old host's frame renders exactly the generic card it always did, with no output window to open, and old clients strip the key on parse. Deliberately a keyed property instead of a new `kind` enum value so an older host's whole-chat safeParse of persisted triggers survives (the same wakeTriggers constraint the sibling `mcp` and `live` entries cite) - which also means every shell's divider keeps `kind: \"monitor\"` and carries its real state inside this key. `notifying` is itself defaulted for the same reason one level down: this key is read back from chats written while it was still a monitor/shell `kind`, whose value strips on parse. It exists because the divider is a door: without the shell's id there is nothing for a click to open; scoped by field path."
     },
     {
       "family": "stream",
@@ -192,6 +208,14 @@
       "payload": "serverFrame",
       "path": "**.coveredUntilMessageId",
       "reason": "Session-anchor/chain seed-coverage field on a parsed stream (frames are live-schema-parsed, so the tolerance executes): nullable/.default(null), and null is the documented 'no seed context ever existed' semantic - literally true for a host that predates fake-context seeding (#187). No shipped client reads the field; only the host's own seeding consumes it."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.turnTailUuid",
+      "reason": "Session-anchor turn-tail field on a parsed stream (frames are live-schema-parsed, so the tolerance executes): nullable/.default(null), and null is the documented 'no tail recorded' semantic - literally true for every anchor written before tail recording existed. No shipped client reads the field; only the host's own rewind-fork resolution consumes it."
     },
     {
       "family": "stream",

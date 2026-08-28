@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   TerminalSubscribeClientFrame,
   TerminalSubscribeServerFrame,
+  TerminalSubscribeViewer,
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
@@ -9,6 +10,7 @@ import {
   createTerminalSessionStore,
   type TerminalWrite,
 } from "@/stores/terminals/terminal-session-store";
+import { isTerminalCrashExit } from "@/hooks/terminal/use-terminal-crash-notification";
 
 type TerminalSnapshotFrame = Extract<
   TerminalSubscribeServerFrame,
@@ -132,8 +134,8 @@ function createHarness() {
     rows: 24,
     reattachMode: "fresh",
     kind: "terminal",
-    streamClientFactory: (_sessionId, _cols, _rows, nextCallbacks) => {
-      callbacks = nextCallbacks;
+    streamClientFactory: (streamArgs) => {
+      callbacks = streamArgs.callbacks;
       return { sendAction, close };
     },
   });
@@ -272,6 +274,34 @@ describe("createTerminalSessionStore", () => {
     });
   });
 
+  it("marks the session 'reaped' (definitive) on a TERMINAL_NOT_FOUND fatal, not the recoverable 'lost'", () => {
+    const harness = createHarness();
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshot(""));
+
+    harness.callbacks().onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "TERMINAL_NOT_FOUND",
+        reason: "TERMINAL_NOT_FOUND: gone",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().status).toBe("reaped");
+  });
+
+  it("marks the session the recoverable 'lost' for any other closed reason (plain transport drop)", () => {
+    const harness = createHarness();
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshot(""));
+
+    harness.callbacks().onConnectionStatus("closed", { kind: "caller" });
+
+    expect(harness.handle.store.getState().status).toBe("lost");
+  });
+
   it("re-flushes a remembered resize after a reconnect snapshot reports stale dimensions", () => {
     const harness = createHarness();
 
@@ -316,6 +346,179 @@ describe("createTerminalSessionStore", () => {
     );
   });
 
+  describe("terminal action protocol (T13): replay + honest input-lost", () => {
+    it("replays an unacked write verbatim (same clientActionId) after a reconnect", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      const clientActionId = harness.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      expect(clientActionId).not.toBeNull();
+      harness.sendAction.mockClear();
+
+      // Transport blip: the actionAck never arrived before the drop.
+      harness.callbacks().onConnectionStatus("reconnecting", null);
+      harness.callbacks().onConnectionStatus("open", null);
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "write",
+          clientActionId,
+          data: "echo hi\r",
+        }),
+      );
+      // Still pending until the host (re-)acks it.
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).toContain(clientActionId);
+    });
+
+    it("does not replay a write once its actionAck has landed", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      const clientActionId = harness.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      if (clientActionId === null) throw new Error("expected an action id");
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        clientActionId,
+        action: "write",
+        status: "accepted",
+        reason: null,
+        code: null,
+      });
+      harness.sendAction.mockClear();
+
+      harness.callbacks().onConnectionStatus("reconnecting", null);
+      harness.callbacks().onConnectionStatus("open", null);
+
+      expect(harness.sendAction).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "write", clientActionId }),
+      );
+    });
+
+    it("drops a stale pending resize on reconnect instead of replaying it verbatim", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+      const resizeId = harness.handle.store.getState().requestResize(120, 40);
+      expect(resizeId).not.toBeNull();
+      harness.sendAction.mockClear();
+
+      harness.callbacks().onConnectionStatus("reconnecting", null);
+      harness.callbacks().onConnectionStatus("open", null);
+      // A fresh snapshot reports the still-stale effective size, so
+      // `flushRequestedResize` reissues its own fresh resize action.
+      emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+      // The OLD resize id must never be replayed verbatim...
+      expect(harness.sendAction).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resize", clientActionId: resizeId }),
+      );
+      // ...only a fresh one reflecting the current requested size.
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resize", cols: 120, rows: 40 }),
+      );
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).not.toContain(resizeId);
+    });
+
+    it("surfaces an honest 'input lost' signal when the pending-action ring evicts an unacked write", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      expect(harness.handle.store.getState().lastInputLostAt).toBeNull();
+
+      // Never ack anything - every write stays pending until the ring's
+      // MAX_PENDING_ACTIONS (64) cap forces an eviction.
+      for (let i = 0; i < 65; i += 1) {
+        harness.handle.store.getState().writeInput(`keystroke-${i}`);
+      }
+
+      expect(harness.handle.store.getState().lastInputLostAt).not.toBeNull();
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).toHaveLength(64);
+    });
+  });
+
+  it("stashes a resize arriving while the session is lost and flushes it after the reconnect snapshot", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    harness.sendAction.mockClear();
+
+    // Stream drops -> "lost". A container resize landing now (pane relayout
+    // while disconnected) must be remembered, not dropped: the xterm engine
+    // records every report in its own dedupe before the store sees it, so a
+    // drop here is never re-offered and the session stays latched at the
+    // pre-disconnect grid after the reconnect.
+    harness.callbacks().onConnectionStatus("closed", null);
+    expect(harness.handle.store.getState().status).toBe("lost");
+    const actionId = harness.handle.store.getState().requestResize(132, 40);
+    expect(actionId).toBeNull();
+    expect(harness.sendAction).not.toHaveBeenCalled();
+    expect(harness.handle.store.getState()).toMatchObject({
+      requestedCols: 132,
+      requestedRows: 40,
+    });
+
+    // Reconnect: on "open" the session is still "lost", so nothing flushes
+    // yet; the snapshot restores it to running and flushes the stashed size.
+    harness.callbacks().onConnectionStatus("open", null);
+    expect(harness.sendAction).not.toHaveBeenCalled();
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 132,
+        rows: 40,
+      }),
+    );
+  });
+
+  it("re-dispatches a repeated resize while the host never adopted it, and dedupes once it did", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    harness.sendAction.mockClear();
+
+    // First report: dispatched, but suppose the frame was lost in flight -
+    // the host's grid never becomes 132x40.
+    harness.handle.store.getState().requestResize(132, 40);
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+
+    // The engine's latch self-heal re-reports the SAME size. Deduping on
+    // `requested` alone would strand it; it must reach the wire to retry.
+    harness.handle.store.getState().requestResize(132, 40);
+    expect(harness.sendAction).toHaveBeenCalledTimes(2);
+
+    // Once the host adopts the size (echo), the same request is redundant
+    // and dedupes again.
+    harness.callbacks().onResized({
+      kind: "resized",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      cols: 132,
+      rows: 40,
+    });
+    expect(harness.handle.store.getState().requestResize(132, 40)).toBeNull();
+    expect(harness.sendAction).toHaveBeenCalledTimes(2);
+  });
+
   it("stores active process metadata from session updates", () => {
     const harness = createHarness();
 
@@ -327,6 +530,66 @@ describe("createTerminalSessionStore", () => {
       title: null,
       activeProcessName: "vim",
     });
+  });
+
+  it("stores live current-directory metadata from v1.5 session updates", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        sessionId: "terminal-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionKind: "terminal",
+        cwd: "/repo",
+        currentCwd: "/repo/packages/gui",
+        shellCommand: "zsh",
+        shellArgs: [],
+        cols: 80,
+        rows: 24,
+        status: "running",
+        exitCode: null,
+        createdAt: 1,
+        title: null,
+        activeProcessName: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().currentCwd).toBe(
+      "/repo/packages/gui",
+    );
+
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+    expect(harness.handle.store.getState().currentCwd).toBe(
+      "/repo/packages/gui",
+    );
+
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        sessionId: "terminal-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionKind: "terminal",
+        cwd: "/repo",
+        currentCwd: "",
+        shellCommand: "zsh",
+        shellArgs: [],
+        cols: 80,
+        rows: 24,
+        status: "running",
+        exitCode: null,
+        createdAt: 1,
+        title: null,
+        activeProcessName: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().currentCwd).toBeNull();
   });
 
   it("clears active process metadata when the session exits", () => {
@@ -343,6 +606,74 @@ describe("createTerminalSessionStore", () => {
     });
   });
 
+  it("keeps a live-delivered reaped exit reason so the kill is not a crash", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    // The host's setup-terminal reap kills a session its canvas tile is
+    // actively subscribed to: `handlePtyExit` broadcasts a `sessionUpdated`
+    // frame carrying the reason, then a reasonless `exit` frame. The store
+    // must keep the reason across both, or the tile reports the reap as
+    // "exited unexpectedly".
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+    harness.callbacks().onExit(exit(-1));
+
+    const state = harness.handle.store.getState();
+    expect(state).toMatchObject({
+      status: "exited",
+      exitCode: -1,
+      exitReason: "reaped",
+    });
+    expect(
+      isTerminalCrashExit({
+        status: state.status,
+        exitCode: state.exitCode,
+        exitReason: state.exitReason,
+        isExitSuppressed: () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not clobber a learned exit reason with a reason-less session update", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+        exitReason: "killed",
+      },
+    });
+    // e.g. from a host predating the field, or a frame built without it.
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+      },
+    });
+
+    expect(harness.handle.store.getState().exitReason).toBe("killed");
+  });
+
   describe("ack-credit (terminal.subscribe@1.1)", () => {
     it("never sends an ack frame until a snapshot confirms ack-credit support", () => {
       const harness = createHarness();
@@ -357,7 +688,8 @@ describe("createTerminalSessionStore", () => {
       });
 
       emitData(harness.callbacks(), data("x".repeat(64 * 1024)));
-      writes[0].onAckable();
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      liveWrites[0].onAckable();
 
       expect(harness.sendAction).not.toHaveBeenCalled();
     });
@@ -373,10 +705,11 @@ describe("createTerminalSessionStore", () => {
 
       const bigChunk = "x".repeat(64 * 1024);
       emitData(harness.callbacks(), data(bigChunk));
-      expect(writes).toHaveLength(1);
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      expect(liveWrites).toHaveLength(1);
 
       // Simulate xterm's own `write(data, callback)` firing once parsed.
-      writes[0].onAckable();
+      liveWrites[0].onAckable();
 
       expect(harness.sendAction).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -400,8 +733,9 @@ describe("createTerminalSessionStore", () => {
 
         emitData(harness.callbacks(), data("a".repeat(1000)));
         emitData(harness.callbacks(), data("b".repeat(2000)));
-        writes[0].onAckable();
-        writes[1].onAckable();
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
+        liveWrites[1].onAckable();
 
         expect(harness.sendAction).not.toHaveBeenCalled();
 
@@ -446,7 +780,7 @@ describe("createTerminalSessionStore", () => {
         });
 
         emitData(harness.callbacks(), data("small chunk"));
-        writes[0].onAckable();
+        writes.filter((write) => write.kind === "live")[0].onAckable();
 
         harness.callbacks().onConnectionStatus("reconnecting", null);
         vi.advanceTimersByTime(1000);
@@ -471,7 +805,7 @@ describe("createTerminalSessionStore", () => {
         // Written before the drop; xterm's own write callback for this
         // chunk hasn't fired yet.
         emitData(harness.callbacks(), data("stale chunk"));
-        const staleWrite = writes[0];
+        const staleWrite = writes.filter((write) => write.kind === "live")[0];
 
         // Reconnect: the host mints a fresh subscriber with unackedBytes
         // reset to 0, and its own snapshot re-confirms ack-credit support -
@@ -548,7 +882,8 @@ describe("createTerminalSessionStore", () => {
       });
 
       harness.callbacks().onData(binaryDataFrame(), new Uint8Array(64 * 1024));
-      writes[0].onAckable();
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      liveWrites[0].onAckable();
 
       expect(harness.sendAction).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "ack", bytes: 64 * 1024 }),
@@ -571,7 +906,8 @@ describe("createTerminalSessionStore", () => {
         const chunkBytes = new TextEncoder().encode("héllo");
         expect(chunkBytes.byteLength).toBe(6);
         harness.callbacks().onData(binaryDataFrame(), chunkBytes);
-        writes[0].onAckable();
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
         vi.advanceTimersByTime(50);
 
         expect(harness.sendAction).toHaveBeenCalledWith(
@@ -580,6 +916,232 @@ describe("createTerminalSessionStore", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("viewer intent (terminal.subscribe@1.6)", () => {
+    it("subscribes as presentation by default", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          viewers.push(streamArgs.viewer);
+          return { sendAction: () => undefined, close: () => undefined };
+        },
+      });
+
+      expect(viewers).toEqual(["presentation"]);
+      expect(handle.store.getState().viewer).toBe("presentation");
+      handle.dispose();
+    });
+
+    it("reopens the stream on viewer change without mapping the old close to lost", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return {
+            sendAction: () => undefined,
+            close: () => {
+              // Production TerminalStreamClient.close() reports closed.
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot(""));
+      expect(handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "presentation",
+      });
+
+      handle.store.getState().setViewer("cache");
+
+      expect(viewers).toEqual(["presentation", "cache"]);
+      expect(handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "cache",
+      });
+
+      handle.store.getState().setViewer("presentation");
+      expect(viewers).toEqual(["presentation", "cache", "presentation"]);
+      expect(handle.store.getState().viewer).toBe("presentation");
+      handle.dispose();
+    });
+
+    it("does not reopen when setViewer is given the current intent", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal",
+        streamClientFactory: (streamArgs) => {
+          viewers.push(streamArgs.viewer);
+          return { sendAction: () => undefined, close: () => undefined };
+        },
+      });
+
+      handle.store.getState().setViewer("presentation");
+      expect(viewers).toEqual(["presentation"]);
+      handle.dispose();
+    });
+
+    it("forwards an empty replacement snapshot after a viewer reopen so a retained engine can reset", () => {
+      const writes: TerminalWrite[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          return {
+            sendAction: () => undefined,
+            close: () => {
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot("stale data"));
+      expect(writes).toMatchObject([
+        { kind: "snapshot", chunk: "stale data", cols: 80, rows: 24 },
+      ]);
+
+      // Lease-free keep-warm reopens as cache; the xterm engine is retained.
+      handle.store.getState().setViewer("cache");
+      opened().onConnectionStatus("open", null);
+      // Host serializes a cleared screen to an empty string. The store must
+      // still deliver a snapshot write so writerProxy can RIS-reset.
+      emitSnapshot(opened(), snapshot(""));
+
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        kind: "snapshot",
+        chunk: "",
+        cols: 80,
+        rows: 24,
+      });
+      handle.dispose();
+    });
+
+    it("queues an empty replacement snapshot until a retained engine re-registers its writer", () => {
+      const writes: TerminalWrite[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          return {
+            sendAction: () => undefined,
+            close: () => {
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot("stale data"));
+
+      handle.store.getState().setViewer("cache");
+      // Tile unmounted, engine kept warm: writer gone, empty snapshot arrives.
+      handle.store.getState().setWriter(null);
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot(""));
+      expect(writes).toHaveLength(1);
+
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        kind: "snapshot",
+        chunk: "",
+        cols: 80,
+        rows: 24,
+      });
+      handle.dispose();
+    });
+
+    it("does not attach a new stream when the session is already dead", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return { sendAction: () => undefined, close: () => undefined };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      opened().onConnectionStatus("closed", { kind: "caller" });
+      expect(handle.store.getState().status).toBe("lost");
+
+      handle.store.getState().setViewer("cache");
+      expect(viewers).toEqual(["presentation"]);
+      expect(handle.store.getState().viewer).toBe("cache");
+      handle.dispose();
     });
   });
 });

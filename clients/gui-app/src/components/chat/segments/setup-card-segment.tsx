@@ -7,7 +7,10 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingOwnerKind,
+  WorktreeFolderIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,11 +26,18 @@ import {
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
+import {
+  useFocusEpicTerminalSession,
+  type EpicTerminalRefOverrides,
+} from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
+import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
+import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
+import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
@@ -43,7 +53,11 @@ import { LiveElapsed } from "./segment-elapsed";
  * spins).
  */
 export type SetupWorkspaceState =
-  "creating" | "setting-up" | "ready" | "failed" | "cancelled";
+  | "creating"
+  | "setting-up"
+  | "ready"
+  | "failed"
+  | "cancelled";
 
 /** Per-workspace entry within one setup lifecycle. */
 export interface SetupCardWorkspace {
@@ -68,6 +82,19 @@ export interface SetupCardWorkspace {
    */
   readonly worktreePath: string | null;
   readonly branch: string | null;
+  /**
+   * Failure reason from the failing `setup.*` event (a provision failure's
+   * git error). `null` for non-failed states and for script failures, which
+   * surface the exit code + terminal output instead.
+   */
+  readonly errorMessage: string | null;
+  /**
+   * Non-null only for a provision failure (`git worktree add` never ran or
+   * failed): the exact folder intent the failed create attempted. Retry
+   * re-provisions from it via `worktree.create` - `worktree.retrySetup` only
+   * re-runs setup scripts and rejects an entry with no worktree.
+   */
+  readonly retryFolderIntent: WorktreeFolderIntent | null;
 }
 
 /**
@@ -138,6 +165,7 @@ export function SetupCardSegment(props: {
   const focusTerminal = useFocusEpicTerminalSession(viewTabId);
   const tabClient = useTabHostClient();
   const retrySetup = useWorktreeRetrySetupFor(tabClient);
+  const worktreeCreate = useWorktreeCreateForClient(tabClient, undefined);
   const terminalList = useTerminalListFor(tabClient, {
     kind: "epic",
     epicId: aggregate.epicId,
@@ -164,12 +192,51 @@ export function SetupCardSegment(props: {
     return livenessKnown ? "ended" : "live";
   };
 
-  const handleRetry = (workspacePath: string): void => {
+  const handleRetry = (workspace: SetupCardWorkspace): void => {
+    // A provision failure has no worktree to re-run setup inside -
+    // `worktree.retrySetup` would reject it ("entry has no worktree"). Retry
+    // it by re-provisioning from the exact intent the failing event carried.
+    // Script failures keep the in-place `retrySetup` path: the worktree
+    // exists and only its setup script needs to re-run.
+    if (workspace.retryFolderIntent !== null) {
+      worktreeCreate.mutate(
+        {
+          epicId: aggregate.epicId,
+          ownerId: aggregate.ownerId,
+          ownerKind: aggregate.ownerKind,
+          entries: worktreeCreateEntries([workspace.retryFolderIntent]),
+        },
+        {
+          // A failed entry does NOT reject the RPC - it rides `perEntry` on a
+          // successful response, so the hook's `onError` toast never sees it.
+          // Surface it here; the host separately appends a fresh
+          // `setup.failed` event that refreshes this card's reason.
+          onSuccess: (response) => {
+            const failed = response.perEntry.find(
+              (entry) =>
+                entry.workspacePath === workspace.workspacePath && !entry.ok,
+            );
+            if (failed === undefined) return;
+            reportableErrorToast(
+              failed.errorMessage ?? "Couldn't create worktree.",
+              undefined,
+              createReportIssueContext({
+                title: "Worktree re-provision failed",
+                message: failed.errorMessage,
+                code: null,
+                source: "Setup",
+              }),
+            );
+          },
+        },
+      );
+      return;
+    }
     retrySetup.mutate({
       epicId: aggregate.epicId,
       ownerId: aggregate.ownerId,
       ownerKind: aggregate.ownerKind,
-      workspacePath,
+      workspacePath: workspace.workspacePath,
     });
   };
 
@@ -200,26 +267,49 @@ export function SetupCardSegment(props: {
 
   const total = workspaces.length;
   const readyCount = workspaces.filter((w) => w.state === "ready").length;
+  const hasProvisionFailure = workspaces.some(isProvisionFailure);
 
   const shared: SharedHandlers = {
     focusTerminal,
     livenessFor,
     onRetry: handleRetry,
-    retryPending: retrySetup.isPending,
+    retryPending: retrySetup.isPending || worktreeCreate.isPending,
     tabReady,
     active: isActive,
   };
 
-  const title = headerTitle(aggregate.state, multi, total, isActive);
+  const title = headerTitle({
+    state: aggregate.state,
+    multi,
+    total,
+    active: isActive,
+    hasProvisionFailure,
+  });
+  const provisionFailureDetail =
+    workspaces.find(isProvisionFailure)?.errorMessage ?? null;
+  const toggleAccessibleLabel =
+    provisionFailureDetail === null
+      ? title
+      : `${title}. ${provisionFailureDetail}`;
   const secondary = multi
     ? `${readyCount} of ${total} done`
     : workspaceSecondary(workspaces[0]);
   const ChevronIcon = expanded ? ChevronDown : ChevronRight;
+  const titleLabel = <span className="text-foreground/85">{title}</span>;
 
   const labelInner = (
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
       <StatusIcon state={aggregate.state} active={isActive} />
-      <span className="text-foreground/85">{title}</span>
+      {provisionFailureDetail === null ? (
+        titleLabel
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>{titleLabel}</TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
+            {provisionFailureDetail}
+          </TooltipContent>
+        </Tooltip>
+      )}
       {secondary.length > 0 ? (
         <>
           {/* Separate centered flex item so the dot aligns with the row's
@@ -264,6 +354,7 @@ export function SetupCardSegment(props: {
           <button
             type="button"
             aria-expanded={expanded}
+            aria-label={toggleAccessibleLabel}
             data-testid="setup-card-toggle"
             className={cn(
               "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
@@ -294,6 +385,7 @@ export function SetupCardSegment(props: {
           data-find-include="true"
           onClick={() => setManualExpanded(!expanded)}
           aria-expanded={expanded}
+          aria-label={toggleAccessibleLabel}
           data-testid="setup-card-toggle"
           className={cn(
             "rounded-sm outline-none transition-colors",
@@ -305,6 +397,7 @@ export function SetupCardSegment(props: {
         <span aria-hidden className="h-px flex-1 bg-border/60" />
       </div>
       {expanded ? (
+        // muted-fill-ok: card variant renders only in a canvas chat tile (inline variant is the Popover arm)
         <div className="mx-auto w-full max-w-[min(90vw,42rem)] rounded-md border border-border/60 bg-muted/30 p-3">
           {workspaceDetail}
         </div>
@@ -317,9 +410,10 @@ interface SharedHandlers {
   readonly focusTerminal: (
     terminalSessionId: string | null,
     cwd: string,
+    overrides: EpicTerminalRefOverrides | null,
   ) => void;
   readonly livenessFor: (sessionId: string | null) => TerminalLiveness;
-  readonly onRetry: (workspacePath: string) => void;
+  readonly onRetry: (workspace: SetupCardWorkspace) => void;
   readonly retryPending: boolean;
   /** Tab host client resolved - gates the `tabClient`-routed Retry. */
   readonly tabReady: boolean;
@@ -345,20 +439,27 @@ function WorkspaceSetupDetail(
     tabReady,
     active,
   } = props;
+  const provisionFailed = isProvisionFailure(entry);
+  const creationState = creationStepState(entry, provisionFailed);
+  const setupState = setupStepState(entry, provisionFailed);
+  const setupActive = !provisionFailed && entry.state !== "creating" && active;
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
     (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (
       <RetryButton
         pending={retryPending}
-        onRetry={() => onRetry(entry.workspacePath)}
+        onRetry={() => onRetry(entry)}
+        label={provisionFailed ? "Retry creation" : "Retry setup"}
       />
     ) : null;
   const reportIssue =
     entry.state === "failed" ? (
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Worktree setup failed",
-          message: null,
+          title: provisionFailed
+            ? "Worktree creation failed"
+            : "Worktree setup failed",
+          message: entry.errorMessage,
           code: null,
           source: "Setup",
         })}
@@ -383,20 +484,21 @@ function WorkspaceSetupDetail(
         <li className="flex items-center gap-2">
           {/* Spins while `git worktree add` runs (state "creating"); flips to a
               done check once the add finishes and the rest proceeds. */}
-          <StatusIcon
-            state={entry.state === "creating" ? "creating" : "ready"}
-            active={active}
-          />
+          <StatusIcon state={creationState} active={active} />
           <span className="text-foreground/85">Creating worktree</span>
         </li>
         <li className="flex items-center gap-2">
           {/* Pending (static dot) until the worktree exists and the setup
               script starts; then reflects the live setup state. */}
-          <StatusIcon
-            state={entry.state === "creating" ? "setting-up" : entry.state}
-            active={entry.state === "creating" ? false : active}
-          />
-          <span className="text-foreground/85">Setting up worktree</span>
+          <StatusIcon state={setupState} active={setupActive} />
+          <span
+            className={cn(
+              "text-foreground/85",
+              provisionFailed && "text-muted-foreground",
+            )}
+          >
+            Setting up worktree
+          </span>
           {entry.state === "failed" && entry.setupExitCode !== null ? (
             <span className="text-muted-foreground">
               (exit {entry.setupExitCode})
@@ -409,6 +511,11 @@ function WorkspaceSetupDetail(
               focusTerminal(
                 entry.terminalSessionId,
                 entry.worktreePath ?? entry.workspacePath,
+                {
+                  name: DEFAULT_EPIC_NODE_NAMES.terminal,
+                  origin: "setup",
+                  originProviderId: undefined,
+                },
               )
             }
           />
@@ -416,16 +523,48 @@ function WorkspaceSetupDetail(
           {reportIssue}
         </li>
       </ol>
+      {entry.state === "failed" && entry.errorMessage !== null ? (
+        // `role="alert"` announces the provisioning failure to assistive tech
+        // when it appears, and gives the message an accessible query handle.
+        <p
+          role="alert"
+          className="m-0 whitespace-pre-wrap break-words pl-6 text-ui-sm text-destructive"
+        >
+          {entry.errorMessage}
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function headerTitle(
-  state: SetupWorkspaceState,
-  multi: boolean,
-  total: number,
-  active: boolean,
-): string {
+function creationStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed) return "failed";
+  if (entry.state === "creating") return "creating";
+  return "ready";
+}
+
+function setupStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed || entry.state === "creating") return "setting-up";
+  return entry.state;
+}
+
+function headerTitle(props: {
+  readonly state: SetupWorkspaceState;
+  readonly multi: boolean;
+  readonly total: number;
+  readonly active: boolean;
+  readonly hasProvisionFailure: boolean;
+}): string {
+  const { state, multi, total, active, hasProvisionFailure } = props;
+  if (state === "failed" && hasProvisionFailure) {
+    return "Worktree creation failed";
+  }
   if (multi) {
     if (state === "ready") return `${total} worktrees ready`;
     if (state === "failed") return "Worktree setup failed";
@@ -499,6 +638,7 @@ function OpenTerminalButton(props: {
 function RetryButton(props: {
   readonly pending: boolean;
   readonly onRetry: () => void;
+  readonly label: "Retry creation" | "Retry setup";
 }) {
   return (
     <Button
@@ -510,7 +650,7 @@ function RetryButton(props: {
       data-testid="setup-card-retry"
       className="text-destructive hover:text-destructive"
     >
-      Retry setup
+      {props.label}
       {props.pending ? (
         <AgentSpinningDots
           className="text-current"
@@ -520,6 +660,10 @@ function RetryButton(props: {
       ) : null}
     </Button>
   );
+}
+
+function isProvisionFailure(entry: SetupCardWorkspace): boolean {
+  return entry.state === "failed" && entry.retryFolderIntent !== null;
 }
 
 /**

@@ -1,6 +1,8 @@
 import {
   useCallback,
+  useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,12 +14,21 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
   FilePlus,
+  GitPullRequest,
+  Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
 } from "lucide-react";
-import { AnimatePresence, LayoutGroup } from "motion/react";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  useReducedMotion,
+  type Transition,
+} from "motion/react";
 import * as m from "motion/react-m";
+import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
+import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -25,6 +36,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropLine } from "@/components/ui/drop-line";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   Tooltip,
   TooltipContent,
@@ -33,6 +45,7 @@ import {
 import {
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
+  useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
 import {
   useInlineRename,
@@ -46,28 +59,46 @@ import {
   type EpicCanvasArtifactTabDragData,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
+import {
+  useActiveArtifactTab,
+  useTabStripDropIndex,
+  useTileStripOffsets,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
+  EpicTerminalRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
+  isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
+  isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
+import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
+import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
+import { useChatUsageDialogStore } from "@/stores/chats/chat-usage-dialog-store";
 import {
   TabStripContextMenu,
   type TabStripContextMenuProps,
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
+import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
@@ -86,13 +117,23 @@ import {
   reportShiftKeyHeld,
   useShiftKeyHeld,
 } from "@/hooks/use-shift-key-held";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
-const EPIC_TAB_LAYOUT_TRANSITION = {
+/**
+ * Neighbour displacement while a tile is dragged past it. Same shape as the
+ * header's certified reorder spring: overdamped (no overshoot, which Chrome
+ * also has none of) and ~174ms to settle, comfortably inside the 320ms budget.
+ */
+const EPIC_TAB_REORDER_TRANSITION = {
   type: "spring",
-  stiffness: 520,
-  damping: 42,
-  mass: 0.65,
-} as const;
+  stiffness: 700,
+  damping: 41,
+  mass: 0.55,
+} satisfies Transition;
 
 const EPIC_TAB_DROP_INDICATOR_TRANSITION = {
   duration: 0.12,
@@ -180,6 +221,9 @@ export function TabStrip(props: TabStripProps) {
   } = props;
 
   const stripRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    runTileStripCommitHandoff(groupId);
+  });
   const handleWheel = useHorizontalWheelScroll();
   const { setTabRef, getTabElement } = useTabElementRegistry();
   const stripEndDropData = useMemo<EpicCanvasDropTargetData>(
@@ -218,22 +262,38 @@ export function TabStrip(props: TabStripProps) {
   // Narrow per-strip subscription: preview ticks re-render only the strip
   // actually hovered, not every strip on the canvas.
   const dndDropIndicator = useTabStripDropIndex(groupId);
-  const chatIds = useMemo(
-    () => tabs.flatMap((tab) => (tab.type === "chat" ? [tab.id] : [])),
+  const activeArtifactTab = useActiveArtifactTab();
+  // Displacement is an explicit per-tile x offset resolved by the drag model,
+  // not a provisional CSS `order`. Empty map => every tile sits at x 0.
+  const tileOffsets = useTileStripOffsets(groupId);
+  // Terminal-agent tabs are chat-scoped notification entities too: a TUI
+  // agent's `agent.stopped` row is keyed by its agent id, and the tab icon
+  // already reads `chats[tab.id]`.
+  //
+  // Grouped by the tab's OWN bound host, not asked of the app-wide active one.
+  // A strip can hold a retained cross-host tab beside a local one, and
+  // `indicatorState` only ever answers about the rows its own host holds: the
+  // active-host read left host B's `pendingFork` permanently dark and could
+  // light a tab from an unrelated chat on A that shares its host-minted id.
+  const indicatorScopes = useMemo(
+    () =>
+      chatIndicatorHostScopes(
+        tabs.flatMap((tab) =>
+          tab.type === "chat" || tab.type === "terminal-agent"
+            ? [{ hostId: tab.hostId, chatId: tab.id }]
+            : [],
+        ),
+      ),
     [tabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
-    epicIds: [],
-    chatIds,
-    enabled: chatIds.length > 0,
-  });
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <ChatIndicatorHostScopes scopes={indicatorScopes}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
         data-group-id={groupId}
+        data-view-tab-id={tabId}
         className={cn(
           "relative flex h-9 shrink-0 items-stretch border-b border-canvas-border/70 bg-canvas",
         )}
@@ -255,37 +315,53 @@ export function TabStrip(props: TabStripProps) {
             re-renders only the two tabs whose flags flip.
           */}
             <LayoutGroup id={`epic-tab-strip-${groupId}`}>
-              {tabs.map((tab, index) => (
-                <TabItem
-                  key={tab.instanceId}
-                  domRef={setTabRef(tab.instanceId)}
-                  tab={tab}
-                  epicId={epicId}
-                  tabId={tabId}
-                  groupId={groupId}
-                  showDropIndicatorBefore={dndDropIndicator === index}
-                  index={index}
-                  onSelect={onSelectTab}
-                  onClose={onCloseTab}
-                  onPromotePreview={onPromotePreview}
-                  canRenameTabs={canRenameTabs}
-                  menuProps={{
-                    groupId,
-                    tabId: tab.instanceId,
-                    canCloseRight: index < tabs.length - 1,
-                    ...menuHandlers,
-                  }}
-                />
-              ))}
+              {tabs.map((tab, index) => {
+                return (
+                  <TabItem
+                    key={tab.instanceId}
+                    domRef={setTabRef(tab.instanceId)}
+                    tab={tab}
+                    epicId={epicId}
+                    tabId={tabId}
+                    groupId={groupId}
+                    offsetX={tileOffsets.get(tab.instanceId) ?? 0}
+                    showDropIndicatorBefore={
+                      activeArtifactTab?.sourceGroupId !== groupId &&
+                      dndDropIndicator === index
+                    }
+                    index={index}
+                    onSelect={onSelectTab}
+                    onClose={onCloseTab}
+                    onPromotePreview={onPromotePreview}
+                    canRenameTabs={canRenameTabs}
+                    menuProps={{
+                      groupId,
+                      tabId: tab.instanceId,
+                      canCloseRight: index < tabs.length - 1,
+                      ...menuHandlers,
+                    }}
+                  />
+                );
+              })}
               <TabStripEndDropIndicator
                 visible={
-                  dndDropIndicator !== null && dndDropIndicator >= tabs.length
+                  activeArtifactTab?.sourceGroupId !== groupId &&
+                  dndDropIndicator !== null &&
+                  dndDropIndicator >= tabs.length
                 }
               />
             </LayoutGroup>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 border-l border-canvas-border/70 bg-canvas px-1">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-0.5 bg-canvas px-1",
+            // Every tab already draws its own right border, so a border here
+            // too would stack two hairlines against each other. Only an empty
+            // strip has no preceding tab to supply the separator.
+            tabs.length === 0 && "border-l border-canvas-border/70",
+          )}
+        >
           <SplitGroupButton groupId={groupId} onSplit={onSplit} />
           <Button
             type="button"
@@ -299,7 +375,7 @@ export function TabStrip(props: TabStripProps) {
           </Button>
         </div>
       </div>
-    </NotificationIndicatorsProvider>
+    </ChatIndicatorHostScopes>
   );
 }
 
@@ -358,7 +434,9 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
         <span className="flex items-center gap-2">
           <span>{actionLabel}</span>
           {shortcut === null ? null : (
-            <Kbd>{formatChordForDisplay(shortcut)}</Kbd>
+            <ShortcutHint>
+              <Kbd>{formatChordForDisplay(shortcut)}</Kbd>
+            </ShortcutHint>
           )}
         </span>
         <span className="text-background/70">
@@ -377,6 +455,7 @@ interface TabItemProps {
   /** The view (canvas) tab id - scopes the per-tab activation selector. */
   readonly tabId: string;
   readonly groupId: string;
+  readonly offsetX: number;
   readonly index: number;
   readonly showDropIndicatorBefore: boolean;
   readonly onSelect: (groupId: string, tabId: string) => void;
@@ -385,12 +464,155 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onEditTitle"
+    "canRename" | "onCopyFilePath" | "onEditTitle" | "onOpenUsage"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
 }
 
+// Ticket 12's chat cost line: the tab's own overflow (this context menu),
+// never the header. `null` for every non-chat tab kind and for a chat whose
+// host hasn't negotiated `host.usage.summary` - "unsupported chats show
+/** The tab's bound host, for the tile kinds that have one. */
+function tabHostId(tab: EpicCanvasTileRef): string | null {
+  return "hostId" in tab ? tab.hostId : null;
+}
+
+// nothing" applied to the menu item itself rather than opening a dialog that
+// would then show a capability notice. Extracted out of `TabItem` to keep
+// that component's branching under the complexity budget.
+function useChatUsageMenuHandler(
+  tab: EpicCanvasTileRef,
+  chatTitle: string,
+): (() => void) | null {
+  const usageChatHostId = tab.type === "chat" ? tabHostId(tab) : null;
+  const usageSupported = useUsageSummarySupported(usageChatHostId);
+  const openChatUsageDialog = useChatUsageDialogStore((s) => s.open);
+  return useMemo(() => {
+    if (usageChatHostId === null || !usageSupported) return null;
+    return () => {
+      openChatUsageDialog({
+        hostId: usageChatHostId,
+        chatId: tab.id,
+        chatTitle,
+      });
+    };
+  }, [chatTitle, openChatUsageDialog, tab.id, usageChatHostId, usageSupported]);
+}
+
+interface TerminalTabControl {
+  readonly mode: "unknown" | "legacy" | "capable";
+  readonly displayTitle: string;
+  readonly canMutate: boolean;
+  readonly rename: (title: string) => void;
+}
+
 function TabItem(props: TabItemProps) {
+  if (props.tab.type !== "terminal") {
+    return <TabItemBody {...props} terminalControl={null} />;
+  }
+  return (
+    <TabHostProvider hostId={props.tab.hostId}>
+      <TerminalTabItem {...props} tab={props.tab} />
+    </TabHostProvider>
+  );
+}
+
+function TerminalTabItem(
+  props: Omit<TabItemProps, "tab"> & { readonly tab: EpicTerminalRef },
+) {
+  const controller = useEpicTerminalAuthority({
+    epicId: props.epicId,
+    node: props.tab,
+  });
+  const rename = controller.rename;
+  const terminalId = props.tab.id;
+  const canMutate =
+    controller.canMutate &&
+    !controller.migrationPending &&
+    controller.projection !== undefined;
+  const control: TerminalTabControl = {
+    mode: controller.capability,
+    displayTitle: controller.viewModel?.displayTitle ?? props.tab.name,
+    canMutate,
+    rename: (title) => {
+      if (!controller.canMutate) return;
+      rename.mutate({
+        hostId: props.tab.hostId,
+        terminalId,
+        manualTitle: title,
+      });
+    },
+  };
+  return <TabItemBody {...props} terminalControl={control} />;
+}
+
+function useTabRenameControl(args: {
+  readonly tab: EpicCanvasTileRef;
+  readonly epicId: string;
+  readonly groupId: string;
+  readonly canRenameTabs: boolean;
+  readonly terminalControl: TerminalTabControl | null;
+  readonly onRename: TabItemProps["menuProps"]["onRename"];
+}) {
+  const { tab, epicId, groupId, canRenameTabs, terminalControl, onRename } =
+    args;
+  const isTerminalTab = tab.type === "terminal";
+  const resolvedHostClient = useHostClientForHostId(
+    isTerminalTab ? tabHostId(tab) : null,
+  );
+  const terminalHostClient =
+    isTerminalTab && terminalControl?.mode !== "capable"
+      ? resolvedHostClient
+      : null;
+  const fallbackDisplayTitle = useEpicTabDisplayTitle(
+    {
+      id: tab.id,
+      name: tab.name,
+      type: tab.type,
+      hostId: tabHostId(tab),
+    },
+    epicId,
+    terminalHostClient,
+  );
+  const displayTitle =
+    terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
+      ? terminalControl.displayTitle
+      : fallbackDisplayTitle;
+  const canRename =
+    canRenameTabs &&
+    (isOpenableEpicNodeKind(tab.type) || tab.type === "terminal") &&
+    (terminalControl === null ||
+      terminalControl.mode === "legacy" ||
+      (terminalControl.mode === "capable" && terminalControl.canMutate));
+  const renameTerminal = useTerminalRenameFor(terminalHostClient);
+  const { mutate: renameTerminalMutate } = renameTerminal;
+  const handleRename = (next: string) => {
+    if (isTerminalTab) {
+      const trimmed = next.trim();
+      if (trimmed.length === 0) return;
+      if (terminalControl?.mode === "capable") {
+        terminalControl.rename(trimmed);
+        return;
+      }
+      if (terminalControl?.mode === "unknown") return;
+      renameTerminalMutate({ sessionId: tab.id, title: trimmed });
+      return;
+    }
+    onRename(groupId, tab.instanceId, next);
+  };
+  const rename = useInlineRename({
+    value: displayTitle,
+    canEdit: canRename,
+    onCommit: handleRename,
+  });
+  return { displayTitle, canRename, rename };
+}
+
+function TabItemBody(
+  props: TabItemProps & {
+    readonly terminalControl: TerminalTabControl | null;
+  },
+) {
   const {
     tab,
     epicId,
@@ -429,6 +651,7 @@ function TabItem(props: TabItemProps) {
     }),
     [epicId, groupId, isPreview, tab.instanceId, tabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -436,6 +659,7 @@ function TabItem(props: TabItemProps) {
   } = useDraggable({
     id: getArtifactTabDragId(groupId, tab.instanceId),
     data: dragData,
+    disabled: dragDisabled,
   });
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({
@@ -450,25 +674,21 @@ function TabItem(props: TabItemProps) {
   const { setNodeRef: dropRef } = useDroppable({
     id: getArtifactTabDropId(groupId, tab.instanceId),
     data: dropData,
+    // Keep the invisible source frame as layout space, never as a drop target.
+    // Otherwise provisional reordering can slide it beneath the pointer and
+    // mask the adjacent tab that should drive the next insertion boundary.
+    disabled: isDragging,
   });
-  // ONE bound-host client per tab, shared by title resolution and the
-  // terminal rename mutation (terminal tabs are host-bound for life; the
-  // default host may differ). Gated to terminals - non-terminal tabs pass
-  // null everywhere, keeping their terminal.list observer disabled.
-  const isTerminalTab = tab.type === "terminal";
-  const resolvedHostClient = useHostClientForHostId(
-    isTerminalTab && "hostId" in tab ? tab.hostId : null,
-  );
-  const terminalHostClient = isTerminalTab ? resolvedHostClient : null;
-  const displayTitle = useEpicTabDisplayTitle(
-    {
-      id: tab.id,
-      name: tab.name,
-      type: tab.type,
-    },
+  const { onRename } = menuProps;
+  const { displayTitle, canRename, rename } = useTabRenameControl({
+    tab,
     epicId,
-    terminalHostClient,
-  );
+    groupId,
+    canRenameTabs,
+    terminalControl: props.terminalControl,
+    onRename,
+  });
+  const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
   );
@@ -477,81 +697,74 @@ function TabItem(props: TabItemProps) {
     [domRef, dragRef, dropRef],
   );
 
-  // Only chat / artifact / terminal tabs carry an editable title; diff,
-  // blank, and workspace-file tabs are not renameable.
-  const canRename = canRenameTabs && isOpenableEpicNodeKind(tab.type);
-  // Terminal renames go straight to the tab's bound host via the shared
-  // client above; the mutation's optimistic `terminal.list` patch is what
-  // every title surface renders from, so no per-view canvas rename is
-  // involved.
-  const renameTerminal = useTerminalRenameFor(terminalHostClient);
-  // Pull `onRename` out so the commit callback depends on the (stable) handler
-  // rather than the per-render `menuProps` object literal.
-  const { onRename } = menuProps;
-  const { mutate: renameTerminalMutate } = renameTerminal;
-  const handleRename = useCallback(
-    (next: string) => {
-      if (isTerminalTab) {
-        const trimmed = next.trim();
-        if (trimmed.length === 0) return;
-        renameTerminalMutate({ sessionId: tab.id, title: trimmed });
-        return;
-      }
-      onRename(groupId, tab.instanceId, next);
-    },
-    [
-      groupId,
-      isTerminalTab,
-      onRename,
-      renameTerminalMutate,
-      tab.id,
-      tab.instanceId,
-    ],
-  );
-  const rename = useInlineRename({
-    value: displayTitle,
-    canEdit: canRename,
-    onCommit: handleRename,
+  const { copy } = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: null,
   });
+  const absoluteFilePath =
+    tab.type === "workspace-file"
+      ? resolveAbsolutePath(tab.workspacePath, tab.filePath)
+      : null;
+  const handleCopyFilePath = useCallback(() => {
+    if (absoluteFilePath !== null) copy(absoluteFilePath);
+  }, [absoluteFilePath, copy]);
+
+  const onOpenUsage = useChatUsageMenuHandler(tab, displayTitle);
+  const consumeNotificationEntity = useContext(NotificationConsumptionContext);
 
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
-  }, [groupId, onSelect, rename.isEditing, tab.instanceId]);
+    if (
+      isActive &&
+      consumeNotificationEntity !== null &&
+      (tab.type === "chat" ||
+        tab.type === "terminal" ||
+        tab.type === "terminal-agent")
+    ) {
+      consumeNotificationEntity({
+        originHostId: tab.hostId,
+        entity: { epicId, chatId: tab.id },
+      });
+    }
+  }, [
+    consumeNotificationEntity,
+    epicId,
+    groupId,
+    isActive,
+    onSelect,
+    rename.isEditing,
+    tab,
+  ]);
 
   const handleDoubleClick = useCallback(() => {
     if (rename.isEditing) return;
     if (isPreview) onPromotePreview(groupId);
   }, [groupId, isPreview, onPromotePreview, rename.isEditing]);
 
-  const handleClose = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      onClose(groupId, tab.instanceId);
-    },
-    [groupId, onClose, tab.instanceId],
-  );
+  const handleClose = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onClose(groupId, tab.instanceId);
+  };
 
-  const handleAuxClick = useCallback(
-    (event: MouseEvent<HTMLDivElement>) => {
-      // Middle-click closes.
-      if (event.button === 1) {
-        event.preventDefault();
-        onClose(groupId, tab.instanceId);
-      }
-    },
-    [groupId, onClose, tab.instanceId],
-  );
+  const handleAuxClick = (event: MouseEvent<HTMLDivElement>) => {
+    // Middle-click closes.
+    if (event.button === 1) {
+      event.preventDefault();
+      onClose(groupId, tab.instanceId);
+    }
+  };
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (rename.isEditing) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        onSelect(groupId, tab.instanceId);
+        selectTab();
       }
     },
-    [groupId, onSelect, rename.isEditing, tab.instanceId],
+    [rename.isEditing, selectTab],
   );
   const leaderBadge =
     leaderModifier === null
@@ -564,7 +777,11 @@ function TabItem(props: TabItemProps) {
 
   return (
     <ContextMenu>
-      <TabItemMotionFrame isDragging={isDragging}>
+      <TabItemMotionFrame
+        isDragging={isDragging}
+        tileItemId={tab.instanceId}
+        offsetX={props.offsetX}
+      >
         <ContextMenuTrigger asChild>
           <div
             ref={setRef}
@@ -607,6 +824,7 @@ function TabItem(props: TabItemProps) {
             />
             <TabItemLabelSlot
               displayTitle={displayTitle}
+              isArchived={isArchived}
               tooltipContent={tooltipContent}
               inputProps={rename.inputProps}
               isActive={isActive}
@@ -623,7 +841,9 @@ function TabItem(props: TabItemProps) {
       <TabStripContextMenu
         {...menuProps}
         canRename={canRename}
+        onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
+        onOpenUsage={onOpenUsage}
       />
     </ContextMenu>
   );
@@ -636,6 +856,7 @@ interface CanvasLeaderBadge {
 
 interface TabItemLabelSlotProps {
   readonly displayTitle: string;
+  readonly isArchived: boolean;
   readonly tooltipContent: ReactNode;
   readonly inputProps: InlineRenameInputProps;
   readonly isActive: boolean;
@@ -650,6 +871,7 @@ interface TabItemLabelSlotProps {
 function TabItemLabelSlot(props: TabItemLabelSlotProps) {
   const {
     displayTitle,
+    isArchived,
     tooltipContent,
     inputProps,
     isActive,
@@ -680,12 +902,15 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
             <span
               data-testid={`tab-title-${tabInstanceId}`}
               className={cn(
-                "inline-block max-w-full truncate pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
+                "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
                 isPreview && "italic",
                 isActive ? "font-medium" : "font-normal",
               )}
             >
-              {displayTitle}
+              <TabDisplayTitle
+                displayTitle={displayTitle}
+                isArchived={isArchived}
+              />
             </span>
           </TooltipTrigger>
           <TooltipContent>{tooltipContent}</TooltipContent>
@@ -693,13 +918,16 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
         <span
           aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden truncate pr-1 group-focus-within:block group-hover:block",
+            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden min-w-0 items-center gap-1 pr-1 group-focus-within:flex group-hover:flex",
             leaderBadge !== null && "right-7",
             isPreview && "italic",
             isActive ? "font-medium" : "font-normal",
           )}
         >
-          {displayTitle}
+          <TabDisplayTitle
+            displayTitle={displayTitle}
+            isArchived={isArchived}
+          />
         </span>
       </span>
       <AnimatePresence initial={false}>
@@ -722,13 +950,34 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           data-testid={`tab-close-${tabInstanceId}`}
           className={cn(
             "pointer-events-none absolute right-2 inline-flex size-4 items-center justify-center rounded-sm opacity-0 transition-[background-color,color,opacity] focus-visible:opacity-100",
-            "hover:bg-muted",
+            "hover:bg-foreground/5",
             "group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
           )}
         >
           <X className="size-3" />
         </button>
       ) : null}
+    </>
+  );
+}
+
+function TabDisplayTitle(props: {
+  readonly displayTitle: string;
+  readonly isArchived: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.isArchived ? (
+        <>
+          <span className="shrink-0 font-semibold text-muted-foreground">
+            Archived
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-muted-foreground">
+            ·
+          </span>
+        </>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">{props.displayTitle}</span>
     </>
   );
 }
@@ -817,19 +1066,41 @@ function GitDiffTooltipSummaryRow(props: {
   );
 }
 
+/**
+ * Tile frames are displaced by an EXPLICIT x transform driven from the drag
+ * model - deliberately not `layout="position"` + CSS `order`, which is what the
+ * header still uses.
+ *
+ * That pairing strands a `translateX` when the item set changes under an
+ * in-flight layout projection: closing two tabs ~40ms apart leaves tiles
+ * rendered hundreds of px from their layout position until the next drag clears
+ * it. Binding x to state instead means the target is always explicitly stated
+ * and is 0 whenever no drag is active, so a stranded transform is not
+ * representable rather than merely unlikely.
+ */
 function TabItemMotionFrame(props: {
   readonly isDragging: boolean;
+  readonly tileItemId: string;
+  readonly offsetX: number;
   readonly children: ReactNode;
 }) {
+  const transition = useTileDisplacementTransition();
+  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const x = useTileTabDisplacement({
+    nodeRef,
+    offsetX: props.offsetX,
+    transition,
+  });
   return (
     <m.div
-      layout="position"
+      ref={nodeRef}
       initial={false}
       animate={{
-        opacity: props.isDragging ? 0.36 : 1,
-        scale: props.isDragging ? 0.97 : 1,
+        opacity: props.isDragging ? 0 : 1,
       }}
-      transition={EPIC_TAB_LAYOUT_TRANSITION}
+      style={{ x }}
+      transition={transition}
+      data-tile-item-id={props.tileItemId}
       className="relative flex shrink-0 items-stretch"
     >
       {props.children}
@@ -837,63 +1108,135 @@ function TabItemMotionFrame(props: {
   );
 }
 
+/**
+ * Displacement spring for tile frames. Matches the header's certified reorder
+ * spring (zeta ~1.05, ~174ms, no overshoot); under reduced motion the order
+ * still changes but nothing travels.
+ */
+function useTileDisplacementTransition(): Transition {
+  const reduceMotion = useReducedMotion() === true;
+  return reduceMotion
+    ? { duration: 0 }
+    : { ...EPIC_TAB_REORDER_TRANSITION, opacity: { duration: 0 } };
+}
+
 function TabStripDropIndicator(props: { readonly visible: boolean }) {
+  // No AnimatePresence: its exit animation keeps the OLD indicator mounted
+  // while the new one enters, so the strip shows two landing positions at once
+  // for the length of the exit (~110ms measured). A drop indicator states one
+  // destination, so it unmounts immediately and only its entry animates.
+  if (!props.visible) return null;
   return (
-    <AnimatePresence initial={false}>
-      {props.visible ? (
-        <m.span
-          aria-hidden
-          initial={{ opacity: 0, scaleY: 0.45 }}
-          animate={{ opacity: 1, scaleY: 1 }}
-          exit={{ opacity: 0, scaleY: 0.45 }}
-          transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
-          className="absolute inset-y-1 left-0 z-20 -translate-x-0.5 origin-center"
-        >
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="h-full"
-            testId="tab-strip-drop-indicator"
-          />
-        </m.span>
-      ) : null}
-    </AnimatePresence>
+    <m.span
+      aria-hidden
+      initial={{ opacity: 0, scaleY: 0.45 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
+      className="absolute inset-y-1 left-0 z-20 -translate-x-0.5 origin-center"
+    >
+      <DropLine
+        orientation="vertical"
+        glow={false}
+        className="h-full"
+        testId="tab-strip-drop-indicator"
+      />
+    </m.span>
   );
 }
 
 function TabStripEndDropIndicator(props: { readonly visible: boolean }) {
+  // Same reason as TabStripDropIndicator: an exit animation would keep this
+  // mounted alongside the indicator that replaced it.
+  if (!props.visible) return null;
   return (
-    <AnimatePresence initial={false}>
-      {props.visible ? (
-        <m.div
-          initial={{ opacity: 0, scaleY: 0.45 }}
-          animate={{ opacity: 1, scaleY: 1 }}
-          exit={{ opacity: 0, scaleY: 0.45 }}
-          transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
-          className="my-1 origin-center self-stretch"
-        >
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="h-full"
-            testId="tab-strip-drop-indicator"
-          />
-        </m.div>
-      ) : null}
-    </AnimatePresence>
+    <m.div
+      initial={{ opacity: 0, scaleY: 0.45 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
+      className="my-1 origin-center self-stretch"
+    >
+      <DropLine
+        orientation="vertical"
+        glow={false}
+        className="h-full"
+        testId="tab-strip-drop-indicator"
+      />
+    </m.div>
   );
 }
 
-function TabIcon(props: {
+/**
+ * Live tile icon (chat progress spinner / harness brand / static kind glyph,
+ * with diff + blank fallbacks). Exported so the mobile current-tile bar
+ * (`epic-canvas/mobile/mobile-current-tile-bar.tsx`) renders the identical icon
+ * as the desktop tab strip instead of duplicating the dispatch.
+ */
+export function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab)) {
+  // Unconditional so hook order holds across tab kinds; the placeholder
+  // answers "reachable", which keeps every non-chat tab on its normal glyph.
+  const boundHostReachability = useHostReachability(
+    props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the
+  // glyph and the name in one tab can never disagree about whether the shell is
+  // watching. Unconditional for hook order; an empty id resolves to null.
+  const managedCommand = useManagedCommandOnHost({
+    epicId: props.epicId,
+    // Scoped to the tab's own bound host: a clone's tab must never wear the
+    // source host's shell (same rule the card's presence follows).
+    hostId: isManagedCommandOutputTileRef(props.tab) ? props.tab.hostId : "",
+    commandId: isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
+  });
+  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isPrDetailTileRef(props.tab)) {
+    return (
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isManagedCommandOutputTileRef(props.tab)) {
+    // A tab opened for a shell whose chat has no live session yet resolves to
+    // nothing; the quiet glyph is the honest guess, since a watcher announces
+    // itself the moment its record lands.
+    return (
+      <ManagedCommandMonitorIcon
+        monitoring={managedCommand !== null && managedCommand.monitoring}
+        decorative
+        className="size-3.5"
+      />
+    );
+  }
+  if (isCommGraphTileRef(props.tab)) {
+    return <CommGraphTileIcon className="size-3.5" />;
+  }
+  // A published copy carries the lock rather than a chat glyph: the tab is
+  // readable but cannot be steered, and that is the one thing about it that
+  // differs from the chat tab beside it.
+  if (isPublishedChatTileRef(props.tab)) {
+    return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  // A live chat tab whose bound host is unreachable renders the published
+  // copy (see tab-group-view's fallback), so its strip icon must say the same
+  // thing the surface does: locked, not steerable, exactly like a copy tab.
+  // Flips back to the chat glyph reactively when the host returns.
+  if (
+    props.tab.type === "chat" &&
+    boundHostReachability.status === "unreachable"
+  ) {
+    return (
+      <Lock
+        className="size-3.5 shrink-0 text-muted-foreground"
+        data-testid={`tab-live-chat-lock-${props.tab.instanceId}`}
+      />
+    );
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

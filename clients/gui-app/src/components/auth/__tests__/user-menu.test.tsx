@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanup,
@@ -28,6 +27,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 function buildHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -54,6 +54,10 @@ function makeMessengerFactory(): (args: {
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
           }),
       },
     });
@@ -97,7 +101,9 @@ function mountMenu(
             messengerFactory={makeMessengerFactory()}
             invalidator={null}
             requestId={null}
-            remoteFetcher={() => Promise.resolve([])}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
             fallback={<div data-testid="runtime-fallback">…</div>}
           >
             <TooltipProvider>{children}</TooltipProvider>
@@ -163,6 +169,29 @@ describe("<UserMenu />", () => {
     result.cleanupClient();
   });
 
+  it("shows the current Settings shortcut beside the menu item", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open user menu" }),
+    );
+
+    expect(
+      (await screen.findByRole("menuitem", { name: /App settings/ }))
+        .textContent,
+    ).toContain(formatChordForDisplay("mod+,"));
+    result.cleanupClient();
+  });
+
   it("suppresses title-bar dragging only while the menu is open", async () => {
     const host = buildHost();
     const result = mountMenu(
@@ -193,12 +222,12 @@ describe("<UserMenu />", () => {
     result.cleanupClient();
   });
 
-  it("calls AuthService.signOut() when the Sign out item is selected", async () => {
+  it("calls AuthService.signOut() once the Sign out confirm is accepted", async () => {
     const host = buildHost();
-    await host.tokenStore.set({
-      token: "token",
-      refreshToken: "token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "token", refreshToken: "token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     const result = mountMenu(
       host,
       <UserMenu
@@ -214,10 +243,44 @@ describe("<UserMenu />", () => {
     const signOut = await screen.findByTestId("user-menu-sign-out");
     fireEvent.click(signOut);
 
-    await waitFor(() => {
-      expect(useAuthStore.getState().status).toBe("signed-out");
+    // Selecting the item only asks - signing out is not undoable from the UI.
+    expect(await host.tokenStore.get()).not.toBeNull();
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+
+    // The cleared token store, not `useAuthStore.status`: this harness's auth
+    // bootstrap lands on "signed-out" at mount regardless, so asserting the
+    // status alone would pass whether or not sign-out ran.
+    await waitFor(async () => {
+      expect(await host.tokenStore.get()).toBeNull();
     });
-    expect(await host.tokenStore.get()).toBeNull();
+    result.cleanupClient();
+  });
+
+  it("leaves the session alone when the Sign out confirm is cancelled", async () => {
+    const host = buildHost();
+    await host.tokenStore.signIn(
+      { token: "token", refreshToken: "token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    fireEvent.click(await screen.findByTestId("user-menu-sign-out"));
+    fireEvent.click(await screen.findByTestId("confirm-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    // The session survives - the token the accept case clears is still there.
+    expect(await host.tokenStore.get()).not.toBeNull();
     result.cleanupClient();
   });
 

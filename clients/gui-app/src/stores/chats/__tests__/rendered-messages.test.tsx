@@ -4,17 +4,20 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   AgentSender,
   ChatEvent,
+  ChatSessionAnchor,
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   ChatActiveTurn,
-  ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatQueueSteerMode,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import type { MessageSegment } from "@/stores/composer/chat-store";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -102,12 +105,37 @@ function userMessageAt(
   return { ...userMessage(messageId), timestamp };
 }
 
+function claudeSessionAnchor(
+  profileId: string | null,
+  labelSnapshot: string | null,
+): ChatSessionAnchor {
+  return {
+    profileId,
+    labelSnapshot,
+    accountUuid: null,
+    accentColor: null,
+    harnessId: "claude",
+    hostId: "host-1",
+    sessionId: "session-1",
+    sessionWorkspaceSnapshot: {
+      workspaceKind: "session-snapshot",
+      primaryWorkspace: "/repo",
+      secondaryWorkspaces: [],
+    },
+    claudeMessageUuid: "claude-message-1",
+    turnTailUuid: null,
+    createdAt: 1000,
+    coveredUntilMessageId: null,
+  };
+}
+
 function steerRequestedQueueItem(
   queueItemId: string,
   messageId: string,
   mode: ChatQueueSteerMode,
-): ChatQueuedItem {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId,
     message: {
@@ -131,7 +159,7 @@ function steerRequestedQueueItem(
   };
 }
 
-function fallbackQueueItem(item: ChatQueuedItem): ChatQueuedItem {
+function fallbackQueueItem(item: ChatQueuedPromptItem): ChatQueuedPromptItem {
   return {
     ...item,
     delivery: "next_turn",
@@ -227,6 +255,22 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
+function plainTextBlock(
+  blockId: string,
+  timestamp: number,
+  text: string,
+): Extract<Message, { role: "assistant" }>["blocks"][number] {
+  return {
+    type: "text",
+    blockId,
+    status: "completed",
+    timestamp,
+    text,
+    providerNotice: null,
   };
 }
 
@@ -340,10 +384,97 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
-  contentBlocksText: () => "",
+  contentBlocksPreview: () => "",
 };
 
+/**
+ * Domain-local RenderedMessages test driver.
+ *
+ * Owns the canonical input defaults (binding identity + empty/idle fields)
+ * so scenarios only declare the deltas that matter for the behavior under
+ * test. Prefer renderRenderedMessages(patch) over hand-rolled renderHook
+ * plus full binding/default objects. For multi-step cases, patch merges
+ * onto the current input and re-renders without re-stating defaults.
+ */
+const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
+  messages: [],
+  events: [],
+  pendingUserMessages: [],
+  liveAssistantMessage: null,
+  activeTurn: null,
+  runStatus: "idle",
+  ...BINDING,
+};
+
+function renderedMessagesInput(
+  patch: Partial<RenderedMessagesInput>,
+): RenderedMessagesInput {
+  return { ...CANONICAL_RENDERED_MESSAGES_INPUT, ...patch };
+}
+
+function renderRenderedMessages(patch: Partial<RenderedMessagesInput>) {
+  let current = renderedMessagesInput(patch);
+  const hook = renderHook(
+    ({ value }: { value: RenderedMessagesInput }) =>
+      useRenderedMessages(value, displayContext),
+    { initialProps: { value: current } },
+  );
+
+  return {
+    result: hook.result,
+    /** Merge onto the current input and re-render. */
+    patch(next: Partial<RenderedMessagesInput>): void {
+      current = { ...current, ...next };
+      hook.rerender({ value: current });
+    },
+    /** Replace the full input and re-render. */
+    set(next: RenderedMessagesInput): void {
+      current = next;
+      hook.rerender({ value: current });
+    },
+    /** Re-render with the same input reference (identity-cache cases). */
+    rerender(): void {
+      hook.rerender({ value: current });
+    },
+  };
+}
+
 describe("useRenderedMessages", () => {
+  it("projects an explicitly anchored send failure into a stable inline error row", () => {
+    const failure = {
+      eventId: "queued-preparation-failure",
+      type: "send.failed",
+      timestamp: 2_000,
+      clientActionId: null,
+      actor: null,
+      message: "The queued prompt could not be prepared.",
+      turnId: null,
+      messageId: null,
+      queueItemId: "queue-item-1",
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: {
+        code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        notificationAnchor: true,
+      },
+    } satisfies ChatEvent;
+    const { result } = renderRenderedMessages({ events: [failure] });
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]).toMatchObject({
+      id: "chat-event:queued-preparation-failure",
+      role: "assistant",
+      segments: [
+        {
+          kind: "error",
+          message: "The queued prompt could not be prepared.",
+          code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        },
+      ],
+    });
+  });
+
   it("projects persisted plan blocks into plan segments", () => {
     const assistant = assistantMessage("turn-plan", 2000);
     const planBlock = {
@@ -384,20 +515,9 @@ describe("useRenderedMessages", () => {
       supersededByPlanId: null,
       metadata: { planRevision: 7 },
     } satisfies Extract<Message, { role: "assistant" }>["blocks"][number];
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [{ ...assistant, blocks: [planBlock] }],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [{ ...assistant, blocks: [planBlock] }],
+    });
 
     const segment = result.current[0]?.segments[0];
     expect(segment.kind).toBe("plan");
@@ -446,20 +566,9 @@ describe("useRenderedMessages", () => {
       metadata: {},
     } satisfies Extract<Message, { role: "assistant" }>["blocks"][number];
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [{ ...assistant, blocks: [planBlock] }],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [{ ...assistant, blocks: [planBlock] }],
+    });
 
     const segments = result.current[0]?.segments ?? [];
     expect(segments.some((segment) => segment.kind === "plan")).toBe(false);
@@ -467,7 +576,7 @@ describe("useRenderedMessages", () => {
 
   it("refreshes a stable plan segment when its content identity changes", () => {
     const assistant = assistantMessage("turn-plan-refresh", 2000);
-    const initial = {
+    const initial = renderedMessagesInput({
       messages: [
         {
           ...assistant,
@@ -481,13 +590,7 @@ describe("useRenderedMessages", () => {
           ],
         },
       ],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle" as const,
-      ...BINDING,
-    };
+    });
     const updated = {
       ...initial,
       messages: [
@@ -505,20 +608,16 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result, rerender } = renderHook(
-      ({ input }: { readonly input: RenderedMessagesInput }) =>
-        useRenderedMessages(input, displayContext),
-      { initialProps: { input: initial } },
-    );
-    const firstSegment = result.current[0]?.segments[0];
+    const driver = renderRenderedMessages(initial);
+    const firstSegment = driver.result.current[0]?.segments[0];
     expect(firstSegment.kind).toBe("plan");
     if (firstSegment.kind !== "plan") throw new Error("expected plan segment");
     expect(firstSegment.contentIdentity).toBe("hash-1");
     expect(firstSegment.markdownPreview).toContain("First plan");
 
-    rerender({ input: updated });
+    driver.set(updated);
 
-    const secondSegment = result.current[0]?.segments[0];
+    const secondSegment = driver.result.current[0]?.segments[0];
     expect(secondSegment.kind).toBe("plan");
     if (secondSegment.kind !== "plan") throw new Error("expected plan segment");
     expect(secondSegment.planId).toBe("plan-1");
@@ -528,59 +627,48 @@ describe("useRenderedMessages", () => {
 
   it("continues projecting persisted text, todo, and generic approval blocks without plan conversion", () => {
     const assistant = assistantMessage("turn-old-flows", 2000);
-    const { result } = renderHook(() =>
-      useRenderedMessages(
+    const { result } = renderRenderedMessages({
+      messages: [
         {
-          messages: [
+          ...assistant,
+          blocks: [
             {
-              ...assistant,
-              blocks: [
+              type: "text",
+              blockId: "text-1",
+              status: "completed",
+              timestamp: 2010,
+              providerNotice: null,
+              text: "Normal assistant text.",
+            },
+            {
+              type: "todo",
+              blockId: "todo-1",
+              status: "completed",
+              timestamp: 2020,
+              items: [
                 {
-                  type: "text",
-                  blockId: "text-1",
-                  status: "completed",
-                  timestamp: 2010,
-                  providerNotice: null,
-                  text: "Normal assistant text.",
-                },
-                {
-                  type: "todo",
-                  blockId: "todo-1",
-                  status: "completed",
-                  timestamp: 2020,
-                  items: [
-                    {
-                      id: "todo-item-1",
-                      text: "Generic checklist item",
-                      status: "pending",
-                      priority: null,
-                      activeForm: null,
-                    },
-                  ],
-                },
-                {
-                  type: "approval",
-                  blockId: "approval-1",
-                  status: "completed",
-                  timestamp: 2030,
-                  toolName: "Shell",
-                  description: "Run command",
-                  ...approvalInputFields("Shell", { command: "pwd" }),
-                  decision: null,
+                  id: "todo-item-1",
+                  text: "Generic checklist item",
+                  status: "pending",
+                  priority: null,
+                  activeForm: null,
                 },
               ],
             },
+            {
+              type: "approval",
+              blockId: "approval-1",
+              status: "completed",
+              timestamp: 2030,
+              toolName: "Shell",
+              description: "Run command",
+              ...approvalInputFields("Shell", { command: "pwd" }),
+              decision: null,
+            },
           ],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
         },
-        displayContext,
-      ),
-    );
+      ],
+    });
 
     const segments = result.current[0]?.segments ?? [];
     expect(segments.map((segment) => segment.kind)).toEqual([
@@ -601,57 +689,44 @@ describe("useRenderedMessages", () => {
 
   it("projects a text block with providerNotice into a provider_notice segment while an ordinary text block stays a text segment", () => {
     const assistant = assistantMessage("turn-notice", 2000);
-    const { result } = renderHook(() =>
-      useRenderedMessages(
+    const { result } = renderRenderedMessages({
+      messages: [
         {
-          messages: [
+          ...assistant,
+          blocks: [
             {
-              ...assistant,
-              blocks: [
-                {
-                  type: "text",
-                  blockId: "text-1",
-                  status: "completed",
-                  timestamp: 2001,
-                  text: "Plain assistant reply.",
-                  providerNotice: null,
+              type: "text",
+              blockId: "text-1",
+              status: "completed",
+              timestamp: 2001,
+              text: "Plain assistant reply.",
+              providerNotice: null,
+            },
+            {
+              type: "text",
+              blockId: "text-2",
+              status: "completed",
+              timestamp: 2002,
+              text: "Codex switched from gpt-5 to gpt-5-safe.",
+              providerNotice: {
+                harnessId: "codex",
+                noticeKind: "model_rerouted",
+                tone: "warning",
+                title: "Model changed",
+                message: "Codex switched from gpt-5 to gpt-5-safe.",
+                details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+                metadata: {
+                  type: "model_rerouted",
+                  fromModel: "gpt-5",
+                  toModel: "gpt-5-safe",
+                  reason: "highRiskCyberActivity",
                 },
-                {
-                  type: "text",
-                  blockId: "text-2",
-                  status: "completed",
-                  timestamp: 2002,
-                  text: "Codex switched from gpt-5 to gpt-5-safe.",
-                  providerNotice: {
-                    harnessId: "codex",
-                    noticeKind: "model_rerouted",
-                    tone: "warning",
-                    title: "Model changed",
-                    message: "Codex switched from gpt-5 to gpt-5-safe.",
-                    details: [
-                      { label: "Reason", value: "highRiskCyberActivity" },
-                    ],
-                    metadata: {
-                      type: "model_rerouted",
-                      fromModel: "gpt-5",
-                      toModel: "gpt-5-safe",
-                      reason: "highRiskCyberActivity",
-                    },
-                  },
-                },
-              ],
+              },
             },
           ],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
         },
-        displayContext,
-      ),
-    );
+      ],
+    });
 
     const segments = result.current[0]?.segments ?? [];
     expect(segments.map((segment) => segment.kind)).toEqual([
@@ -676,26 +751,16 @@ describe("useRenderedMessages", () => {
     const u1 = userMessage("m1");
     const u2 = userMessage("m2");
     const messages = [u1, u2];
-    const input: RenderedMessagesInput = {
+    const input = renderedMessagesInput({
       messages,
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: typeof input }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: input } },
-    );
-    const first = result.current;
+    const driver = renderRenderedMessages(input);
+    const first = driver.result.current;
 
     // Re-render with same input - every model should be the same reference.
-    rerender({ value: input });
-    const second = result.current;
+    driver.rerender();
+    const second = driver.result.current;
     expect(second[0]).toBe(first[0]);
     expect(second[1]).toBe(first[1]);
   });
@@ -703,34 +768,19 @@ describe("useRenderedMessages", () => {
   it("invalidates only the changed message slot when messages array is replaced", () => {
     const u1 = userMessage("m1");
     const u2 = userMessage("m2");
-    const initial: RenderedMessagesInput = {
+    const initial = renderedMessagesInput({
       messages: [u1, u2],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: typeof initial }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: initial } },
-    );
-    const first = result.current;
+    const driver = renderRenderedMessages(initial);
+    const first = driver.result.current;
 
     // Replace `u2` with a new reference (simulating the streaming-row
     // replaceMessageAt path). `u1` reference is preserved so its cached
     // model survives.
     const u2Replaced = userMessage("m2");
-    rerender({
-      value: {
-        ...initial,
-        messages: [u1, u2Replaced],
-      },
-    });
-    const second = result.current;
+    driver.patch({ messages: [u1, u2Replaced] });
+    const second = driver.result.current;
     expect(second[0]).toBe(first[0]);
     expect(second[1]).not.toBe(first[1]);
   });
@@ -740,20 +790,9 @@ describe("useRenderedMessages", () => {
       ...assistantMessage("turn-1", 2000),
       messageId: "assistant-message-1",
     };
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [a],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [a],
+    });
     expect(result.current).toHaveLength(1);
     expect(result.current[0]?.role).toBe("assistant");
     expect(result.current[0]?.id).toBe("assistant:turn-1");
@@ -769,20 +808,9 @@ describe("useRenderedMessages", () => {
       ...assistantMessage("turn-1", 2400),
       messageId: "assistant-message-2",
     };
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [first, second],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [first, second],
+    });
     expect(result.current).toHaveLength(1);
     expect(result.current[0]?.persistentMessageId).toBe("assistant-message-2");
   });
@@ -826,20 +854,9 @@ describe("useRenderedMessages", () => {
       },
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [message],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [message],
+    });
 
     expect(result.current[0]).toMatchObject({
       id: "agent-message-1",
@@ -858,32 +875,75 @@ describe("useRenderedMessages", () => {
       reasoningEffort: "high",
       serviceTier: "priority",
     };
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [a],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [a],
+    });
     // `provider` comes from the sender's harnessId; the labels come from the
     // display context; reasoningEffort/serviceTier flow from the persisted
     // message through the turn accumulator.
     expect(result.current[0]?.assistantMeta).toEqual({
       provider: "claude",
       providerLabel: "Claude Code",
+      profileLabel: null,
       modelLabel: null,
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
       costUsd: null,
     });
+  });
+
+  it("threads the provider-session profile snapshot onto its assistant turns", () => {
+    const anchoredUser = {
+      ...userMessage("profile-user"),
+      sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+    };
+    const continuationUser = userMessageAt("continuation-user", 3000);
+    const { result } = renderRenderedMessages({
+      messages: [
+        anchoredUser,
+        assistantMessage("turn-profile-1", 2000),
+        continuationUser,
+        assistantMessage("turn-profile-2", 4000),
+      ],
+    });
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    expect(
+      assistantRows.map((message) => message.assistantMeta?.profileLabel),
+    ).toEqual(["Work", "Work"]);
+  });
+
+  it("shows the initiating profile on the active turn before output starts", () => {
+    const initiatingUser = {
+      ...userMessage("active-profile-user"),
+      sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+    };
+    const { result } = renderRenderedMessages({
+      messages: [initiatingUser],
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-active-profile",
+        status: "starting",
+        harnessId: "claude",
+        model: "claude-sonnet-4-5",
+        reasoningEffort: "high",
+        serviceTier: null,
+        profileId: "work-profile",
+        userMessageId: initiatingUser.messageId,
+        startedAt: 2000,
+        updatedAt: 2000,
+      },
+      runStatus: "running",
+    });
+
+    expect(
+      result.current.find((message) => message.role === "assistant")
+        ?.assistantMeta?.profileLabel,
+    ).toBe("Work");
   });
 
   it("threads the turn's cost onto assistantMeta for the completion footer", () => {
@@ -896,20 +956,9 @@ describe("useRenderedMessages", () => {
         costUsd: 0.0456,
       },
     };
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [a],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [a],
+    });
     expect(result.current[0]?.assistantMeta?.costUsd).toBe(0.0456);
   });
 
@@ -939,20 +988,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     expect(result.current).toHaveLength(1);
     expect(result.current[0]).toMatchObject({
@@ -1015,20 +1053,9 @@ describe("useRenderedMessages", () => {
       timestamp: 2002,
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant, steered],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+    });
 
     expect(result.current.map((message) => message.role)).toEqual([
       "assistant",
@@ -1106,20 +1133,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [before, steered, after],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [before, steered, after],
+    });
 
     expect(result.current.map((message) => message.role)).toEqual([
       "assistant",
@@ -1136,32 +1152,24 @@ describe("useRenderedMessages", () => {
   });
 
   it("does not render unconfirmed queue steers as in-chat user bubbles", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistantMessage("turn-1", 2000)],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: {
-            turnId: "turn-1",
-            status: "running",
-            harnessId: "claude",
-            model: "claude-sonnet-4-5",
-            agentMode: "regular",
-            profileId: null,
-            userMessageId: null,
-            startedAt: 1,
-            updatedAt: 2,
-            reasoningEffort: null,
-            serviceTier: null,
-          },
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistantMessage("turn-1", 2000)],
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-1",
+        status: "running",
+        harnessId: "claude",
+        model: "claude-sonnet-4-5",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 1,
+        updatedAt: 2,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      runStatus: "running",
+    });
 
     expect(
       result.current.some((message) => message.id === "steer:queue-1"),
@@ -1178,28 +1186,18 @@ describe("useRenderedMessages", () => {
       "interrupt_restart",
     );
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("message-interrupt")],
-          events: [
-            queueEvent({
-              type: "queue.steerRequested",
-              timestamp: 2000,
-              messageId: "message-interrupt",
-              queueItemId: "queue-interrupt",
-              metadata: { items: [requested] },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("message-interrupt")],
+      events: [
+        queueEvent({
+          type: "queue.steerRequested",
+          timestamp: 2000,
+          messageId: "message-interrupt",
+          queueItemId: "queue-interrupt",
+          metadata: { items: [requested] },
+        }),
+      ],
+    });
 
     expect(result.current[0]).toMatchObject({
       role: "user",
@@ -1216,35 +1214,25 @@ describe("useRenderedMessages", () => {
     );
     const fallback = fallbackQueueItem(requested);
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("message-safe")],
-          events: [
-            queueEvent({
-              type: "queue.steerRequested",
-              timestamp: 2000,
-              messageId: "message-safe",
-              queueItemId: "queue-safe",
-              metadata: { items: [requested] },
-            }),
-            queueEvent({
-              type: "queue.fallback",
-              timestamp: 2100,
-              messageId: "message-safe",
-              queueItemId: "queue-safe",
-              metadata: { item: fallback },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("message-safe")],
+      events: [
+        queueEvent({
+          type: "queue.steerRequested",
+          timestamp: 2000,
+          messageId: "message-safe",
+          queueItemId: "queue-safe",
+          metadata: { items: [requested] },
+        }),
+        queueEvent({
+          type: "queue.fallback",
+          timestamp: 2100,
+          messageId: "message-safe",
+          queueItemId: "queue-safe",
+          metadata: { item: fallback },
+        }),
+      ],
+    });
 
     expect(result.current[0]).toMatchObject({
       role: "user",
@@ -1266,38 +1254,25 @@ describe("useRenderedMessages", () => {
     );
     const safePointFallback = fallbackQueueItem(safePointRequest);
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [
-            userMessage("message-interrupt"),
-            userMessage("message-safe"),
-          ],
-          events: [
-            queueEvent({
-              type: "queue.steerRequested",
-              timestamp: 2000,
-              messageId: "message-interrupt",
-              queueItemId: "queue-interrupt",
-              metadata: { items: [interruptRequest, safePointRequest] },
-            }),
-            queueEvent({
-              type: "queue.fallback",
-              timestamp: 2100,
-              messageId: "message-safe",
-              queueItemId: "queue-safe",
-              metadata: { items: [interruptRequest, safePointFallback] },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("message-interrupt"), userMessage("message-safe")],
+      events: [
+        queueEvent({
+          type: "queue.steerRequested",
+          timestamp: 2000,
+          messageId: "message-interrupt",
+          queueItemId: "queue-interrupt",
+          metadata: { items: [interruptRequest, safePointRequest] },
+        }),
+        queueEvent({
+          type: "queue.fallback",
+          timestamp: 2100,
+          messageId: "message-safe",
+          queueItemId: "queue-safe",
+          metadata: { items: [interruptRequest, safePointFallback] },
+        }),
+      ],
+    });
 
     const interruptRow = result.current.find(
       (message) => message.persistentMessageId === "message-interrupt",
@@ -1338,6 +1313,8 @@ describe("useRenderedMessages", () => {
           exitCode: null,
           status: "streaming",
           timestamp: 2002,
+          backgroundTask: null,
+          stopped: false,
         },
       ],
     };
@@ -1355,36 +1332,22 @@ describe("useRenderedMessages", () => {
         streamingAssistant.blocks[1],
       ],
     };
-    const input: RenderedMessagesInput = {
+    const input = renderedMessagesInput({
       messages: [streamingAssistant],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
       runStatus: "running",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: input } },
-    );
-    const streamingSegment = result.current[0].segments[0];
+    const driver = renderRenderedMessages(input);
+    const streamingSegment = driver.result.current[0].segments[0];
     expect(streamingSegment.kind).toBe("text");
     if (streamingSegment.kind !== "text") {
       throw new Error("expected text segment");
     }
     expect(streamingSegment.isStreaming).toBe(true);
 
-    rerender({
-      value: {
-        ...input,
-        messages: [completedTextAssistant],
-      },
-    });
+    driver.patch({ messages: [completedTextAssistant] });
 
-    const completedSegment = result.current[0].segments[0];
+    const completedSegment = driver.result.current[0].segments[0];
     expect(completedSegment.kind).toBe("text");
     if (completedSegment.kind !== "text") {
       throw new Error("expected text segment");
@@ -1419,30 +1382,16 @@ describe("useRenderedMessages", () => {
         },
       ],
     };
-    const input: RenderedMessagesInput = {
+    const input = renderedMessagesInput({
       messages: [partialAssistant],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
       runStatus: "running",
-      ...BINDING,
-    };
-
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: input } },
-    );
-
-    rerender({
-      value: {
-        ...input,
-        messages: [expandedAssistant],
-      },
     });
 
-    const segment = result.current[0].segments[0];
+    const driver = renderRenderedMessages(input);
+
+    driver.patch({ messages: [expandedAssistant] });
+
+    const segment = driver.result.current[0].segments[0];
     expect(segment.kind).toBe("text");
     if (segment.kind !== "text") {
       throw new Error("expected text segment");
@@ -1478,31 +1427,21 @@ describe("useRenderedMessages", () => {
       ...assistantMessage("turn-1", 2000),
       blocks: [providerNoticeBlock("Model re-verified")],
     };
-    const input: RenderedMessagesInput = {
+    const input = renderedMessagesInput({
       messages: [before],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: input } },
-    );
-    const firstSegment = result.current[0]?.segments[0];
+    const driver = renderRenderedMessages(input);
+    const firstSegment = driver.result.current[0]?.segments[0];
     expect(firstSegment.kind).toBe("provider_notice");
     if (firstSegment.kind !== "provider_notice") {
       throw new Error("expected a provider_notice segment");
     }
     expect(firstSegment.title).toBe("Model changed");
 
-    rerender({ value: { ...input, messages: [after] } });
+    driver.patch({ messages: [after] });
 
-    const secondSegment = result.current[0]?.segments[0];
+    const secondSegment = driver.result.current[0]?.segments[0];
     expect(secondSegment.kind).toBe("provider_notice");
     if (secondSegment.kind !== "provider_notice") {
       throw new Error("expected a provider_notice segment");
@@ -1525,31 +1464,16 @@ describe("useRenderedMessages", () => {
         },
       ],
     };
-    const input: RenderedMessagesInput = {
+    const input = renderedMessagesInput({
       messages: [assistant],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
-
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: input } },
-    );
-    const first = result.current[0];
-
-    rerender({
-      value: {
-        ...input,
-        messages: [{ ...assistant, blocksVersion: 2 }],
-      },
     });
 
-    expect(result.current[0]).not.toBe(first);
+    const driver = renderRenderedMessages(input);
+    const first = driver.result.current[0];
+
+    driver.patch({ messages: [{ ...assistant, blocksVersion: 2 }] });
+
+    expect(driver.result.current[0]).not.toBe(first);
   });
 
   it("keeps operational assistant blocks flat for display-time grouping", () => {
@@ -1571,6 +1495,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("read_file", { path: "/repo/src/app.ts" }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1579,6 +1504,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "command",
@@ -1588,24 +1514,15 @@ describe("useRenderedMessages", () => {
           exitCode: 0,
           status: "completed",
           timestamp: 2003,
+          backgroundTask: null,
+          stopped: false,
         },
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
       "text",
@@ -1625,6 +1542,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("Bash", { command: "bun run compile" }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -1633,6 +1551,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "autonomous_resume",
@@ -1648,6 +1567,8 @@ describe("useRenderedMessages", () => {
               blockId: "tool-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
@@ -1662,20 +1583,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
       "tool",
@@ -1697,6 +1607,7 @@ describe("useRenderedMessages", () => {
           }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1705,6 +1616,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "autonomous_resume",
@@ -1720,26 +1632,17 @@ describe("useRenderedMessages", () => {
               blockId: "wake-tool",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
       "tool",
@@ -1758,6 +1661,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("Bash", { command: "bun run compile" }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -1766,6 +1670,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "text",
@@ -1789,26 +1694,17 @@ describe("useRenderedMessages", () => {
               blockId: "tool-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
       "tool",
@@ -1844,6 +1740,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("read_file", { path: "/repo/src/app.ts" }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1852,6 +1749,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           // The resume trigger's blockId targets the subagent itself, but in
@@ -1871,26 +1769,17 @@ describe("useRenderedMessages", () => {
               blockId: "agent-1",
               outputFile: null,
               mcp: null,
+              managedCommand: null,
+              live: false,
             },
           ],
         },
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
       "subagent",
@@ -1934,20 +1823,10 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      runStatus: "running",
+    });
 
     const subagents =
       result.current[0]?.segments.filter(
@@ -1972,6 +1851,7 @@ describe("useRenderedMessages", () => {
           }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1980,6 +1860,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: null,
+          imageResults: [],
         },
         {
           type: "subagent",
@@ -1999,20 +1880,10 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      runStatus: "running",
+    });
 
     const segments = result.current[0]?.segments ?? [];
     // The duplicate spawn tool row is dropped (parity with file-edit tool calls).
@@ -2063,20 +1934,10 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      runStatus: "running",
+    });
 
     const subagents = (result.current[0]?.segments ?? []).filter(
       (segment): segment is SubagentSegment => segment.kind === "subagent",
@@ -2108,12 +1969,14 @@ describe("useRenderedMessages", () => {
           }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -2127,12 +1990,14 @@ describe("useRenderedMessages", () => {
           }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
           stopped: false,
           startedAt: null,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -2146,6 +2011,7 @@ describe("useRenderedMessages", () => {
           }),
           error: "stopped: user requested stop",
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2155,6 +2021,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -2168,12 +2035,14 @@ describe("useRenderedMessages", () => {
           }),
           error: "failed: command exited with code 1",
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
           stopped: false,
           startedAt: 5_000,
           endedAt: 67_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -2184,30 +2053,22 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("Bash", { command: "pwd" }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
           stopped: false,
           startedAt: 2000,
           endedAt: 5000,
+          imageResults: [],
         },
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      runStatus: "running",
+    });
 
     const tools = (result.current[0]?.segments ?? []).filter(
       (segment): segment is ToolSegment => segment.kind === "tool",
@@ -2261,25 +2122,16 @@ describe("useRenderedMessages", () => {
           exitCode: 0,
           status: "completed",
           timestamp: 2002,
+          backgroundTask: null,
+          stopped: false,
           parentBlockId: "agent-1",
         },
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const top = result.current[0]?.segments ?? [];
     // The command nests under the subagent rather than appearing top-level.
@@ -2294,6 +2146,56 @@ describe("useRenderedMessages", () => {
       throw new Error("expected a command child");
     }
     expect(child.command).toBe("rg TODO");
+  });
+
+  it("keeps a nested image generation visible as a top-level card", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "artist",
+          task: "Create an image.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "tool_call",
+          blockId: "image-1",
+          toolName: "image_generation",
+          ...toolCallInputFields("image_generation", { prompt: "a cat" }),
+          error: null,
+          agentMessageSend: null,
+          managedCommand: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+          imageResults: [],
+          parentBlockId: "agent-1",
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual(["subagent", "tool"]);
+    const image = top[1];
+    if (image.kind !== "tool") throw new Error("expected image tool segment");
+    expect(image.toolName).toBe("image_generation");
+    expect(image.parentId).toBe("agent-1");
   });
 
   it("folds a depth-3 nested subagent chain via parentBlockId", () => {
@@ -2350,20 +2252,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const top = result.current[0]?.segments ?? [];
     expect(top.map((segment) => segment.kind)).toEqual(["subagent"]);
@@ -2427,20 +2318,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const top = result.current[0]?.segments ?? [];
     expect(top.map((segment) => segment.kind)).toEqual([
@@ -2502,20 +2382,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const top = result.current[0]?.segments ?? [];
     // The notice nests under the subagent rather than appearing top-level.
@@ -2562,20 +2431,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const top = result.current[0]?.segments ?? [];
     expect(top.map((segment) => segment.kind)).toEqual(["provider_notice"]);
@@ -2633,28 +2491,19 @@ describe("useRenderedMessages", () => {
     const inputFor = (
       parentName: string,
       timestamp: number,
-    ): RenderedMessagesInput => ({
-      messages: [buildAssistant(parentName, timestamp)],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    });
+    ): RenderedMessagesInput =>
+      renderedMessagesInput({
+        messages: [buildAssistant(parentName, timestamp)],
+      });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: inputFor("root", 2001) } },
-    );
+    const driver = renderRenderedMessages(inputFor("root", 2001));
 
-    const before = result.current[0]?.segments ?? [];
+    const before = driver.result.current[0]?.segments ?? [];
     expect(before.map((segment) => segment.kind)).toEqual(["subagent"]);
 
-    rerender({ value: inputFor("root (renamed)", 2005) });
+    driver.set(inputFor("root (renamed)", 2005));
 
-    const after = result.current[0]?.segments ?? [];
+    const after = driver.result.current[0]?.segments ?? [];
     expect(after.map((segment) => segment.kind)).toEqual(["subagent"]);
     const root = after[0];
     if (root.kind !== "subagent") {
@@ -2675,6 +2524,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("Workflow", { script: "..." }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2683,6 +2533,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2000,
           startedAt: 2000,
           endedAt: 2000,
+          imageResults: [],
         },
         {
           type: "subagent",
@@ -2712,20 +2563,10 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      runStatus: "running",
+    });
 
     const segments = result.current[0]?.segments ?? [];
     const workflow = segments.find((segment) => segment.kind === "subagent");
@@ -2771,20 +2612,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const segment = (result.current[0]?.segments ?? []).find(
       (candidate) => candidate.kind === "subagent",
@@ -2797,29 +2627,21 @@ describe("useRenderedMessages", () => {
 
   it("drops the live assistant when the persisted assistant for the same turn exists", () => {
     const a = assistantMessage("turn-1", 2000);
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [a],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: {
-            turnId: "turn-1",
-            blocks: [],
-            startedAt: 2500,
-            blocksVersion: 0,
-            timestamp: 2500,
-            sender: ASSISTANT_SENDER,
-            reasoningEffort: null,
-            serviceTier: null,
-          },
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [a],
+      liveAssistantMessage: {
+        turnId: "turn-1",
+        blocks: [],
+        startedAt: 2500,
+        blocksVersion: 0,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
+        timestamp: 2500,
+        sender: ASSISTANT_SENDER,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    });
     expect(result.current).toHaveLength(1);
     expect(result.current[0]?.id).toBe("assistant:turn-1");
   });
@@ -2827,11 +2649,12 @@ describe("useRenderedMessages", () => {
   it("keeps persisted rows stable while only the live row streams", () => {
     const u1 = userMessage("m1");
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 1,
@@ -2839,10 +2662,8 @@ describe("useRenderedMessages", () => {
       reasoningEffort: null,
       serviceTier: null,
     };
-    const firstLive: RenderedMessagesInput = {
+    const firstLive = renderedMessagesInput({
       messages: [u1],
-      events: [],
-      pendingUserMessages: [],
       liveAssistantMessage: {
         turnId: "turn-1",
         blocks: [
@@ -2857,6 +2678,8 @@ describe("useRenderedMessages", () => {
         ],
         startedAt: 2000,
         blocksVersion: 1,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2000,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -2864,46 +2687,40 @@ describe("useRenderedMessages", () => {
       },
       activeTurn,
       runStatus: "running",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: firstLive } },
-    );
-    const firstUserRow = result.current.find(
+    const driver = renderRenderedMessages(firstLive);
+    const firstUserRow = driver.result.current.find(
       (message) => message.role === "user",
     );
 
     // A streamed delta: same `messages` reference, a brand-new live row object
     // with one more token. The live turn has no persisted assistant message, so
     // the persisted render must NOT re-derive - the user row keeps its identity.
-    rerender({
-      value: {
-        ...firstLive,
-        liveAssistantMessage: {
-          turnId: "turn-1",
-          blocks: [
-            {
-              type: "text",
-              blockId: "text-1",
-              text: "ab",
-              status: "streaming",
-              timestamp: 11,
-              providerNotice: null,
-            },
-          ],
-          startedAt: 2000,
-          blocksVersion: 2,
-          timestamp: 2001,
-          sender: ASSISTANT_SENDER,
-          reasoningEffort: null,
-          serviceTier: null,
-        },
+    driver.patch({
+      liveAssistantMessage: {
+        turnId: "turn-1",
+        blocks: [
+          {
+            type: "text",
+            blockId: "text-1",
+            text: "ab",
+            status: "streaming",
+            timestamp: 11,
+            providerNotice: null,
+          },
+        ],
+        startedAt: 2000,
+        blocksVersion: 2,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
+        timestamp: 2001,
+        sender: ASSISTANT_SENDER,
+        reasoningEffort: null,
+        serviceTier: null,
       },
     });
-    const secondUserRow = result.current.find(
+    const secondUserRow = driver.result.current.find(
       (message) => message.role === "user",
     );
 
@@ -2926,35 +2743,25 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            waitEvent({
-              type: "approval.requested",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              approvalId: "approval-1",
-              blockId: null,
-            }),
-            waitEvent({
-              type: "approval.resolved",
-              timestamp: 25_000,
-              turnId: "turn-1",
-              approvalId: "approval-1",
-              blockId: null,
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        waitEvent({
+          type: "approval.requested",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          approvalId: "approval-1",
+          blockId: null,
+        }),
+        waitEvent({
+          type: "approval.resolved",
+          timestamp: 25_000,
+          turnId: "turn-1",
+          approvalId: "approval-1",
+          blockId: null,
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.createdAt).toBe(10_000);
@@ -2979,35 +2786,25 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            waitEvent({
-              type: "interview.requested",
-              timestamp: 16_000,
-              turnId: "turn-1",
-              approvalId: null,
-              blockId: "question-1",
-            }),
-            waitEvent({
-              type: "interview.resolved",
-              timestamp: 29_000,
-              turnId: "turn-1",
-              approvalId: null,
-              blockId: "question-1",
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        waitEvent({
+          type: "interview.requested",
+          timestamp: 16_000,
+          turnId: "turn-1",
+          approvalId: null,
+          blockId: "question-1",
+        }),
+        waitEvent({
+          type: "interview.resolved",
+          timestamp: 29_000,
+          turnId: "turn-1",
+          approvalId: null,
+          blockId: "question-1",
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.createdAt).toBe(10_000);
@@ -3018,11 +2815,12 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an approval is pending", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -3036,45 +2834,40 @@ describe("useRenderedMessages", () => {
       blocks: [],
       startedAt: 10_000,
       blocksVersion: 0,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
       timestamp: 20_000,
       reasoningEffort: null,
       serviceTier: null,
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        waitEvent({
+          type: "approval.requested",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          approvalId: "approval-1",
+          blockId: null,
+        }),
+      ],
+      liveAssistantMessage: liveAssistant,
+      activeTurn,
+      pendingApprovals: [
         {
-          messages: [userMessage("m1")],
-          events: [
-            waitEvent({
-              type: "approval.requested",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              approvalId: "approval-1",
-              blockId: null,
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: liveAssistant,
-          activeTurn,
-          pendingApprovals: [
-            {
-              approvalId: "approval-1",
-              toolName: "Edit",
-              description: "Apply edit",
-              input: null,
-              requestedAt: 15_000,
-              kind: "tool",
-              planId: null,
-              actions: [],
-            },
-          ],
-          runStatus: "running",
-          ...BINDING,
+          approvalId: "approval-1",
+          toolName: "Edit",
+          description: "Apply edit",
+          input: null,
+          requestedAt: 15_000,
+          kind: "tool",
+          planId: null,
+          actions: [],
         },
-        displayContext,
-      ),
-    );
+      ],
+      runStatus: "running",
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.pausedDurationMs).toBe(0);
@@ -3083,11 +2876,12 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an interview is pending from snapshot state", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -3096,30 +2890,24 @@ describe("useRenderedMessages", () => {
       serviceTier: null,
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1")],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: {
-            turnId: "turn-1",
-            sender: ASSISTANT_SENDER,
-            blocks: [],
-            startedAt: 10_000,
-            blocksVersion: 0,
-            timestamp: 20_000,
-            reasoningEffort: null,
-            serviceTier: null,
-          },
-          activeTurn,
-          pendingInterviews: [{ blockId: "question-1", requestedAt: 16_000 }],
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      liveAssistantMessage: {
+        turnId: "turn-1",
+        sender: ASSISTANT_SENDER,
+        blocks: [],
+        startedAt: 10_000,
+        blocksVersion: 0,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
+        timestamp: 20_000,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      activeTurn,
+      pendingInterviews: [{ blockId: "question-1", requestedAt: 16_000 }],
+      runStatus: "running",
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.pausedDurationMs).toBe(0);
@@ -3128,11 +2916,12 @@ describe("useRenderedMessages", () => {
 
   it("keeps the assistant row id stable from live turn to completion", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3140,15 +2929,15 @@ describe("useRenderedMessages", () => {
       reasoningEffort: null,
       serviceTier: null,
     };
-    const liveInput: RenderedMessagesInput = {
+    const liveInput = renderedMessagesInput({
       messages: [userMessage("m1")],
-      events: [],
-      pendingUserMessages: [],
       liveAssistantMessage: {
         turnId: "turn-1",
         blocks: [],
         startedAt: 2000,
         blocksVersion: 0,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2000,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -3156,41 +2945,34 @@ describe("useRenderedMessages", () => {
       },
       activeTurn,
       runStatus: "running",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: liveInput } },
-    );
-    const liveAssistantId = result.current.find(
+    const driver = renderRenderedMessages(liveInput);
+    const liveAssistantId = driver.result.current.find(
       (message) => message.role === "assistant",
     )?.id;
 
-    rerender({
-      value: {
-        ...liveInput,
-        messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
-        liveAssistantMessage: null,
-        activeTurn: null,
-        runStatus: "idle",
-      },
+    driver.patch({
+      messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
     });
 
     expect(liveAssistantId).toBe("assistant:turn-1");
     expect(
-      result.current.find((message) => message.role === "assistant")?.id,
+      driver.result.current.find((message) => message.role === "assistant")?.id,
     ).toBe(liveAssistantId);
   });
 
   it("keeps an accepted pending user before the pre-turn assistant row", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-2",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m2",
       startedAt: 2500,
@@ -3199,29 +2981,24 @@ describe("useRenderedMessages", () => {
       serviceTier: null,
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
+      pendingUserMessages: [
         {
-          messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
-          events: [],
-          pendingUserMessages: [
-            {
-              clientActionId: "action-2",
-              messageId: "m2",
-              content: CONTENT,
-              sender: { type: "user", userId: "owner-1" },
-              settings: SETTINGS,
-              timestamp: 3000,
-            },
-          ],
-          liveAssistantMessage: null,
-          activeTurn,
-          runStatus: "running",
-          ...BINDING,
+          clientActionId: "action-2",
+          messageId: "m2",
+          content: CONTENT,
+          sender: { type: "user", userId: "owner-1" },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
+          timestamp: 3000,
+          restoreWorktreeIntent: null,
         },
-        displayContext,
-      ),
-    );
+      ],
+      activeTurn,
+      runStatus: "running",
+    });
 
     expect(result.current.map((message) => message.id)).toEqual([
       "m1",
@@ -3254,20 +3031,10 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [checkpointEvent(manifest), checkpointEvent(laterManifest)],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      events: [checkpointEvent(manifest), checkpointEvent(laterManifest)],
+    });
 
     // The aggregate file_change_group is appended at the END of the
     // assistant message; inline file_change segments stay flat in their
@@ -3298,24 +3065,14 @@ describe("useRenderedMessages", () => {
       blocks: [fileChangeBlock("/repo/src/app.ts")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [
-            checkpointEvent(manifest),
-            checkpointEvent(unrelatedManifest),
-            checkpointEvent(laterManifest),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      events: [
+        checkpointEvent(manifest),
+        checkpointEvent(unrelatedManifest),
+        checkpointEvent(laterManifest),
+      ],
+    });
 
     const segments = result.current[0]?.segments ?? [];
     const group = segments[segments.length - 1];
@@ -3335,11 +3092,12 @@ describe("useRenderedMessages", () => {
       blocks: [fileChangeBlock("/repo/src/app.ts")],
     };
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3347,22 +3105,15 @@ describe("useRenderedMessages", () => {
       reasoningEffort: null,
       serviceTier: null,
     };
-    const baseInput: RenderedMessagesInput = {
+    const baseInput = renderedMessagesInput({
       messages: [assistant],
       events: [checkpointEvent(manifest)],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
       activeTurn,
       runStatus: "running",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: baseInput } },
-    );
-    const activeSegments = result.current[0]?.segments ?? [];
+    const driver = renderRenderedMessages(baseInput);
+    const activeSegments = driver.result.current[0]?.segments ?? [];
     expect(
       activeSegments.some((segment) => segment.kind === "file_change_group"),
     ).toBe(false);
@@ -3371,10 +3122,8 @@ describe("useRenderedMessages", () => {
       activeSegments.some((segment) => segment.kind === "file_change"),
     ).toBe(true);
 
-    rerender({
-      value: { ...baseInput, activeTurn: null, runStatus: "idle" },
-    });
-    const doneSegments = result.current[0]?.segments ?? [];
+    driver.patch({ activeTurn: null, runStatus: "idle" });
+    const doneSegments = driver.result.current[0]?.segments ?? [];
     expect(
       doneSegments.some((segment) => segment.kind === "file_change_group"),
     ).toBe(true);
@@ -3391,6 +3140,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("edit", { file_path: "/repo/src/app.ts" }),
           error: null,
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3399,6 +3149,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: 2001,
+          imageResults: [],
         },
         {
           type: "file_change",
@@ -3417,20 +3168,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const segments = result.current[0]?.segments ?? [];
     // The edit's tool_call is suppressed; the file_change shows inline (the
@@ -3455,6 +3195,7 @@ describe("useRenderedMessages", () => {
           ...toolCallInputFields("edit", { file_path: "/repo/src/app.ts" }),
           error: "Permission denied by user",
           agentMessageSend: null,
+          managedCommand: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3463,6 +3204,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: 2001,
+          imageResults: [],
         },
         {
           type: "file_change",
@@ -3481,20 +3223,9 @@ describe("useRenderedMessages", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [assistant],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
 
     const segments = result.current[0]?.segments ?? [];
     // Redundant Edit tool_call is suppressed; the denied edit stays inline as a
@@ -3509,56 +3240,50 @@ describe("useRenderedMessages", () => {
   });
 
   it("keeps a streaming file change before it completes", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: {
-            turnId: "turn-1",
-            blocks: [
-              {
-                type: "file_change",
-                blockId: "file-streaming",
-                filePath: "/repo/src/app.ts",
-                operation: "edit",
-                diffSource: "none",
-                beforeHash: null,
-                afterHash: null,
-                additions: 0,
-                deletions: 0,
-                reason: "capture_failed",
-                status: "streaming",
-                timestamp: 2001,
-              },
-            ],
-            startedAt: 1,
-            blocksVersion: 1,
+    const { result } = renderRenderedMessages({
+      liveAssistantMessage: {
+        turnId: "turn-1",
+        blocks: [
+          {
+            type: "file_change",
+            blockId: "file-streaming",
+            filePath: "/repo/src/app.ts",
+            operation: "edit",
+            diffSource: "none",
+            beforeHash: null,
+            afterHash: null,
+            additions: 0,
+            deletions: 0,
+            reason: "capture_failed",
+            status: "streaming",
             timestamp: 2001,
-            sender: ASSISTANT_SENDER,
-            reasoningEffort: null,
-            serviceTier: null,
           },
-          activeTurn: {
-            turnId: "turn-1",
-            status: "running",
-            harnessId: "claude",
-            model: "claude-sonnet-4-5",
-            agentMode: "regular",
-            profileId: null,
-            userMessageId: null,
-            startedAt: 1,
-            updatedAt: 2,
-            reasoningEffort: null,
-            serviceTier: null,
-          },
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+        ],
+        startedAt: 1,
+        blocksVersion: 1,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
+        timestamp: 2001,
+        sender: ASSISTANT_SENDER,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-1",
+        status: "running",
+        harnessId: "claude",
+        model: "claude-sonnet-4-5",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 1,
+        updatedAt: 2,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      runStatus: "running",
+    });
     const segments = result.current[0]?.segments ?? [];
     expect(segments.some((segment) => segment.kind === "file_change")).toBe(
       true,
@@ -3567,11 +3292,12 @@ describe("useRenderedMessages", () => {
 
   it("holds back the file change group for the streaming live assistant", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: null,
       startedAt: 1,
@@ -3579,29 +3305,22 @@ describe("useRenderedMessages", () => {
       reasoningEffort: null,
       serviceTier: null,
     };
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: {
-            turnId: "turn-1",
-            blocks: [fileChangeBlock("/repo/src/app.ts")],
-            startedAt: 2500,
-            blocksVersion: 1,
-            timestamp: 2500,
-            sender: ASSISTANT_SENDER,
-            reasoningEffort: null,
-            serviceTier: null,
-          },
-          activeTurn,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      liveAssistantMessage: {
+        turnId: "turn-1",
+        blocks: [fileChangeBlock("/repo/src/app.ts")],
+        startedAt: 2500,
+        blocksVersion: 1,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
+        timestamp: 2500,
+        sender: ASSISTANT_SENDER,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      activeTurn,
+      runStatus: "running",
+    });
     const segments = result.current[0]?.segments ?? [];
     expect(
       segments.some((segment) => segment.kind === "file_change_group"),
@@ -3667,11 +3386,12 @@ function forkEvent(input: {
 }
 
 const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
+  agentMode: "regular",
+  sameTurnSteeringSupported: false,
   turnId: "turn-setup",
   status: "running",
   harnessId: "claude",
   model: "claude-sonnet-4-5",
-  agentMode: "regular",
   profileId: null,
   userMessageId: null,
   startedAt: 1,
@@ -3682,31 +3402,21 @@ const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
 
 describe("useRenderedMessages fork link integration", () => {
   it("projects chat.forked events into fork-source link rows", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
-          events: [
-            forkEvent({
-              eventId: "fork-1",
-              timestamp: 2500,
-              metadata: {
-                sourceChatId: "source-chat-1",
-                sourceChatTitle: "Original chat",
-                sourceHostId: "source-host-1",
-                assistantTurnKey: "turn-1",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
+      events: [
+        forkEvent({
+          eventId: "fork-1",
+          timestamp: 2500,
+          metadata: {
+            sourceChatId: "source-chat-1",
+            sourceChatTitle: "Original chat",
+            sourceHostId: "source-host-1",
+            assistantTurnKey: "turn-1",
+          },
+        }),
+      ],
+    });
 
     expect(result.current.map((message) => message.id)).toEqual([
       "m1",
@@ -3728,30 +3438,20 @@ describe("useRenderedMessages fork link integration", () => {
   });
 
   it("skips malformed chat.forked metadata", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1")],
-          events: [
-            forkEvent({
-              eventId: "fork-bad",
-              timestamp: 2500,
-              // Missing sourceChatId — required field absent → row skipped
-              metadata: {
-                sourceChatTitle: "Some chat",
-                sourceHostId: "source-host-1",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        forkEvent({
+          eventId: "fork-bad",
+          timestamp: 2500,
+          // Missing sourceChatId — required field absent → row skipped
+          metadata: {
+            sourceChatTitle: "Some chat",
+            sourceHostId: "source-host-1",
+          },
+        }),
+      ],
+    });
 
     expect(result.current.map((message) => message.id)).toEqual(["m1"]);
   });
@@ -3759,27 +3459,17 @@ describe("useRenderedMessages fork link integration", () => {
 
 describe("useRenderedMessages setup card integration", () => {
   it("pins the genesis setup card above the first user message", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1")],
-          events: [
-            setupEvent({
-              eventId: "s-running",
-              type: "setup.running",
-              timestamp: 1500,
-              metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        setupEvent({
+          eventId: "s-running",
+          type: "setup.running",
+          timestamp: 1500,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+      ],
+    });
 
     // The genesis card is PINNED first - above the first user message (m1,
     // createdAt 1002) - regardless of its (late) genesis timestamp (1500). The
@@ -3802,45 +3492,35 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("pins only the genesis card; a re-bind window stays inline at its timestamp", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
-          events: [
-            setupEvent({
-              eventId: "g-running",
-              type: "setup.running",
-              timestamp: 1500,
-              metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-            }),
-            setupEvent({
-              eventId: "g-succeeded",
-              type: "setup.succeeded",
-              timestamp: 1600,
-              metadata: { workspacePath: "/repo" },
-            }),
-            setupEvent({
-              eventId: "rebind-missing",
-              type: "worktree.missing",
-              timestamp: 2100,
-              metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
-            }),
-            setupEvent({
-              eventId: "rebind-running",
-              type: "setup.running",
-              timestamp: 2200,
-              metadata: { workspacePath: "/repo", terminalSessionId: "term-2" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistantMessage("turn-1", 2000)],
+      events: [
+        setupEvent({
+          eventId: "g-running",
+          type: "setup.running",
+          timestamp: 1500,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        setupEvent({
+          eventId: "g-succeeded",
+          type: "setup.succeeded",
+          timestamp: 1600,
+          metadata: { workspacePath: "/repo" },
+        }),
+        setupEvent({
+          eventId: "rebind-missing",
+          type: "worktree.missing",
+          timestamp: 2100,
+          metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
+        }),
+        setupEvent({
+          eventId: "rebind-running",
+          type: "setup.running",
+          timestamp: 2200,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-2" },
+        }),
+      ],
+    });
 
     // Genesis (window 0, ts 1500) is pinned to the very top; the re-bind window
     // (window 1, ts 2200) interleaves inline AFTER the assistant turn (2000).
@@ -3853,52 +3533,37 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("anchors a mid-chat FIRST creation above its triggering send (window 0 not pinned)", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          // The chat's FIRST worktree is created mid-conversation by the `create`
-          // send. Window 0 carries a `setup.creating` (so it is NOT a back-filled
-          // genesis and must NOT pin to the top), and that event stamps
-          // `triggeringMessageId`, so the card anchors directly above the send -
-          // exactly the production shape (the host always stamps the id).
-          messages: [
-            userMessage("m1"),
-            assistantMessage("turn-1", 2000),
-            userMessageAt("create", 2400),
-          ],
-          events: [
-            setupEvent({
-              eventId: "midchat-creating",
-              type: "setup.creating",
-              timestamp: 2500,
-              metadata: {
-                workspacePath: "/repo",
-                branch: "feature",
-                triggeringMessageId: "create",
-              },
-            }),
-            setupEvent({
-              eventId: "midchat-running",
-              type: "setup.running",
-              timestamp: 2600,
-              metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-            }),
-            setupEvent({
-              eventId: "midchat-succeeded",
-              type: "setup.succeeded",
-              timestamp: 2700,
-              metadata: { workspacePath: "/repo" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [
+        userMessage("m1"),
+        assistantMessage("turn-1", 2000),
+        userMessageAt("create", 2400),
+      ],
+      events: [
+        setupEvent({
+          eventId: "midchat-creating",
+          type: "setup.creating",
+          timestamp: 2500,
+          metadata: {
+            workspacePath: "/repo",
+            branch: "feature",
+            triggeringMessageId: "create",
+          },
+        }),
+        setupEvent({
+          eventId: "midchat-running",
+          type: "setup.running",
+          timestamp: 2600,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        setupEvent({
+          eventId: "midchat-succeeded",
+          type: "setup.succeeded",
+          timestamp: 2700,
+          metadata: { workspacePath: "/repo" },
+        }),
+      ],
+    });
 
     // Card sits immediately above its `create` send: NOT pinned above m1, and not
     // floated to its own 2500 stamp BELOW the send (which a createdAt sort gives).
@@ -3911,61 +3576,51 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("pins the genesis but anchors a later different-repo creation above its send", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [
-            userMessage("m1"),
-            assistantMessage("turn-1", 2000),
-            userMessageAt("create-other", 2400),
-          ],
-          events: [
-            // Genesis worktree (window 0): back-filled, NO creating phase -> pins.
-            setupEvent({
-              eventId: "g-running",
-              type: "setup.running",
-              timestamp: 1500,
-              metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-            }),
-            setupEvent({
-              eventId: "g-succeeded",
-              type: "setup.succeeded",
-              timestamp: 1600,
-              metadata: { workspacePath: "/repo" },
-            }),
-            // A SEPARATE later send (`create-other`) creates a worktree for a
-            // DIFFERENT repo. Its `setup.creating` splits a fresh window (the
-            // genesis already progressed past creating) and stamps
-            // `triggeringMessageId`, so the window anchors above that send.
-            setupEvent({
-              eventId: "midchat-creating",
-              type: "setup.creating",
-              timestamp: 2500,
-              metadata: {
-                workspacePath: "/other",
-                branch: "feature",
-                triggeringMessageId: "create-other",
-              },
-            }),
-            setupEvent({
-              eventId: "midchat-running",
-              type: "setup.running",
-              timestamp: 2600,
-              metadata: {
-                workspacePath: "/other",
-                terminalSessionId: "term-2",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [
+        userMessage("m1"),
+        assistantMessage("turn-1", 2000),
+        userMessageAt("create-other", 2400),
+      ],
+      events: [
+        // Genesis worktree (window 0): back-filled, NO creating phase -> pins.
+        setupEvent({
+          eventId: "g-running",
+          type: "setup.running",
+          timestamp: 1500,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        setupEvent({
+          eventId: "g-succeeded",
+          type: "setup.succeeded",
+          timestamp: 1600,
+          metadata: { workspacePath: "/repo" },
+        }),
+        // A SEPARATE later send (`create-other`) creates a worktree for a
+        // DIFFERENT repo. Its `setup.creating` splits a fresh window (the
+        // genesis already progressed past creating) and stamps
+        // `triggeringMessageId`, so the window anchors above that send.
+        setupEvent({
+          eventId: "midchat-creating",
+          type: "setup.creating",
+          timestamp: 2500,
+          metadata: {
+            workspacePath: "/other",
+            branch: "feature",
+            triggeringMessageId: "create-other",
+          },
+        }),
+        setupEvent({
+          eventId: "midchat-running",
+          type: "setup.running",
+          timestamp: 2600,
+          metadata: {
+            workspacePath: "/other",
+            terminalSessionId: "term-2",
+          },
+        }),
+      ],
+    });
 
     // Genesis (window 0) pinned at the very top; the different-repo creation
     // (window 1) anchors directly ABOVE its `create-other` send - NOT folded into
@@ -3980,40 +3635,30 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("anchors a mid-chat card directly above its triggering message, overriding createdAt", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [
-            userMessage("m0"),
-            userMessage("trigger-msg"),
-            assistantMessage("turn-1", 6000),
-          ],
-          events: [
-            // The card is announced (`setup.creating`) BEFORE the slow git
-            // worktree add, but its server `createdAt` (5000) lands AFTER the
-            // triggering message's stamp (1011) - the clock-skew / persisted-
-            // later case. A pure createdAt sort would drop the card BELOW
-            // `trigger-msg`; the messageId anchor keeps it directly ABOVE.
-            setupEvent({
-              eventId: "creating",
-              type: "setup.creating",
-              timestamp: 5000,
-              metadata: {
-                workspacePath: "/repo",
-                branch: "feat",
-                triggeringMessageId: "trigger-msg",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [
+        userMessage("m0"),
+        userMessage("trigger-msg"),
+        assistantMessage("turn-1", 6000),
+      ],
+      events: [
+        // The card is announced (`setup.creating`) BEFORE the slow git
+        // worktree add, but its server `createdAt` (5000) lands AFTER the
+        // triggering message's stamp (1011) - the clock-skew / persisted-
+        // later case. A pure createdAt sort would drop the card BELOW
+        // `trigger-msg`; the messageId anchor keeps it directly ABOVE.
+        setupEvent({
+          eventId: "creating",
+          type: "setup.creating",
+          timestamp: 5000,
+          metadata: {
+            workspacePath: "/repo",
+            branch: "feat",
+            triggeringMessageId: "trigger-msg",
+          },
+        }),
+      ],
+    });
 
     // Card sits immediately above `trigger-msg` (not floated to its 5000 stamp
     // between the message and the assistant turn, and not pinned to the top).
@@ -4026,44 +3671,34 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("anchors the card above the optimistic pending echo before the message persists", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m0")],
+      events: [
+        setupEvent({
+          eventId: "creating",
+          type: "setup.creating",
+          timestamp: 5000,
+          metadata: {
+            workspacePath: "/repo",
+            branch: "feat",
+            triggeringMessageId: "echo-msg",
+          },
+        }),
+      ],
+      pendingUserMessages: [
         {
-          // The persisted message hasn't arrived (git worktree add still
-          // running); only the optimistic echo exists. The card must still sit
-          // directly above it so "Creating worktree" shows above the just-sent
-          // message INSTANTLY - the whole point of restoring the echo.
-          messages: [userMessage("m0")],
-          events: [
-            setupEvent({
-              eventId: "creating",
-              type: "setup.creating",
-              timestamp: 5000,
-              metadata: {
-                workspacePath: "/repo",
-                branch: "feat",
-                triggeringMessageId: "echo-msg",
-              },
-            }),
-          ],
-          pendingUserMessages: [
-            {
-              clientActionId: "action-1",
-              messageId: "echo-msg",
-              content: CONTENT,
-              sender: { type: "user", userId: "owner-1" },
-              settings: SETTINGS,
-              timestamp: 1010,
-            },
-          ],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
+          clientActionId: "action-1",
+          messageId: "echo-msg",
+          content: CONTENT,
+          sender: { type: "user", userId: "owner-1" },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
+          timestamp: 1010,
+          restoreWorktreeIntent: null,
         },
-        displayContext,
-      ),
-    );
+      ],
+    });
 
     expect(result.current.map((message) => message.id)).toEqual([
       "m0",
@@ -4073,31 +3708,23 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("drops a pending user echo whose messageId is already persisted", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+
+      pendingUserMessages: [
         {
-          messages: [userMessage("m1")],
-          events: [],
-          // The optimistic echo for m1 lingers (orphaned) after m1 persisted -
-          // the setup-gating race. It must NOT render a second m1 row.
-          pendingUserMessages: [
-            {
-              clientActionId: "action-1",
-              messageId: "m1",
-              content: CONTENT,
-              sender: { type: "user", userId: "owner-1" },
-              settings: SETTINGS,
-              timestamp: 3000,
-            },
-          ],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
+          clientActionId: "action-1",
+          messageId: "m1",
+          content: CONTENT,
+          sender: { type: "user", userId: "owner-1" },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
+          timestamp: 3000,
+          restoreWorktreeIntent: null,
         },
-        displayContext,
-      ),
-    );
+      ],
+    });
 
     const m1Rows = result.current.filter((message) => message.id === "m1");
     expect(m1Rows).toHaveLength(1);
@@ -4107,48 +3734,37 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("emits one card per setup lifecycle window anchored at each genesis", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "s1-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-            }),
-            setupEvent({
-              eventId: "s1-succeeded",
-              type: "setup.succeeded",
-              timestamp: 1100,
-              metadata: { workspacePath: "/repo" },
-            }),
-            setupEvent({
-              eventId: "missing",
-              type: "worktree.missing",
-              timestamp: 1200,
-              metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
-            }),
-            setupEvent({
-              eventId: "s2-running",
-              type: "setup.running",
-              timestamp: 1300,
-              metadata: {
-                workspacePath: "/repo2",
-                terminalSessionId: "term-2",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "s1-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        setupEvent({
+          eventId: "s1-succeeded",
+          type: "setup.succeeded",
+          timestamp: 1100,
+          metadata: { workspacePath: "/repo" },
+        }),
+        setupEvent({
+          eventId: "missing",
+          type: "worktree.missing",
+          timestamp: 1200,
+          metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
+        }),
+        setupEvent({
+          eventId: "s2-running",
+          type: "setup.running",
+          timestamp: 1300,
+          metadata: {
+            workspacePath: "/repo2",
+            terminalSessionId: "term-2",
+          },
+        }),
+      ],
+    });
 
     const cards = result.current.filter((message) =>
       message.id.startsWith("setup-card:"),
@@ -4167,39 +3783,28 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("consolidates a multi-repo window into one card with per-workspace state", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "a-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repoA", terminalSessionId: "ta" },
-            }),
-            setupEvent({
-              eventId: "b-running",
-              type: "setup.running",
-              timestamp: 1010,
-              metadata: { workspacePath: "/repoB", terminalSessionId: "tb" },
-            }),
-            setupEvent({
-              eventId: "a-succeeded",
-              type: "setup.succeeded",
-              timestamp: 1100,
-              metadata: { workspacePath: "/repoA" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "a-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repoA", terminalSessionId: "ta" },
+        }),
+        setupEvent({
+          eventId: "b-running",
+          type: "setup.running",
+          timestamp: 1010,
+          metadata: { workspacePath: "/repoB", terminalSessionId: "tb" },
+        }),
+        setupEvent({
+          eventId: "a-succeeded",
+          type: "setup.succeeded",
+          timestamp: 1100,
+          metadata: { workspacePath: "/repoA" },
+        }),
+      ],
+    });
 
     const cards = result.current.filter((message) =>
       message.id.startsWith("setup-card:"),
@@ -4216,37 +3821,26 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("surfaces failed and cancelled lifecycle state on the card model", () => {
-    const failed = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "f-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repo", terminalSessionId: "tf" },
-            }),
-            setupEvent({
-              eventId: "f-failed",
-              type: "setup.failed",
-              timestamp: 1100,
-              metadata: {
-                workspacePath: "/repo",
-                terminalSessionId: "tf",
-                setupExitCode: 7,
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const failed = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "f-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repo", terminalSessionId: "tf" },
+        }),
+        setupEvent({
+          eventId: "f-failed",
+          type: "setup.failed",
+          timestamp: 1100,
+          metadata: {
+            workspacePath: "/repo",
+            terminalSessionId: "tf",
+            setupExitCode: 7,
+          },
+        }),
+      ],
+    });
     const failedCard = failed.result.current.find((message) =>
       message.id.startsWith("setup-card:"),
     );
@@ -4263,33 +3857,22 @@ describe("useRenderedMessages setup card integration", () => {
       terminalSessionId: "tf",
     });
 
-    const cancelled = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "c-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repo", terminalSessionId: "tc" },
-            }),
-            setupEvent({
-              eventId: "c-cancelled",
-              type: "setup.cancelled",
-              timestamp: 1100,
-              metadata: { workspacePath: "/repo", terminalSessionId: "tc" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const cancelled = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "c-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repo", terminalSessionId: "tc" },
+        }),
+        setupEvent({
+          eventId: "c-cancelled",
+          type: "setup.cancelled",
+          timestamp: 1100,
+          metadata: { workspacePath: "/repo", terminalSessionId: "tc" },
+        }),
+      ],
+    });
     const cancelledCard = cancelled.result.current.find((message) =>
       message.id.startsWith("setup-card:"),
     );
@@ -4302,27 +3885,18 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("suppresses the pre-turn Working indicator while setup gates", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "g-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repo", terminalSessionId: "tg" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: RUNNING_ACTIVE_TURN,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "g-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repo", terminalSessionId: "tg" },
+        }),
+      ],
+      activeTurn: RUNNING_ACTIVE_TURN,
+      runStatus: "running",
+    });
 
     // The gating card stands in for the indicator: no synthetic assistant row.
     expect(result.current.some((message) => message.role === "assistant")).toBe(
@@ -4337,20 +3911,10 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("still shows the pre-turn Working indicator for a normal turn (no active setup)", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: RUNNING_ACTIVE_TURN,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      activeTurn: RUNNING_ACTIVE_TURN,
+      runStatus: "running",
+    });
 
     const indicator = result.current.find(
       (message) => message.role === "assistant",
@@ -4360,33 +3924,24 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("still shows the Working indicator when setup has already completed", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "done-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repo", terminalSessionId: "td" },
-            }),
-            setupEvent({
-              eventId: "done-succeeded",
-              type: "setup.succeeded",
-              timestamp: 1100,
-              metadata: { workspacePath: "/repo" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: RUNNING_ACTIVE_TURN,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "done-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repo", terminalSessionId: "td" },
+        }),
+        setupEvent({
+          eventId: "done-succeeded",
+          type: "setup.succeeded",
+          timestamp: 1100,
+          metadata: { workspacePath: "/repo" },
+        }),
+      ],
+      activeTurn: RUNNING_ACTIVE_TURN,
+      runStatus: "running",
+    });
 
     // Setup is `ready`, not gating, so the awaited turn's indicator returns.
     expect(
@@ -4402,33 +3957,24 @@ describe("useRenderedMessages setup card integration", () => {
     // vanished mid-setup) strands a historical card at `setting-up`. Because the
     // window is closed it reads inactive, so it must NOT suppress the indicator
     // for a later normal turn - only the LIVE lifecycle gates.
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "stranded-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repo", terminalSessionId: "ts" },
-            }),
-            setupEvent({
-              eventId: "stranded-missing",
-              type: "worktree.missing",
-              timestamp: 1100,
-              metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: RUNNING_ACTIVE_TURN,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "stranded-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repo", terminalSessionId: "ts" },
+        }),
+        setupEvent({
+          eventId: "stranded-missing",
+          type: "worktree.missing",
+          timestamp: 1100,
+          metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
+        }),
+      ],
+      activeTurn: RUNNING_ACTIVE_TURN,
+      runStatus: "running",
+    });
 
     // The awaited turn's "Working…" indicator returns despite the stranded card.
     const indicator = result.current.find(
@@ -4448,43 +3994,34 @@ describe("useRenderedMessages setup card integration", () => {
     // `failed`. Suppression must key off any-workspace-setting-up, NOT the
     // aggregate, so the live card still stands in for the awaited turn (no
     // duplicate "Working…" beside it).
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            setupEvent({
-              eventId: "mr-a-running",
-              type: "setup.running",
-              timestamp: 1000,
-              metadata: { workspacePath: "/repoA", terminalSessionId: "ta" },
-            }),
-            setupEvent({
-              eventId: "mr-b-running",
-              type: "setup.running",
-              timestamp: 1010,
-              metadata: { workspacePath: "/repoB", terminalSessionId: "tb" },
-            }),
-            setupEvent({
-              eventId: "mr-a-failed",
-              type: "setup.failed",
-              timestamp: 1100,
-              metadata: {
-                workspacePath: "/repoA",
-                setupExitCode: 1,
-                terminalSessionId: "ta",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: RUNNING_ACTIVE_TURN,
-          runStatus: "running",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        setupEvent({
+          eventId: "mr-a-running",
+          type: "setup.running",
+          timestamp: 1000,
+          metadata: { workspacePath: "/repoA", terminalSessionId: "ta" },
+        }),
+        setupEvent({
+          eventId: "mr-b-running",
+          type: "setup.running",
+          timestamp: 1010,
+          metadata: { workspacePath: "/repoB", terminalSessionId: "tb" },
+        }),
+        setupEvent({
+          eventId: "mr-a-failed",
+          type: "setup.failed",
+          timestamp: 1100,
+          metadata: {
+            workspacePath: "/repoA",
+            setupExitCode: 1,
+            terminalSessionId: "ta",
+          },
+        }),
+      ],
+      activeTurn: RUNNING_ACTIVE_TURN,
+      runStatus: "running",
+    });
 
     // No synthetic assistant "Working…" row: the live card (still in flight via
     // /repoB) stands in for it, even though the aggregate rolled up to failed.
@@ -4572,6 +4109,8 @@ describe("useRenderedMessages head/tail partition", () => {
       blocks,
       startedAt,
       blocksVersion: blocks.length,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
       timestamp: startedAt + blocks.length,
       reasoningEffort: null,
       serviceTier: null,
@@ -4582,15 +4121,10 @@ describe("useRenderedMessages head/tail partition", () => {
     messages: ReadonlyArray<Message>,
     live: LiveAssistantMessage | null,
   ): RenderedMessagesInput {
-    return {
+    return renderedMessagesInput({
       messages,
-      events: [],
-      pendingUserMessages: [],
       liveAssistantMessage: live,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
+    });
   }
 
   it("keeps settled rows referentially stable across a streaming delta into a multi-record turn", () => {
@@ -4604,32 +4138,30 @@ describe("useRenderedMessages head/tail partition", () => {
     };
     const messages = [userMessage("u1"), settledAssistant, activeRecord];
 
-    const { result, rerender } = renderHook(
-      ({ live }: { live: LiveAssistantMessage }) =>
-        useRenderedMessages(partitionInput(messages, live), displayContext),
-      {
-        initialProps: {
-          live: liveTurn(
-            "turn-2",
-            [turnTextBlock("block-3", 4100, "streaming")],
-            4000,
-          ),
-        },
-      },
-    );
-    const first = result.current;
-
-    rerender({
-      live: liveTurn(
-        "turn-2",
-        [
-          turnTextBlock("block-3", 4100, "streaming"),
-          turnTextBlock("block-4", 4200, "more streaming"),
-        ],
-        4000,
+    const driver = renderRenderedMessages(
+      partitionInput(
+        messages,
+        liveTurn("turn-2", [turnTextBlock("block-3", 4100, "streaming")], 4000),
       ),
-    });
-    const second = result.current;
+    );
+    const first = driver.result.current;
+
+    // Same `messages` array identity; only the live turn advances so settled
+    // rows must stay referentially stable while the active row recomputes.
+    driver.set(
+      partitionInput(
+        messages,
+        liveTurn(
+          "turn-2",
+          [
+            turnTextBlock("block-3", 4100, "streaming"),
+            turnTextBlock("block-4", 4200, "more streaming"),
+          ],
+          4000,
+        ),
+      ),
+    );
+    const second = driver.result.current;
 
     const firstSettledRow = first.find((row) => row.id === "assistant:turn-1");
     const secondSettledRow = second.find(
@@ -4665,9 +4197,7 @@ describe("useRenderedMessages head/tail partition", () => {
       4000,
     );
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(partitionInput(messages, live), displayContext),
-    );
+    const { result } = renderRenderedMessages(partitionInput(messages, live));
 
     const steeredRows = result.current.filter(
       (row) => row.id === "steered-user-1",
@@ -4713,11 +4243,8 @@ describe("useRenderedMessages head/tail partition", () => {
       ],
       4000,
     );
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        partitionInput([userMessage("u1"), activeRecord], live),
-        displayContext,
-      ),
+    const { result } = renderRenderedMessages(
+      partitionInput([userMessage("u1"), activeRecord], live),
     );
     return result.current.find((row) => row.steerBadge?.status === "steered");
   }
@@ -4778,9 +4305,7 @@ describe("useRenderedMessages head/tail partition", () => {
       4000,
     );
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(partitionInput(messages, live), displayContext),
-    );
+    const { result } = renderRenderedMessages(partitionInput(messages, live));
 
     expect(result.current.map((row) => row.id)).toEqual([
       "u1",
@@ -4790,7 +4315,7 @@ describe("useRenderedMessages head/tail partition", () => {
     ]);
   });
 
-  it("suppresses code:auth error segments while keeping surrounding content", () => {
+  it("renders code:auth error segments alongside other errors (no suppression)", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [
@@ -4800,37 +4325,36 @@ describe("useRenderedMessages head/tail partition", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        partitionInput([userMessage("u1"), assistant], null),
-        displayContext,
-      ),
+    const { result } = renderRenderedMessages(
+      partitionInput([userMessage("u1"), assistant], null),
     );
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
     expect(row?.segments.some((s) => s.kind === "text")).toBe(true);
-    // The auth error is gone; the non-auth error survives.
+    // Auth errors render like any other error: suppressing them made headless
+    // (A2A-triggered) auth failures invisible once the transient re-auth
+    // banner cleared.
     const errorSegments = row?.segments.filter((s) => s.kind === "error") ?? [];
-    expect(errorSegments).toHaveLength(1);
-    const onlyError = errorSegments[0];
-    expect(onlyError.code).toBe("RUNTIME_THROWN");
+    expect(errorSegments.map((segment) => segment.code)).toEqual([
+      "auth",
+      "RUNTIME_THROWN",
+    ]);
   });
 
-  it("collapses an auth-only turn to zero segments", () => {
+  it("keeps an auth-only turn's error segment as its durable record", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [turnErrorBlock("block-1", 2000, "auth")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        partitionInput([userMessage("u1"), assistant], null),
-        displayContext,
-      ),
+    const { result } = renderRenderedMessages(
+      partitionInput([userMessage("u1"), assistant], null),
     );
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
-    expect(row?.segments ?? []).toHaveLength(0);
+    const segments = row?.segments ?? [];
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.kind).toBe("error");
   });
 });
 
@@ -4838,7 +4362,7 @@ describe("useRenderedMessages turn.stopped", () => {
   function terminalEvent(input: {
     readonly type: Extract<
       ChatEvent["type"],
-      "turn.stopped" | "turn.interrupted" | "turn.completed"
+      "turn.started" | "turn.stopped" | "turn.interrupted" | "turn.completed"
     >;
     readonly timestamp: number;
     readonly turnId: string | null;
@@ -4918,38 +4442,30 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 14_000, "Partial answer")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("leaves the stopped marker null for a turn that completed naturally", () => {
@@ -4959,33 +4475,656 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Done")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.completed",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              message: "Turn completed.",
-              severity: "info",
-              metadata: null,
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
     expect(row?.stopped).toBeNull();
+  });
+
+  it("uses lifecycle timing after an autonomous-resume notification is adopted", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+    const interveningUser = userMessageAt("m2", 12_500);
+
+    const driver = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, interveningUser],
+    });
+
+    const notificationRow = driver.result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(notificationRow?.segments.map((segment) => segment.kind)).toEqual([
+      "autonomous_resume",
+    ]);
+    expect(notificationRow).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(notificationRow?.elapsedStartedAt).toBeUndefined();
+
+    driver.patch({
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const resumedRow = driver.result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(resumedRow).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+    expect(
+      driver.result.current.findIndex(
+        (message) => message.id === resumedRow?.id,
+      ),
+    ).toBeLessThan(
+      driver.result.current.findIndex((message) => message.id === "m2"),
+    );
+  });
+
+  it("keeps an adopted start without a terminal event footerless", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // A fatal connection close clears the active turn while the provider may
+    // still be running: turn.started exists, its terminal event does not. A
+    // start alone must not fabricate a "Resumed · no response · 0s" footer.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    // The live timer still seeds from the provider start.
+    expect(row?.elapsedStartedAt).toBe(13_000);
+  });
+
+  it("keeps lifecycle timing after the adopted resume produces output", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        textBlock("block-1", 14_000, "Resumed answer"),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    // The first response block must not switch the turn back to the
+    // pre-resume persisted start - the elapsed interval stays the provider
+    // window.
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: false,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("measures a steered continuation from the resumed attempt's start", () => {
+    const steeredUser = userMessageAt("m2", 12_500);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        steerBlock("steer-1", "m2", 12_500),
+      ],
+    };
+
+    // Safe-point steering continuations reuse the turnId, so the turn can
+    // carry a pre-steer turn.started. The resumed attempt is the LATEST
+    // window; collapsing starts to their minimum would stretch the silent
+    // resume's elapsed across both attempts.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      elapsedStartedAt: 13_000,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("scopes pause accounting to the resumed attempt's window", () => {
+    const approvalEvent = (
+      type: "approval.requested" | "approval.resolved",
+      approvalId: string,
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId: `event:${type}:${approvalId}:${timestamp}`,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: "turn-resume",
+      messageId: "m1",
+      queueItemId: null,
+      approvalId,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    });
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // Attempt 1 pauses 8.5s → 9s; the resumed attempt (13s → 15s) pauses
+    // 13.5s → 14s. Only the in-window wait may subtract from the resumed
+    // attempt's duration.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        approvalEvent("approval.requested", "appr-1", 8_500),
+        approvalEvent("approval.resolved", "appr-1", 9_000),
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        approvalEvent("approval.requested", "appr-2", 13_500),
+        approvalEvent("approval.resolved", "appr-2", 14_000),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      elapsedStartedAt: 13_000,
+      completedAt: 15_000,
+    });
+    expect(row?.pausedDurationMs).toBe(500);
+  });
+
+  it("ignores a completed attempt window that predates the resume divider", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // The reused turnId completed an attempt BEFORE the notification was
+    // persisted, and the provider never started again. That window predates
+    // the divider it would prove adopted - the row must stay a footerless
+    // notification instead of rendering "Resumed · no response" with the
+    // stale window's timing.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 9_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("adopts a window whose start ties the resume divider timestamp", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // The host stamps the divider before launching the adopting provider
+    // turn, so a same-millisecond `turn.started` is the resumed attempt, not
+    // pre-resume history.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 12_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 12_000,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("does not seed the live timer from a pre-resume start without a terminal", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // A stale open window from before the notification (a connection close
+    // never delivered the terminal event) must not adopt the live timer -
+    // unlike a start AFTER the divider, which legitimately seeds it.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("keeps an autonomous-resume notification terminal but footerless when only an end event exists", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.interrupted",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "The background continuation ended before producing output.",
+          severity: "info",
+          metadata: {
+            reason:
+              "The background continuation ended before producing output.",
+            code: "AUTONOMOUS_RESUME_LOST",
+            recoverable: true,
+          },
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("retains a stopped boundary on an autonomous-resume notification without a start event", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      completedAt: 15_000,
+      stopped: {
+        stoppedAt: 15_000,
+        reason: "Stop requested by owner.",
+        turnHadOutput: false,
+      },
+    });
+  });
+
+  it("checks every assistant slice before classifying an autonomous resume as silent", () => {
+    const steeredUser = userMessageAt("m2", 12_000);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 14_000,
+      blocks: [
+        textBlock("block-1", 11_000, "Earlier response"),
+        steerBlock("steer-1", steeredUser.messageId, 12_000),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 14_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 10_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    const completedRow = assistantRows.find(
+      (message) => message.completedAt !== null,
+    );
+    expect(completedRow?.segments.map((segment) => segment.kind)).toEqual([
+      "autonomous_resume",
+    ]);
+    expect(completedRow?.turnHasOnlyAutonomousResumeSegments).toBe(false);
+  });
+
+  it("uses lifecycle timing for a silent autonomous resume that contains a steer", () => {
+    const steeredUser = userMessageAt("m2", 14_000);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 14_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        steerBlock("steer-1", steeredUser.messageId, 14_000),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const completedRow = result.current.find(
+      (message) => message.role === "assistant" && message.completedAt !== null,
+    );
+    expect(completedRow).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
   });
 
   it("does not produce a stopped marker for a steer-restart turn.interrupted event", () => {
@@ -4995,32 +5134,22 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.interrupted",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              message: "Restarted by a same-turn steer.",
-              severity: "info",
-              metadata: {
-                reason: "Restarted by a same-turn steer.",
-                code: "STEER_RESTART",
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.interrupted",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          message: "Restarted by a same-turn steer.",
+          severity: "info",
+          metadata: {
+            reason: "Restarted by a same-turn steer.",
+            code: "STEER_RESTART",
+          },
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
@@ -5034,35 +5163,24 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.interrupted",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              message:
-                "The background continuation ended before producing output.",
-              severity: "info",
-              metadata: {
-                reason:
-                  "The background continuation ended before producing output.",
-                code: "AUTONOMOUS_RESUME_LOST",
-                recoverable: true,
-              },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.interrupted",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          message: "The background continuation ended before producing output.",
+          severity: "info",
+          metadata: {
+            reason:
+              "The background continuation ended before producing output.",
+            code: "AUTONOMOUS_RESUME_LOST",
+            recoverable: true,
+          },
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
@@ -5085,38 +5203,30 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 15_000,
-              turnId: "turn-1",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.segments.at(-1)?.kind).toBe("error");
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Working on it",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("Working on it");
   });
 
   it("renders an empty completed turn with the stopped marker (stopped before responding)", () => {
@@ -5126,65 +5236,47 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 11_000,
-              turnId: "turn-1",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 11_000,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.segments ?? []).toHaveLength(0);
     expect(row?.completedAt).toBe(11_000);
-    expect(row?.stopped).toEqual({
+    expect(row?.stopped).toMatchObject({
       stoppedAt: 11_000,
       reason: "Stop requested by owner.",
       turnHadOutput: false,
-      turnReplyText: "",
     });
+    expect(
+      collectAssistantReplyText(row?.stopped?.turnReplySegments ?? []),
+    ).toBe("");
   });
 
   it("synthesizes a stopped boundary when no assistant record ever materialized", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1")],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 11_000,
-              turnId: "turn-pre-setup",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 11_000,
+          turnId: "turn-pre-setup",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     const row = result.current.find((message) => message.role === "assistant");
     expect(row).toMatchObject({
@@ -5198,46 +5290,36 @@ describe("useRenderedMessages turn.stopped", () => {
         stoppedAt: 11_000,
         reason: "Stop requested by owner.",
         turnHadOutput: false,
-        turnReplyText: "",
+        turnReplySegments: [],
       },
     });
   });
 
   it("does not resurrect an event-only stopped turn whose user message was removed", () => {
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 11_000,
-              turnId: "turn-removed",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 11_000,
+          turnId: "turn-removed",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     expect(result.current).toHaveLength(0);
   });
 
   it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-pre-setup",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -5245,7 +5327,7 @@ describe("useRenderedMessages turn.stopped", () => {
       reasoningEffort: null,
       serviceTier: null,
     };
-    const baseInput: RenderedMessagesInput = {
+    const baseInput = renderedMessagesInput({
       messages: [userMessage("m1")],
       events: [
         terminalEvent({
@@ -5257,34 +5339,24 @@ describe("useRenderedMessages turn.stopped", () => {
           metadata: { reason: "Stop requested by owner." },
         }),
       ],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
       activeTurn,
       runStatus: "stopping",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: baseInput } },
-    );
+    const driver = renderRenderedMessages(baseInput);
 
-    const stopping = result.current.find(
+    const stopping = driver.result.current.find(
       (message) => message.role === "assistant",
     );
     expect(stopping?.runState).toBe("stopping");
     expect(stopping?.stopped).toBeNull();
 
-    rerender({
-      value: {
-        ...baseInput,
-        activeTurn: null,
-        runStatus: "idle",
-      },
+    driver.patch({
+      activeTurn: null,
+      runStatus: "idle",
     });
 
-    const settled = result.current.find(
+    const settled = driver.result.current.find(
       (message) => message.role === "assistant",
     );
     expect(settled?.runState).toBeNull();
@@ -5306,34 +5378,24 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-2", 22_000, "Done")],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [
-            userMessage("m1"),
-            stoppedAssistant,
-            userMessageAt("m2", 15_000),
-            completedAssistant,
-          ],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 12_000,
-              turnId: "turn-1",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [
+        userMessage("m1"),
+        stoppedAssistant,
+        userMessageAt("m2", 15_000),
+        completedAssistant,
+      ],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 12_000,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     const assistantRows = result.current.filter(
       (message) => message.role === "assistant",
@@ -5358,29 +5420,19 @@ describe("useRenderedMessages turn.stopped", () => {
       ],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 13_000,
-              turnId: "turn-1",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 13_000,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     const rows = result.current;
     const assistantRows = rows.filter((row) => row.role === "assistant");
@@ -5399,7 +5451,7 @@ describe("useRenderedMessages turn.stopped", () => {
     // createdAt anchors to the turn's true startedAt (not an ordering-only
     // bumped timestamp), so completedAt - createdAt measures the whole turn.
     expect(trailingRow?.createdAt).toBe(10_000);
-    expect(trailingRow?.stopped).toEqual({
+    expect(trailingRow?.stopped).toMatchObject({
       stoppedAt: 13_000,
       reason: "Stop requested by owner.",
       // The turn DID produce output (the text chunk above the steer) even
@@ -5408,8 +5460,10 @@ describe("useRenderedMessages turn.stopped", () => {
       // The turn's copyable reply text, aggregated from the text chunk
       // above the steer even though this boundary row's own segments are
       // empty - the copy control needs somewhere to source it from.
-      turnReplyText: "Working on it",
     });
+    expect(
+      collectAssistantReplyText(trailingRow?.stopped?.turnReplySegments ?? []),
+    ).toBe("Working on it");
     // The trailing row sorts after the nested steer bubble, not before it.
     const steerIndex = rows.findIndex(
       (row) => row.id === "steer:queue:block-2",
@@ -5426,29 +5480,19 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [steerBlock("block-1", "steer-msg-1", 10_500)],
     };
 
-    const { result } = renderHook(() =>
-      useRenderedMessages(
-        {
-          messages: [userMessage("m1"), assistant],
-          events: [
-            terminalEvent({
-              type: "turn.stopped",
-              timestamp: 10_500,
-              turnId: "turn-1",
-              message: "Stop requested by owner.",
-              severity: "warning",
-              metadata: { reason: "Stop requested by owner." },
-            }),
-          ],
-          pendingUserMessages: [],
-          liveAssistantMessage: null,
-          activeTurn: null,
-          runStatus: "idle",
-          ...BINDING,
-        },
-        displayContext,
-      ),
-    );
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 10_500,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
 
     // Before the fix, a steer-only turn produced no assistant row at all, so
     // neither "Stopped · …" nor "Stopped before responding" had anywhere to
@@ -5462,12 +5506,14 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(trailingRow.completedAt).toBe(10_500);
     // createdAt anchors to startedAt here too - there's no earlier chunk.
     expect(trailingRow.createdAt).toBe(10_000);
-    expect(trailingRow.stopped).toEqual({
+    expect(trailingRow.stopped).toMatchObject({
       stoppedAt: 10_500,
       reason: "Stop requested by owner.",
       turnHadOutput: false,
-      turnReplyText: "",
     });
+    expect(
+      collectAssistantReplyText(trailingRow.stopped?.turnReplySegments ?? []),
+    ).toBe("");
   });
 
   it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {
@@ -5476,49 +5522,40 @@ describe("useRenderedMessages turn.stopped", () => {
       timestamp: 15_000,
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
-    const baseInput: RenderedMessagesInput = {
+    const baseInput = renderedMessagesInput({
       messages: [userMessage("m1"), assistant],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
+    });
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: baseInput } },
+    const driver = renderRenderedMessages(baseInput);
+
+    const before = driver.result.current.find(
+      (row) => row.role === "assistant",
     );
-
-    const before = result.current.find((row) => row.role === "assistant");
     expect(before?.completedAt).toBe(15_000);
     expect(before?.stopped).toBeNull();
 
-    rerender({
-      value: {
-        ...baseInput,
-        events: [
-          terminalEvent({
-            type: "turn.stopped",
-            timestamp: 15_000,
-            turnId: "turn-1",
-            message: "Stop requested by owner.",
-            severity: "warning",
-            metadata: { reason: "Stop requested by owner." },
-          }),
-        ],
-      },
+    driver.patch({
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 15_000,
+          turnId: "turn-1",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
     });
 
-    const after = result.current.find((row) => row.role === "assistant");
-    expect(after?.stopped).toEqual({
+    const after = driver.result.current.find((row) => row.role === "assistant");
+    expect(after?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(after?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("suppresses the stopped marker while the turn is still active, even once its event has landed, then shows it once the snapshot catches up", () => {
@@ -5528,11 +5565,12 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
     const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
       model: "claude-sonnet-4-5",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "m1",
       startedAt: 10_000,
@@ -5550,64 +5588,52 @@ describe("useRenderedMessages turn.stopped", () => {
     });
     const messages = [userMessage("m1"), assistant];
 
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      {
-        initialProps: {
-          value: {
-            messages,
-            events: [],
-            pendingUserMessages: [],
-            liveAssistantMessage: null,
-            activeTurn,
-            runStatus: "stopping",
-            ...BINDING,
-          },
-        },
-      },
-    );
+    const driver = renderRenderedMessages({
+      messages,
+      activeTurn,
+      runStatus: "stopping",
+    });
 
-    const active = result.current.find((row) => row.role === "assistant");
+    const active = driver.result.current.find(
+      (row) => row.role === "assistant",
+    );
     expect(active?.completedAt).toBeNull();
     expect(active?.stopped).toBeNull();
 
     // Race: the event lands in the log before a snapshot clears the active turn.
-    rerender({
-      value: {
+    driver.set(
+      renderedMessagesInput({
         messages,
         events: [stoppedEvent],
-        pendingUserMessages: [],
-        liveAssistantMessage: null,
         activeTurn,
         runStatus: "stopping",
-        ...BINDING,
-      },
-    });
-    const stillActive = result.current.find((row) => row.role === "assistant");
+      }),
+    );
+    const stillActive = driver.result.current.find(
+      (row) => row.role === "assistant",
+    );
     expect(stillActive?.completedAt).toBeNull();
     expect(stillActive?.stopped).toBeNull();
 
     // The snapshot catches up: the turn is no longer active.
-    rerender({
-      value: {
+    driver.set(
+      renderedMessagesInput({
         messages,
         events: [stoppedEvent],
-        pendingUserMessages: [],
-        liveAssistantMessage: null,
-        activeTurn: null,
-        runStatus: "idle",
-        ...BINDING,
-      },
-    });
-    const settled = result.current.find((row) => row.role === "assistant");
+      }),
+    );
+    const settled = driver.result.current.find(
+      (row) => row.role === "assistant",
+    );
     expect(settled?.completedAt).toBe(15_000);
-    expect(settled?.stopped).toEqual({
+    expect(settled?.stopped).toMatchObject({
       stoppedAt: 15_000,
       reason: "Stop requested by owner.",
       turnHadOutput: true,
-      turnReplyText: "Partial answer",
     });
+    expect(
+      collectAssistantReplyText(settled?.stopped?.turnReplySegments ?? []),
+    ).toBe("Partial answer");
   });
 
   it("keeps an unrelated turn's row reference stable when a sibling turn's turn.stopped event is appended", () => {
@@ -5621,54 +5647,117 @@ describe("useRenderedMessages turn.stopped", () => {
       timestamp: 6000,
       blocks: [textBlock("block-2", 6000, "Partial")],
     };
-    const baseInput: RenderedMessagesInput = {
+    const baseInput = renderedMessagesInput({
       messages: [
         userMessage("m1"),
         untouchedAssistant,
         userMessageAt("m2", 4000),
         stoppedAssistant,
       ],
-      events: [],
-      pendingUserMessages: [],
-      liveAssistantMessage: null,
-      activeTurn: null,
-      runStatus: "idle",
-      ...BINDING,
-    };
-
-    const { result, rerender } = renderHook(
-      ({ value }: { value: RenderedMessagesInput }) =>
-        useRenderedMessages(value, displayContext),
-      { initialProps: { value: baseInput } },
-    );
-
-    const untouchedBefore = result.current.find(
-      (row) => row.id === "assistant:turn-1",
-    );
-
-    rerender({
-      value: {
-        ...baseInput,
-        events: [
-          terminalEvent({
-            type: "turn.stopped",
-            timestamp: 6000,
-            turnId: "turn-2",
-            message: "Stop requested by owner.",
-            severity: "warning",
-            metadata: { reason: "Stop requested by owner." },
-          }),
-        ],
-      },
     });
 
-    const untouchedAfter = result.current.find(
+    const driver = renderRenderedMessages(baseInput);
+
+    const untouchedBefore = driver.result.current.find(
       (row) => row.id === "assistant:turn-1",
     );
-    const stoppedAfter = result.current.find(
+
+    driver.patch({
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 6000,
+          turnId: "turn-2",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
+
+    const untouchedAfter = driver.result.current.find(
+      (row) => row.id === "assistant:turn-1",
+    );
+    const stoppedAfter = driver.result.current.find(
       (row) => row.id === "assistant:turn-2",
     );
     expect(untouchedAfter).toBe(untouchedBefore);
     expect(stoppedAfter?.stopped).not.toBeNull();
+  });
+  it("merges a multi-record turn without mutating the source record's blocks", () => {
+    // The accumulator now ALIASES the first record's block array and clones
+    // only on the first append. If that clone-on-write is ever lost, merging
+    // a sibling record would grow the persisted record's own array in place.
+    const first = {
+      ...assistantMessage("turn-merge", 2000),
+      messageId: "record-1",
+      blocks: [plainTextBlock("block-a", 2000, "first half")],
+    };
+    const second = {
+      ...assistantMessage("turn-merge", 2100),
+      messageId: "record-2",
+      blocks: [plainTextBlock("block-b", 2100, "second half")],
+    };
+    const firstBlocksRef = first.blocks;
+
+    const { result } = renderRenderedMessages({
+      messages: [first, second],
+    });
+
+    // Source record untouched...
+    expect(first.blocks).toBe(firstBlocksRef);
+    expect(first.blocks).toHaveLength(1);
+    expect(second.blocks).toHaveLength(1);
+    // ...and the rendered turn still carries both records' content, in order.
+    // `length > 0` alone passed even if merging dropped `second half`.
+    expect(
+      collectAssistantReplyText(
+        result.current.flatMap((row) =>
+          row.role === "assistant" ? row.segments : [],
+        ),
+      ),
+    ).toBe("first half\n\nsecond half");
+  });
+});
+describe("assistant turn render cache invalidation", () => {
+  it("re-renders a single-record turn whose blocks are replaced at the same blocksVersion", () => {
+    // An authoritative snapshot can rebuild a record with the SAME messageId,
+    // timestamp and persisted counter (counters restart at 0 on a rebuild).
+    // Keying on the counter alone then serves the previous render forever and
+    // the transcript stays visibly frozen at the older content.
+    const first = assistantMessage("turn-1", 10_000);
+    const firstRecord = {
+      ...first,
+      blocksVersion: 0,
+      blocks: [plainTextBlock("b1", 10_000, "original answer")],
+    };
+
+    const driver = renderRenderedMessages({
+      messages: [userMessage("m1"), firstRecord],
+    });
+
+    const textOf = (
+      row: { readonly segments: ReadonlyArray<MessageSegment> } | undefined,
+    ): string =>
+      (row?.segments ?? [])
+        .map((segment) => (segment.kind === "text" ? segment.markdown : ""))
+        .join("");
+
+    const before = driver.result.current.find(
+      (row) => row.role === "assistant",
+    );
+    expect(textOf(before)).toContain("original answer");
+
+    // Same id, same timestamp, same counter - only the blocks array is new.
+    const replaced = {
+      ...firstRecord,
+      blocks: [plainTextBlock("b1", 10_000, "corrected answer")],
+    };
+    driver.patch({
+      messages: [userMessage("m1"), replaced],
+    });
+
+    const after = driver.result.current.find((row) => row.role === "assistant");
+    expect(textOf(after)).toContain("corrected answer");
   });
 });

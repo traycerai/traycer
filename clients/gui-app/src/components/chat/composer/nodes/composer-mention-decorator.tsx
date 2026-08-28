@@ -1,4 +1,11 @@
-import { Folder, FolderGit2, GitBranch, Layers } from "lucide-react";
+import {
+  CircleDot,
+  Folder,
+  FolderGit2,
+  GitBranch,
+  GitPullRequest,
+  Layers,
+} from "lucide-react";
 import type { ReactElement } from "react";
 import type { MentionAttachment } from "@/lib/composer/types";
 import { MaterialFileIcon } from "@/components/material-file-icon";
@@ -48,10 +55,30 @@ function DecoratorIcon({
       <Layers className={cn(className, "text-muted-foreground")} aria-hidden />
     );
   }
-  if (mention.contextType === "chat") {
-    const Icon = EPIC_NODE_ICONS.chat;
+  if (
+    mention.contextType === "chat" ||
+    mention.contextType === "terminal-agent" ||
+    mention.contextType === "terminal"
+  ) {
+    const Icon = EPIC_NODE_ICONS[mention.contextType];
     return (
       <Icon className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
+  }
+  if (mention.contextType === "github_pull_request") {
+    return (
+      <GitPullRequest
+        className={cn(className, "text-muted-foreground")}
+        aria-hidden
+      />
+    );
+  }
+  if (mention.contextType === "github_issue") {
+    return (
+      <CircleDot
+        className={cn(className, "text-muted-foreground")}
+        aria-hidden
+      />
     );
   }
   if (

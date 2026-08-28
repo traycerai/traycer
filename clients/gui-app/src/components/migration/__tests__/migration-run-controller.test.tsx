@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render } from "@testing-library/react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import type { ExternalToast } from "sonner";
@@ -65,6 +64,8 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-test" }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ getActiveHostId: () => "host-test" }),
 }));
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({

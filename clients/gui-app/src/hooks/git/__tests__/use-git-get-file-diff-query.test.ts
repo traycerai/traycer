@@ -5,24 +5,75 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+  type GitGetFileDiffRequest,
   type GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostRpcRegistry } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useGitGetFileDiffQuery } from "../use-git-get-file-diff-query";
 
-const circularSchema: { def: { element: object | null } } = {
-  def: { element: null },
-};
-circularSchema.def.element = circularSchema;
+// The client is an ARGUMENT now, not an ambient read. The hook used to call
+// `useHostClient()` while taking `hostId` separately and asserting in a comment
+// that the two were "correlated 1:1" - they were not, which is the D15 defect
+// `routesToThePassedClient` below pins. There is deliberately NO `@/lib/host`
+// mock left in this file: an app-wide read reintroduced here has nothing to
+// answer it.
+//
+// Real clients over mock messengers rather than chained `as unknown as`
+// assertions - the repo's lint forbids those in tests as much as in production,
+// and a stub would also hide the day this hook starts calling something it
+// lacks.
+function buildClient(args: {
+  readonly entry: typeof mockLocalHostEntry;
+  readonly onFileDiff: (
+    request: GitGetFileDiffRequest,
+  ) => GitGetFileDiffResponse;
+}) {
+  let requestCount = 0;
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === args.entry.hostId ? args.entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () =>
+        `req-${args.entry.hostId}-${String((requestCount += 1))}`,
+      handlers: { "git.getFileDiff": args.onFileDiff },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(args.entry);
+}
 
-const mockHostClient = {
-  request: vi.fn(),
-  schema: circularSchema,
-};
+const diffResponse = (patch: string): GitGetFileDiffResponse => ({
+  filePath: "src/file.ts",
+  headSha: "abc123",
+  stagedOid: "oid-staged",
+  worktreeOid: "oid-worktree",
+  patch,
+  isTruncated: false,
+  truncatedAfterBytes: null,
+  isBinary: false,
+});
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => mockHostClient,
-}));
+// The TILE's client. Every existing arm passes this one.
+let tileRequests: GitGetFileDiffRequest[] = [];
+let tileClient: HostClient<HostRpcRegistry>;
+// A SECOND client for the host the app is pointed at while the tile stays bound
+// to its own. Nothing in this file may reach it.
+let appWideRequests: GitGetFileDiffRequest[] = [];
+let appWideClient: HostClient<HostRpcRegistry>;
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
@@ -33,9 +84,27 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 
 describe("useGitGetFileDiffQuery", () => {
   let queryClient: QueryClient;
+  let diffPatch = "diff";
 
   beforeEach(() => {
     vi.clearAllMocks();
+    tileRequests = [];
+    appWideRequests = [];
+    tileClient = buildClient({
+      entry: mockLocalHostEntry,
+      onFileDiff: (request) => {
+        tileRequests.push(request);
+        return diffResponse(diffPatch);
+      },
+    });
+    appWideClient = buildClient({
+      entry: mockRemoteHostEntry,
+      onFileDiff: (request) => {
+        appWideRequests.push(request);
+        return diffResponse("app-wide host's diff");
+      },
+    });
+    diffPatch = "diff";
     queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -78,22 +147,11 @@ describe("useGitGetFileDiffQuery", () => {
   });
 
   it("keeps the circular host client out of the TanStack query key", async () => {
-    const response: GitGetFileDiffResponse = {
-      filePath: "src/file.ts",
-      headSha: "abc123",
-      stagedOid: "oid-staged",
-      worktreeOid: "oid-worktree",
-      patch: "diff",
-      isTruncated: false,
-      truncatedAfterBytes: null,
-      isBinary: false,
-    };
-    mockHostClient.request.mockResolvedValue(response);
-
     const wrapper = makeWrapper();
     const { result } = renderHook(
       () =>
         useGitGetFileDiffQuery({
+          client: tileClient,
           hostId: "host-1",
           runningDir: "/repo",
           filePath: "src/file.ts",
@@ -110,18 +168,20 @@ describe("useGitGetFileDiffQuery", () => {
     );
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockHostClient.request).toHaveBeenCalledWith("git.getFileDiff", {
-      hostId: "host-1",
-      runningDir: "/repo",
-      filePath: "src/file.ts",
-      previousPath: null,
-      stage: "unstaged",
-      ignoreWhitespace: false,
-      byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    });
+    expect(tileRequests).toEqual([
+      {
+        hostId: "host-1",
+        runningDir: "/repo",
+        filePath: "src/file.ts",
+        previousPath: null,
+        stage: "unstaged",
+        ignoreWhitespace: false,
+        byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+      },
+    ]);
     const queries = queryClient.getQueryCache().getAll();
     expect(queries).toHaveLength(1);
-    expect(queries[0].queryKey).not.toContain(mockHostClient);
+    expect(queries[0].queryKey).not.toContain(tileClient);
     expect(() => JSON.stringify(queries[0].queryKey)).not.toThrow();
   });
 
@@ -129,6 +189,7 @@ describe("useGitGetFileDiffQuery", () => {
     const { result } = renderHook(
       () =>
         useGitGetFileDiffQuery({
+          client: tileClient,
           hostId: "host-1",
           runningDir: "/path",
           filePath: "/path/file.ts",
@@ -147,25 +208,16 @@ describe("useGitGetFileDiffQuery", () => {
     await Promise.resolve();
 
     expect(result.current.isFetching).toBe(false);
-    expect(mockHostClient.request).not.toHaveBeenCalled();
+    expect(tileRequests).toEqual([]);
   });
 
   it("passes null byteBudget for uncapped full diff requests", async () => {
-    const response: GitGetFileDiffResponse = {
-      filePath: "src/file.ts",
-      headSha: "abc123",
-      stagedOid: null,
-      worktreeOid: "oid-worktree",
-      patch: "full diff",
-      isTruncated: false,
-      truncatedAfterBytes: null,
-      isBinary: false,
-    };
-    mockHostClient.request.mockResolvedValue(response);
+    diffPatch = "full diff";
 
     const { result } = renderHook(
       () =>
         useGitGetFileDiffQuery({
+          client: tileClient,
           hostId: "host-1",
           runningDir: "/repo",
           filePath: "src/file.ts",
@@ -183,21 +235,60 @@ describe("useGitGetFileDiffQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(mockHostClient.request).toHaveBeenCalledWith("git.getFileDiff", {
-      hostId: "host-1",
-      runningDir: "/repo",
-      filePath: "src/file.ts",
-      previousPath: null,
-      stage: "unstaged",
-      ignoreWhitespace: false,
-      byteBudget: null,
-    });
+    expect(tileRequests).toEqual([
+      {
+        hostId: "host-1",
+        runningDir: "/repo",
+        filePath: "src/file.ts",
+        previousPath: null,
+        stage: "unstaged",
+        ignoreWhitespace: false,
+        byteBudget: null,
+      },
+    ]);
+  });
+
+  // The D15 arm. `hostId` names the TILE's host and `client` must be the one
+  // that addresses it; the hook used to read `useHostClient()` here, so a tile
+  // bound to A kept its A-shaped query key while the request went to whichever
+  // host the app was pointed at. Two real clients, and the app-wide one must
+  // stay untouched.
+  it("routes the request to the PASSED client, never an app-wide one", async () => {
+    const { result } = renderHook(
+      () =>
+        useGitGetFileDiffQuery({
+          client: tileClient,
+          hostId: mockLocalHostEntry.hostId,
+          runningDir: "/repo",
+          filePath: "src/file.ts",
+          previousPath: null,
+          stage: "unstaged",
+          headSha: "abc123",
+          stagedOid: "oid-staged",
+          worktreeOid: "oid-worktree",
+          ignoreWhitespace: false,
+          byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+          enabled: true,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // Non-vacuous in both directions: the tile's messenger answered, and the
+    // app-wide client - which is live and would have answered with a different
+    // patch - was never asked.
+    expect(tileRequests).toHaveLength(1);
+    expect(tileClient.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
+    expect(appWideRequests).toEqual([]);
+    expect(appWideClient.getActiveHostId()).toBe(mockRemoteHostEntry.hostId);
+    expect(result.current.data?.patch).toBe("diff");
   });
 
   it("does not request when hostId is null", async () => {
     const { result } = renderHook(
       () =>
         useGitGetFileDiffQuery({
+          client: tileClient,
           hostId: null,
           runningDir: "/path",
           filePath: "/path/file.ts",
@@ -216,7 +307,7 @@ describe("useGitGetFileDiffQuery", () => {
     await Promise.resolve();
 
     expect(result.current.isFetching).toBe(false);
-    expect(mockHostClient.request).not.toHaveBeenCalled();
+    expect(tileRequests).toEqual([]);
   });
 
   it("OID change triggers new query key", () => {

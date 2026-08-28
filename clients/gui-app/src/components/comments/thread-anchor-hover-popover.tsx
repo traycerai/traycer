@@ -18,9 +18,12 @@ import {
 import type { Editor } from "@tiptap/core";
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { useEpicCommentThreads } from "@/hooks/comments/use-epic-comment-threads";
+import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
@@ -29,6 +32,11 @@ const HOVER_DELAY_MS = 300;
 
 export interface ThreadAnchorHoverPopoverProps {
   readonly epicId: string;
+  /** The TILE's client, handed down by `collab-tile-body.tsx`. It must be the
+   *  same one the tile's own threads query used or this cache-only read
+   *  (`enabled: false`) lands on a different host's key and never resolves a
+   *  thread (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   /** Tiptap editor for the active tile. We attach pointer listeners to
@@ -49,11 +57,20 @@ interface HoverState {
  * Lightweight 300 ms-delayed preview that surfaces a thread's quoted snapshot
  * + most recent comment when the user dwells on a `[data-thread-id]` span.
  *
+ * Dwelling is a pointing-device gesture, so the preview is offered to a mouse
+ * only. A touch pointer emits `pointerout` immediately after `pointerup`, which
+ * cancels the pending show - a tap could never open the preview - and there is
+ * no hover state to reach it from either. A tap therefore skips the preview
+ * entirely and activates the thread directly, which is what the preview's own
+ * click does.
+ *
  * Implementation notes:
- *  - We attach pointerover / pointerout listeners to the editor's root DOM
- *    rather than walking React refs - the `threadAnchor` mark is rendered by
- *    ProseMirror, not React, so a delegated DOM listener is the canonical
- *    bridge.
+ *  - We attach pointerdown / pointerover / pointerout / click listeners to the
+ *    editor's root DOM rather than walking React refs - the `threadAnchor` mark
+ *    is rendered by ProseMirror, not React, so a delegated DOM listener is the
+ *    canonical bridge. `click` carries no `pointerType`, so the preceding
+ *    `pointerdown` records which device produced it; the "mouse" default means
+ *    an event with no pointer behind it takes the desktop path.
  *  - The hover threadId is mirrored into the Zustand store so the
  *    decoration plugin paints the matching anchor at the same time the
  *    popover appears.
@@ -66,6 +83,7 @@ interface HoverState {
 export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const {
     epicId,
+    hostClient,
     artifactType,
     artifactId,
     editor,
@@ -78,11 +96,22 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const floatingRef = useRef<HTMLButtonElement | null>(null);
+  // Which device produced the gesture in flight. `click` does not carry a
+  // pointer type of its own, so it is read from the `pointerdown` that preceded
+  // it.
+  const lastPointerTypeRef = useRef<string>("mouse");
+  // Render into the pane's portal host so a hover popover triggered inside a
+  // background split pane is hidden with that pane, not shown over the partner.
+  const paneContainer = usePanePortalContainer();
 
   // Read the cached thread snapshot without firing a fresh request - the
   // hover popover should never trigger network traffic.
-  const threadsQuery = useEpicCommentThreads(epicId, artifactType, artifactId, {
-    enabled: false,
+  const threadsQuery = useEpicCommentThreadsForClient({
+    client: hostClient,
+    epicId,
+    artifactType: artifactType,
+    artifactId: artifactId,
+    options: { enabled: false },
   });
   const threadsById = useMemo(() => {
     const map = new Map<string, CommentThreadWire>();
@@ -123,7 +152,12 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     }, 100);
   }, [cancelTimers, epicId, setHoverThread]);
 
+  const handlePointerDown = useEffectEvent((event: PointerEvent) => {
+    lastPointerTypeRef.current = event.pointerType;
+  });
+
   const handlePointerOver = useEffectEvent((event: PointerEvent) => {
+    if (!isHoverCapablePointer(event.pointerType)) return;
     const anchor = findThreadAnchor(event.target);
     if (anchor === null) return;
     const threadId = anchor.dataset.threadId ?? "";
@@ -139,16 +173,43 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     scheduleHide();
   });
 
+  const handleClick = useEffectEvent((event: MouseEvent) => {
+    if (isHoverCapablePointer(lastPointerTypeRef.current)) return;
+    // A thread anchor may sit ON a link: the `threadAnchor` mark sets
+    // `excludes: ""`, so it deliberately overlaps other marks, and the artifact
+    // link layer listens for `click` on this same editor root. A tap inside a
+    // link therefore has two possible readings, and it is resolved in favour of
+    // the link - the only one of the two with no other way to reach it. Every
+    // thread on the artifact is listed in the comments panel, while a link
+    // inside a document body has no affordance but its own text. Resolving it
+    // here, on the shape of the DOM, is also what keeps the answer from
+    // depending on which surface happened to register its listener first.
+    if (findLinkAnchor(event.target) !== null) return;
+    const anchor = findThreadAnchor(event.target);
+    if (anchor === null) return;
+    const threadId = anchor.dataset.threadId ?? "";
+    if (threadId.length === 0) return;
+    if (resolvedThreadIds.has(threadId)) return;
+    cancelTimers();
+    setHover(null);
+    setHoverThread(epicId, null);
+    onActivateThread(threadId);
+  });
+
   // Delegate pointer events on the editor root. ProseMirror reuses the same
   // `editor.view.dom` reference for the lifetime of the editor instance, so
   // attaching once is safe.
   useEffect(() => {
     const root = editor.view.dom;
+    root.addEventListener("pointerdown", handlePointerDown);
     root.addEventListener("pointerover", handlePointerOver);
     root.addEventListener("pointerout", handlePointerOut);
+    root.addEventListener("click", handleClick);
     return () => {
+      root.removeEventListener("pointerdown", handlePointerDown);
       root.removeEventListener("pointerover", handlePointerOver);
       root.removeEventListener("pointerout", handlePointerOut);
+      root.removeEventListener("click", handleClick);
       cancelTimers();
     };
   }, [editor, cancelTimers]);
@@ -167,7 +228,9 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     };
     reposition();
     return autoUpdate(hover.anchor, floating, reposition);
-  }, [hover]);
+    // `paneContainer` dep: rebind positioning to the live node after the portal
+    // host settles (initially null → the pane container).
+  }, [hover, paneContainer]);
 
   if (hover === null) return null;
   if (typeof document === "undefined") return null;
@@ -231,11 +294,31 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
         {thread.comments.length === 1 ? "" : "s"} · click to open
       </p>
     </button>,
-    document.body,
+    paneContainer ?? document.body,
   );
+}
+
+/**
+ * Whether this pointer can rest on a target without committing to it - the
+ * precondition for a dwell-delayed preview. Only a mouse can: touch has no
+ * hover state, and a pen reports one so briefly that the delay outlives it.
+ * Everything else activates on the tap instead.
+ */
+function isHoverCapablePointer(pointerType: string): boolean {
+  return pointerType === "mouse";
 }
 
 function findThreadAnchor(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof HTMLElement)) return null;
   return target.closest<HTMLElement>("[data-thread-id]");
+}
+
+/**
+ * The link the artifact link layer would consider this event to be on. The
+ * selector matches that layer's own, so the two surfaces cannot disagree about
+ * what counts as a link and leave a tap claimed by both or by neither.
+ */
+function findLinkAnchor(target: EventTarget | null): HTMLAnchorElement | null {
+  if (!(target instanceof HTMLElement)) return null;
+  return target.closest<HTMLAnchorElement>("a");
 }

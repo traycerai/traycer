@@ -6,7 +6,15 @@ import type {
   ScrollRestorationAdapter,
   TileScrollAnchor,
 } from "@/hooks/scroll/scroll-restoration-adapter";
-import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
+import {
+  activateReadingPositionAccount,
+  flushPendingReadingPositionWrites,
+  readReadingPosition,
+  resetReadingPositionServiceForTests,
+  saveReadingPosition,
+  type ReadingPositionIdentity,
+} from "@/lib/reading-position";
+import { isTileScrollAnchor } from "@/hooks/scroll/scroll-anchor-types";
 
 const liveness = vi.hoisted(() => ({ live: true }));
 
@@ -21,6 +29,36 @@ const ANCHOR: TileScrollAnchor = {
   scrollHeight: 1000,
   scrollWidth: 500,
 };
+
+function identity(viewKey: string): ReadingPositionIdentity {
+  return {
+    viewKey,
+    contentKey: null,
+    deletionKey: null,
+    epicId: null,
+    hostId: null,
+    durability: "renderer-live",
+  };
+}
+
+function durableIdentity(viewKey: string): ReadingPositionIdentity {
+  return {
+    viewKey,
+    contentKey: `artifact:${viewKey}`,
+    deletionKey: `artifact:${viewKey}`,
+    epicId: "epic-1",
+    hostId: "host-1",
+    durability: "durable",
+  };
+}
+
+function seed(viewKey: string): void {
+  saveReadingPosition(identity(viewKey), "native", ANCHOR);
+}
+
+function read(viewKey: string): TileScrollAnchor | null {
+  return readReadingPosition(identity(viewKey), "native", isTileScrollAnchor);
+}
 
 interface MockAdapter {
   readonly adapter: ScrollRestorationAdapter;
@@ -41,6 +79,7 @@ function makeMockAdapter(): MockAdapter {
       captureValue = value;
     },
     adapter: {
+      surfaceKind: "native",
       captureAnchor: () => {
         state.captureCalls += 1;
         return captureValue;
@@ -73,7 +112,8 @@ function flushRaf(): void {
 
 describe("useScrollRestoration", () => {
   beforeEach(() => {
-    useTileScrollAnchorStore.setState({ anchors: {} });
+    resetReadingPositionServiceForTests();
+    window.localStorage.clear();
     liveness.live = true;
     rafQueue = [];
     canceledRafIds = new Set<number>();
@@ -102,11 +142,11 @@ describe("useScrollRestoration", () => {
 
     rerender({ visible: false });
 
-    expect(useTileScrollAnchorStore.getState().getAnchor("t1")).toEqual(ANCHOR);
+    expect(read("t1")).toEqual(ANCHOR);
   });
 
   it("restores when a hidden tile becomes visible", () => {
-    useTileScrollAnchorStore.getState().setAnchor("t1", ANCHOR);
+    seed("t1");
     const mock = makeMockAdapter();
     const { rerender } = renderHook(
       ({ visible }) => useScrollRestoration("t1", mock.adapter, visible, true),
@@ -120,7 +160,7 @@ describe("useScrollRestoration", () => {
   });
 
   it("restores on first mount when already visible (remount path)", () => {
-    useTileScrollAnchorStore.getState().setAnchor("t1", ANCHOR);
+    seed("t1");
     const mock = makeMockAdapter();
 
     renderHook(() => useScrollRestoration("t1", mock.adapter, true, true));
@@ -129,7 +169,7 @@ describe("useScrollRestoration", () => {
   });
 
   it("does not restore until content is ready, then restores on the transition", () => {
-    useTileScrollAnchorStore.getState().setAnchor("t1", ANCHOR);
+    seed("t1");
     const mock = makeMockAdapter();
     const { rerender } = renderHook(
       ({ contentReady }) =>
@@ -151,12 +191,12 @@ describe("useScrollRestoration", () => {
 
     unmount();
 
-    expect(useTileScrollAnchorStore.getState().getAnchor("t2")).toEqual(ANCHOR);
+    expect(read("t2")).toEqual(ANCHOR);
   });
 
   it("neither commits nor clears on unmount when the tile was already removed", () => {
     liveness.live = false;
-    useTileScrollAnchorStore.getState().setAnchor("t2", ANCHOR);
+    seed("t2");
     const mock = makeMockAdapter();
     const { unmount } = renderHook(() =>
       useScrollRestoration("t2", mock.adapter, true, true),
@@ -169,11 +209,11 @@ describe("useScrollRestoration", () => {
     // not clear (would duplicate the sweep). So the pre-set anchor is left
     // untouched here, and capture is never called.
     expect(mock.captureCalls).toBe(0);
-    expect(useTileScrollAnchorStore.getState().getAnchor("t2")).toEqual(ANCHOR);
+    expect(read("t2")).toEqual(ANCHOR);
   });
 
   it("retries restoration on later frames while the adapter reports retry", () => {
-    useTileScrollAnchorStore.getState().setAnchor("t3", ANCHOR);
+    seed("t3");
     const mock = makeMockAdapter();
     mock.queueApplyResults("retry", "retry", "applied");
 
@@ -189,7 +229,7 @@ describe("useScrollRestoration", () => {
   });
 
   it("keeps re-asserting on later frames while the adapter reports defend", () => {
-    useTileScrollAnchorStore.getState().setAnchor("t3", ANCHOR);
+    seed("t3");
     const mock = makeMockAdapter();
     mock.queueApplyResults("defend", "defend", "applied");
 
@@ -205,7 +245,7 @@ describe("useScrollRestoration", () => {
   });
 
   it("lets callers cancel a retry loop when user input takes over", () => {
-    useTileScrollAnchorStore.getState().setAnchor("t3", ANCHOR);
+    seed("t3");
     const mock = makeMockAdapter();
     mock.queueApplyResults("retry", "retry", "applied");
 
@@ -214,7 +254,7 @@ describe("useScrollRestoration", () => {
     );
     expect(mock.applied).toEqual([ANCHOR]);
 
-    result.current();
+    result.current.cancelRetry();
     flushRaf();
 
     expect(mock.applied).toEqual([ANCHOR]);
@@ -224,6 +264,63 @@ describe("useScrollRestoration", () => {
     const mock = makeMockAdapter();
 
     renderHook(() => useScrollRestoration("fresh", mock.adapter, true, true));
+
+    expect(mock.applied).toHaveLength(0);
+  });
+
+  it("performs one late cross-window reconciliation when the destination has not moved", () => {
+    activateReadingPositionAccount("account-1");
+    const target = durableIdentity("late-view");
+    const mock = makeMockAdapter();
+    mock.setCaptureValue(null);
+    renderHook(() => useScrollRestoration(target, mock.adapter, true, true));
+
+    saveReadingPosition(target, "native", ANCHOR);
+    flushPendingReadingPositionWrites();
+    const exactKey = Object.keys(window.localStorage).find((key) =>
+      key.includes(encodeURIComponent(target.viewKey)),
+    );
+    expect(exactKey).toBeDefined();
+    if (exactKey === undefined) throw new Error("Expected exact-view key");
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: exactKey,
+        newValue: window.localStorage.getItem(exactKey),
+        storageArea: window.localStorage,
+      }),
+    );
+
+    expect(mock.applied).toEqual([ANCHOR]);
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: exactKey,
+        newValue: window.localStorage.getItem(exactKey),
+        storageArea: window.localStorage,
+      }),
+    );
+    expect(mock.applied).toEqual([ANCHOR]);
+  });
+
+  it("lets destination interaction win over a late source storage event", () => {
+    activateReadingPositionAccount("account-1");
+    const target = durableIdentity("locally-moved-view");
+    const mock = makeMockAdapter();
+    renderHook(() => useScrollRestoration(target, mock.adapter, true, true));
+
+    saveReadingPosition(target, "native", ANCHOR);
+    flushPendingReadingPositionWrites();
+    const exactKey = Object.keys(window.localStorage).find((key) =>
+      key.includes(encodeURIComponent(target.viewKey)),
+    );
+    expect(exactKey).toBeDefined();
+    if (exactKey === undefined) throw new Error("Expected exact-view key");
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: exactKey,
+        newValue: window.localStorage.getItem(exactKey),
+        storageArea: window.localStorage,
+      }),
+    );
 
     expect(mock.applied).toHaveLength(0);
   });

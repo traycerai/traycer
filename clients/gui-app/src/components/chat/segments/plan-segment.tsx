@@ -34,6 +34,13 @@ import {
 } from "@/components/chat/chat-plan-actions-context";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useAgentPlanQuery } from "@/hooks/agent/use-agent-plan-query";
+import {
+  payloadTruncationNotice,
+  usePublishedChatSource,
+  usePublishedPlanContent,
+  type PayloadReadFailure,
+  type PublishedChatSource,
+} from "@/lib/chats/published-chat-source";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { TraycerMarkdown } from "@/markdown";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
@@ -210,7 +217,7 @@ function PlanStepRow(props: {
   );
 }
 
-function PlanModal(props: {
+interface PlanModalProps {
   readonly segment: PlanSegmentModel;
   readonly planActions: ChatPlanActionsContextValue | null;
   readonly markdownFallback: string;
@@ -219,25 +226,111 @@ function PlanModal(props: {
   readonly actionsVisible: boolean;
   readonly actionsDisabled: boolean;
   readonly onImplement: () => void;
-}) {
+}
+
+function PlanModal(props: PlanModalProps) {
+  // Hookless dispatcher - see `FileChangeInlineDiff`'s note. A live plan must
+  // not mount the cloud payload observer at all, so the two sources are
+  // component boundaries rather than two disabled queries side by side.
+  const published = usePublishedChatSource();
+  if (published === null) return <LivePlanModal {...props} />;
+  return <PublishedPlanModal {...props} source={published} />;
+}
+
+function LivePlanModal(props: PlanModalProps) {
   const { segment, planActions, markdownFallback, open } = props;
-  const hasFullContent = segment.fullContentRef !== null;
   const planQuery = useAgentPlanQuery({
     epicId: planActions?.epicId ?? "",
     chatId: planActions?.chatId ?? "",
     planId: segment.planId,
     contentIdentity: segment.contentIdentity,
-    enabled: open && hasFullContent && planActions !== null,
+    enabled: open && segment.fullContentRef !== null && planActions !== null,
   });
+  const resolved = resolvePlanModalContent(planQuery, markdownFallback);
+  return (
+    <PlanModalView
+      {...props}
+      modalMarkdown={resolved.markdown}
+      unavailable={resolved.unavailable}
+      isFetching={planQuery.isFetching}
+      truncationNotice={null}
+      // Unchanged: the local path folds its own failure into `unavailable`, and
+      // this ticket did not touch it.
+      failure={null}
+    />
+  );
+}
+
+function PublishedPlanModal(
+  props: PlanModalProps & { readonly source: PublishedChatSource },
+) {
+  const { segment, markdownFallback, open } = props;
+  // The full markdown is a cloud payload the owning host uploaded; the reading
+  // host's `agent.gui.getPlan` has never heard of this chat.
+  const publishedPlan = usePublishedPlanContent({
+    source: props.source,
+    contentHash: segment.fullContentRef?.hash ?? null,
+    enabled: open && segment.fullContentRef !== null,
+  });
+  return (
+    <PlanModalView
+      {...props}
+      modalMarkdown={publishedPlan.markdown ?? markdownFallback}
+      // A plan with no `fullContentRef` has no external content to be missing:
+      // its saved preview IS the whole plan, and the payload query is disabled
+      // on purpose. Without the first clause that disabled query's `null`
+      // markdown read as "unavailable" and warned about content that was
+      // already on screen - the live path gates the same way.
+      //
+      // The last clause is the same shape of mistake one layer up: a read that
+      // FAILED also leaves `markdown === null`, and calling that "unavailable"
+      // told the reader their plan was gone when the network was the only thing
+      // missing. That case draws the retry below instead.
+      unavailable={
+        segment.fullContentRef !== null &&
+        !publishedPlan.isLoading &&
+        publishedPlan.markdown === null &&
+        publishedPlan.failure === null
+      }
+      isFetching={publishedPlan.isLoading}
+      truncationNotice={
+        publishedPlan.truncation === null
+          ? null
+          : payloadTruncationNotice(publishedPlan.truncation)
+      }
+      failure={publishedPlan.failure}
+    />
+  );
+}
+
+/** The modal itself; only where its markdown came from differs by source. */
+function PlanModalView(
+  props: PlanModalProps & {
+    readonly modalMarkdown: string;
+    readonly unavailable: boolean;
+    /** Whether the full markdown is still on its way, from either source. */
+    readonly isFetching: boolean;
+    /**
+     * Set when the markdown is a PREFIX of the real plan. Null on the live
+     * path; a cloud payload past the reader's preview bound arrives truncated,
+     * and a plan cut mid-step must not read as the whole plan.
+     */
+    readonly truncationNotice: string | null;
+    /**
+     * Set when the full markdown's read FAILED on the wire. Null on the live
+     * path. Drawn in place of the unavailable banner: the saved preview still
+     * shows, but the reader is told the full plan is one request away rather
+     * than gone.
+     */
+    readonly failure: PayloadReadFailure | null;
+  },
+) {
+  const { segment, open, modalMarkdown, unavailable } = props;
   // The Dialog portals to <body>; re-assert the active theme on the modal so its
   // tokens (e.g. --primary-foreground for the Implement button) resolve to the
   // SAME values as the inline card, even if the portal escapes the themed root in
   // some shells.
   const { resolvedTheme, themePreset } = useResolvedTheme();
-  const { markdown: modalMarkdown, unavailable } = resolvePlanModalContent(
-    planQuery,
-    markdownFallback,
-  );
   const modalHeadline = planHeadline(segment, modalMarkdown);
   const modalBody = stripRedundantTitleHeading(modalMarkdown, modalHeadline);
   return (
@@ -261,8 +354,16 @@ function PlanModal(props: {
           </div>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-5 py-4">
-          {planQuery.isFetching ? (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground">
+          {props.truncationNotice === null ? null : (
+            <p
+              className="mb-3 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm italic text-muted-foreground"
+              data-testid="plan-truncated-notice"
+            >
+              {props.truncationNotice}
+            </p>
+          )}
+          {props.isFetching ? (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground">
               <AgentSpinningDots
                 className="text-muted-foreground"
                 testId="plan-fetch-spinner"
@@ -277,6 +378,27 @@ function PlanModal(props: {
               Full plan content is unavailable. Showing the saved preview.
             </div>
           ) : null}
+          {props.failure === null ? null : (
+            <div
+              className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground"
+              data-testid="plan-content-error"
+            >
+              <span>
+                Couldn&apos;t load the full plan. Showing the saved preview.
+              </span>
+              <button
+                type="button"
+                onClick={props.failure.retry}
+                data-testid="plan-content-retry"
+                className={cn(
+                  "underline underline-offset-2",
+                  "hover:text-foreground focus-visible:outline-none focus-visible:text-foreground",
+                )}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           <TraycerMarkdown
             className={null}
             proseSize="normal"
@@ -433,6 +555,7 @@ function planCardTone(status: PlanSegmentModel["planStatus"]): string {
     return "border-emerald-500/25 bg-emerald-500/5";
   }
   if (status === "rejected" || status === "superseded") {
+    // muted-fill-ok: plan card tone paints on the chat canvas backdrop, never card/popover
     return "border-border/35 bg-muted/20 opacity-85";
   }
   return "border-border/45 bg-card";
@@ -449,9 +572,9 @@ function statusBadgeTone(status: PlanSegmentModel["planStatus"]): string {
     return "border-destructive/30 bg-destructive/10 text-destructive";
   }
   if (status === "superseded") {
-    return "border-border/50 bg-muted/50 text-muted-foreground";
+    return "border-border/50 bg-foreground/5 text-muted-foreground";
   }
-  return "border-border/50 bg-muted/40 text-muted-foreground";
+  return "border-border/50 bg-foreground/5 text-muted-foreground";
 }
 
 // Drop the leading markdown heading from the modal body ONLY when it duplicates

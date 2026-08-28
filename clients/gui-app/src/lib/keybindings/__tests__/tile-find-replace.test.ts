@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { findConflict } from "@/lib/keybindings/conflicts";
@@ -108,7 +107,7 @@ describe("tile find replace keybinding", () => {
     expect(bindings["tile.find.replace"]).toBe("mod+alt+f");
     expect(findActionForChord("mod+alt+f")).toBe("tile.find.replace");
 
-    const conflict = findConflict(bindings, "epic.new", "mod+alt+f");
+    const conflict = findConflict(bindings, "epic.new", "mod+alt+f", []);
     expect(conflict?.severity).toBe("duplicate");
     expect(conflict?.conflictingActionId).toBe("tile.find.replace");
   });

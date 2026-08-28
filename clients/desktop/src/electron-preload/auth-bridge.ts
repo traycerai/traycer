@@ -3,9 +3,28 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
-import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
-import type { AuthTokenRefreshResult } from "../ipc-contracts/auth-types";
+import type {
+  DeregisterHostFetchResult,
+  HostListFetchResult,
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  MintHostCredentialRequest,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "../ipc-contracts/host-types";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+} from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -51,44 +70,109 @@ function subscribeAuthCallback(handler: Listener<void>): Disposable {
 }
 
 export interface AuthBridgeSurface {
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult>;
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
+  deregisterHostFromAccount(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
 
 export function buildAuthBridge(): AuthBridgeSurface {
   return {
-    validateAuthToken: (token, refreshToken) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.validateAuthToken,
-        token,
-        refreshToken,
-      ) as Promise<AuthTokenValidationResult>,
-
-    validateAuthTokenIdentity: (token, refreshToken) =>
+    validateAuthTokenIdentity: (token) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.validateAuthTokenIdentity,
         token,
-        refreshToken,
       ) as Promise<AuthIdentityValidationResult>,
 
-    refreshAuthToken: (token, refreshToken) =>
+    listRegisteredHosts: (bearerToken) =>
       ipcRenderer.invoke(
-        RunnerHostInvoke.refreshAuthToken,
-        token,
-        refreshToken,
-      ) as Promise<AuthTokenRefreshResult>,
+        RunnerHostInvoke.listRegisteredHosts,
+        bearerToken,
+      ) as Promise<HostListFetchResult>,
+
+    listUserSessions: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listUserSessions,
+        bearerToken,
+      ) as Promise<ListUserSessionsFetchResult>,
+
+    revokeUserSession: (bearerToken, familyId, useStepUpCredential) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.revokeUserSession,
+        bearerToken,
+        familyId,
+        useStepUpCredential,
+      ) as Promise<RevokeUserSessionFetchResult>,
+
+    revokeAllSessions: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.revokeAllSessions,
+        bearerToken,
+      ) as Promise<RevokeAllSessionsFetchResult>,
+
+    mintHostCredential: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintHostCredential,
+        bearerToken,
+        request,
+      ) as Promise<MintHostCredentialFetchResult>,
+
+    requestStepUpChallenge: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.requestStepUpChallenge,
+        bearerToken,
+      ) as Promise<StepUpChallengeFetchResult>,
+
+    verifyStepUpChallenge: (bearerToken, code) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.verifyStepUpChallenge,
+        bearerToken,
+        code,
+      ) as Promise<RetainedStepUpVerifyFetchResult>,
+
+    updateHostVersionPolicy: (bearerToken, hostId, input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateHostVersionPolicy,
+        bearerToken,
+        hostId,
+        input,
+      ) as Promise<UpdateHostVersionPolicyFetchResult>,
+
+    deregisterHostFromAccount: (bearerToken, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deregisterHostFromAccount,
+        bearerToken,
+        hostId,
+      ) as Promise<DeregisterHostFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to
@@ -96,6 +180,69 @@ export function buildAuthBridge(): AuthBridgeSurface {
     beginAuthAttempt: () => undefined,
 
     onAuthCallback: (handler) => subscribeAuthCallback(handler),
+  };
+}
+
+/**
+ * Renderer-side `ITokenStore` backed by the main-process `FileTokenStore`
+ * (tech plan §3). `rotate` performs the refresh spend in main under the file
+ * lock; `subscribe` receives the owned-watcher change events (source lands in
+ * §4). The renderer wraps this exactly as its `ITokenStore` implementation.
+ */
+export interface AuthTokenStoreBridgeSurface {
+  get(): Promise<StoredCredentials | null>;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<void>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
+  delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
+  subscribe(handler: Listener<TokenStoreChange>): Disposable;
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
+}
+
+export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
+  return {
+    get: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreGet,
+      ) as Promise<StoredCredentials | null>,
+    signIn: (tokens, identity) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreSignIn,
+        tokens,
+        identity,
+      ) as Promise<void>,
+    rotate: (expected) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreRotate,
+        expected,
+      ) as Promise<TokenRotateResult>,
+    delete: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreDelete,
+      ) as Promise<void>,
+    deleteIfToken: (expectedToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreDeleteIfToken,
+        expectedToken,
+      ) as Promise<"deleted" | "kept">,
+    subscribe: (handler) =>
+      subscribe<TokenStoreChange>(
+        RunnerHostEvent.authTokenStoreChange,
+        handler,
+      ),
+    migrateLegacyCredentials: (legacy) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        legacy,
+      ) as Promise<CredentialsMigrationOutcome>,
   };
 }
 

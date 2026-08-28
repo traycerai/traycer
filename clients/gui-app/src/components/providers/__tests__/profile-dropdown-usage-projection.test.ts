@@ -30,9 +30,11 @@ function entry(
   return {
     profileId: "work",
     providerId: "claude-code",
+    fetchEligible: true,
     detail,
     refreshStatus: "idle",
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
   };
 }
 

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -24,16 +23,25 @@ vi.mock("@/lib/host", () => {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:1/rpc",
     version: null,
-    status: "available",
+    transportDialability: "dialable",
+  };
+  const client = {
+    request: () => new Promise(() => {}),
+    getActiveHostId: () => "host-test",
+    // `useTabHostClient` resolves through `useHostClientForHostId`, which
+    // asks the SPINE for the tab's entry (live directory first, then the
+    // active entry) before handing it to `useHostClientFor` - mocked below to
+    // return the same stub client for any entry. Spine and app-wide client
+    // are separate exports since redesign P2.1; one stub serves both here.
+    resolveHostById: () => entry,
+    getActiveHost: () => entry,
+    getRequestContextUserId: () => "user-test",
+    onChange: () => () => undefined,
   };
   return {
     useHostBinding: () => null,
-    useHostClient: () => ({
-      request: () => new Promise(() => {}),
-      getActiveHostId: () => "host-test",
-      getRequestContextUserId: () => "user-test",
-      onChange: () => () => undefined,
-    }),
+    useHostClient: () => client,
+    useHostRuntimeClient: () => client,
     useHostDirectory: () => ({
       findById: () => entry,
       onChange: () => ({ dispose: () => undefined }),
@@ -61,7 +69,8 @@ vi.mock(
       surface: {
         binding: WorktreeBinding | null;
         onBindingCommitted:
-          ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
+          | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
+          | null;
       };
     }) => {
       dialogMocks.workspaceSelectorProps.push(props);
@@ -151,9 +160,17 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   }),
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
@@ -355,11 +372,15 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
     };
     const sourceStagingKey = {
       surface: "owner" as const,
+      hostId: "test-host",
       epicId: "epic-test",
       ownerKind: "terminal-agent" as const,
       ownerId: "agent-1",
     };
-    const pendingForkKey = pendingForkTerminalAgentStagingKey("epic-test");
+    const pendingForkKey = pendingForkTerminalAgentStagingKey(
+      "test-host",
+      "epic-test",
+    );
     useWorktreeIntentStagingStore.getState().setIntent(sourceStagingKey, {
       entries: [
         {
@@ -471,7 +492,8 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
     const props = dialogMocks.workspaceSelectorProps[0] as {
       readonly surface: {
         readonly onBindingCommitted:
-          ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
+          | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
+          | null;
       };
     };
     if (props.surface.onBindingCommitted === null) {

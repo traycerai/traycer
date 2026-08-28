@@ -1,10 +1,12 @@
 import type { JsonContent } from "./registry";
+import { isDefaultGithubMentionHost } from "./github-mention-host";
 
 export enum ContextType {
   File = "file",
   Folder = "folder",
   Worktree = "worktree",
   GithubIssue = "github_issue",
+  GithubPullRequest = "github_pull_request",
   Attachment = "attachment",
   Phase = "phase",
   ReviewComment = "review_comment",
@@ -16,6 +18,25 @@ export enum ContextType {
   Review = "review",
   WorkflowCommand = "workflow_command",
   Chat = "chat",
+  /**
+   * A referenceable Agent that uses the Terminal interface.
+   *
+   * Additive sibling of `Chat`, NOT a replacement: `Chat` is a released token
+   * carried by persisted mentions and must keep its value. Agent is the durable
+   * entity and Chat/Terminal are its interfaces, so both members serialize to
+   * the same interface-agnostic `@agent:` reference form for the coding agent -
+   * referring to an Agent means the same thing either way (Core Flows, Flow 3).
+   */
+  TerminalAgent = "terminal-agent",
+  /**
+   * A plain interactive terminal - a shell a person or an agent is working
+   * in, not an Agent. Distinct from `TerminalAgent` for exactly that reason:
+   * `TerminalAgent` names an Agent reached through the terminal interface and
+   * projects as `@agent:`, while this names the terminal itself, which a
+   * coding agent can only READ (`traycer_read_terminal` / `traycer terminal
+   * output`) and never talk to.
+   */
+  Terminal = "terminal",
   Execution = "execution",
   User = "user",
 }
@@ -128,6 +149,12 @@ function renderableMarks(
 }
 
 /**
+ * Exported for the composer's recovery seam, which quotes a dead send's text
+ * back to its author and is held to PARITY with this serializer: the marks a
+ * resend would carry have to be the marks the recovery copy shows. It reuses
+ * this rather than imitating it because the run discipline below is the
+ * subtle part, and a second implementation would drift from it silently.
+ *
  * Serializes a run of consecutive inline text nodes, emitting mark
  * delimiters only where the mark set changes between nodes. Wrapping each
  * node independently corrupts continuous marks that contain nested marks:
@@ -145,7 +172,7 @@ function renderableMarks(
  * would open bold outside italic (schema-rank order), and bold ending
  * after "b" would force italic closed and reopened, doubling delimiters.
  */
-function serializeTextRun(nodes: JsonContent[]): string {
+export function serializeTextRun(nodes: JsonContent[]): string {
   const textNodes = nodes.filter((node) => Boolean(node.text));
   const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
 
@@ -226,12 +253,14 @@ export interface MentionAttrs {
   organizationLogin?: string;
   repositoryName?: string;
   issueNumber?: number;
+  githubHost?: string;
   branchName?: string;
   commitHash?: string;
   gitType?: string;
   fileName?: string;
   phaseId?: string;
   reviewCommentId?: string;
+  terminalId?: string;
   commandName?: string;
   workflowId?: string;
   b64content?: string;
@@ -267,11 +296,20 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const title = attrs.label || attrs.id || "";
       return `epic:${title}`;
     }
-    case ContextType.GithubIssue: {
+    case ContextType.GithubIssue:
+    case ContextType.GithubPullRequest: {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
-      return `${org}/${repo}#${issue}`;
+      const reference = `${org}/${repo}#${issue}`;
+      // Same default-host rule as the LLM form below: github.com is what an
+      // unqualified reference already means, while an enterprise reference
+      // with the same coordinates is a different thing and must not read
+      // identically to the human this string is for.
+      if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
+        return `${attrs.githubHost}/${reference}`;
+      }
+      return reference;
     }
     case ContextType.Git: {
       const { branchName, commitHash } = attrs;
@@ -289,9 +327,19 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const name = attrs.commandName || attrs.label || "";
       return `workflow:${name}`;
     }
-    case ContextType.Chat: {
+    // Agent is the durable entity a human reads here; Chat and Terminal are
+    // only the interfaces used to reach one. Both arms therefore project as
+    // `agent:` - prefixing by interface (`chat:` / `terminal-agent:`) would
+    // render the two as sibling entity types, which is the model this replaces.
+    // The enum values stay `chat` / `terminal-agent`; only the projection moved.
+    case ContextType.Chat:
+    case ContextType.TerminalAgent: {
       const title = attrs.label || attrs.id || "";
-      return `chat:${title}`;
+      return `agent:${title}`;
+    }
+    case ContextType.Terminal: {
+      const title = attrs.label || attrs.terminalId || attrs.id || "";
+      return `terminal:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -373,11 +421,32 @@ function formatMentionForLLMQuery(
     }
     case ContextType.Epic:
       return atRef(attrs.relPath || `epic:${attrs.epicId || attrs.id || ""}`);
-    case ContextType.GithubIssue: {
+    case ContextType.GithubIssue:
+    case ContextType.GithubPullRequest: {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
-      return `github:${org}/${repo}#${issue}`;
+      const prefix =
+        attrs.contextType === ContextType.GithubPullRequest
+          ? "github-pr"
+          : "github-issue";
+      const reference = `@${prefix}:${org}/${repo}#${issue}`;
+      // `url` is still optional on the node, so the suffix is only appended
+      // when there is one. Emitting `[url=]` for a node that predates the
+      // attribute - or for any caller that omits it - turns a reference that
+      // used to serialize cleanly into malformed metadata, and hands the agent
+      // an empty fallback instead of no fallback.
+      if (attrs.url) return `${reference} [url=${attrs.url}]`;
+      // Without a URL, the host is the only thing that can disambiguate an
+      // enterprise reference: `org/repo#123` on ghe.example.com is a different
+      // artifact from the same coordinates on github.com, and the node keeps
+      // `githubHost` even when no `url` was ever set. github.com stays bare -
+      // it is the default every unqualified reference already means, and
+      // qualifying it would churn every serialization that was fine.
+      if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
+        return `${reference} [host=${attrs.githubHost}]`;
+      }
+      return reference;
     }
     case ContextType.Git: {
       if (attrs.branchName)
@@ -401,12 +470,30 @@ function formatMentionForLLMQuery(
       const cmdName = attrs.commandName || "";
       return cmdName ? `workflow:${wfId}/${cmdName}` : `workflow:${wfId}`;
     }
-    case ContextType.Chat: {
+    // Both Agent interfaces share this arm deliberately. "Refer to Agent B"
+    // must mean the same thing to the coding agent whether B uses the Chat or
+    // the Terminal interface, so both emit the interface-agnostic `@agent:`
+    // marker plus the durable id the agent needs for `traycer_send_message` /
+    // `traycer_get_transcript`. Falling through to `default:` dropped the id
+    // entirely and handed the runtime a bare title.
+    case ContextType.Chat:
+    case ContextType.TerminalAgent: {
       const agentId = attrs.id || "";
       const title = attrs.label || "untitled";
       return agentId.length === 0
         ? `@agent:${title} [agentId is unavailable]`
         : `@agent:${title} [agentId=${agentId}]`;
+    }
+    // Mirrors the agent arm above: a human-readable title so the reference
+    // reads as the user wrote it, plus the durable id the read tools address
+    // (`traycer_read_terminal`, `traycer terminal output`). Without the id the
+    // runtime is handed a bare title it cannot resolve.
+    case ContextType.Terminal: {
+      const terminalId = attrs.terminalId || attrs.id || "";
+      const title = attrs.label || "untitled";
+      return terminalId.length === 0
+        ? `@terminal:${title} [terminalId is unavailable]`
+        : `@terminal:${title} [terminalId=${terminalId}]`;
     }
     case ContextType.Execution: {
       const epicPart = attrs.epicId ? `${attrs.epicId}/` : "";
@@ -454,6 +541,20 @@ function formatMentionForUser(
   if (attrs.contextType === ContextType.User) {
     const name = attrs.label || attrs.id || "";
     return `@${name}`;
+  }
+
+  // GitHub references carry their durable URL in the LLM form and are never
+  // materialized against this host. Unlike file/artifact references, a stale
+  // validation result must not append `[NOT FOUND]` to either kind of chip.
+  if (
+    attrs.contextType === ContextType.GithubIssue ||
+    attrs.contextType === ContextType.GithubPullRequest
+  ) {
+    const formatted = formatMentionForDisplayQuery({
+      ...attrs,
+      contextType: attrs.contextType,
+    });
+    return `\`${formatted}\``;
   }
 
   // Use shared formatting for all other types. `contextType` is
@@ -629,7 +730,7 @@ function serializeOrderedList(
   };
 
   if (node.content) {
-    let index = 1;
+    let index = readNumberAttr(node.attrs, "start", 1);
     for (const child of node.content) {
       if (child.type === "listItem") {
         items.push(serializeListItem(child, childCtx, true, index));
@@ -762,6 +863,17 @@ function serializeChildren(
   return parts.join("");
 }
 
+function serializeImage(node: JsonContent): string {
+  const src = readStringAttr(node.attrs, "src");
+  const alt = readStringAttr(node.attrs, "alt");
+  if (src.length === 0) return "";
+  const escapedAlt = alt.replace(/[\\[\]]/g, "\\$&");
+  const destination = /[\s()<>]/.test(src)
+    ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
+    : src;
+  return `![${escapedAlt}](${destination})`;
+}
+
 function serializeNode(node: JsonContent, ctx: SerializerContext): string {
   switch (node.type) {
     case "doc":
@@ -772,6 +884,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeText(node);
     case "hardBreak":
       return serializeHardBreak();
+    case "image":
+      return serializeImage(node);
     case "heading":
       return serializeHeading(node, ctx);
     case "bulletList":

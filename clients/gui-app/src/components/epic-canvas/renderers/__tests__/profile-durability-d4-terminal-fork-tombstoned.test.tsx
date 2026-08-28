@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -52,6 +51,18 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   }),
 }));
 
+// This suite's dialog target is always plain-fork intent, so the bulk
+// fork-admission preflight this hook backs is never invoked - stubbed purely
+// so the dialog's unconditional `useValidateTuiForkProfile` call doesn't hit
+// the partially-mocked `use-host-query` module below (which only implements
+// `useHostQuery`, not the mutation-lifecycle helper this hook also imports).
+vi.mock("@/hooks/agent/use-validate-tui-fork-profile-mutation", () => ({
+  useValidateTuiForkProfile: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly client: unknown;
@@ -87,7 +98,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -103,7 +114,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
     isPending: false,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       models: [
         {
@@ -132,9 +143,18 @@ interface TerminalForkCreateInput {
 }
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = {
+    hostId,
+    label: hostId,
+    kind: "local" as const,
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     // `useHostQuery` is mocked wholesale below, so this messenger's handlers
     // are never actually invoked - this just needs to be a real, distinct
     // `HostClient` instance to key `dialogMocks.providersByClient` by.
@@ -144,15 +164,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
       handlers: {},
     }),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    status: "available",
-  });
-  return client;
+  return spine.createRequester(entry);
 }
 
 // The dialog's own `hostClient` prop - the ONLY client its `createAgent`
@@ -166,6 +178,9 @@ const DECOY_ACTIVE_HOST_CLIENT = buildHostClient("decoy-active-host");
 function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises profile
+    // durability, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",
@@ -179,6 +194,7 @@ function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
     reasoningEffort: "high",
     agentMode: "regular",
     profileId,
+    archivedAt: null,
     harnessSessionId: "source-session",
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
@@ -200,6 +216,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -212,6 +229,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -238,6 +256,16 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -264,6 +292,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("tombstoned-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -297,6 +326,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -333,6 +363,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -366,6 +397,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
         target={{
           sourceAgent: sourceAgentWithProfile("work-uuid"),
           workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
         }}
         epicId="epic-test"
         tabId="tab-test"
@@ -408,6 +440,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
           target={{
             sourceAgent: sourceAgentWithProfile("work-uuid"),
             workspaceSeed: emptyWorkspaceSeed(),
+            intent: "fork",
           }}
           epicId="epic-test"
           tabId="tab-test"
@@ -448,6 +481,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
           target={{
             sourceAgent: sourceAgentWithProfile("work-uuid"),
             workspaceSeed: emptyWorkspaceSeed(),
+            intent: "fork",
           }}
           epicId="epic-test"
           tabId="tab-test"

@@ -140,6 +140,98 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       `spend: ${formatNumber(rateLimits.dailySpend)} today, ${formatNumber(rateLimits.weeklySpend)} this week, ${formatNumber(rateLimits.monthlySpend)} this month`,
     ].join("\n");
   }
+  if (rateLimits.provider === "huggingface") {
+    // Spend-only when the account carries no included allowance: reporting
+    // "0/unknown included" there would invent a plan the user does not have.
+    return [
+      rateLimits.includedUsd === null
+        ? `spend: ${formatNumber(rateLimits.usedUsd)} this period`
+        : `included credits: ${formatNumber(rateLimits.remainingIncludedUsd)}/${formatNumber(rateLimits.includedUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
+      rateLimits.limitUsd === null
+        ? null
+        : `spend limit: ${formatNumber(rateLimits.remainingLimitUsd)}/${formatNumber(rateLimits.limitUsd)} remaining`,
+      rateLimits.numRequests === null
+        ? null
+        : `requests: ${rateLimits.numRequests}`,
+      rateLimits.periodStart === null || rateLimits.periodEnd === null
+        ? null
+        : `billing period: ${rateLimits.periodStart} - ${rateLimits.periodEnd}`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
+  if (rateLimits.provider === "grok") {
+    return [
+      `tier: ${rateLimits.subscriptionTier ?? "unknown"}`,
+      formatWindowLine(
+        rateLimits.periodType === null
+          ? "period"
+          : `period (${rateLimits.periodType})`,
+        rateLimits.period,
+      ),
+      rateLimits.period !== null ||
+      rateLimits.periodStart === null ||
+      rateLimits.periodEnd === null
+        ? null
+        : `billing period: ${formatTimestamp(rateLimits.periodStart)} - ${formatTimestamp(rateLimits.periodEnd)}`,
+      rateLimits.onDemandCap === null && rateLimits.onDemandUsed === null
+        ? null
+        : `on-demand: ${formatNumber(rateLimits.onDemandUsed)}/${formatNumber(rateLimits.onDemandCap)} used`,
+      rateLimits.prepaidBalance === null
+        ? null
+        : `prepaid balance: ${formatNumber(rateLimits.prepaidBalance)}`,
+      rateLimits.monthlyLimit === null
+        ? null
+        : `monthly limit: ${formatNumber(rateLimits.monthlyLimit)}`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
+  if (rateLimits.provider === "opencode") {
+    return [
+      `${formatWindowLine("5-hour", rateLimits.fiveHour)} [${rateLimits.fiveHour.status}]`,
+      `${formatWindowLine("weekly", rateLimits.weekly)} [${rateLimits.weekly.status}]`,
+      `${formatWindowLine("monthly", rateLimits.monthly)} [${rateLimits.monthly.status}]`,
+    ].join("\n");
+  }
+  if (rateLimits.provider === "cursor") {
+    const hasBucketWindow =
+      rateLimits.cursorModels !== null || rateLimits.otherModels !== null;
+    return [
+      // The two buckets Cursor's own Spending page renders; the blended pool
+      // travels as the money line below, never as a percentage.
+      rateLimits.cursorModels === null
+        ? null
+        : formatWindowLine("cursor models", rateLimits.cursorModels),
+      rateLimits.otherModels === null
+        ? null
+        : formatWindowLine("other models", rateLimits.otherModels),
+      // "Included usage" is Cursor's own name for the blended $400 pool - a
+      // DIFFERENT denominator than the bucket windows above (each bucket is
+      // measured against its own unpublished limit), so this line reads as
+      // money, never as a percentage that could contradict the windows.
+      // Spend-only when the limit was not reported, exactly like the Hugging
+      // Face arm above: the fields are independently nullable, and a missing
+      // denominator must not hide the spend that IS known.
+      rateLimits.includedLimitUsd !== null
+        ? `included usage: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`
+        : rateLimits.usedUsd === null && rateLimits.remainingUsd === null
+          ? null
+          : `spend: ${formatNumber(rateLimits.usedUsd)} this cycle${rateLimits.remainingUsd === null ? "" : `, ${formatNumber(rateLimits.remainingUsd)} remaining`}`,
+      // Only worth a line when no bucket window already carried the reset -
+      // otherwise it restates the instant `formatWindowLine` printed.
+      hasBucketWindow ||
+      rateLimits.cycleStart === null ||
+      rateLimits.cycleEnd === null
+        ? null
+        : `billing cycle: ${formatTimestamp(rateLimits.cycleStart)} - ${formatTimestamp(rateLimits.cycleEnd)}`,
+      rateLimits.onDemandLimitUsd === null
+        ? null
+        : `on-demand${rateLimits.onDemandLimitType === null ? "" : ` (${rateLimits.onDemandLimitType})`}: ${formatNumber(rateLimits.onDemandUsedUsd)}/${formatNumber(rateLimits.onDemandLimitUsd)} used`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
   return [
     `credit balance: ${formatNumber(rateLimits.creditBalance)}`,
     `pass: ${rateLimits.passState ?? "unknown"}`,

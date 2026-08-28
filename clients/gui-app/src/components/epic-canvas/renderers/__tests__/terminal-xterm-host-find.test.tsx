@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act, StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
@@ -8,12 +7,17 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
+import { TerminalGridMeasureProbe } from "@/components/epic-canvas/renderers/terminal-grid-measure-probe";
 import {
   __disposeAllXtermHostsForTests,
   __getXtermHostEntryForTests,
+  reconcileXtermHostAfterLayoutTransition,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { useTerminalFindStore } from "@/stores/find-in-page/terminal-find-store";
@@ -21,6 +25,15 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useTileFindStore } from "@/stores/tile-find";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import type { TerminalTileFindKind } from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
+import {
+  focusTerminalInstance,
+  resetTerminalFocusRegistryForTests,
+} from "@/lib/terminals/terminal-focus-registry";
+import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 type Disposable = {
   readonly dispose: () => void;
@@ -36,6 +49,7 @@ type SearchResultListener = (result: SearchResult) => void;
 type MockTerminalInstance = {
   readonly focus: Mock;
   readonly paste: Mock;
+  readonly textarea: HTMLTextAreaElement;
   readonly isDisposed: () => boolean;
 };
 
@@ -84,7 +98,12 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     options: Record<string, unknown>;
     readonly buffer = { active: { baseY: 0, length: 24 } };
-    readonly focus = vi.fn();
+    // Real cell-width behaviour is covered in
+    // terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here
+    // the addon just needs somewhere to register.
+    readonly unicode = { activeVersion: "6", register: vi.fn() };
+    readonly textarea = document.createElement("textarea");
+    readonly focus = vi.fn(() => this.textarea.focus());
     readonly paste = vi.fn((data: string) => {
       this.dataListeners.forEach((listener) => {
         listener(`\x1b[200~${data}\x1b[201~`);
@@ -95,6 +114,10 @@ vi.mock("@xterm/xterm", () => ({
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
+      this.textarea.addEventListener("keydown", (event) => {
+        if (event.key.length !== 1) return;
+        this.dataListeners.forEach((listener) => listener(event.key));
+      });
       xtermMocks.terminals.push(this);
     }
 
@@ -104,7 +127,8 @@ vi.mock("@xterm/xterm", () => ({
       }
     }
 
-    open(_container: HTMLElement): void {
+    open(container: HTMLElement): void {
+      container.appendChild(this.textarea);
       setTimeout(() => {
         if (this.disposed) {
           throw new TypeError(
@@ -138,6 +162,12 @@ vi.mock("@xterm/xterm", () => ({
       if (chunk.includes("\x1b[6n")) {
         this.dataListeners.forEach((listener) => {
           listener("\x1b[16;39R");
+        });
+      }
+      // Real xterm answers OSC 11 colour queries with its themed background.
+      if (chunk.includes("\x1b]11;?")) {
+        this.dataListeners.forEach((listener) => {
+          listener("\x1b]11;rgb:ffff/ffff/ffff\x07");
         });
       }
       if (callback !== undefined) {
@@ -252,6 +282,7 @@ function ScopedTerminalHost(props: ScopedTerminalHostProps) {
     >
       <TerminalXtermHost
         sessionId={props.sessionId}
+        hostId="host-1"
         tileKind={props.tileKind}
         instanceId={props.instanceId}
         effectiveCols={80}
@@ -260,9 +291,11 @@ function ScopedTerminalHost(props: ScopedTerminalHostProps) {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={props.isActive}
+        registerImperativeFocus
         findTargetId={findTargetId}
         keepAlive={props.keepAlive}
         chrome="padded"
+        onTerminalReady={null}
       />
     </TileFindScope>
   );
@@ -304,7 +337,9 @@ function getSearchAddon(index: number): MockSearchAddonInstance {
 describe("<TerminalXtermHost /> terminal find", () => {
   afterEach(() => {
     cleanup();
+    resetTerminalFocusRegistryForTests();
     __disposeAllXtermHostsForTests();
+    resetNegotiatedManifests();
     vi.useRealTimers();
     xtermMocks.terminals.length = 0;
     xtermMocks.searchAddons.length = 0;
@@ -329,6 +364,55 @@ describe("<TerminalXtermHost /> terminal find", () => {
     useTileFindStore.getState().resetForTests();
   });
 
+  it("keeps landing focus parked through the real measurement-probe to live-host handoff", async () => {
+    const instanceId = "landing-focus-instance";
+    const sessionId = "landing-focus-session";
+    const onLiveInput = vi.fn();
+
+    focusTerminalInstance(instanceId);
+    const rendered = render(
+      <TerminalGridMeasureProbe
+        sessionId={sessionId}
+        hostId="host-1"
+        instanceId={instanceId}
+        tileKind="terminal"
+        chrome="flush"
+        onMeasured={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(xtermMocks.terminals).toHaveLength(1));
+    const terminal = xtermMocks.terminals[0];
+    expect(terminal.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(terminal.textarea);
+
+    rendered.rerender(
+      <TerminalXtermHost
+        sessionId={sessionId}
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId={instanceId}
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onLiveInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={vi.fn()}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive
+        chrome="flush"
+        onTerminalReady={null}
+      />,
+    );
+
+    await waitFor(() => expect(document.activeElement).toBe(terminal.textarea));
+    expect(terminal.focus).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(terminal.textarea, { key: "x", code: "KeyX" });
+    expect(onLiveInput).toHaveBeenCalledWith("x");
+  });
+
   it("reuses one xterm engine across a StrictMode remount, then disposes it once on unmount", () => {
     vi.useFakeTimers();
 
@@ -336,6 +420,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       <StrictMode>
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind="terminal"
           instanceId="test-instance"
           effectiveCols={80}
@@ -344,9 +429,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane={false}
+          registerImperativeFocus
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />
       </StrictMode>,
     );
@@ -368,9 +455,43 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(xtermMocks.terminals[0].isDisposed()).toBe(true);
   });
 
+  it("reconciles a registered engine after a layout transition and ignores a missing one", () => {
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={vi.fn()}
+        onContainerResize={vi.fn()}
+        onWriterReady={vi.fn()}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+    const entry = __getXtermHostEntryForTests("test-instance");
+    if (entry === null) throw new Error("Expected a registered xterm engine");
+    const reconcile = vi.spyOn(entry.controls, "reconcileWithHost");
+
+    reconcileXtermHostAfterLayoutTransition("test-instance");
+
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledWith(entry.term.cols, entry.term.rows);
+    expect(() =>
+      reconcileXtermHostAfterLayoutTransition("missing-instance"),
+    ).not.toThrow();
+  });
+
   it("clears the glyph atlas before refreshing when a hidden pane becomes visible", () => {
     const hostProps = {
       sessionId: "test-session",
+      hostId: "host-1",
       tileKind: "terminal",
       instanceId: "test-instance",
       effectiveCols: 80,
@@ -379,9 +500,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
       onContainerResize: vi.fn(),
       onWriterReady: vi.fn(),
       shouldFocusOnActivePane: false,
+      registerImperativeFocus: true,
       findTargetId: "terminal:test",
       keepAlive: false,
       chrome: "padded",
+      onTerminalReady: null,
     } as const;
 
     const rendered = render(
@@ -412,10 +535,80 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(xtermMocks.repaintLog).toEqual(["clearAtlas", "refresh"]);
   });
 
+  it("repairs both visible split terminals while only the focused member owns find and DOM focus", () => {
+    vi.useFakeTimers();
+    render(
+      <>
+        <PaneSurfaceActivityContext.Provider
+          value={{ visible: true, focused: true }}
+        >
+          <PaneVisibilityContext value>
+            <TerminalXtermHost
+              sessionId="split-left"
+              hostId="host-1"
+              tileKind="terminal"
+              instanceId="split-left-instance"
+              effectiveCols={80}
+              effectiveRows={24}
+              onUserInput={vi.fn()}
+              onContainerResize={vi.fn()}
+              onWriterReady={vi.fn()}
+              shouldFocusOnActivePane
+              registerImperativeFocus
+              findTargetId="terminal:split-left"
+              keepAlive={false}
+              chrome="padded"
+              onTerminalReady={null}
+            />
+          </PaneVisibilityContext>
+        </PaneSurfaceActivityContext.Provider>
+        <PaneSurfaceActivityContext.Provider
+          value={{ visible: true, focused: false }}
+        >
+          <PaneVisibilityContext value>
+            <TerminalXtermHost
+              sessionId="split-right"
+              hostId="host-1"
+              tileKind="terminal"
+              instanceId="split-right-instance"
+              effectiveCols={80}
+              effectiveRows={24}
+              onUserInput={vi.fn()}
+              onContainerResize={vi.fn()}
+              onWriterReady={vi.fn()}
+              shouldFocusOnActivePane
+              registerImperativeFocus
+              findTargetId="terminal:split-right"
+              keepAlive={false}
+              chrome="padded"
+              onTerminalReady={null}
+            />
+          </PaneVisibilityContext>
+        </PaneSurfaceActivityContext.Provider>
+      </>,
+    );
+
+    expect(xtermMocks.repaintLog).toEqual([
+      "clearAtlas",
+      "refresh",
+      "clearAtlas",
+      "refresh",
+    ]);
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(xtermMocks.terminals[0]?.focus).toHaveBeenCalledTimes(1);
+    expect(xtermMocks.terminals[1]?.focus).not.toHaveBeenCalled();
+    expect(useTerminalFindStore.getState().activeController?.id).toBe(
+      "terminal:split-left",
+    );
+  });
+
   it("searches the terminal without taking focus from the find input", async () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -424,9 +617,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -453,6 +648,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -461,9 +657,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -873,6 +1071,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -881,9 +1080,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -899,6 +1100,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -909,9 +1111,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
           writer = nextWriter;
         }}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -938,6 +1142,125 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
   });
 
+  it("never forwards xterm's OSC 10/11 colour reports as user input", async () => {
+    // The HOST is the single authority for colour queries (it answers with
+    // the session's spawn-time themeHint). A live query still reaches this
+    // client's xterm through the output stream and xterm generates a reply;
+    // forwarding it would race the host's answer with one reply per attached
+    // viewer, each reporting its own theme. Suppression is gated on the host
+    // actually having the responder (terminal.create@2.1+), so the test
+    // seeds the negotiated manifest a real handshake would have recorded.
+    recordNegotiatedHostManifest("host-1", {
+      "terminal.create": { major: 2, minor: 1 },
+    });
+    const onUserInput = vi.fn();
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    getWriter()({ kind: "live", chunk: "\x1b]11;?\x07", onAckable: () => {} });
+    expect(onUserInput).not.toHaveBeenCalled();
+
+    // Genuine input keeps flowing untouched.
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
+    expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
+
+    // The filter matches only the report grammar xterm generates: an OSC
+    // 10/11 QUERY or colour-SET arriving as genuine user input (a paste)
+    // must reach the PTY untouched.
+    onUserInput.mockClear();
+    xtermMocks.terminals[0].paste("\x1b]11;#112233\x07");
+    expect(onUserInput).toHaveBeenCalledWith(
+      "\x1b[200~\x1b]11;#112233\x07\x1b[201~",
+    );
+
+    // Even a byte-exact colour REPORT pasted while the terminal is idle is
+    // user input, not a generated reply: replies only ever surface while a
+    // live output chunk is mid-parse, and the filter is gated on that window.
+    onUserInput.mockClear();
+    xtermMocks.terminals[0].paste("\x1b]11;rgb:1111/2222/3333\x07");
+    expect(onUserInput).toHaveBeenCalledWith(
+      "\x1b[200~\x1b]11;rgb:1111/2222/3333\x07\x1b[201~",
+    );
+  });
+
+  it("keeps forwarding colour replies to a host without the OSC responder", async () => {
+    // A pre-terminal.create@2.1 host has no host-side answer for OSC 10/11.
+    // This viewer's xterm reply - late-query-only and per-viewer as it is -
+    // is the only answer a probing TUI gets there, so suppression must not
+    // engage (Codex review on #1424).
+    recordNegotiatedHostManifest("host-1", {
+      "terminal.create": { major: 2, minor: 0 },
+    });
+    const onUserInput = vi.fn();
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    getWriter()({ kind: "live", chunk: "\x1b]11;?\x07", onAckable: () => {} });
+    expect(onUserInput).toHaveBeenCalledWith("\x1b]11;rgb:ffff/ffff/ffff\x07");
+  });
+
   it("resets the buffer before replaying a reconnect snapshot", async () => {
     // A transport reconnect re-sends a full snapshot into the same kept-alive
     // engine that still holds pre-disconnect content. The engine must reset the
@@ -955,6 +1278,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session-reset"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance-reset"
         effectiveCols={80}
@@ -965,9 +1289,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
           writer = nextWriter;
         }}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1022,6 +1348,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session-reset-binary"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance-reset-binary"
         effectiveCols={80}
@@ -1032,9 +1359,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
           writer = nextWriter;
         }}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1082,6 +1411,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       <PaneVisibilityContext.Provider value={false}>
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind="terminal"
           instanceId="test-instance"
           effectiveCols={80}
@@ -1090,9 +1420,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane
+          registerImperativeFocus
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />
       </PaneVisibilityContext.Provider>,
     );
@@ -1106,6 +1438,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       <PaneVisibilityContext.Provider value>
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind="terminal"
           instanceId="test-instance"
           effectiveCols={80}
@@ -1114,9 +1447,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane
+          registerImperativeFocus
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />
       </PaneVisibilityContext.Provider>,
     );
@@ -1130,6 +1465,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1138,9 +1474,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1154,6 +1492,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     const { rerender } = render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1162,9 +1501,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1176,6 +1517,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     rerender(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1184,9 +1526,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1196,7 +1540,6 @@ describe("<TerminalXtermHost /> terminal find", () => {
   });
 
   it("focuses an activated terminal after the clicked tab's own focus settles", async () => {
-    vi.useFakeTimers();
     const focusOrder: string[] = [];
 
     function ActivationHarness() {
@@ -1206,16 +1549,17 @@ describe("<TerminalXtermHost /> terminal find", () => {
           <button
             type="button"
             onClick={() => {
+              // Native pointer focus lands on the tab before its click handler
+              // commits the active terminal pane.
+              focusOrder.push("tab");
               setActive(true);
-              window.setTimeout(() => {
-                focusOrder.push("tab");
-              }, 0);
             }}
           >
             Activate terminal tab
           </button>
           <TerminalXtermHost
             sessionId="test-session"
+            hostId="host-1"
             tileKind="terminal"
             instanceId="test-instance"
             effectiveCols={80}
@@ -1224,9 +1568,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
             onContainerResize={vi.fn()}
             onWriterReady={vi.fn()}
             shouldFocusOnActivePane={active}
+            registerImperativeFocus
             findTargetId={active ? "terminal:test" : null}
             keepAlive={false}
             chrome="padded"
+            onTerminalReady={null}
           />
         </>
       );
@@ -1243,13 +1589,62 @@ describe("<TerminalXtermHost /> terminal find", () => {
       screen.getByRole("button", { name: "Activate terminal tab" }),
     );
 
-    expect(focusOrder).toEqual([]);
+    await waitFor(() => {
+      expect(focusOrder).toEqual(["tab", "terminal"]);
+    });
+  });
+
+  it("does not steal focus from the control that activated the terminal pane", async () => {
+    vi.useFakeTimers();
+    const shouldYieldAutoFocus = vi.fn(() => true);
+
+    function ActivationHarness() {
+      const [active, setActive] = useState(false);
+      return (
+        <PaneActivationFocusIntentContext.Provider
+          value={{
+            mark: () => undefined,
+            shouldYieldAutoFocus,
+          }}
+        >
+          <button type="button" onClick={() => setActive(true)}>
+            Open terminal control
+          </button>
+          <TerminalXtermHost
+            sessionId="test-session"
+            hostId="host-1"
+            tileKind="terminal"
+            instanceId="test-instance"
+            effectiveCols={80}
+            effectiveRows={24}
+            onUserInput={vi.fn()}
+            onContainerResize={vi.fn()}
+            onWriterReady={vi.fn()}
+            shouldFocusOnActivePane={active}
+            registerImperativeFocus
+            findTargetId={active ? "terminal:test" : null}
+            keepAlive={false}
+            chrome="padded"
+            onTerminalReady={null}
+          />
+        </PaneActivationFocusIntentContext.Provider>
+      );
+    }
+
+    render(<ActivationHarness />);
+    const button = screen.getByRole("button", {
+      name: "Open terminal control",
+    });
+    button.focus();
+    fireEvent.click(button);
 
     await act(async () => {
       await vi.runOnlyPendingTimersAsync();
     });
 
-    expect(focusOrder).toEqual(["tab", "terminal"]);
+    expect(shouldYieldAutoFocus).toHaveBeenCalledTimes(1);
+    expect(xtermMocks.terminals[0].focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
   });
 
   it("pastes dropped file paths through xterm's paste path", async () => {
@@ -1261,6 +1656,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1269,9 +1665,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1301,6 +1699,112 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(xtermMocks.terminals[0].focus).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    "terminal",
+    "terminal-agent",
+  ] satisfies readonly TerminalTileFindKind[])(
+    "pastes copied file paths through xterm for %s tiles",
+    async (tileKind) => {
+      const onUserInput = vi.fn();
+      const copiedPath = "/Users/tgill/Documents/agent notes.md";
+      const copiedFile = new File(["notes"], "agent notes.md", {
+        type: "text/markdown",
+      });
+      runnerHostMocks.resolveDroppedFilePaths.mockResolvedValue([copiedPath]);
+
+      render(
+        <TerminalXtermHost
+          sessionId="test-session"
+          hostId="host-1"
+          tileKind={tileKind}
+          instanceId="test-instance"
+          effectiveCols={80}
+          effectiveRows={24}
+          onUserInput={onUserInput}
+          onContainerResize={vi.fn()}
+          onWriterReady={vi.fn()}
+          shouldFocusOnActivePane={false}
+          registerImperativeFocus
+          findTargetId={null}
+          keepAlive={false}
+          chrome="padded"
+          onTerminalReady={null}
+        />,
+      );
+
+      const pasteTarget = screen.getByTestId("terminal-xterm-host");
+
+      fireEvent.paste(pasteTarget, {
+        clipboardData: {
+          types: ["Files"],
+          files: [copiedFile],
+          items: [],
+        },
+      });
+
+      await waitFor(() => {
+        expect(runnerHostMocks.resolveDroppedFilePaths).toHaveBeenCalledWith([
+          copiedFile,
+        ]);
+        expect(xtermMocks.terminals[0].paste).toHaveBeenCalledWith(
+          "/Users/tgill/Documents/agent\\ notes.md",
+        );
+        expect(onUserInput).toHaveBeenCalledWith(
+          "\x1b[200~/Users/tgill/Documents/agent\\ notes.md\x1b[201~",
+        );
+      });
+      expect(xtermMocks.terminals[0].focus).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("copies ephemeral file URL clipboard data into a stable path before pasting", async () => {
+    const onUserInput = vi.fn();
+    const stablePath =
+      "/tmp/traycer-dropped-files/20260603-uuid-Screenshot-2026-06-03-at-1.17.17-AM.png";
+    runnerHostMocks.copyDroppedFilePaths.mockResolvedValue([stablePath]);
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={vi.fn()}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+
+    fireEvent.paste(screen.getByTestId("terminal-xterm-host"), {
+      clipboardData: {
+        types: ["Files", "text/uri-list"],
+        files: [],
+        items: [],
+        getData: (type: string) =>
+          type === "text/uri-list"
+            ? "file:///Users/tgill/Desktop/Screenshot%202026-06-03%20at%201.17.17%E2%80%AFAM.png"
+            : "",
+      },
+    });
+
+    await waitFor(() => {
+      expect(xtermMocks.terminals[0].paste).toHaveBeenCalledWith(stablePath);
+    });
+    expect(runnerHostMocks.copyDroppedFilePaths).toHaveBeenCalledWith([
+      "/Users/tgill/Desktop/Screenshot 2026-06-03 at 1.17.17\u202fAM.png",
+    ]);
+    expect(runnerHostMocks.resolveDroppedFilePaths).not.toHaveBeenCalled();
+    expect(onUserInput).toHaveBeenCalledWith(`\x1b[200~${stablePath}\x1b[201~`);
+  });
+
   it("copies ephemeral file URL drops into a stable path before pasting", async () => {
     const onUserInput = vi.fn();
     const stablePath =
@@ -1310,6 +1814,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1318,9 +1823,11 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 

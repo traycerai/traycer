@@ -6,8 +6,8 @@ import {
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
+  findActionMatchForChord,
   type DigitActionMatch,
-  findActionForChord,
   isExternallyHandled,
   isRepeatSensitiveAction,
   matchDigitAction,
@@ -15,8 +15,10 @@ import {
   resolveLeaderOwner,
 } from "@/lib/keybindings/dispatch";
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
-import { getHistoryController } from "@/lib/history-navigation";
+import { historyNavChromeAvailable } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
+import { ACTION_META, type TerminalPolicy } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
 import {
   routerAdapterFor,
   type KeybindingRouterSource,
@@ -26,6 +28,10 @@ import {
   type LeaderModifier,
   type LeaderState,
 } from "@/providers/keybinding-context";
+import {
+  isDiffsEditorEvent,
+  isEditableEventTarget,
+} from "@/lib/keybindings/editable-target";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -62,14 +68,14 @@ interface RefBox<T> {
 
 /**
  * Tracks clean leader-hold sessions and publishes leader owners relative to the
- * modifier combo actually held (`mod`, `alt`, or `modShift`). Holding one leader
- * always reveals that modifier's owner, and also reveals the OTHER modifiers'
- * owners when a DIFFERENT scope owns them - so two sibling app scopes (canvas
- * tabs own `mod`, header tabs own `alt`) still show `⌘` and `⌥` badges together.
- * A lone overlay scope that binds all three dimensions (the model picker: `⌘`
- * rail, `⌥` reasoning, `⌘⇧` profile) only lights the one matching the held
- * combo. The dispatcher's chord matching still owns route-aware action
- * selection and fires digit shortcuts from the actual key event immediately.
+ * modifier combo actually held (`mod`, `alt`, or `modShift`). Holding either
+ * ordinary leader reveals that modifier's owner and the other ordinary
+ * modifier's owner when a DIFFERENT scope owns it - so two sibling app scopes
+ * (canvas tabs own `mod`, header tabs own `alt`) still show `⌘` and `⌥` badges
+ * together. The shifted leader is an exact-owner-only tier: an unowned Cmd+Shift
+ * hold must never fall through to the ordinary leaders. The dispatcher's chord
+ * matching still owns route-aware action selection and fires digit shortcuts
+ * from the actual key event immediately.
  */
 export function KeybindingProvider(props: KeybindingProviderProps) {
   const { router, children } = props;
@@ -106,15 +112,14 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       setLeaderState(next);
     };
 
-    // Publish the held modifier's owner always; publish the OTHER modifiers'
-    // owners only when a DIFFERENT scope owns them. Two sibling app scopes
-    // (canvas tabs own `mod`, header tabs own `alt`) still light both badge sets
-    // on a single hold - the #3966 "show both task tabs" behavior. But a lone
-    // overlay scope binding ALL THREE dimensions (the model picker: ⌘ rail, ⌥
-    // reasoning, ⌘⇧ profile) owns each dimension under one scope id, so its
-    // badge consumers can only be disambiguated by the held combo: ⌘ lights the
-    // rail, ⌥ lights reasoning, ⌘⇧ lights the profile dropdown, never more than
-    // one at once.
+    // Publish the held ordinary modifier's owner and the OTHER ordinary
+    // modifier's owner only when a DIFFERENT scope owns it. Two sibling app
+    // scopes (canvas tabs own `mod`, header tabs own `alt`) still light both
+    // badge sets on a single hold - the #3966 "show both task tabs" behavior.
+    // The shifted leader is exact-owner-only: Cmd+Shift must not light ordinary
+    // Cmd/Option badges when no scope owns the `modShift` mask. A lone overlay
+    // scope binding all three dimensions (the model picker: ⌘ rail, ⌥
+    // reasoning, ⌘⇧ profile) therefore lights only the matching tier.
     const resolveVisibleLeaderState = (
       heldModifier: LeaderModifier,
       pathname: string,
@@ -122,6 +127,17 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const modOwner = resolveLeaderOwner("mod");
       const altOwner = resolveLeaderOwner("alt");
       const modShiftOwner = resolveLeaderOwner("modShift");
+      if (heldModifier === "modShift") {
+        return {
+          modHeld: false,
+          altHeld: false,
+          modShiftHeld: modShiftOwner !== null,
+          modOwnerScopeId: null,
+          altOwnerScopeId: null,
+          modShiftOwnerScopeId: modShiftOwner,
+          pathname,
+        };
+      }
       const showMod =
         heldModifier === "mod" ||
         (modOwner !== null &&
@@ -132,27 +148,26 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         (altOwner !== null &&
           altOwner !== modOwner &&
           altOwner !== modShiftOwner);
-      const showModShift =
-        heldModifier === "modShift" ||
-        (modShiftOwner !== null &&
-          modShiftOwner !== modOwner &&
-          modShiftOwner !== altOwner);
       return {
         modHeld: showMod && modOwner !== null,
         altHeld: showAlt && altOwner !== null,
-        modShiftHeld: showModShift && modShiftOwner !== null,
+        modShiftHeld: false,
         modOwnerScopeId: showMod ? modOwner : null,
         altOwnerScopeId: showAlt ? altOwner : null,
-        modShiftOwnerScopeId: showModShift ? modShiftOwner : null,
+        modShiftOwnerScopeId: null,
         pathname,
       };
     };
 
-    const hasVisibleLeaderOwners = (): boolean => {
+    const hasLeaderOwner = (modifier: LeaderModifier): boolean => {
+      if (modifier === "modShift") {
+        return resolveLeaderOwner("modShift") !== null;
+      }
+      // Ordinary Cmd/Option sessions intentionally retain the sibling-owner
+      // behavior: holding one ordinary modifier can still reveal the other
+      // ordinary scope when only that scope is active.
       return (
-        resolveLeaderOwner("mod") !== null ||
-        resolveLeaderOwner("alt") !== null ||
-        resolveLeaderOwner("modShift") !== null
+        resolveLeaderOwner("mod") !== null || resolveLeaderOwner("alt") !== null
       );
     };
 
@@ -194,7 +209,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         return;
       }
       const pathname = adapter.getPathname();
-      if (!hasVisibleLeaderOwners()) {
+      if (!hasLeaderOwner(modifier)) {
         spendHintSession(pathname);
         return;
       }
@@ -243,9 +258,9 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const cleanMod = modKeyHeld && !event.altKey && !event.shiftKey;
       const cleanAlt = event.altKey && !modKeyHeld && !event.shiftKey;
       const cleanModShift = modKeyHeld && event.shiftKey && !event.altKey;
-      if (cleanMod && hasVisibleLeaderOwners()) return "mod";
-      if (cleanAlt && hasVisibleLeaderOwners()) return "alt";
-      if (cleanModShift && hasVisibleLeaderOwners()) return "modShift";
+      if (cleanMod && hasLeaderOwner("mod")) return "mod";
+      if (cleanAlt && hasLeaderOwner("alt")) return "alt";
+      if (cleanModShift && hasLeaderOwner("modShift")) return "modShift";
       return null;
     };
 
@@ -261,7 +276,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const pathname = adapter.getPathname();
       const session = hintSessionRef.current;
       if (session.status === "pending" || session.status === "visible") {
-        if (!hasVisibleLeaderOwners()) {
+        if (!hasLeaderOwner(session.modifier)) {
           spendHintSession(pathname);
           return;
         }
@@ -297,6 +312,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
+      // A Diffs editor boundary claims bare typing plus its native history
+      // commands. Other modified chords (⌘1, a reserved shortcut, ...) still
+      // resolve as app actions below. Undo/redo are different: Diffs owns a
+      // custom edit stack, so even a persisted user binding must not reserve
+      // Cmd/Ctrl-Z or Shift-Cmd/Ctrl-Z before the editor sees them.
+      if (isDiffsEditorOwnedKey(event, hasLeaderModifier(event))) return;
       if (isArtifactEditorLinkShortcut(event)) return;
 
       // Digit actions (e.g. ⌘1 or header tab sequences like ⌥1,0) must match
@@ -305,22 +326,30 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // digit-by-number flow. `matchDigitAction` only succeeds when a digit
       // is the primary key + at least one modifier is held.
       const digitMatch = matchDigitAction(event);
-      if (digitMatch !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        handleDigitMatch(digitMatch, digitSequenceRef, digitSequenceTimerRef);
+      if (
+        handleDigitKeyDown(
+          event,
+          digitMatch,
+          digitSequenceRef,
+          digitSequenceTimerRef,
+        )
+      )
         return;
-      }
 
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
 
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
+      if (
+        shouldPassCtrlChordToFocusedTerminal(event, actionId.terminalPolicy)
+      ) {
+        return;
+      }
 
       // Toggles (e.g. the model picker) must act once per physical press. Still
       // reserve the chord on OS key-repeat so the browser default can't run,
       // but skip re-dispatch so a held chord doesn't flip the toggle rapidly.
-      if (event.repeat && isRepeatSensitiveAction(actionId)) {
+      if (event.repeat && isRepeatSensitiveAction(actionId.actionId)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -332,18 +361,19 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // (Cmd+Alt+Left/Right = history back/forward on Chrome+Safari).
       event.preventDefault();
       event.stopPropagation();
-      dispatchAction(actionId, adapter);
+      dispatchAction(actionId.actionId, adapter);
     };
 
-    // Mouse back/forward (buttons 3/4). Desktop-only: gated on the current
-    // router carrying a persistent-history controller, so the browser/web build
-    // never intercepts these. `preventDefault()` runs only when handled, so the
-    // shell's native back/forward stays intact off-desktop.
+    // Mouse back/forward (buttons 3/4). Desktop-only, on the shared chrome
+    // predicate rather than the controller brand alone: the mobile app carries
+    // the brand too, and these buttons are chrome for a device that has them.
+    // `preventDefault()` runs only when handled, so the shell's native
+    // back/forward stays intact everywhere else.
     // NOTE: Windows may instead surface these as a main-process `app-command`
     // (`browser-backward`/`browser-forward`); that path is a verify-and-extend
     // follow-up tracked in the tech plan (§4.4).
     const handleMouseNav = (event: MouseEvent) => {
-      if (getHistoryController(router.history) === null) return;
+      if (!historyNavChromeAvailable(router.history)) return;
       if (event.button === 3) {
         event.preventDefault();
         adapter.goBack();
@@ -385,17 +415,18 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     };
 
     // A scope registering/unregistering (e.g. the model picker opening or
-    // closing) can change who owns visible leader badges. Re-resolve a VISIBLE
-    // session immediately so badges flip without waiting for the next key event;
-    // if no scope owns either leader anymore, the session is spent.
+    // closing) can change who owns visible leader badges. Re-resolve a pending
+    // or visible session immediately; if its owner disappears, spend the
+    // session so a transient owner loss cannot be repaired by a stale timer.
     const handleScopeChange = () => {
       const session = hintSessionRef.current;
-      if (session.status !== "visible") return;
+      if (session.status !== "pending" && session.status !== "visible") return;
       const pathname = adapter.getPathname();
-      if (!hasVisibleLeaderOwners()) {
+      if (!hasLeaderOwner(session.modifier)) {
         spendHintSession(pathname);
         return;
       }
+      if (session.status !== "visible") return;
       showLeaderHints(session.modifier, pathname);
     };
 
@@ -437,12 +468,64 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
  * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
  * reserving those would swallow the key when the owner is inactive.
  */
-function resolveReservedAction(event: KeyboardEvent): ActionId | null {
+interface ReservedAction {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+function resolveReservedAction(event: KeyboardEvent): ReservedAction | null {
   const chord = resolveMatchingChord(event);
   if (chord === null) return null;
-  const actionId = findActionForChord(chord);
-  if (actionId === null) return null;
-  return isExternallyHandled(actionId) ? null : actionId;
+  const match = findActionMatchForChord(chord);
+  if (match === null) return null;
+  // Cmd+Left/Right is browser history on macOS, but it is also the native
+  // beginning/end-of-line command in text fields. Keep the familiar global
+  // navigation binding without breaking editing. The same safeguard applies
+  // if a non-Mac user explicitly remaps history to Ctrl+Left/Right.
+  if (
+    (match.actionId === "nav.back" || match.actionId === "nav.forward") &&
+    (chord === "mod+arrowleft" || chord === "mod+arrowright") &&
+    (isEditableEventTarget(event.target) || isDiffsEditorEvent(event))
+  ) {
+    return null;
+  }
+  if (isExternallyHandled(match.actionId)) return null;
+  return match;
+}
+
+function shouldPassCtrlChordToFocusedTerminal(
+  event: KeyboardEvent,
+  terminalPolicy: TerminalPolicy,
+): boolean {
+  return (
+    !isMac() &&
+    event.ctrlKey &&
+    terminalPolicy === "shell" &&
+    isTerminalEventTarget(event.target)
+  );
+}
+
+function isTerminalEventTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest("[data-terminal-host]") !== null
+  );
+}
+
+function isDiffsHistoryShortcut(event: KeyboardEvent): boolean {
+  return (
+    hasPlatformModKey(event) && !event.altKey && event.key.toLowerCase() === "z"
+  );
+}
+
+function isDiffsEditorOwnedKey(
+  event: KeyboardEvent,
+  hasLeaderModifier: boolean,
+): boolean {
+  return (
+    isDiffsEditorEvent(event) &&
+    (!hasLeaderModifier || isDiffsHistoryShortcut(event))
+  );
 }
 
 function isArtifactEditorLinkShortcut(event: KeyboardEvent): boolean {
@@ -522,6 +605,27 @@ function handleDigitMatch(
   }
 
   scheduleDigitSequenceCommit(sequenceRef, timerRef);
+  return true;
+}
+
+function handleDigitKeyDown(
+  event: KeyboardEvent,
+  match: DigitActionMatch | null,
+  sequenceRef: RefBox<DigitSequenceSession | null>,
+  timerRef: RefBox<number | null>,
+): boolean {
+  if (match === null) return false;
+  if (
+    shouldPassCtrlChordToFocusedTerminal(
+      event,
+      ACTION_META[match.actionId].terminalPolicy,
+    )
+  )
+    return true;
+
+  event.preventDefault();
+  event.stopPropagation();
+  handleDigitMatch(match, sequenceRef, timerRef);
   return true;
 }
 
