@@ -19,7 +19,6 @@ import {
 } from "@/components/layout/shell/screen-snapshot-cache";
 import {
   SWIPE_NAV_SETTLE,
-  SWIPE_NAV_SHAPE,
   swipeNavCommits,
 } from "@/components/layout/shell/swipe-nav-transition-motion";
 import type { SwipeNavTransitionView } from "@/components/layout/shell/swipe-nav-transition-layers";
@@ -237,7 +236,6 @@ export function useSwipeNavTransition(
         destination,
         destinationKey,
         widthPx,
-        shape: SWIPE_NAV_SHAPE,
       };
       viewRef.current = next;
       setView(next);

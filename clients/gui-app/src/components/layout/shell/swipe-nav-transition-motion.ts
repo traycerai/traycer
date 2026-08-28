@@ -43,9 +43,6 @@ const DESTINATION_PARALLAX = 1 / 3;
  */
 const RECEDED_DIM_OPACITY = 0.25;
 
-/** Rotation a face has turned through at full travel, in degrees. */
-const CUBE_QUARTER_TURN_DEG = 90;
-
 export interface SwipeNavRelease {
   /** Inward travel at release, in px. */
   readonly travelPx: number;
@@ -80,35 +77,9 @@ export function swipeNavCommits(release: SwipeNavRelease): boolean {
   });
 }
 
-/**
- * The visual model the two layers are composed under.
- *
- * `pop` is the stacked-card transition every phone platform ships: the near
- * plane translates off, the far plane trails it in and lifts its dim.
- *
- * `cube` turns the same two planes as adjacent faces of a box hinged at the
- * screen edge. It is a genuine alternative rather than a decoration, so it is
- * expressed in the same terms and chosen by one constant - which is what keeps
- * the machinery (snapshots, gesture, release rule) indifferent to which one is
- * on screen.
- */
-export type SwipeNavShape = "pop" | "cube";
-
-/**
- * The shape the app transitions with.
- *
- * A constant rather than a setting: which way a screen leaves is not a
- * preference the app asks about, and a switch shipped for one person to try
- * would outlive the trying. The alternative stays expressed here so the choice
- * is legible and reversible in one line.
- */
-export const SWIPE_NAV_SHAPE: SwipeNavShape = "pop";
-
 export interface SwipeNavLayerTransform {
   /** Ready for a motion `style`; a plain object so this stays testable. */
   readonly x: number;
-  readonly rotateY: number;
-  readonly transformOrigin: string;
   /** Opacity of the dim laid OVER this layer. 0 leaves it undimmed. */
   readonly dimOpacity: number;
 }
@@ -144,11 +115,11 @@ export function swipeNavPlaneTransform(
 /**
  * Where both layers sit at a given progress.
  *
- * ONE function for both directions and both shapes, because the two directions
- * are the same transition with the roles exchanged: going BACK, the screen you
- * are on is the near plane and it leaves; going FORWARD, the screen you are
- * heading to is the near plane and it arrives. Deriving them separately is how
- * a back that feels right ends up paired with a forward that feels inverted.
+ * ONE function for both directions, because the two directions are the same
+ * transition with the roles exchanged: going BACK, the screen you are on is
+ * the near plane and it leaves; going FORWARD, the screen you are heading to
+ * is the near plane and it arrives. Deriving them separately is how a back
+ * that feels right ends up paired with a forward that feels inverted.
  *
  * `progress` is 0 at the resting position the gesture began from and 1 at the
  * committed one, and is the only quantity the caller animates - so an
@@ -159,20 +130,13 @@ export function composeSwipeNavLayers(
   direction: EdgeNavDirection,
   progress: number,
   widthPx: number,
-  shape: SwipeNavShape,
 ): SwipeNavComposition {
   // A back drag carries the near plane OUT (0 -> 1 of its own travel); a
   // forward drag carries it IN (1 -> 0). Reading them as one advance of the
   // near plane is what lets a single composition answer both.
   const nearAdvance = direction === "back" ? progress : 1 - progress;
-  // Only the cube's geometry mirrors with the direction - the box turns the
-  // way the finger pushes it, so its hinge and its turn change sides. The pop
-  // stack keeps one orientation regardless of direction; see `popPlane`.
-  const cubeSign = direction === "back" ? 1 : -1;
   const plane = (side: SwipeNavPlane): SwipeNavLayerTransform =>
-    shape === "cube"
-      ? cubeFace(cubeSign, nearAdvance, side)
-      : popPlane(nearAdvance, widthPx, side);
+    popPlane(nearAdvance, widthPx, side);
   const near = plane("near");
   const far = plane("far");
   return direction === "back"
@@ -202,44 +166,11 @@ function popPlane(
   if (plane === "near") {
     return {
       x: nearAdvance * widthPx,
-      rotateY: 0,
-      transformOrigin: "center",
       dimOpacity: 0,
     };
   }
   return {
     x: -(1 - nearAdvance) * widthPx * DESTINATION_PARALLAX,
-    rotateY: 0,
-    transformOrigin: "center",
-    dimOpacity: (1 - nearAdvance) * RECEDED_DIM_OPACITY,
-  };
-}
-
-/**
- * The box face. Both planes hinge on the edge they meet at, so the pair turns
- * as one solid rather than as two cards that happen to rotate: the near face
- * swings away about the edge the finger is travelling toward, and the far one
- * arrives out of the quarter turn behind it.
- */
-function cubeFace(
-  sign: number,
-  nearAdvance: number,
-  plane: "near" | "far",
-): SwipeNavLayerTransform {
-  const hinge = sign > 0 ? "left center" : "right center";
-  const opposite = sign > 0 ? "right center" : "left center";
-  if (plane === "near") {
-    return {
-      x: 0,
-      rotateY: sign * nearAdvance * CUBE_QUARTER_TURN_DEG,
-      transformOrigin: hinge,
-      dimOpacity: 0,
-    };
-  }
-  return {
-    x: 0,
-    rotateY: -sign * (1 - nearAdvance) * CUBE_QUARTER_TURN_DEG,
-    transformOrigin: opposite,
     dimOpacity: (1 - nearAdvance) * RECEDED_DIM_OPACITY,
   };
 }

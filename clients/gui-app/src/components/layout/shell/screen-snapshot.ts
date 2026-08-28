@@ -109,8 +109,12 @@ function recordScrollOffsets(
   source: HTMLElement,
   clone: HTMLElement,
 ): ReadonlyArray<ScreenSnapshotScroll> {
-  const sourceNodes = source.querySelectorAll("*");
-  const cloneNodes = clone.querySelectorAll("*");
+  // The roots lead their own descendant walks: `querySelectorAll` returns
+  // descendants only, and the screen root is as capable of scrolling as
+  // anything inside it - skipping it would freeze exactly the region the
+  // marker names at its top.
+  const sourceNodes = [source, ...source.querySelectorAll("*")];
+  const cloneNodes = [clone, ...clone.querySelectorAll("*")];
   const offsets: ScreenSnapshotScroll[] = [];
   for (let index = 0; index < sourceNodes.length; index += 1) {
     const from = sourceNodes[index];

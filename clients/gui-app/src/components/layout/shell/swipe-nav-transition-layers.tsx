@@ -4,7 +4,6 @@ import {
   composeSwipeNavLayers,
   swipeNavPlaneTransform,
   type SwipeNavPlane,
-  type SwipeNavShape,
 } from "@/components/layout/shell/swipe-nav-transition-motion";
 import {
   applyScreenSnapshotScroll,
@@ -13,13 +12,6 @@ import {
 } from "@/components/layout/shell/screen-snapshot";
 import type { EdgeNavDirection } from "@/components/layout/shell/use-edge-nav-swipe";
 import { cn } from "@/lib/utils";
-
-/**
- * Depth of the box the cube shape turns inside. Perspective describes the
- * observer rather than the layout, so it is the one distance here that is not
- * derived from the surface it applies to.
- */
-const CUBE_PERSPECTIVE_PX = 1200;
 
 export interface SwipeNavTransitionView {
   readonly direction: EdgeNavDirection;
@@ -34,7 +26,6 @@ export interface SwipeNavTransitionView {
   readonly destinationKey: string;
   /** Measured once, at the gesture's start; never re-read mid-drag. */
   readonly widthPx: number;
-  readonly shape: SwipeNavShape;
 }
 
 interface SwipeNavTransitionLayersProps {
@@ -66,13 +57,7 @@ export function SwipeNavTransitionLayers(
       aria-hidden
       className="absolute inset-0 z-50 overflow-hidden bg-canvas"
       data-direction={view.direction}
-      data-shape={view.shape}
       data-testid="swipe-nav-transition-layers"
-      style={
-        view.shape === "cube"
-          ? { perspective: CUBE_PERSPECTIVE_PX, transformStyle: "preserve-3d" }
-          : undefined
-      }
       {...{ [SWIPE_NAV_EXCLUDE_ATTRIBUTE]: "" }}
     >
       {/* Painted far first, near second: that is the order they stack in, and
@@ -90,43 +75,29 @@ function SwipeNavLayer(props: {
   readonly view: SwipeNavTransitionView;
 }): ReactNode {
   const { plane, progress, view } = props;
-  const { direction, widthPx, shape } = view;
+  const { direction, widthPx } = view;
   const x = useTransform(
     progress,
     (value: number) =>
       swipeNavPlaneTransform(
-        composeSwipeNavLayers(direction, value, widthPx, shape),
+        composeSwipeNavLayers(direction, value, widthPx),
         plane,
       ).x,
-  );
-  const rotateY = useTransform(
-    progress,
-    (value: number) =>
-      swipeNavPlaneTransform(
-        composeSwipeNavLayers(direction, value, widthPx, shape),
-        plane,
-      ).rotateY,
   );
   const dimOpacity = useTransform(
     progress,
     (value: number) =>
       swipeNavPlaneTransform(
-        composeSwipeNavLayers(direction, value, widthPx, shape),
+        composeSwipeNavLayers(direction, value, widthPx),
         plane,
       ).dimOpacity,
   );
-  // The hinge a face turns about does not move with the finger, so it is read
-  // once from the resting composition rather than animated.
-  const transformOrigin = swipeNavPlaneTransform(
-    composeSwipeNavLayers(direction, 0, widthPx, shape),
-    plane,
-  ).transformOrigin;
   const snapshot = planeSnapshot(view, plane);
   return (
     <motion.div
       className={cn("absolute inset-0", plane === "near" && "shadow-2xl")}
       data-plane={plane}
-      style={{ x, rotateY, transformOrigin }}
+      style={{ x }}
     >
       <SnapshotMount snapshot={snapshot} />
       {/* The dim seats the far plane under the near one. A sibling rather than
@@ -153,12 +124,7 @@ function planeSnapshot(
   view: SwipeNavTransitionView,
   plane: SwipeNavPlane,
 ): ScreenSnapshot {
-  const composition = composeSwipeNavLayers(
-    view.direction,
-    0,
-    view.widthPx,
-    view.shape,
-  );
+  const composition = composeSwipeNavLayers(view.direction, 0, view.widthPx);
   const nearIsOutgoing = composition.nearLayer === "outgoing";
   const showsOutgoing = plane === "near" ? nearIsOutgoing : !nearIsOutgoing;
   return showsOutgoing ? view.outgoing : view.destination;

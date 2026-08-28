@@ -34,7 +34,7 @@ afterEach(() => {
  */
 describe("composeSwipeNavLayers", () => {
   it("rests with the near plane covering the screen and the far one behind it", () => {
-    const back = composeSwipeNavLayers("back", 0, WIDTH_PX, "pop");
+    const back = composeSwipeNavLayers("back", 0, WIDTH_PX);
 
     expect(back.nearLayer).toBe("outgoing");
     expect(swipeNavPlaneTransform(back, "near").x).toBe(0);
@@ -43,7 +43,7 @@ describe("composeSwipeNavLayers", () => {
   });
 
   it("arrives with both planes on the screen and the dim lifted", () => {
-    const back = composeSwipeNavLayers("back", 1, WIDTH_PX, "pop");
+    const back = composeSwipeNavLayers("back", 1, WIDTH_PX);
 
     expect(swipeNavPlaneTransform(back, "near").x).toBe(WIDTH_PX);
     // Signed zeroes: both quantities arrive from the negative side.
@@ -58,8 +58,8 @@ describe("composeSwipeNavLayers", () => {
   // mirrored assertion once certified a forward whose planes travelled against
   // the finger.
   it("carries the destination in from the trailing edge, going forward", () => {
-    const rest = composeSwipeNavLayers("forward", 0, WIDTH_PX, "pop");
-    const done = composeSwipeNavLayers("forward", 1, WIDTH_PX, "pop");
+    const rest = composeSwipeNavLayers("forward", 0, WIDTH_PX);
+    const done = composeSwipeNavLayers("forward", 1, WIDTH_PX);
 
     expect(rest.nearLayer).toBe("destination");
     expect(swipeNavPlaneTransform(rest, "near").x).toBe(WIDTH_PX);
@@ -75,13 +75,8 @@ describe("composeSwipeNavLayers", () => {
   it("runs forward as back played in reverse, plane for plane", () => {
     for (let step = 0; step <= 10; step += 1) {
       const progress = step / 10;
-      const forward = composeSwipeNavLayers(
-        "forward",
-        progress,
-        WIDTH_PX,
-        "pop",
-      );
-      const back = composeSwipeNavLayers("back", 1 - progress, WIDTH_PX, "pop");
+      const forward = composeSwipeNavLayers("forward", progress, WIDTH_PX);
+      const back = composeSwipeNavLayers("back", 1 - progress, WIDTH_PX);
 
       for (const plane of ["near", "far"] as const) {
         expect(swipeNavPlaneTransform(forward, plane).x).toBeCloseTo(
@@ -101,8 +96,8 @@ describe("composeSwipeNavLayers", () => {
     // Both travels are MEASURED between the endpoints rather than derived from
     // the parallax constant: a test that recomputes the formula it is checking
     // agrees with any formula, including none at all.
-    const start = composeSwipeNavLayers("back", 0, WIDTH_PX, "pop");
-    const end = composeSwipeNavLayers("back", 1, WIDTH_PX, "pop");
+    const start = composeSwipeNavLayers("back", 0, WIDTH_PX);
+    const end = composeSwipeNavLayers("back", 1, WIDTH_PX);
     const nearTravel = Math.abs(
       swipeNavPlaneTransform(end, "near").x -
         swipeNavPlaneTransform(start, "near").x,
@@ -124,7 +119,6 @@ describe("composeSwipeNavLayers", () => {
           direction,
           step / 10,
           WIDTH_PX,
-          "pop",
         );
         const near = swipeNavPlaneTransform(composition, "near").x;
         const far = swipeNavPlaneTransform(composition, "far").x;
@@ -140,23 +134,6 @@ describe("composeSwipeNavLayers", () => {
         expect(trailing).toBeLessThanOrEqual(leading + WIDTH_PX);
       }
     }
-  });
-
-  // The cube turns the same two planes rather than sliding them, so nothing
-  // translates and the hinge each face turns about is the edge they meet at.
-  it("turns the planes about the edge they meet at, under the cube shape", () => {
-    const rest = composeSwipeNavLayers("back", 0, WIDTH_PX, "cube");
-    const done = composeSwipeNavLayers("back", 1, WIDTH_PX, "cube");
-
-    expect(swipeNavPlaneTransform(rest, "near").x).toBe(0);
-    expect(swipeNavPlaneTransform(rest, "near").rotateY).toBe(0);
-    expect(swipeNavPlaneTransform(rest, "far").rotateY).toBe(-90);
-    expect(swipeNavPlaneTransform(done, "near").rotateY).toBe(90);
-    // A signed zero: the face has finished turning, from the negative side.
-    expect(swipeNavPlaneTransform(done, "far").rotateY).toBeCloseTo(0);
-    expect(swipeNavPlaneTransform(rest, "near").transformOrigin).not.toBe(
-      swipeNavPlaneTransform(rest, "far").transformOrigin,
-    );
   });
 });
 
@@ -361,6 +338,25 @@ describe("captureScreenSnapshot", () => {
     // scroll the screen the user is still looking at.
     expect(recorded[0]?.element).toBe(snapshot?.node.querySelector("#list"));
     expect(recorded[0]?.element).not.toBe(list);
+  });
+
+  // The screen ROOT is as capable of scrolling as anything inside it, and a
+  // descendant-only walk skips exactly the region the marker names - which
+  // would freeze it at its top, the defect this recording exists to prevent.
+  it("records the screen root's own offset, against the clone root", () => {
+    const source = mountScreen(`<p>a chat</p>`);
+    Object.defineProperty(source, "scrollTop", {
+      value: 120,
+      configurable: true,
+    });
+
+    const snapshot = captureScreenSnapshot(source);
+    const recorded = snapshot?.scrollOffsets ?? [];
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.scrollTop).toBe(120);
+    expect(recorded[0]?.element).toBe(snapshot?.node);
+    expect(recorded[0]?.element).not.toBe(source);
   });
 
   // A region at its origin is not worth carrying: every element in the tree
