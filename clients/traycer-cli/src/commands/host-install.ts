@@ -29,8 +29,12 @@ import {
 } from "../service/install-lifecycle";
 import { withCliLock } from "../store/cli-lock";
 
-// `traycer host install <version|latest>` - registry path (NP-4) /
-// `--from <path>` local-file path (NP-2).
+// `traycer host install [--release <version>]` - registry path (NP-4) /
+// `--from <path>` local-file path (NP-2). There is NO positional argument:
+// bare `install` means latest, and a pin is spelled `--release <version>`
+// (the root `--version` collision is why it isn't `--version`). Recovery
+// text elsewhere in the CLI must use those two spellings - `host install
+// latest` is rejected by Commander as an excess argument.
 //
 // Lifecycle ordering (Tech Plan, Decision 3): stage + verify + extract
 // happen before we touch the OS service. Only once the new bytes are

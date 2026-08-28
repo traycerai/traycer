@@ -81,6 +81,15 @@ export interface CreateRemoteTransportOptions<
    * inheriting the only value any consumer could have passed.
    */
   readonly clientIdentity: FirstPartyClientIdentity;
+  /**
+   * Whether the process-wide wake sweep may proactively poke or force-drop
+   * the session this consumer acquires - the consumer's statement that a
+   * reconnect's subscribe replay is safe for the streams it will carry. A
+   * one-shot side-effecting transport passes `false`; see
+   * `RemoteSessionAcquirePolicy.proactiveWakeEligible` for why this is not
+   * inferred from `auth`.
+   */
+  readonly proactiveWakeEligible: boolean;
 }
 
 export interface RemoteHostTransport<
@@ -150,6 +159,7 @@ export function createRemoteHostTransport<
       // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
       authEpoch: authEpochFor(bearerSource),
     },
+    { proactiveWakeEligible: options.proactiveWakeEligible },
     () => {
       const grantProvider = createAttachGrantProvider({
         authnBaseUrl: options.authnBaseUrl,

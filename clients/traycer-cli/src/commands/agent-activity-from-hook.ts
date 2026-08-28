@@ -12,7 +12,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpcFastFail,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -189,7 +189,8 @@ async function submitPrompt(identity: HookActivityIdentity) {
     };
   }
 
-  const { accepted, pendingPromptContext } = parseHostResponse(
+  const { accepted, pendingPromptContext } = parseCanonicalHostResponse(
+    "agent.tui.promptSubmitted",
     tuiAgentPromptSubmittedResponseSchema,
     rpcResult,
   );
@@ -231,7 +232,11 @@ async function callRecordActivity(
     throw err;
   });
   if (rpcResult === "host-unreachable") return "host-unreachable";
-  return parseHostResponse(recordTuiAgentActivityResponseSchema, rpcResult);
+  return parseCanonicalHostResponse(
+    "agent.tui.recordActivity",
+    recordTuiAgentActivityResponseSchema,
+    rpcResult,
+  );
 }
 
 function userPromptSubmitEnvelope(additionalContext: string): string {

@@ -1048,7 +1048,10 @@ describe("landing workspace summary empty state", () => {
     expect(screen.getByTestId("folder-row-loading").textContent).toContain(
       "Loading folder metadata",
     );
-    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
+    const location = screen.getByTestId("folder-location-trigger");
+    expect(location.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByTestId("folder-location-local")).toBeNull();
+    expect(screen.queryByTestId("folder-location-worktree")).toBeNull();
 
     queryClient.clear();
   });

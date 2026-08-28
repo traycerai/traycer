@@ -2,7 +2,7 @@ import { listAgentsResponseSchema } from "@traycer/protocol/host/agent/shared";
 import { formatAgentListResponse } from "@traycer/protocol/agent/agent-list-format";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
 import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
@@ -29,7 +29,11 @@ export function buildAgentListCommand(opts: {
         scope: opts.all ? ("all" as const) : ("user" as const),
       }),
     );
-    const response = parseHostResponse(listAgentsResponseSchema, result);
+    const response = parseCanonicalHostResponse(
+      "agent.list",
+      listAgentsResponseSchema,
+      result,
+    );
     return {
       data: response,
       human: formatAgentListResponse(response),

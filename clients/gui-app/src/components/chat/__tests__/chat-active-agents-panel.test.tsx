@@ -75,7 +75,7 @@ function row(over: Partial<AgentRow> & Pick<AgentRow, "id">): AgentRow {
   return {
     title: `title-${over.id}`,
     surface: "gui",
-    active: true,
+    activity: "turn",
     hostId: "d1",
     ...over,
   };
@@ -94,7 +94,7 @@ describe("ActiveAgentsPanel", () => {
       <ActiveAgentsPanel
         epicId="epic-1"
         viewTabId="tab-1"
-        self={row({ id: "self", title: "Root chat", active: true })}
+        self={row({ id: "self", title: "Root chat", activity: "turn" })}
         descendants={[
           row({ id: "child-1", title: "Sub-agent one" }),
           row({
@@ -118,6 +118,25 @@ describe("ActiveAgentsPanel", () => {
     expect(stopAll.getAttribute("data-icon-only")).toBe("false");
     // The list is collapsed, so descendant rows are not mounted yet.
     expect(screen.queryByText("Sub-agent one")).toBeNull();
+  });
+
+  it("uses the shared background-process glyph for background-only agents", () => {
+    render(
+      <ActiveAgentsPanel
+        epicId="epic-1"
+        viewTabId="tab-1"
+        self={row({ id: "self", activity: false })}
+        descendants={[row({ id: "child", activity: "background" })]}
+        scrollRegionMaxHeightClass="max-h-40"
+        separated={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /active agents/i }));
+
+    expect(
+      screen.getByTestId("active-agent-background-activity-child"),
+    ).toBeTruthy();
   });
 
   it("moves 'Stop all' onto the current agent's row and reveals descendant stops on hover when expanded", () => {

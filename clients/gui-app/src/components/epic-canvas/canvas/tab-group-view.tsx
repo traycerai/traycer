@@ -73,6 +73,7 @@ import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
 import { isWorkspaceFileRef } from "@/stores/epics/canvas/types";
 import { requestFileTreeReveal } from "@/stores/file-tree/file-tree-reveal-store";
+import { requestSidebarNodeReveal } from "@/stores/epics/sidebar-node-reveal-store";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
 import { surfaceOwnerFor } from "@/components/epic-canvas/surface-host/surface-owner";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
@@ -340,6 +341,12 @@ export const TabGroupView = memo(function TabGroupView(
           workspacePath: tab.workspacePath,
           filePath: tab.filePath,
         });
+      }
+      if (
+        tab !== undefined &&
+        (tab.type === "chat" || tab.type === "terminal-agent")
+      ) {
+        requestSidebarNodeReveal(tabId, tab.id);
       }
       setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },

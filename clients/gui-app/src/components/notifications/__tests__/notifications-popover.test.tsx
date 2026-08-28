@@ -58,6 +58,7 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import type {
   HostNotificationEntry,
+  HostNotificationEntryV21,
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
@@ -544,7 +545,7 @@ function threadEntryWithState(state: ThreadEntryState): NotificationEntry {
 }
 
 function applyHostSnapshot(
-  entries: ReadonlyArray<HostNotificationEntry>,
+  entries: ReadonlyArray<HostNotificationEntryV21>,
   summary: { readonly unreadCount: number; readonly attentionCount: number },
 ): void {
   useHostNotificationsStore.getState().applySnapshot({
@@ -1258,6 +1259,88 @@ describe("NotificationsPopover", () => {
 
     const timestamp = await screen.findByTestId("notification-timestamp");
     expect(timestamp.textContent).toBe("2m ago");
+  });
+
+  it("uses workspace glyphs for worktree lifecycle notifications", async () => {
+    applyHostSnapshot(
+      [
+        {
+          id: "worktree.deletion:command-1",
+          updatedAt: 200,
+          readAt: null,
+          kind: "host.operation.finished",
+          sourceRef: "command-1",
+          severity: "done",
+          outcome: "completed",
+          epicId: null,
+          chatId: null,
+          payload: {
+            kind: "worktree_deletion",
+            operation: "worktree.deletion",
+            title: "Worktree deleted",
+            message: "Deleted 1 worktree.",
+            commandId: "command-1",
+            source: "settings",
+            requestedCount: 1,
+            deletedCount: 1,
+            failedCount: 0,
+          },
+        },
+        {
+          id: "workspace.operation.failed:event-1",
+          updatedAt: 100,
+          readAt: null,
+          kind: "workspace.operation.failed",
+          sourceRef: "event-1",
+          severity: "failure",
+          outcome: "errored",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          payload: {
+            kind: "workspace_operation_failed",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chatTitle: "Agent",
+            taskTitle: TASK_TITLE,
+            operation: "provision",
+            title: "Worktree creation failed",
+            message: "Worktree creation failed.",
+            outcome: "errored",
+          },
+        },
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByText("Worktree deleted");
+    const rows = screen.getAllByTestId("notification-entry");
+    const deletionRow = rows.find(
+      (row) =>
+        row.dataset.notificationId === "host:worktree.deletion:command-1",
+    );
+    const creationFailureRow = rows.find(
+      (row) =>
+        row.dataset.notificationId ===
+        "host:workspace.operation.failed:event-1",
+    );
+    expect(deletionRow?.querySelector(".lucide-trash-2")).not.toBeNull();
+    expect(
+      deletionRow?.querySelector(".lucide-message-square-check"),
+    ).toBeNull();
+    expect(
+      creationFailureRow?.querySelector(".lucide-folder-x"),
+    ).not.toBeNull();
+    expect(
+      creationFailureRow?.querySelector(".lucide-message-square-x"),
+    ).toBeNull();
   });
 
   it("renders Attention before Recent and omits Attention when empty", async () => {

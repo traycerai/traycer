@@ -97,6 +97,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
+import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
@@ -1185,6 +1186,25 @@ export function WorktreesList(props: {
       visibleWorktrees,
     ],
   );
+  // Select-all never pre-selects in-use rows: those are a deliberate opt-in
+  // because confirming them stops their holders.
+  const selectAllWorktreePaths = useMemo(
+    () =>
+      visibleWorktrees
+        .filter((entry) =>
+          worktreeIsSelectAllEligible(
+            entry,
+            backgroundedDeleteStatusByPath,
+            deleteEnrichmentStateFor(entry.worktreePath),
+          ),
+        )
+        .map((entry) => entry.worktreePath),
+    [
+      backgroundedDeleteStatusByPath,
+      deleteEnrichmentStateFor,
+      visibleWorktrees,
+    ],
+  );
   const selectablePathSet = useMemo(
     () => new Set(selectableWorktreePaths),
     [selectableWorktreePaths],
@@ -1199,6 +1219,13 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
+  // Select-all's checked state is the intersection with its own eligible
+  // set, not the full selection: in-use rows are deliberately selectable
+  // but never select-all-eligible, so counting them would mark the toggle
+  // checked while idle rows stay unselected.
+  const selectAllSelectedCount = selectAllWorktreePaths.filter((path) =>
+    selectedPaths.has(path),
+  ).length;
   // Live-measured height of the floating selection action bar (see
   // `WorktreeSelectionActionBar` / `WORKTREE_ACTION_BAR_GAP_PX`), so the scroll
   // viewport's bottom clearance tracks the bar's REAL rendered height - including
@@ -1230,14 +1257,16 @@ export function WorktreesList(props: {
   );
   // Re-resolve the pending targets against the freshest listing and split into
   // the rows still eligible to delete vs. the ones dropped (gone from the list,
-  // now in-use / mid-delete, or regressed to `Checking`). All selection is
-  // user-driven now, so the remaining confirm-time gates are "still selectable"
-  // and "not Checking"; a hand-picked dirty / ahead row proceeds with its
-  // FRESHEST loss copy (per-row opt-in is intentional). Both the dialog copy
-  // and the confirm action read from this, so what the user sees is what gets
-  // deleted - a row that opened confirmation while ready/unknown but becomes
-  // `Checking` before confirm (e.g. a refresh re-arms its enrichment) must not
-  // delete, matching the rule that `Checking` rows are never deletable.
+  // mid-delete, or regressed to `Checking`). In-use rows stay eligible: the
+  // busy refusal with typed holders opens the force-delete confirm. All
+  // selection is user-driven now, so the remaining confirm-time gates are
+  // "still selectable" and "not Checking"; a hand-picked dirty / ahead row
+  // proceeds with its FRESHEST loss copy (per-row opt-in is intentional). Both
+  // the dialog copy and the confirm action read from this, so what the user
+  // sees is what gets deleted - a row that opened confirmation while
+  // ready/unknown but becomes `Checking` before confirm (e.g. a refresh
+  // re-arms its enrichment) must not delete, matching the rule that
+  // `Checking` rows are never deletable.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
     const kept: WorktreeHostEntryV14[] = [];
@@ -1320,19 +1349,19 @@ export function WorktreesList(props: {
   // untouched - the header + count reflect visible rows, and the confirm-time
   // re-resolution + honest dialog still govern what is deleted.
   const allVisibleSelected =
-    selectableWorktreePaths.length > 0 &&
-    selectedCount === selectableWorktreePaths.length;
+    selectAllWorktreePaths.length > 0 &&
+    selectAllWorktreePaths.every((path) => selectedPaths.has(path));
   const toggleSelectAllVisible = useCallback(() => {
     setSelectedPaths((prev) => {
       const next = new Set(prev);
       if (allVisibleSelected) {
-        for (const path of selectableWorktreePaths) next.delete(path);
+        for (const path of selectAllWorktreePaths) next.delete(path);
       } else {
-        for (const path of selectableWorktreePaths) next.add(path);
+        for (const path of selectAllWorktreePaths) next.add(path);
       }
       return next;
     });
-  }, [allVisibleSelected, selectableWorktreePaths, setSelectedPaths]);
+  }, [allVisibleSelected, selectAllWorktreePaths, setSelectedPaths]);
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set());
   }, [setSelectedPaths]);
@@ -1396,9 +1425,9 @@ export function WorktreesList(props: {
   const handleConfirm = (): void => {
     if (pendingResolution === null || pendingDeleteTargets === null) return;
     // `pendingResolution` already re-resolved each pending path to its freshest
-    // entry and split kept vs. dropped (gone from the list, now in-use / mid-
-    // delete, or regressed to Checking). Start the run on the FRESHEST kept
-    // entries, and name the drops.
+    // entry and split kept vs. dropped (gone from the list, mid-delete, or
+    // regressed to Checking). Start the run on the FRESHEST kept entries, and
+    // name the drops.
     const { kept, dropped } = pendingResolution;
     if (dropped.length > 0) {
       toast.message(
@@ -1410,7 +1439,11 @@ export function WorktreesList(props: {
       );
     }
     if (kept.length === 1) {
-      start(kept[0], reviewedScriptsByPath.get(kept[0].worktreePath) ?? null);
+      start(
+        kept[0],
+        reviewedScriptsByPath.get(kept[0].worktreePath) ?? null,
+        false,
+      );
     } else if (kept.length > 1) {
       startBatchBackgrounded(kept, reviewedScriptsByPath);
     }
@@ -1541,26 +1574,17 @@ export function WorktreesList(props: {
       visibleRowCount={visibleWorktrees.length}
     >
       <div className="flex h-full min-h-0 flex-col">
-        {confirmed !== null && run !== null ? (
-          // Gutter padding rather than an inset box, so the child centres
-          // inside the safe region while the backdrop below still covers the
-          // whole screen - a dim over the status bar is a dim, not a surface.
-          // Each gutter is the layout's own 1rem or the device inset,
-          // whichever is larger, so nothing doubles up.
-          <div className="fixed inset-0 z-50 flex items-center justify-center pt-safe-top-gutter pr-safe-right-gutter pb-safe-bottom-gutter pl-safe-left-gutter">
-            <div
-              aria-hidden
-              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-            />
-            <div className="relative z-10 max-h-[min(80vh,40rem)] w-[min(92vw,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
-              <WorktreeDeleteProgressModal
-                target={confirmed}
-                run={run}
-                onClose={handleCloseModal}
-              />
-            </div>
-          </div>
-        ) : null}
+        <WorktreeDeleteForegroundSurface
+          confirmed={confirmed}
+          run={run}
+          reviewedScriptsByPath={reviewedScriptsByPath}
+          onForceDelete={(target, scripts) => {
+            close();
+            start(target, scripts, true);
+          }}
+          onDismissForceDelete={close}
+          onCloseProgress={handleCloseModal}
+        />
 
         <WorktreesToolbar
           {...props.toolbarProps}
@@ -1568,8 +1592,8 @@ export function WorktreesList(props: {
             <>
               <SelectAllToggle
                 accessibleLabel="Select all visible worktrees"
-                selectableCount={selectableWorktreePaths.length}
-                selectedCount={selectedCount}
+                selectableCount={selectAllWorktreePaths.length}
+                selectedCount={selectAllSelectedCount}
                 disabled={false}
                 testId="worktrees-select-all"
                 onToggle={toggleSelectAllVisible}
@@ -1782,6 +1806,57 @@ export function WorktreesList(props: {
         />
       </div>
     </WorktreeListRenderProfiler>
+  );
+}
+
+function WorktreeDeleteForegroundSurface(props: {
+  readonly confirmed: WorktreeHostEntry | null;
+  readonly run: WorktreeDeleteRunState | null;
+  readonly reviewedScriptsByPath: ReadonlyMap<string, WorktreeEntryScripts>;
+  readonly onForceDelete: (
+    target: WorktreeHostEntry,
+    scripts: WorktreeEntryScripts | null,
+  ) => void;
+  readonly onDismissForceDelete: () => void;
+  readonly onCloseProgress: () => void;
+}): ReactNode {
+  const { confirmed, run } = props;
+  if (confirmed === null || run === null) return null;
+  if (run.pendingBusyHolders !== null && run.pendingBusyHolders.length > 0) {
+    return (
+      <TeardownForceDeleteDialog
+        open
+        worktreeLabel={branchLabel(confirmed)}
+        holders={run.pendingBusyHolders}
+        onConfirm={() => {
+          const scripts =
+            props.reviewedScriptsByPath.get(confirmed.worktreePath) ??
+            confirmed.scripts;
+          props.onForceDelete(confirmed, scripts);
+        }}
+        onDismiss={props.onDismissForceDelete}
+      />
+    );
+  }
+  // Gutter padding rather than an inset box, so the child centres inside
+  // the safe region while the backdrop below still covers the whole screen
+  // - a dim over the status bar is a dim, not a surface. Each gutter is
+  // the layout's own 1rem or the device inset, whichever is larger, so
+  // nothing doubles up.
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center pt-safe-top-gutter pr-safe-right-gutter pb-safe-bottom-gutter pl-safe-left-gutter">
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+      />
+      <div className="relative z-10 max-h-[min(80vh,40rem)] w-[min(92vw,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
+        <WorktreeDeleteProgressModal
+          target={confirmed}
+          run={run}
+          onClose={props.onCloseProgress}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -2177,18 +2252,18 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
 });
 
 /**
- * Why a row's delete affordance is disabled, if at all - `in-use` takes
- * priority (it also blocks selection), then `checking` (a `Checking` row's
- * tier isn't known yet, so its delete confirmation can't be trusted). An
- * `Unknown` row (settled enrichment error) is NOT disabled here - it is still
- * deletable, just through the unknown-risk confirmation instead of the
- * generic one, even when the host never stamped `resolvedAt`.
+ * Why a row's delete affordance is disabled, if at all. `checking` (a
+ * `Checking` row's tier isn't known yet, so its delete confirmation can't be
+ * trusted). In-use rows are deletable: the busy refusal with typed holders
+ * opens the force-delete confirm. An `Unknown` row (settled enrichment error)
+ * is NOT disabled here - it is still deletable, just through the unknown-risk
+ * confirmation instead of the generic one, even when the host never stamped
+ * `resolvedAt`.
  */
 function worktreeDeleteDisabledReason(
   entry: WorktreeHostEntryV14,
   enrichment: WorktreeEnrichmentState,
-): "in-use" | "checking" | null {
-  if (entry.inUse) return "in-use";
+): "checking" | null {
   if (enrichment === "unknown") return null;
   if (entry.resolvedAt === null || enrichment === "pending") return "checking";
   return null;
@@ -2989,13 +3064,9 @@ function WorktreesRepoExpansionControl(props: {
 }
 
 const WORKTREE_DELETE_DISABLED_COPY: Record<
-  "in-use" | "checking",
+  "checking",
   { readonly ariaLabel: string; readonly selectTooltip: string }
 > = {
-  "in-use": {
-    ariaLabel: "Delete worktree (in use by an active agent)",
-    selectTooltip: "In use by an active agent",
-  },
   checking: {
     ariaLabel: "Delete worktree (status is still being checked)",
     selectTooltip: "Status is still being checked",
@@ -3007,7 +3078,7 @@ function WorktreeSelectionControl(props: {
   readonly selected: boolean;
   readonly canSelect: boolean;
   readonly deleting: boolean;
-  readonly selectDisabledReason: "in-use" | "checking" | null;
+  readonly selectDisabledReason: "checking" | null;
   readonly onToggleSelection: () => void;
 }): ReactNode {
   // NO default reason. A row can also be unselectable because a backgrounded
@@ -3069,7 +3140,7 @@ function WorktreeSelectionControl(props: {
  * destructive and still carries branch-specific accessible copy.
  */
 function WorktreeRowActions(props: {
-  readonly deleteDisabledReason: "in-use" | "checking" | null;
+  readonly deleteDisabledReason: "checking" | null;
   readonly onCopyPath: () => void;
   readonly onManageScripts: () => void;
   readonly onDelete: () => void;
@@ -3787,8 +3858,18 @@ function worktreeCanBeSelected(
 ): boolean {
   return (
     (entry.resolvedAt !== null || deleteEnrichment === "unknown") &&
-    !entry.inUse &&
     !deleteStatusByPath.has(entry.worktreePath)
+  );
+}
+
+function worktreeIsSelectAllEligible(
+  entry: WorktreeHostEntryV14,
+  deleteStatusByPath: ReadonlyMap<string, WorktreeRowDeleteStatus>,
+  deleteEnrichment: WorktreeEnrichmentState,
+): boolean {
+  return (
+    worktreeCanBeSelected(entry, deleteStatusByPath, deleteEnrichment) &&
+    !entry.inUse
   );
 }
 

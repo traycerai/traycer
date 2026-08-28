@@ -28,7 +28,13 @@ vi.mock("../../host/free-port-kill", () => ({
     commandName: string;
   }) => {
     mocks.killCalls.push(opts);
-    return { killed: true, killError: null };
+    return {
+      killed: true,
+      killError: null,
+      release: "released",
+      releaseDetail: "pid 4242 exited after SIGTERM",
+      holderPid: null,
+    };
   },
 }));
 
