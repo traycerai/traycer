@@ -142,9 +142,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const refresh = useRefreshSpinner({
     onRefresh: async () => {
       const fresh = await refreshCandidates();
-      setSessionOutcomes((current) =>
-        reconcileSessionOutcomes(current, fresh),
-      );
+      setSessionOutcomes((current) => reconcileSessionOutcomes(current, fresh));
     },
     externalRefreshing: isPending,
     timeoutMs: SWEEP_WORKTREES_REFRESH_TIMEOUT_MS,
@@ -218,8 +216,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const isSweeping = sweepMutation.isPending;
   const proofReady = !isPending && !isError;
   const bulkRows = rows.filter(
-    (row) =>
-      isBulkScopeRow(row) && !isRowSweeping(row) && !isRowUncertain(row),
+    (row) => isBulkScopeRow(row) && !isRowSweeping(row) && !isRowUncertain(row),
   );
   const bulkSelectedCount = bulkRows.filter(isRowChecked).length;
   const allBulkSelected =
@@ -409,9 +406,7 @@ function applySelectionRetarget(input: {
   readonly selectionKey: string | null;
   readonly setPreviousSelectionKey: (key: string | null) => void;
   readonly setCheckOverrides: (next: ReadonlyMap<string, boolean>) => void;
-  readonly setPreviousInUseByPath: (
-    next: ReadonlyMap<string, boolean>,
-  ) => void;
+  readonly setPreviousInUseByPath: (next: ReadonlyMap<string, boolean>) => void;
   readonly setStep: (step: "choose" | "review") => void;
   readonly setReviewSnapshot: (next: SweepReviewSnapshot | null) => void;
   readonly setTypedSweep: (value: string) => void;
@@ -437,9 +432,7 @@ function applyInUseConsentDrop(input: {
   readonly checkOverrides: ReadonlyMap<string, boolean>;
   readonly isPending: boolean;
   readonly selectionRetargeted: boolean;
-  readonly setPreviousInUseByPath: (
-    next: ReadonlyMap<string, boolean>,
-  ) => void;
+  readonly setPreviousInUseByPath: (next: ReadonlyMap<string, boolean>) => void;
   readonly setCheckOverrides: (next: ReadonlyMap<string, boolean>) => void;
 }): void {
   const inUseTransition = takeInUseFalseToTrueTransition({
@@ -453,7 +446,10 @@ function applyInUseConsentDrop(input: {
   input.setPreviousInUseByPath(inUseTransition.nextInUseByPath);
   if (inUseTransition.droppedForcePaths.length === 0) return;
   input.setCheckOverrides(
-    withoutOverridePaths(input.checkOverrides, inUseTransition.droppedForcePaths),
+    withoutOverridePaths(
+      input.checkOverrides,
+      inUseTransition.droppedForcePaths,
+    ),
   );
 }
 
@@ -461,7 +457,9 @@ function startSweepPrimary(input: {
   readonly proofReady: boolean;
   readonly hostId: string | null;
   readonly checkedRows: ReadonlyArray<EpicSweepWorktreeRow>;
-  readonly refreshCandidates: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
+  readonly refreshCandidates: () => Promise<
+    ReadonlyArray<EpicSweepWorktreeRow>
+  >;
   readonly kickoff: (targets: ReadonlyArray<EpicSweepWorktreeRow>) => void;
   readonly reviewRefreshGate: { current: boolean };
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
@@ -473,7 +471,11 @@ function startSweepPrimary(input: {
   readonly setInventoryChanged: (value: boolean) => void;
   readonly setStep: (step: "choose" | "review") => void;
 }): void {
-  if (!input.proofReady || input.hostId === null || input.checkedRows.length === 0) {
+  if (
+    !input.proofReady ||
+    input.hostId === null ||
+    input.checkedRows.length === 0
+  ) {
     return;
   }
   if (selectionIsSafeOnly(input.checkedRows)) {
@@ -755,8 +757,7 @@ function SweepWorktreesChoose(props: {
               {safeSummaryCopy(
                 props.selectedCount,
                 props.rows.filter(
-                  (row) =>
-                    props.isRowChecked(row) && row.entry.branch !== null,
+                  (row) => props.isRowChecked(row) && row.entry.branch !== null,
                 ).length,
               )}
             </p>

@@ -30,7 +30,9 @@ function holder(
 }
 
 describe("teardown holder copy", () => {
-  const names = new Map<string, string>([["chat:chat-1", "Fixing persistent busyness"]]);
+  const names = new Map<string, string>([
+    ["chat:chat-1", "Fixing persistent busyness"],
+  ]);
 
   it("composes actor sentences and never says Run directory or busy", () => {
     const sentences = [
@@ -78,7 +80,9 @@ describe("teardown holder copy", () => {
       "Shell “bun run dev” is running — will be stopped",
       "Agent “Fixing persistent busyness” is still running from this worktree — will be stopped",
     ]);
-    expect(sentences.join("\n")).not.toMatch(/Run directory|\bbusy\b|holder|PTY|\bowner\b/i);
+    expect(sentences.join("\n")).not.toMatch(
+      /Run directory|\bbusy\b|holder|PTY|\bowner\b/i,
+    );
   });
 
   it("groups same-identity records into one actor", () => {
@@ -163,15 +167,13 @@ describe("teardown holder copy", () => {
     expect(actors).toHaveLength(1);
     expect(actors[0]?.tone).toBe("working");
     expect(actors[0]?.sentence).toContain("still running from this worktree");
-    expect(actors[0]?.evidence.some((line) => line.includes("idle session"))).toBe(
-      true,
-    );
+    expect(
+      actors[0]?.evidence.some((line) => line.includes("idle session")),
+    ).toBe(true);
   });
 
   it("does not claim an exact process count when unknown inventories are mixed in", () => {
-    expect(
-      formatStopHeading({ knownActors: 1, unknownRows: 1 }),
-    ).toBe(
+    expect(formatStopHeading({ knownActors: 1, unknownRows: 1 })).toBe(
       "1 process will be stopped, and unidentified background work",
     );
     expect(formatStopHeading({ knownActors: 0, unknownRows: 2 })).toBe(

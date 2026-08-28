@@ -82,8 +82,8 @@ export function SweepWorktreesReview(props: {
             className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-foreground"
             data-testid="sweep-review-uncertain"
           >
-            {props.snapshot.pendingUncertain.join(", ")} unconfirmed — check
-            the worktree. That deletion is not being retried.
+            {props.snapshot.pendingUncertain.join(", ")} unconfirmed — check the
+            worktree. That deletion is not being retried.
           </p>
         ) : null}
         {props.snapshot.retryableFailed.length > 0 ? (

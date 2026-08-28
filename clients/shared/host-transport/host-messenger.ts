@@ -225,7 +225,11 @@ function holdersRevisionForBusyCode(
 ): string | null {
   if (!isHolderCarryingCode(code)) return null;
   const parsed = holdersRevisionWireFieldSchema.safeParse(revision);
-  if (!parsed.success || parsed.data === undefined || parsed.data.length === 0) {
+  if (
+    !parsed.success ||
+    parsed.data === undefined ||
+    parsed.data.length === 0
+  ) {
     return null;
   }
   return parsed.data;

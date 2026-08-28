@@ -70,8 +70,7 @@ const testState = vi.hoisted(() => {
           "worktreePath" in target && typeof target.worktreePath === "string"
             ? target.worktreePath
             : "";
-        const stopOwners =
-          "stopOwners" in target && target.stopOwners === true;
+        const stopOwners = "stopOwners" in target && target.stopOwners === true;
         const expectedHoldersRevision =
           "expectedHoldersRevision" in target &&
           typeof target.expectedHoldersRevision === "string"
@@ -200,9 +199,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.taskTitles = new Map();
     testState.hostId = "host-1";
     testState.refresh.mockReset();
-    testState.refresh.mockImplementation(() =>
-      Promise.resolve(testState.rows),
-    );
+    testState.refresh.mockImplementation(() => Promise.resolve(testState.rows));
     testState.refresh.mockClear();
   });
 
@@ -321,7 +318,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
     );
-    expect(screen.getByTestId("teardown-disclosure-inline").textContent).toContain(
+    expect(
+      screen.getByTestId("teardown-disclosure-inline").textContent,
+    ).toContain(
       "Terminal agent “Claude Code agent polite-ocelot” is working — will be stopped",
     );
     expect(screen.queryByText("Run directory")).toBeNull();
@@ -347,9 +346,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Sweep worktree feat-octopus" }),
     );
-    expect(screen.getByTestId("teardown-disclosure-inline").textContent).toContain(
-      formatUnknownHolderConsequence("feat-octopus"),
-    );
+    expect(
+      screen.getByTestId("teardown-disclosure-inline").textContent,
+    ).toContain(formatUnknownHolderConsequence("feat-octopus"));
   });
 
   it("select-all includes unproven rows, excludes in-use, and deselect-all clears in-use", () => {
@@ -579,9 +578,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-inventory-changed").textContent).toContain(
-        "What is running changed",
-      );
+      expect(
+        screen.getByTestId("sweep-inventory-changed").textContent,
+      ).toContain("What is running changed");
     });
     expect(screen.getByText("Review this sweep")).toBeTruthy();
   });
@@ -652,9 +651,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     expect(testState.mutate).toHaveBeenCalledTimes(1);
-    expect(
-      testState.lastVariables.worktrees[0]?.expectedHoldersRevision,
-    ).toBe(REV_A);
+    expect(testState.lastVariables.worktrees[0]?.expectedHoldersRevision).toBe(
+      REV_A,
+    );
   });
 
   it("shows the safe-summary copy for a proven-idle selection", () => {
@@ -803,9 +802,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
       expect(screen.getByTestId("sweep-inventory-changed")).toBeTruthy();
     });
@@ -814,9 +811,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     expect(screen.getByTestId("sweep-review-removal").textContent).toContain(
       "2 worktrees will be removed",
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     expect(testState.mutate).toHaveBeenCalledTimes(2);
     const firstKickoff = testState.parseSweepVariables(
       testState.mutate.mock.calls[0]?.[0],
@@ -1242,20 +1237,16 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain").textContent).toContain(
-        "feat-maybe",
-      );
+      expect(
+        screen.getByTestId("sweep-review-uncertain").textContent,
+      ).toContain("feat-maybe");
     });
     expect(screen.getByTestId("sweep-review-removal").textContent).toContain(
       "1 worktree will be removed",
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     expect(testState.mutate).toHaveBeenCalledTimes(2);
     expect(
       testState.lastVariables.worktrees.map((target) => target.worktreePath),
@@ -1412,9 +1403,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
       expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
     });
@@ -1432,7 +1421,11 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     expect(uncertainBox.hasAttribute("disabled")).toBe(true);
     expect(uncertainBox.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getAllByTestId("sweep-worktrees-row-outcome").map((node) => node.textContent)).toEqual(
+    expect(
+      screen
+        .getAllByTestId("sweep-worktrees-row-outcome")
+        .map((node) => node.textContent),
+    ).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/unconfirmed/i),
         expect.stringMatching(/couldn't be removed/i),
@@ -1493,13 +1486,11 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain").textContent).toContain(
-        "feat-maybe",
-      );
+      expect(
+        screen.getByTestId("sweep-review-uncertain").textContent,
+      ).toContain("feat-maybe");
     });
     testState.uncertain = [];
     testState.holdersChanged = [
@@ -1509,13 +1500,11 @@ describe("SweepWorktreesDialog ergonomics", () => {
         holdersRevision: REV_B,
       },
     ];
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain").textContent).toContain(
-        "feat-maybe",
-      );
+      expect(
+        screen.getByTestId("sweep-review-uncertain").textContent,
+      ).toContain("feat-maybe");
     });
     expect(testState.mutate).toHaveBeenCalledTimes(2);
     expect(
@@ -1584,9 +1573,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
       expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
     });
@@ -1659,9 +1646,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
       expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
     });
@@ -1744,9 +1729,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Stop work & sweep" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
       expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
     });

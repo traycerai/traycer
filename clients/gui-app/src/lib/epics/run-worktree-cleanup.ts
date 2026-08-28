@@ -367,7 +367,10 @@ async function runFallbackCleanup(input: {
     }
   };
 
-  const workerCount = Math.min(MAX_PARALLEL_CLEANUP_STREAMS, input.paths.length);
+  const workerCount = Math.min(
+    MAX_PARALLEL_CLEANUP_STREAMS,
+    input.paths.length,
+  );
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   return { removed, failed, uncertain, holdersChanged };

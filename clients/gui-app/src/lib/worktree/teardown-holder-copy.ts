@@ -128,9 +128,7 @@ function formatActorGroup(
   };
 }
 
-function worstHolder(
-  group: readonly WorktreeBusyHolder[],
-): WorktreeBusyHolder {
+function worstHolder(group: readonly WorktreeBusyHolder[]): WorktreeBusyHolder {
   const working = group.find((holder) => holder.activity === "working");
   return working ?? group[0];
 }

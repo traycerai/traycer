@@ -10,8 +10,7 @@ import {
 import type { EpicSweepWorktreeRow } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 
 function row(
-  over: Partial<EpicSweepWorktreeRow> &
-    Pick<EpicSweepWorktreeRow, "note">,
+  over: Partial<EpicSweepWorktreeRow> & Pick<EpicSweepWorktreeRow, "note">,
 ): EpicSweepWorktreeRow {
   return {
     entry: {
@@ -72,9 +71,9 @@ describe("sweep consequence copy", () => {
   });
 
   it("keeps the in-use caveat on the select-all count", () => {
-    expect(
-      selectAllCountCopy({ selected: 5, total: 7, inUse: 2 }),
-    ).toBe("5 of 7 selected · 2 in-use worktrees require individual selection");
+    expect(selectAllCountCopy({ selected: 5, total: 7, inUse: 2 })).toBe(
+      "5 of 7 selected · 2 in-use worktrees require individual selection",
+    );
   });
 
   it("counts distinct external Tasks, not bindings", () => {
@@ -151,8 +150,14 @@ describe("sweep consequence copy", () => {
       ["/wt/fail", { kind: "failed" as const, identity: "feat-fail" }],
     ]);
     const reconciled = reconcileSessionOutcomes(current, [
-      row({ note: "in-use", entry: { ...row({ note: "in-use" }).entry, worktreePath: "/wt/maybe" } }),
-      row({ note: "in-use", entry: { ...row({ note: "in-use" }).entry, worktreePath: "/wt/fail" } }),
+      row({
+        note: "in-use",
+        entry: { ...row({ note: "in-use" }).entry, worktreePath: "/wt/maybe" },
+      }),
+      row({
+        note: "in-use",
+        entry: { ...row({ note: "in-use" }).entry, worktreePath: "/wt/fail" },
+      }),
     ]);
     expect(reconciled.has("/wt/maybe")).toBe(false);
     expect(reconciled.get("/wt/fail")?.kind).toBe("failed");

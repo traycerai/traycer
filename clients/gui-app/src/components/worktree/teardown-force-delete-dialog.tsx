@@ -49,10 +49,7 @@ export function TeardownForceDeleteDialog(props: {
           </div>
         </div>
         <div className="min-w-0 px-5 pb-4">
-          <TeardownDisclosure
-            holders={props.holders}
-            agentNames={agentNames}
-          />
+          <TeardownDisclosure holders={props.holders} agentNames={agentNames} />
         </div>
         <div
           className="flex min-w-0 flex-wrap justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3"

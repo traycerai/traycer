@@ -159,42 +159,51 @@ export function useEpicSweepWorktreeCandidatesForClient(
   );
   const selectedEpicKey =
     selectedEpicIds === null ? "" : selectedEpicIds.join(",");
-  const fetchFreshTaskWorktrees =
-    async (): Promise<SweepCandidatesPayload> => {
-      if (client === null) {
-        throw hostClientUnavailableError("worktree.listAllForHost");
-      }
-      const base: WorktreeListAllForHostResponseV14 = await client.request(
-        "worktree.listAllForHost",
-        {
-          includeActivity: false,
-          activityPaths: null,
-          cursor: null,
-          limit: null,
-          forceRefresh: false,
-        },
-      );
-      const selected = new Set(selectedEpicIds ?? []);
-      const ownedPaths = base.worktrees.flatMap((entry) =>
-        entry.owners.some((owner) => selected.has(owner.epicId))
-          ? [entry.worktreePath]
-          : [],
-      );
-      if (ownedPaths.length === 0) {
-        return { listing: { worktrees: [], nextCursor: null }, holdersByPath: new Map() };
-      }
-      const listing = await client.request("worktree.listAllForHost", {
-        includeActivity: true,
-        activityPaths: ownedPaths,
+  const fetchFreshTaskWorktrees = async (): Promise<SweepCandidatesPayload> => {
+    if (client === null) {
+      throw hostClientUnavailableError("worktree.listAllForHost");
+    }
+    const base: WorktreeListAllForHostResponseV14 = await client.request(
+      "worktree.listAllForHost",
+      {
+        includeActivity: false,
+        activityPaths: null,
         cursor: null,
         limit: null,
-        forceRefresh: true,
-      });
-      const holdersByPath = await loadHoldersForInUseRows(client, listing.worktrees);
-      return { listing, holdersByPath };
-    };
-  const fetchFreshTaskWorktreesNormalized = (): Promise<SweepCandidatesPayload> =>
-    withHostQueryErrorBoundary("worktree.listAllForHost", fetchFreshTaskWorktrees);
+        forceRefresh: false,
+      },
+    );
+    const selected = new Set(selectedEpicIds ?? []);
+    const ownedPaths = base.worktrees.flatMap((entry) =>
+      entry.owners.some((owner) => selected.has(owner.epicId))
+        ? [entry.worktreePath]
+        : [],
+    );
+    if (ownedPaths.length === 0) {
+      return {
+        listing: { worktrees: [], nextCursor: null },
+        holdersByPath: new Map(),
+      };
+    }
+    const listing = await client.request("worktree.listAllForHost", {
+      includeActivity: true,
+      activityPaths: ownedPaths,
+      cursor: null,
+      limit: null,
+      forceRefresh: true,
+    });
+    const holdersByPath = await loadHoldersForInUseRows(
+      client,
+      listing.worktrees,
+    );
+    return { listing, holdersByPath };
+  };
+  const fetchFreshTaskWorktreesNormalized =
+    (): Promise<SweepCandidatesPayload> =>
+      withHostQueryErrorBoundary(
+        "worktree.listAllForHost",
+        fetchFreshTaskWorktrees,
+      );
   const { data, isFetching, isError, refetch } = useQuery(
     queryOptions<SweepCandidatesPayload, HostRpcError>({
       queryKey: hostQueryKeys.sweepWorktreeCandidates(

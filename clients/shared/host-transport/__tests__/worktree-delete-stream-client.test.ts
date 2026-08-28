@@ -233,7 +233,7 @@ describe("WorktreeDeleteStreamClient", () => {
         scripts: null,
         stopOwners: true,
         expectedHoldersRevision:
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       },
     );
     session.emitFrame({

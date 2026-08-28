@@ -1885,7 +1885,12 @@ describe("WorktreesList delete flow", () => {
     // `/wt/clean` settles under the ORIGINAL command and releases its
     // reservation, so the user can act on that path again.
     act(() => {
-      callbacksFor("/wt/clean").onFailed("busy", undefined, undefined, undefined);
+      callbacksFor("/wt/clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // They do: a fresh single delete opens its own command, whose record sits
@@ -1982,7 +1987,12 @@ describe("WorktreesList delete flow", () => {
     // The queued third target starts only once a slot frees, and every target
     // releases its reservation as it settles.
     act(() => {
-      callbacksFor("/wt/clean").onFailed("busy", undefined, undefined, undefined);
+      callbacksFor("/wt/clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
     expect(streamMock.paths).toEqual([
       "/wt/clean",
@@ -1990,8 +2000,18 @@ describe("WorktreesList delete flow", () => {
       "/wt/api-clean",
     ]);
     act(() => {
-      callbacksFor("/wt/dirty").onFailed("busy", undefined, undefined, undefined);
-      callbacksFor("/wt/api-clean").onFailed("busy", undefined, undefined, undefined);
+      callbacksFor("/wt/dirty").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
+      callbacksFor("/wt/api-clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // All three failed, so all three are selectable and deletable again - a
