@@ -8,8 +8,7 @@ import {
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
 import type { Environment } from "../runner/environment";
-import { readHostPidMetadata } from "../host/pid-metadata";
-import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
+import { findLiveIncumbentHost } from "../host/incumbent-check";
 
 // `traycer host service start` - ask the OS service manager to start the
 // already-registered host in the BACKGROUND and return.
@@ -36,28 +35,41 @@ import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 // inside another actor's install/apply critical section and race the process
 // that section is about to swap out.
 /**
- * Is the process pid metadata names actually the one that published it?
+ * Is a host POSITIVELY serving right now?
  *
- * `dead` / `mismatch` (a recycled pid) and an unreadable record all answer
- * "no", so the caller starts the service rather than trusting a `running`
- * status derived from a bare liveness check. An indeterminate OS probe also
- * answers "no": attempting a start that turns out to be unnecessary is
- * recoverable, leaving a stopped host down is not.
+ * `findLiveIncumbentHost` is exactly the right instrument for this direction,
+ * and using it here is not in tension with `host uninstall` refusing it: there
+ * the question was "did the process DIE?", which its documented bias toward
+ * `null` cannot answer. Here the question is "is one alive?", which is what it
+ * positively establishes - something answers the recorded loopback endpoint,
+ * and identity has not refuted it as a recycled-pid impostor.
+ *
+ * A bare identity verdict is NOT enough. `processStartIdentity` is nullable,
+ * so an older live host's metadata yields `indeterminate` - and rejecting the
+ * shortcut on that made `host service start` fail against a perfectly healthy
+ * legacy host on Windows, where `MultipleInstancesPolicy=IgnoreNew` suppresses
+ * the redundant `/Run` and `runTaskAndVerifyStart` then waits out its whole
+ * verification timeout looking for spawn evidence that can never arrive.
  */
-async function isPublishedHostCurrent(
+async function isHostPositivelyServing(
   environment: Environment,
 ): Promise<boolean> {
   try {
-    const metadata = await readHostPidMetadata(environment);
-    if (metadata === null) return false;
-    if (!Number.isInteger(metadata.pid) || metadata.pid <= 0) return false;
-    const verdict = await getPublishedProcessIdentityVerdict(
-      metadata.pid,
-      metadata.processStartIdentity,
-    );
-    return verdict === "current";
+    return (await findLiveIncumbentHost(environment)) !== null;
   } catch {
     return false;
+  }
+}
+
+/** Never lets a descriptive probe decide the command's outcome. */
+async function statusBestEffort(
+  controller: { status(label: ServiceLabel): Promise<ServiceStatus> },
+  label: ServiceLabel,
+): Promise<ServiceStatus | null> {
+  try {
+    return await controller.status(label);
+  } catch {
+    return null;
   }
 }
 
@@ -87,7 +99,12 @@ export const serviceStartCommand: CommandFn = async (
       // service could not be started whenever the preliminary query happened
       // to fail. The platform start is the authoritative attempt; this read
       // only decides what to SAY when that attempt fails.
-      const before = await controller.status(label);
+      // BEST-EFFORT. A Linux manifest stat or a macOS `launchctl print` that
+      // fails must not stop the authoritative start attempt - that would leave
+      // a registered, stopped host down because an inspection failed, which is
+      // the same "advisory read used as a gate" defect this probe was already
+      // demoted for once.
+      const before = await statusBestEffort(controller, label);
       // Already running: report it and touch NOTHING. The platform start is
       // skipped deliberately rather than relied on to no-op, because on
       // Windows it does not. The Scheduled Task is registered
@@ -107,18 +124,18 @@ export const serviceStartCommand: CommandFn = async (
       // a running host that is not there. Skipping the start on that leaves a
       // genuinely stopped host down until someone repairs the metadata, which
       // is the opposite of what this command was asked to do. Confirm the
-      // recorded process is the one that published before taking the shortcut.
+      // recorded process is genuinely serving before taking the shortcut.
       const runningConfirmed =
-        before.state === "running" &&
-        (await isPublishedHostCurrent(environment));
+        before?.state === "running" &&
+        (await isHostPositivelyServing(environment));
       if (runningConfirmed) {
         ctx.runtime.logger.info("Service start command found a running host", {
           environment: ctx.runtime.environment,
           label: label.id,
         });
         return {
-          data: startData(label, before.state, before, true),
-          human: humanSummary(label.id, before.state, before),
+          data: startData(label, "running", before, true),
+          human: humanSummary(label.id, true, before),
           exitCode: 0,
         };
       }
@@ -143,7 +160,7 @@ export const serviceStartCommand: CommandFn = async (
         // that combination is what "you have no service" actually looks like,
         // so attach the actionable guidance here rather than refusing up
         // front on a read that cannot be trusted to mean it.
-        if (before.state === "not-installed") {
+        if (before?.state === "not-installed") {
           throw cliError({
             code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
             message: `host service start: could not start the service, and no OS service appears to be registered for environment=${ctx.runtime.environment}; run 'traycer host service install' to register and start it, or 'traycer host ensure' to install the host as well (start failed: ${cause instanceof Error ? cause.message : String(cause)})`,
@@ -153,16 +170,19 @@ export const serviceStartCommand: CommandFn = async (
         }
         throw cause;
       }
-      const after = await controller.status(label);
+      // Also best-effort: the start was ACCEPTED, and a descriptive readback
+      // that fails afterwards must not turn that into a nonzero result. This
+      // command promises an accepted request, not readiness.
+      const after = await statusBestEffort(controller, label);
       ctx.runtime.logger.info("Service start command completed", {
         environment: ctx.runtime.environment,
         label: label.id,
-        priorState: before.state,
-        state: after.state,
+        priorState: before?.state ?? null,
+        state: after?.state ?? null,
       });
       return {
-        data: startData(label, before.state, after, false),
-        human: humanSummary(label.id, before.state, after),
+        data: startData(label, before?.state ?? null, after, false),
+        human: humanSummary(label.id, false, after),
         exitCode: 0,
       };
     },
@@ -171,35 +191,40 @@ export const serviceStartCommand: CommandFn = async (
 
 function startData(
   label: ServiceLabel,
-  priorState: ServiceStatus["state"],
-  observed: ServiceStatus,
+  priorState: ServiceStatus["state"] | null,
+  observed: ServiceStatus | null,
   alreadyRunning: boolean,
 ): Record<string, unknown> {
   return {
     label: label.id,
     environment: label.environment,
     priorState,
-    state: observed.state,
-    pid: observed.pid,
-    listenUrl: observed.listenUrl,
-    version: observed.version,
+    state: observed?.state ?? null,
+    pid: observed?.pid ?? null,
+    listenUrl: observed?.listenUrl ?? null,
+    version: observed?.version ?? null,
     alreadyRunning,
   };
 }
 
 function humanSummary(
   labelId: string,
-  priorState: ServiceStatus["state"],
-  after: ServiceStatus,
+  // The CONFIRMED decision, not the prior state it was derived from. A
+  // `running` status that identity refused still starts the service, and
+  // saying "was already running" there contradicted both the action taken and
+  // the `alreadyRunning: false` in the same payload.
+  alreadyRunning: boolean,
+  after: ServiceStatus | null,
 ): string {
-  if (priorState === "running") {
-    return `service '${labelId}' was already running${after.pid === null ? "" : ` (pid ${after.pid})`}`;
+  const pid = after?.pid ?? null;
+  if (alreadyRunning) {
+    return `service '${labelId}' was already running${pid === null ? "" : ` (pid ${pid})`}`;
   }
   // "requested", not "started": every backend returns once the service
   // manager has ACCEPTED the launch, and a job that is registered but
   // unspawnable still reports success there. `host status` is the honest
   // readiness check, so point at it rather than overclaiming here.
-  return after.state === "running"
-    ? `started service '${labelId}'${after.pid === null ? "" : ` (pid ${after.pid})`}`
+  return after?.state === "running"
+    ? `started service '${labelId}'${pid === null ? "" : ` (pid ${pid})`}`
     : `requested start for service '${labelId}'; run 'traycer host status' to confirm the host came up`;
 }

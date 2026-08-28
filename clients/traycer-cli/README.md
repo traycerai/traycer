@@ -60,10 +60,9 @@ traycer host status
 
 `traycer host start` is the **foreground** supervisor - it runs the host in this
 terminal and blocks until the host exits. It is also the entrypoint launchd /
-systemd / Scheduled Tasks invoke. On macOS and Linux it mirrors the host log
-while it runs; on Windows it prints the log path instead, because a Scheduled
-Task can hold a console there too - use `traycer host logs --follow` in another
-terminal. To start the background service and get your prompt back, use
+systemd / Scheduled Tasks invoke. Interactive runs print a banner naming the log
+file and how to stop; use `traycer host logs --follow` in another terminal to
+watch the log. To start the background service and get your prompt back, use
 `traycer host service start`.
 
 Use `--help` on any command group for the full local reference:

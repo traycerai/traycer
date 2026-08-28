@@ -683,10 +683,11 @@ function registerHostCommands(program: Command): void {
         [
           "",
           "Foreground behaviour:",
-          "  Interactive runs print a banner naming the host log. On macOS and Linux they",
-          "  also mirror new host log lines until the host exits; on Windows they do not,",
-          "  because a Scheduled Task can hold a console there too - use",
-          "  'traycer host logs --follow' in another terminal instead.",
+          "  Interactive runs print a banner naming the host log and how to stop, then",
+          "  stay quiet. They do NOT mirror the log: writing it from this process would",
+          "  block the supervisor's own event loop on a slow or flow-stopped terminal and",
+          "  could stop Ctrl-C reaching the host. Use 'traycer host logs --follow' in",
+          "  another terminal to watch it.",
           "  Ordinary service-manager starts, non-TTY runs and --quiet print nothing",
           "  human-readable, exactly as before (--quiet suppresses human output, not the",
           "  --json event - that is what --no-progress is for, matching the runner). Two service starts are not silent, both by design: a Windows task",
@@ -729,7 +730,6 @@ function registerHostCommands(program: Command): void {
       // `extractRunnerFlags`' own reading of the same option.
       noProgress: opts.progress === false,
       interactive: process.stdout.isTTY === true,
-      platform: process.platform,
     });
     logger.info("Host supervisor command invoked", {
       environment: config.environment,
@@ -1168,7 +1168,7 @@ function registerHostCommands(program: Command): void {
     host
       .command("update")
       .description(
-        "Update the installed host to a registry version (defaults to latest), then verify it comes back healthy",
+        "Update the installed host to a registry version (defaults to latest), then check that a host comes back healthy",
       )
       // A REAL registered option, spelled like `host install` / `host ensure`.
       // The version target used to exist only as free-form help text backed by
@@ -1292,9 +1292,10 @@ function registerHostCommands(program: Command): void {
           "           install to launch. Recover with 'traycer host install', or clean up with",
           "           'traycer host service uninstall'.",
           "  --all    Deregistration REQUESTED, the host asked to stand down, and the bytes",
-          "           removed. No platform can verify that a registration is gone, so the",
-          "           result reports the request plus what the readback saw - a positive",
-          "           `serviceRegistrationRetained` means it is definitely still there.",
+          "           removed. No platform can verify a registration is actually GONE, so",
+          "           this reports the request plus what the readback saw: a positive",
+          "           `serviceRegistrationRetained` means it is definitely still there, and",
+          "           null means nothing could confirm either way.",
           "           WINDOWS: deregistration force-kills the host process tree",
           "           first - there is no busy check, so running terminal sessions and",
           "           in-flight agent work are lost. macOS/Linux: the stop is cooperative and",

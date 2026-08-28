@@ -30,18 +30,35 @@ import {
 /**
  * What a `host start` invocation is allowed to print.
  *
- * - `mirror` - a person is watching: banner plus streamed `host.log` appends.
- * - `banner` - announce and stop there. The banner is one-shot and a few lines
- *   long; the mirror polls and reads for the entire life of a supervisor that
- *   can run for weeks. Where interactivity cannot be established beyond doubt,
- *   the cheap half is still worth printing and the expensive half is not.
+ * - `banner` - a person is watching: announce what is running, where the log
+ *   is, how to stop, and how to follow the log from another terminal.
  * - `events` - `--json`: one structured lifecycle event, and NEVER raw log
  *   lines. Mirrors `host logs`, whose `--follow` is likewise inert under
  *   `--json` because an NDJSON consumer wants events, not a file firehose.
  * - `silent` - a service manager, a script, or `--quiet`: byte-for-byte the
  *   behaviour this command has always had.
+ *
+ * THERE IS NO LOG-MIRRORING MODE, and that is a deliberate retreat from the
+ * first version of this feature.
+ *
+ * Mirroring meant writing arbitrary log volume to stdout from the supervisor's
+ * own event-loop thread, and there is no non-blocking way to do that. Node and
+ * Bun both make `process.stdout.write` a BLOCKING syscall on a TTY; wrapping
+ * it in a promise does not change that. Measured: 64 KiB into an open but
+ * unread PTY blocked the loop so a registered SIGINT handler had not run 1.5s
+ * later, and the process needed SIGKILL. One ordinary tail poll can carry 1
+ * MiB. So a slow or flow-stopped terminal (Ctrl-S, a scrolled-back pager)
+ * could stop the supervisor forwarding Ctrl-C to its child - breaking the very
+ * command this feature exists to make usable, and doing it on the interactive
+ * path where a person is definitely present.
+ *
+ * The banner keeps everything the audit actually asked for - the invocation
+ * identifies itself immediately, names the log, and says how to stop - and
+ * points at `traycer host logs --follow`, which streams the same file from a
+ * process that is not supervising anything. The shared follower this module
+ * used still exists and is still used there.
  */
-export type ForegroundStartMode = "mirror" | "banner" | "events" | "silent";
+export type ForegroundStartMode = "banner" | "events" | "silent";
 
 export interface ForegroundStartModeInput {
   /**
@@ -70,11 +87,6 @@ export interface ForegroundStartModeInput {
   readonly noProgress: boolean;
   /** stdout is a terminal. */
   readonly interactive: boolean;
-  /**
-   * `process.platform`. Windows is the one platform where a TTY does NOT imply
-   * a human - see the mirror gate below.
-   */
-  readonly platform: NodeJS.Platform;
 }
 
 export function resolveForegroundStartMode(
@@ -83,55 +95,23 @@ export function resolveForegroundStartMode(
   if (input.serviceManaged) return "silent";
   if (input.json) return input.noProgress ? "silent" : "events";
   if (input.quiet) return "silent";
-  if (!input.interactive) return "silent";
-  return canMirrorOnPlatform(input.platform) ? "mirror" : "banner";
+  return input.interactive ? "banner" : "silent";
 }
 
-/**
- * Is a TTY on this platform sufficient evidence that a PERSON is watching?
+/*
+ * A NOTE ON WINDOWS, kept because it constrains anything richer than a banner.
  *
- * Everywhere but Windows, yes - for the definitions this CLI emits, under
- * default manager settings. The macOS plist executes the per-label launcher
- * directly and sets no `StandardOutPath`, so launchd gives the job its default
- * (not a terminal); systemd binds stdout to the journal socket. An ordinary
- * start of either has no terminal to inherit.
+ * A TTY does not imply a human there. Scheduled Tasks registered before the
+ * launcher was hidden execute the CLI directly with a bare `host start`, no
+ * identity flags, `LogonType=InteractiveToken` and `Hidden=false`, so Task
+ * Scheduler allocates a console and `stdout.isTTY` is true - byte-identical,
+ * from inside the process, to a person typing the command. Those definitions
+ * are still attested by `host-lifecycle/identity.ts` and still on machines.
  *
- * That is a statement about Traycer's own definitions, NOT a universal
- * invariant, and the difference is worth naming. An operator can route a
- * service's stdout to their terminal on purpose - `launchctl debug
- * gui/$UID/<label> --stdout` with no path does exactly that for the next
- * invocation, and a systemd drop-in can set `StandardOutput=tty`. A legacy
- * bare-`host start` service started that way reaches this function with a TTY
- * and no identity flag, and gets `mirror`.
- *
- * Deliberately left that way. Those are debugging affordances whose entire
- * purpose is "show me this service's output on my terminal", so mirroring the
- * host log there is the thing that was asked for rather than a leak - and the
- * mirror is bounded (a capped read per poll, a capped drain on exit), so the
- * cost is a bounded read loop for as long as the operator leaves it attached.
- * What must not happen is a service reaching `mirror` when NOBODY asked, and
- * that is what the Windows arm below is for.
- *
- * On Windows it is NOT sufficient, and this is a live case rather than a
- * theoretical one. Scheduled Tasks registered before the launcher was hidden
- * (`fix(windows): hide host task launcher`) execute the CLI DIRECTLY with a
- * bare `host start`, no identity flags, `LogonType=InteractiveToken` and
- * `Hidden=false` - so Task Scheduler allocates a console and `stdout.isTTY` is
- * true. Those definitions are still attested by
- * `host-lifecycle/identity.ts` and still on machines, because the task
- * definition is replaced independently of the CLI slot it invokes. From inside
- * the process that invocation is byte-for-byte identical to a person typing
- * `traycer host start`.
- *
- * So Windows gets the banner and not the mirror. The audit's own rule is that
- * TTY inference must not be the sole safety boundary; where the inference is
- * known-unreliable, the unbounded half of the behaviour does not run. A
- * Windows user still learns the command is blocking, where the log is, and how
- * to follow it - which is the defect this feature exists to fix.
+ * The banner is safe there anyway: one short one-shot write, no polling, no
+ * unbounded volume. Anything that streams would not be, on that platform or
+ * on any other - see the mode doc above.
  */
-function canMirrorOnPlatform(platform: NodeJS.Platform): boolean {
-  return platform !== "win32";
-}
 
 export interface ForegroundConsoleOptions {
   readonly environment: Environment;
@@ -239,36 +219,5 @@ export function openForegroundConsole(
     ].join("\n"),
   );
 
-  if (options.mode === "banner") return INERT_CONSOLE;
-
-  const tail = deps.startTail({
-    path,
-    // Raw bytes, verbatim: the mirror is a view of one existing sink, not a
-    // second formatter of host output. Re-rendering it here would make the
-    // terminal and `host logs` disagree about what the host actually said.
-    onBytes: (chunk) => deps.writeBytes(chunk),
-    onExhausted: () => {
-      deps.writeText(
-        `traycer host start: ${path} stayed unreadable; stopped mirroring the host log. The host is still being supervised.\n`,
-      );
-    },
-    onSkipped: (bytes) => {
-      deps.writeText(
-        `\ntraycer host start: skipped ${bytes} bytes of host log to print the most recent output; the full log is at ${path}.\n`,
-      );
-    },
-    pollIntervalMs: LOG_TAIL_POLL_INTERVAL_MS,
-    maxMissingRetries: LOG_TAIL_MAX_MISSING_RETRIES,
-  });
-
-  return {
-    close: (): void => {
-      // Stop, and deliberately do NOT drain. The catch-up read would have to
-      // write log bytes through a blocking syscall on the way to
-      // `process.exit` - see `writeBytes` above. At most one poll interval of
-      // mirrored output is lost, and it is still in host.log; a supervisor
-      // that cannot exit is not.
-      tail.stop();
-    },
-  };
+  return INERT_CONSOLE;
 }

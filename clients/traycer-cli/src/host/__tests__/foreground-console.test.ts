@@ -18,7 +18,6 @@ describe("resolveForegroundStartMode", () => {
     quiet: false,
     noProgress: false,
     interactive: false,
-    platform: "darwin",
   };
 
   it.each<[string, Partial<ForegroundStartModeInput>, string]>([
@@ -54,36 +53,13 @@ describe("resolveForegroundStartMode", () => {
     // content, not progress reporting, and `--quiet` is the flag that silences
     // human output.
     [
-      "--no-progress alone leaves an interactive mirror alone",
+      "--no-progress alone leaves the interactive banner alone",
       { noProgress: true, interactive: true },
-      "mirror",
-    ],
-    // A TTY does not imply a human on Windows. Scheduled Tasks registered
-    // before the launcher was hidden execute the CLI directly with a bare
-    // `host start`, no identity flags, InteractiveToken and Hidden=false - so
-    // Task Scheduler allocates a console and isTTY is true, and the argv is
-    // byte-identical to a person typing the command. Those definitions are
-    // still attested and still on machines, so Windows gets the one-shot
-    // banner and not the unbounded mirror.
-    [
-      "win32 + interactive TTY degrades to banner-only",
-      { interactive: true, platform: "win32" },
       "banner",
-    ],
-    ["win32 without a TTY is still silent", { platform: "win32" }, "silent"],
-    [
-      "win32 + serviceManaged is still silent",
-      { serviceManaged: true, interactive: true, platform: "win32" },
-      "silent",
-    ],
-    [
-      "linux + interactive TTY still mirrors",
-      { interactive: true, platform: "linux" },
-      "mirror",
     ],
     ["quiet, interactive TTY", { quiet: true, interactive: true }, "silent"],
     ["quiet, non-interactive", { quiet: true }, "silent"],
-    ["interactive TTY, no other flags", { interactive: true }, "mirror"],
+    ["interactive TTY, no other flags", { interactive: true }, "banner"],
     ["non-interactive, no other flags", {}, "silent"],
   ])("%s -> %s", (_name, overrides, expected) => {
     expect(resolveForegroundStartMode({ ...BASE, ...overrides })).toBe(
@@ -95,23 +71,19 @@ describe("resolveForegroundStartMode", () => {
   // evidence a service manager produced the invocation, so it must win over
   // every other combination, not just the ones above.
   it("serviceManaged is silent across the full remaining flag matrix", () => {
-    const platforms: NodeJS.Platform[] = ["darwin", "linux", "win32"];
     for (const json of [false, true]) {
       for (const quiet of [false, true]) {
         for (const noProgress of [false, true]) {
           for (const interactive of [false, true]) {
-            for (const platform of platforms) {
-              expect(
-                resolveForegroundStartMode({
-                  serviceManaged: true,
-                  json,
-                  quiet,
-                  noProgress,
-                  interactive,
-                  platform,
-                }),
-              ).toBe("silent");
-            }
+            expect(
+              resolveForegroundStartMode({
+                serviceManaged: true,
+                json,
+                quiet,
+                noProgress,
+                interactive,
+              }),
+            ).toBe("silent");
           }
         }
       }
@@ -149,56 +121,12 @@ function makeTailStub(): {
 }
 
 describe("openForegroundConsole", () => {
-  it("mirror mode: writes a banner naming the log path, Ctrl-C, and the service-start pointer BEFORE any tail bytes, then forwards bytes verbatim; close() stops WITHOUT draining", () => {
-    const written: string[] = [];
-    const byteChunks: Buffer[] = [];
-    const onBytesCalls: Array<(chunk: Buffer) => void> = [];
-    const tailControl = makeTailStub();
-
-    const deps: Partial<ForegroundConsoleDeps> = {
-      logPath: () => "/tmp/host.log",
-      writeText: (text) => written.push(text),
-      writeBytes: (chunk) => byteChunks.push(chunk),
-      startTail: (options) => {
-        tailControl.startCalls.push(options);
-        onBytesCalls.push(options.onBytes);
-        return tailControl.stub;
-      },
-      now: () => "2026-08-27T00:00:00.000Z",
-    };
-
-    const console = openForegroundConsole(
-      { environment: "production", mode: "mirror" },
-      deps,
-    );
-
-    // Banner precedes any tail activity.
-    expect(written).toHaveLength(1);
-    const banner = written[0] ?? "";
-    expect(banner).toContain("/tmp/host.log");
-    expect(banner).toContain("Ctrl-C");
-    expect(banner).toContain("traycer host service start");
-    expect(byteChunks).toHaveLength(0);
-
-    // Bytes forwarded verbatim through writeBytes, not re-rendered.
-    expect(onBytesCalls).toHaveLength(1);
-    const chunk = Buffer.from("raw host log bytes\n");
-    onBytesCalls[0]?.(chunk);
-    expect(byteChunks).toEqual([chunk]);
-
-    console.close();
-    expect(tailControl.stopCalls).toBe(1);
-    // Deliberately NOT drained: the catch-up write would be a blocking
-    // syscall on the way to `process.exit`, and a flow-stopped terminal could
-    // hold it indefinitely. Losing up to one poll of mirrored output that
-    // host.log already holds is the cheaper failure.
-    expect(tailControl.drainSyncCalls).toBe(0);
-  });
-
-  // The Windows degradation. The banner is one-shot and a few lines long, so
-  // it is harmless even in a legacy Scheduled Task's console; the mirror polls
-  // and reads for the whole life of a supervisor that can run for weeks, so it
-  // must not start where interactivity cannot be established.
+  // There is no mirroring mode at all: writing arbitrary log volume from the
+  // supervisor's own event-loop thread blocks on a TTY (measured: 64 KiB into
+  // an unread PTY delayed a SIGINT handler past 1.5s), which would stop Ctrl-C
+  // reaching the host. The banner carries everything the audit asked for and
+  // points at `host logs --follow`, which streams from a process that is not
+  // supervising anything.
   it("banner mode: announces and points at 'host logs --follow', but starts NO tail", () => {
     const written: string[] = [];
     const byteChunks: Buffer[] = [];

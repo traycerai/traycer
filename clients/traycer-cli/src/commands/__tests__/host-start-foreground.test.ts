@@ -91,7 +91,10 @@ describe("host start - foreground console wiring", () => {
     program.exitOverride();
     await program.parseAsync(["host", "start"], { from: "user" });
 
-    expect(mocks.startTailCalls).toHaveLength(1);
+    // No tail is ever started: there is no mirroring mode. Writing log volume
+    // from the supervisor's own event loop blocks on a TTY and can stop Ctrl-C
+    // reaching the host.
+    expect(mocks.startTailCalls).toHaveLength(0);
     const runHostStartIndex = mocks.order.indexOf("runHostStart-called");
     expect(runHostStartIndex).toBeGreaterThan(0);
     // Everything before the mocked runHostStart call is the console's own
@@ -106,6 +109,7 @@ describe("host start - foreground console wiring", () => {
     expect(banner).toContain("Running the Traycer host in the foreground");
     expect(banner).toContain("Ctrl-C");
     expect(banner).toContain("traycer host service start");
+    expect(banner).toContain("traycer host logs --follow");
   });
 
   it("a service-manager invocation produces no banner and starts no tail", async () => {

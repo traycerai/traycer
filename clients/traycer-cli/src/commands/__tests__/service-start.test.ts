@@ -8,10 +8,10 @@ const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
   startFails: false,
-  // Whether the process pid metadata names is the one that published it. The
-  // `running` status alone is derived from a bare liveness check, so this is
-  // what decides whether the idempotent shortcut is safe.
-  publishedIdentity: "current" as "current" | "mismatch" | "dead" | "none",
+  // Is a host POSITIVELY serving? The `running` status alone is derived from a
+  // bare liveness check over pid metadata, so this is what decides whether the
+  // idempotent shortcut is safe.
+  hostServing: true,
   statusResponses: [] as Array<{
     state: "running" | "stopped" | "not-installed" | "externally-managed";
     version: string | null;
@@ -46,18 +46,12 @@ vi.mock("../../service", async (importOriginal) => {
   };
 });
 
-vi.mock("../../host/pid-metadata", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../host/pid-metadata")>()),
-  readHostPidMetadata: async () =>
-    mocks.publishedIdentity === "none"
-      ? null
-      : { pid: 4242, processStartIdentity: "identity", version: "1.2.3" },
-}));
-
-vi.mock("../../store/process-identity", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../store/process-identity")>()),
-  getPublishedProcessIdentityVerdict: async () =>
-    mocks.publishedIdentity === "none" ? "dead" : mocks.publishedIdentity,
+vi.mock("../../host/incumbent-check", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../host/incumbent-check")>()),
+  findLiveIncumbentHost: async () =>
+    mocks.hostServing
+      ? { pid: 4242, version: "1.2.3", websocketUrl: "ws://127.0.0.1:1/rpc" }
+      : null,
 }));
 
 vi.mock("../../store/cli-lock", async (importOriginal) => {
@@ -118,7 +112,7 @@ describe("serviceStartCommand", () => {
     mocks.lockCalls = [];
     mocks.statusResponses = [];
     mocks.startFails = false;
-    mocks.publishedIdentity = "current";
+    mocks.hostServing = true;
   });
 
   afterEach(() => {
@@ -191,7 +185,7 @@ describe("serviceStartCommand", () => {
   // timeout and throws E_SERVICE_CONTROL_FAILED. Calling `start` here would
   // have made "start an already-running host" a slow hard failure on Windows.
   it("reports alreadyRunning: true without ever calling controller.start when the service was already running", async () => {
-    mocks.publishedIdentity = "current";
+    mocks.hostServing = true;
     mocks.statusResponses = [
       {
         state: "running",
@@ -219,7 +213,7 @@ describe("serviceStartCommand", () => {
   // idempotent shortcut on that left a genuinely stopped host down until
   // someone repaired the metadata - the opposite of what was asked.
   it("starts anyway when a 'running' status rests on stale, recycled pid metadata", async () => {
-    mocks.publishedIdentity = "mismatch";
+    mocks.hostServing = false;
     mocks.statusResponses = [
       { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
       { state: "running", version: "1.2.3", listenUrl: null, pid: 5555 },

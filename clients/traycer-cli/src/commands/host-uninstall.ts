@@ -289,6 +289,12 @@ export async function runHostUninstall(
       reason: "supervisor-quiescence-unproven",
     });
   }
+  // The boundary re-read, on BOTH paths now: `published` describes the child
+  // captured at entry; this asks what is publishing at the moment the bytes go.
+  const boundary = await readPublishedHostBestEffort(deps, ctx);
+  if (!args.all) {
+    liveness = await observeLiveness(deps, ctx, boundary ?? published);
+  }
   ctx.progress({
     stage: "uninstall",
     message: "removing installed host",
@@ -347,7 +353,7 @@ export async function runHostUninstall(
   // `serviceRegistrationRetained` beside it, and the human copy is keyed on
   // THAT, so the prose never claims what the readback contradicts.
   const serviceRegistrationRetained = registrationRetained;
-  // Liveness comes from the endpoint probe on BOTH paths, never from
+  // Liveness comes from PROCESS IDENTITY on both paths, never from
   // `ServiceStatus.state`. That field is about REGISTRATION: `busy-check.ts`
   // keys liveness off pid metadata instead, and `externally-managed` (the
   // Desktop-owned macOS label) deliberately folds in no run state at all and
