@@ -7,6 +7,7 @@ import {
   type SwipeNavShape,
 } from "@/components/layout/shell/swipe-nav-transition-motion";
 import {
+  applyScreenSnapshotScroll,
   SWIPE_NAV_EXCLUDE_ATTRIBUTE,
   type ScreenSnapshot,
 } from "@/components/layout/shell/screen-snapshot";
@@ -113,7 +114,7 @@ function SwipeNavLayer(props: {
     composeSwipeNavLayers(direction, 0, widthPx, shape),
     plane,
   ).transformOrigin;
-  const snapshot = plane === "near" ? nearSnapshot(view) : farSnapshot(view);
+  const snapshot = planeSnapshot(view, plane);
   return (
     <motion.div
       className={cn("absolute inset-0", plane === "near" && "shadow-2xl")}
@@ -132,12 +133,28 @@ function SwipeNavLayer(props: {
   );
 }
 
-function nearSnapshot(view: SwipeNavTransitionView): ScreenSnapshot {
-  return view.direction === "back" ? view.outgoing : view.destination;
-}
-
-function farSnapshot(view: SwipeNavTransitionView): ScreenSnapshot {
-  return view.direction === "back" ? view.destination : view.outgoing;
+/**
+ * The frozen screen a plane shows, taken from the composition's own answer.
+ *
+ * `nearLayer` is where the plane-to-screen mapping lives, and asking it is what
+ * keeps this from being a SECOND copy of the direction rule. Two copies can
+ * disagree, and a disagreement here pairs one plane's transform with the other
+ * plane's screen - the same class of defect as a transition whose planes
+ * travelled against the finger, and just as invisible in a still frame.
+ */
+function planeSnapshot(
+  view: SwipeNavTransitionView,
+  plane: SwipeNavPlane,
+): ScreenSnapshot {
+  const composition = composeSwipeNavLayers(
+    view.direction,
+    0,
+    view.widthPx,
+    view.shape,
+  );
+  const nearIsOutgoing = composition.nearLayer === "outgoing";
+  const showsOutgoing = plane === "near" ? nearIsOutgoing : !nearIsOutgoing;
+  return showsOutgoing ? view.outgoing : view.destination;
 }
 
 /**
@@ -148,6 +165,12 @@ function farSnapshot(view: SwipeNavTransitionView): ScreenSnapshot {
  * copied or destroyed: the same frozen screen is the destination of a back
  * swipe and, after that swipe commits, the outgoing screen of the forward swipe
  * that undoes it.
+ *
+ * The scroll offsets are applied HERE, immediately after the append, and the
+ * order is the whole point: a detached element has no scroll box, so the same
+ * assignment one moment earlier would be discarded and every scrollable region
+ * would freeze at its top. Re-applied on every mount rather than once, because
+ * a snapshot is remounted each time it changes plane.
  */
 function SnapshotMount(props: {
   readonly snapshot: ScreenSnapshot;
@@ -158,6 +181,7 @@ function SnapshotMount(props: {
     const host = hostRef.current;
     if (host === null) return;
     host.appendChild(snapshot.node);
+    applyScreenSnapshotScroll(snapshot);
     return () => {
       snapshot.node.remove();
     };

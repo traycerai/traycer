@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  applyScreenSnapshotScroll,
   captureScreenSnapshot,
   findSnapshotSource,
   SWIPE_NAV_EXCLUDE_ATTRIBUTE,
@@ -225,7 +226,9 @@ describe("the snapshot cache", () => {
   function snapshotOf(text: string): ScreenSnapshot {
     const node = document.createElement("div");
     node.textContent = text;
-    return { node };
+    // The cache stores screens and never reads inside them, so an unscrolled
+    // one is all these cases need.
+    return { node, scrollOffsets: [] };
   }
 
   it("files a screen under the entry it shows", () => {
@@ -318,11 +321,83 @@ describe("captureScreenSnapshot", () => {
     expect(snapshot?.node.textContent).toBe("a chat");
   });
 
-  // Scroll offsets and canvas pixels are the other half of a faithful copy and
-  // are deliberately NOT asserted here: jsdom lays nothing out, so it reports
-  // every scroll offset as 0 and gives a canvas no drawing context. A test
-  // written against it would pass by agreeing with a stub rather than by
-  // observing the behaviour, which is worse than no test. Both are verified on
-  // a device, where a chat read halfway down and a live terminal are the cases
-  // that show it.
+  /**
+   * Scroll offsets are RECORDED at capture and applied after the node is
+   * mounted, and it is the recording these assert.
+   *
+   * That split is the fix for a real defect and not a convenience: a detached
+   * element has no scroll box, so writing `scrollTop` to the clone at capture
+   * time was silently discarded and every scrollable region froze at its top.
+   * Recording is also the half a layout-free environment can observe - the
+   * numbers are read from the source and carried as data, so nothing here
+   * depends on jsdom laying anything out.
+   *
+   * What these do NOT cover, and what still needs a device: that APPLYING them
+   * after mount actually moves the region (jsdom reports every offset as 0
+   * however it is set), and canvas restoration (jsdom gives a canvas no
+   * drawing context). A chat read halfway down and a live terminal tile are
+   * the two cases that show those.
+   */
+  it("records where each scrolled region was, against the cloned element", () => {
+    const source = mountScreen(`<div id="list"><p>a chat</p></div>`);
+    const list = source.querySelector("#list");
+    if (!(list instanceof HTMLElement)) throw new Error("list did not mount");
+    Object.defineProperty(list, "scrollTop", {
+      value: 250,
+      configurable: true,
+    });
+    Object.defineProperty(list, "scrollLeft", {
+      value: 10,
+      configurable: true,
+    });
+
+    const snapshot = captureScreenSnapshot(source);
+    const recorded = snapshot?.scrollOffsets ?? [];
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.scrollTop).toBe(250);
+    expect(recorded[0]?.scrollLeft).toBe(10);
+    // The CLONE's element, never the live one: applying to the source would
+    // scroll the screen the user is still looking at.
+    expect(recorded[0]?.element).toBe(snapshot?.node.querySelector("#list"));
+    expect(recorded[0]?.element).not.toBe(list);
+  });
+
+  // A region at its origin is not worth carrying: every element in the tree
+  // would otherwise be recorded, and a frozen screen is already a whole DOM
+  // tree held out of the collector's reach.
+  it("records nothing for a screen that is not scrolled anywhere", () => {
+    const snapshot = captureScreenSnapshot(
+      mountScreen(`<div id="list"><p>a chat</p></div>`),
+    );
+
+    expect(snapshot?.scrollOffsets).toHaveLength(0);
+  });
+
+  // The write is deferred, not skipped. `applyScreenSnapshotScroll` is what
+  // the mount calls, and it must assign to the recorded element rather than
+  // re-deriving anything.
+  it("applies a recorded offset to the element it was recorded against", () => {
+    const source = mountScreen(`<div id="list"><p>a chat</p></div>`);
+    const list = source.querySelector("#list");
+    if (!(list instanceof HTMLElement)) throw new Error("list did not mount");
+    Object.defineProperty(list, "scrollTop", {
+      value: 250,
+      configurable: true,
+    });
+    const snapshot = captureScreenSnapshot(source);
+    if (snapshot === null) throw new Error("snapshot did not capture");
+    const applied: Array<{ top: number; left: number }> = [];
+    expect(snapshot.scrollOffsets).toHaveLength(1);
+    const target = snapshot.scrollOffsets[0].element;
+    Object.defineProperty(target, "scrollTop", {
+      set: (value: number) => applied.push({ top: value, left: 0 }),
+      get: () => 0,
+      configurable: true,
+    });
+
+    applyScreenSnapshotScroll(snapshot);
+
+    expect(applied).toEqual([{ top: 250, left: 0 }]);
+  });
 });

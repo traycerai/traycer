@@ -38,9 +38,27 @@ export const SWIPE_NAV_SCREEN_ATTRIBUTE = "data-swipe-nav-screen";
  */
 export const SWIPE_NAV_EXCLUDE_ATTRIBUTE = "data-swipe-nav-exclude";
 
+/** One scrollable region of a frozen screen, and where it was scrolled to. */
+export interface ScreenSnapshotScroll {
+  /** The element inside {@link ScreenSnapshot.node}, not the one copied from. */
+  readonly element: HTMLElement;
+  readonly scrollTop: number;
+  readonly scrollLeft: number;
+}
+
 export interface ScreenSnapshot {
   /** Detached, inert clone. Mount it by appending; nothing else owns it. */
   readonly node: HTMLElement;
+  /**
+   * Where each scrollable region was, RECORDED at capture and applied by
+   * {@link applyScreenSnapshotScroll} once the node is in the document.
+   *
+   * Carried rather than written into the clone directly, because a detached
+   * element has no scroll box: assigning `scrollTop` to a node outside the
+   * document is silently discarded, so the offsets have to survive as data
+   * until there is something to apply them to.
+   */
+  readonly scrollOffsets: ReadonlyArray<ScreenSnapshotScroll>;
 }
 
 /** The element a snapshot is taken of, or `null` before the shell has mounted. */
@@ -62,7 +80,7 @@ export function captureScreenSnapshot(
 ): ScreenSnapshot | null {
   const clone = source.cloneNode(true);
   if (!(clone instanceof HTMLElement)) return null;
-  restoreScrollOffsets(source, clone);
+  const scrollOffsets = recordScrollOffsets(source, clone);
   restoreCanvasPixels(source, clone);
   dropExcludedSubtrees(clone);
   // A frozen screen is scenery: it must not answer a hit test, receive focus,
@@ -71,25 +89,56 @@ export function captureScreenSnapshot(
   clone.setAttribute("aria-hidden", "true");
   clone.setAttribute("inert", "");
   clone.style.pointerEvents = "none";
-  return { node: clone };
+  return { node: clone, scrollOffsets };
 }
 
 /**
+ * Where every scrolled region of the screen was, paired with the clone element
+ * that has to be put there.
+ *
  * `cloneNode` copies markup, and a scroll offset is not markup - it is live
- * state on the element. Without this every scrollable region in the frozen
- * screen snaps to its top, so a chat read halfway down freezes as a chat at the
+ * state on the element. Without it every scrollable region in the frozen screen
+ * sits at its top, so a chat read halfway down freezes as a chat at the
  * beginning, and the transition shows the user a screen they were never on.
+ *
+ * The offsets are only READ here. Writing them now would be writing to a
+ * detached element, which has no scroll box and silently discards the
+ * assignment - the defect this split exists to fix.
  */
-function restoreScrollOffsets(source: HTMLElement, clone: HTMLElement): void {
+function recordScrollOffsets(
+  source: HTMLElement,
+  clone: HTMLElement,
+): ReadonlyArray<ScreenSnapshotScroll> {
   const sourceNodes = source.querySelectorAll("*");
   const cloneNodes = clone.querySelectorAll("*");
+  const offsets: ScreenSnapshotScroll[] = [];
   for (let index = 0; index < sourceNodes.length; index += 1) {
     const from = sourceNodes[index];
     const to = cloneNodes[index];
     if (!(to instanceof HTMLElement)) continue;
     if (from.scrollTop === 0 && from.scrollLeft === 0) continue;
-    to.scrollTop = from.scrollTop;
-    to.scrollLeft = from.scrollLeft;
+    offsets.push({
+      element: to,
+      scrollTop: from.scrollTop,
+      scrollLeft: from.scrollLeft,
+    });
+  }
+  return offsets;
+}
+
+/**
+ * Puts every recorded region back where it was. Call once the snapshot's node
+ * is IN the document - before that there is nothing to scroll.
+ *
+ * An element dropped with an excluded subtree is still in this list and is
+ * still assigned to; it is detached, so the write goes nowhere and costs
+ * nothing. Filtering for that would mean re-deriving which nodes survived,
+ * which is a second copy of the exclusion rule for no gain.
+ */
+export function applyScreenSnapshotScroll(snapshot: ScreenSnapshot): void {
+  for (const offset of snapshot.scrollOffsets) {
+    offset.element.scrollTop = offset.scrollTop;
+    offset.element.scrollLeft = offset.scrollLeft;
   }
 }
 
