@@ -49,6 +49,30 @@ function userMessage(messageId: string, timestamp: number): Message {
   };
 }
 
+/**
+ * The `messageAccepted` frame's own message type. NOT the `Message` above:
+ * the two are structurally identical and nominally distinct (the frame's
+ * resolves through the subscribe union's schema instance), so a fixture typed
+ * as one cannot be passed where the other is expected.
+ */
+type AcceptedMessage = Parameters<
+  ChatStreamCallbacks["onMessageAccepted"]
+>[0]["message"];
+
+function acceptedUserMessage(
+  messageId: string,
+  timestamp: number,
+): AcceptedMessage {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: OWNER_ID },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+    timestamp,
+    sessionAnchor: null,
+  };
+}
+
 function assistantMessage(messageId: string, timestamp: number): Message {
   return {
     role: "assistant",
@@ -231,7 +255,7 @@ describe("the append republish interleave (bootstrap → accept → snapshot →
         hasBinaryPayload: false,
         epicId: EPIC_ID,
         chatId: CHAT_ID,
-        message: userMessage("m-1", 2),
+        message: acceptedUserMessage("m-1", 2),
       });
       // ...and its append republish follows: snapshot at the NEW rowCount but
       // the held revision, then the delta for the very same append.
