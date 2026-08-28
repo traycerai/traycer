@@ -229,7 +229,10 @@ export function applyLandingDraftDesktopProjection(
   // in a per-draft handoff DB before the move. Adoption is self-gating (it
   // only opens the handoff when a hash is actually missing locally), so this
   // is a no-op for ordinary restores; the attempted-set just keeps it to one
-  // probe per draft per session.
+  // probe per draft per session. A FAILED probe releases its entry: an
+  // IndexedDB read that lost to a transient error must be retried on the next
+  // projection, otherwise a moved draft's images stay unavailable for the rest
+  // of the session even though the handoff is still sitting there.
   for (const draft of drafts) {
     if (imageAdoptionAttemptedDraftIds.has(draft.id)) continue;
     imageAdoptionAttemptedDraftIds.add(draft.id);
@@ -237,6 +240,7 @@ export function applyLandingDraftDesktopProjection(
       draft.id,
       draftImageHashes(draft.content),
     ).catch((error: unknown) => {
+      imageAdoptionAttemptedDraftIds.delete(draft.id);
       appLogger.warn("[landing-draft] draft-move image adoption failed", {
         draftId: draft.id,
         error: describeLogError(error),

@@ -324,18 +324,6 @@ async function openDraftInNewWindow(
   if (movedDraft === undefined) {
     return { result: "not-found", windowId: "" };
   }
-  const remainingDrafts = sourceSnapshot.landingDrafts.filter(
-    (draft) => draft.id !== draftId,
-  );
-  // Nulled rather than pointed at a successor: the source RENDERER owns
-  // successor selection (its `closeRefAfterConfirmed` picks the neighbouring
-  // tab and re-projects), and a successor chosen here would race that pick.
-  // This patch only matters if the source crashes before its own close runs.
-  const nextSourceActiveDraftId =
-    sourceSnapshot.activeLandingDraftId === draftId
-      ? null
-      : sourceSnapshot.activeLandingDraftId;
-
   const destination = { windowId: null as string | null };
   let destinationWindowId: string;
   try {
@@ -372,13 +360,30 @@ async function openDraftInNewWindow(
     throw err;
   }
 
+  // The prune is a read-modify-write of whatever the source has projected BY
+  // NOW, not of `sourceSnapshot`: `create` above awaited the destination's
+  // load, and in that gap the source renderer may have projected a newer
+  // snapshot (another draft edited, a new one started). Writing the pre-await
+  // array back wholesale would revert those. Only this draft is removed.
+  //
+  // The active id is nulled rather than pointed at a successor: the source
+  // RENDERER owns successor selection (its `closeRefAfterConfirmed` picks the
+  // neighbouring tab and re-projects), and a successor chosen here would race
+  // that pick. This patch only matters if the source crashes before its own
+  // close runs.
   void Promise.resolve()
-    .then(() =>
-      bridge.perWindowState.update(sourceWindowId, {
-        landingDrafts: remainingDrafts,
-        activeLandingDraftId: nextSourceActiveDraftId,
-      }),
-    )
+    .then(() => {
+      const current = bridge.perWindowState.get(sourceWindowId);
+      return bridge.perWindowState.update(sourceWindowId, {
+        landingDrafts: current.landingDrafts.filter(
+          (draft) => draft.id !== draftId,
+        ),
+        activeLandingDraftId:
+          current.activeLandingDraftId === draftId
+            ? null
+            : current.activeLandingDraftId,
+      });
+    })
     .catch((error: unknown) => {
       log.warn("[windows-ipc] source draft-move state persistence failed", {
         windowId: sourceWindowId,

@@ -1349,6 +1349,44 @@ describe("useLandingDraftStore", () => {
       applyLandingDraftDesktopProjection(snapshot);
       expect(adopt).toHaveBeenCalledTimes(1);
     });
+
+    it("retries a draft whose adoption FAILED - a transient IndexedDB error must not skip it for the session", async () => {
+      const adopt = vi
+        .spyOn(landingImageMove, "adoptDraftImageHandoff")
+        .mockImplementationOnce(() => Promise.reject(new Error("idb closing")))
+        .mockImplementation(() => Promise.resolve());
+      // `spyOn` hands back the spy the sibling test above already installed,
+      // call history included - this suite restores no mocks between tests.
+      adopt.mockClear();
+      const snapshot = emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-adopt-retry",
+            content: desktopTextContent("moved here"),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+          },
+        ],
+        activeLandingDraftId: "draft-adopt-retry",
+      });
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(1);
+      // Let the rejection reach the handler that releases the attempted-set.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(2);
+
+      // The retry succeeded, so the draft is settled and probed no further.
+      await Promise.resolve();
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("[B1] empty-inbound clobber guard", () => {

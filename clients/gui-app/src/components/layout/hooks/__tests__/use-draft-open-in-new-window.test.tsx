@@ -31,6 +31,7 @@ import type {
 } from "@/lib/windows/types";
 import {
   discardDraftImageHandoff,
+  draftHasIngestingImages,
   stageDraftImageHandoff,
 } from "@/lib/composer/landing-image-move";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -39,6 +40,7 @@ import type { TabRef } from "@/stores/tabs/types";
 
 vi.mock("@/lib/composer/landing-image-move", () => ({
   draftImageHashes: vi.fn(() => []),
+  draftHasIngestingImages: vi.fn(() => false),
   stageDraftImageHandoff: vi.fn(() => Promise.resolve()),
   discardDraftImageHandoff: vi.fn(() => Promise.resolve()),
   adoptDraftImageHandoff: vi.fn(() => Promise.resolve()),
@@ -184,6 +186,9 @@ describe("useDraftOpenInNewWindowFlow", () => {
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     flowRef = null;
     vi.clearAllMocks();
+    // `clearAllMocks` clears calls, not implementations - a test that arms the
+    // ingest barrier has to be un-armed explicitly or it leaks forward.
+    vi.mocked(draftHasIngestingImages).mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -275,5 +280,64 @@ describe("useDraftOpenInNewWindowFlow", () => {
       },
     ]);
     expect(vi.mocked(discardDraftImageHandoff)).toHaveBeenCalledWith("draft-c");
+  });
+
+  it("holds the move until a still-ingesting attachment settles - nothing staged, nothing sent, in the meantime", async () => {
+    seedDraftTab("draft-d");
+    vi.mocked(draftHasIngestingImages).mockReturnValue(true);
+    const windows = buildControllableDraftMoveBridge();
+    renderFlow(windows.bridge, draftPathname("draft-d"));
+    await flush();
+
+    act(() => {
+      flowRef?.requestOpenInNewWindow({ draftId: "draft-d" });
+    });
+    await flush();
+
+    // A pasted image whose `putImage` has not landed yet has no hash to stage
+    // and is stripped from the projection, so a move started here would carry
+    // the draft over without it and then close the only copy that had it.
+    expect(vi.mocked(stageDraftImageHandoff)).not.toHaveBeenCalled();
+    expect(windows.requestedDraftIds).toEqual([]);
+
+    // The ingest lands: the node now carries a hash, and the store write that
+    // records it is what releases the barrier.
+    vi.mocked(draftHasIngestingImages).mockReturnValue(false);
+    act(() => {
+      useLandingDraftStore.setState((state) => ({ drafts: [...state.drafts] }));
+    });
+    await flush();
+
+    expect(vi.mocked(stageDraftImageHandoff)).toHaveBeenCalledWith(
+      "draft-d",
+      [],
+    );
+    expect(windows.requestedDraftIds).toEqual(["draft-d"]);
+  });
+
+  it("discards the staged handoff when the move IPC rejects, so the bytes are not stranded", async () => {
+    seedDraftTab("draft-e");
+    const bridge: DesktopWindowsBridge = {
+      windowId: "window-a",
+      ...baseBridgeFields(),
+      requestOpenDraftInNewWindow: () =>
+        Promise.reject(new Error("destination window failed to load")),
+    };
+    renderFlow(bridge, draftPathname("draft-e"));
+    await flush();
+
+    act(() => {
+      flowRef?.requestOpenInNewWindow({ draftId: "draft-e" });
+    });
+    await flush();
+
+    expect(vi.mocked(stageDraftImageHandoff)).toHaveBeenCalledWith(
+      "draft-e",
+      [],
+    );
+    expect(vi.mocked(discardDraftImageHandoff)).toHaveBeenCalledWith("draft-e");
+    expect(useLandingDraftStore.getState().drafts.map((d) => d.id)).toEqual([
+      "draft-e",
+    ]);
   });
 });

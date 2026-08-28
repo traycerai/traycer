@@ -346,6 +346,12 @@ class FakeWindowRegistry implements IpcWindowRegistry {
   forceCloseRequests: string[] = [];
   initialRoutes: Array<string | null> = [];
   createFailure: Error | null = null;
+  /**
+   * Runs inside `create`, after `beforeLoad` - the stand-in for whatever the
+   * SOURCE window does while the destination is still loading, which the real
+   * `create` awaits.
+   */
+  duringCreate: (() => void) | null = null;
 
   add(windowId: string, webContentsId: number, window: IpcManagedWindow): void {
     this.recordsByWindowId.set(windowId, { windowId, webContentsId, window });
@@ -363,6 +369,7 @@ class FakeWindowRegistry implements IpcWindowRegistry {
     const windowId = `created-${this.createCount}`;
     this.add(windowId, 1000 + this.createCount, buildWindow());
     options.beforeLoad?.(windowId);
+    this.duringCreate?.();
     if (this.createFailure !== null) {
       return Promise.reject(this.createFailure);
     }
@@ -591,6 +598,45 @@ describe("openDraftInNewWindow (windowsRequestOpenDraftInNewWindow)", () => {
     expect(perWindowState.get("window-a")).toMatchObject({
       landingDrafts: [draftB],
       activeLandingDraftId: "draft-b",
+    });
+    bridge.dispose();
+  });
+
+  it("prunes from the source's CURRENT snapshot, not the one read before the destination loaded", async () => {
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const { bridge, perWindowState } = await buildBridge(registry);
+    const draftA = buildDraft("draft-a");
+    const draftB = buildDraft("draft-b");
+    const draftC = buildDraft("draft-c");
+    perWindowState.update("window-a", {
+      landingDrafts: [draftA, draftB],
+      activeLandingDraftId: "draft-a",
+    });
+    bridge.install();
+    // The source keeps working while the destination loads: a third draft is
+    // started and becomes active. Writing the pre-await array back wholesale
+    // would erase it.
+    registry.duringCreate = () => {
+      perWindowState.update("window-a", {
+        landingDrafts: [draftA, draftB, draftC],
+        activeLandingDraftId: "draft-c",
+      });
+    };
+
+    await expect(
+      Promise.resolve(draftOpenHandler()(sender(101), "draft-a")),
+    ).resolves.toEqual({ result: "moved", windowId: "created-1" });
+    // The prune is deferred by a microtask so a throwing `update` cannot fail
+    // the move.
+    await Promise.resolve();
+
+    expect(perWindowState.get("window-a")).toMatchObject({
+      landingDrafts: [draftB, draftC],
+      // Read from the current snapshot too: the moved draft is no longer the
+      // active one, so the pointer is left alone rather than nulled.
+      activeLandingDraftId: "draft-c",
     });
     bridge.dispose();
   });

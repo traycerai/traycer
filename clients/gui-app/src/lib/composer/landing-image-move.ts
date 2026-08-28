@@ -121,6 +121,20 @@ export function draftImageHashes(content: JsonContent): ReadonlyArray<string> {
 }
 
 /**
+ * Whether the draft still holds an attachment that has not finished ingesting.
+ * An in-place structured paste leaves the image in the document as base64 with
+ * NO hash until the background `putImage` rewrites that node
+ * (`startPendingImageIngest`), and such an atom is invisible to every part of
+ * the move: `draftImageHashes` has no hash to stage, and the desktop
+ * projection strips base64 before the snapshot the destination is seeded from.
+ * Moving in that gap would carry the draft over without the attachment and
+ * then close the only copy that still had it - so the move waits it out.
+ */
+export function draftHasIngestingImages(content: JsonContent): boolean {
+  return collectImageAtoms(content).some((atom) => atom.hash === null);
+}
+
+/**
  * Copy the draft's reachable bytes into its handoff DB. A hash with no local
  * bytes (a manually wiped restore) is skipped: the moved draft renders that
  * chip broken in the destination exactly as it would have here, and the move

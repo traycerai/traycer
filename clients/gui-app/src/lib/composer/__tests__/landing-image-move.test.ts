@@ -4,6 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   adoptDraftImageHandoff,
   discardDraftImageHandoff,
+  draftHasIngestingImages,
   draftImageHashes,
   stageDraftImageHandoff,
 } from "@/lib/composer/landing-image-move";
@@ -101,6 +102,40 @@ describe("landing-image-move", () => {
         ],
       };
       expect(draftImageHashes(doc)).toEqual([]);
+    });
+  });
+
+  describe("draftHasIngestingImages", () => {
+    it("is true while a pasted node still carries base64 and no hash", () => {
+      const doc: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              imageNode("hash-a"),
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "pending-1",
+                  fileName: "pasted.png",
+                  b64content: "AAAA",
+                  mimeType: "image/png",
+                  size: 3,
+                },
+              },
+            ],
+          },
+        ],
+      };
+      expect(draftHasIngestingImages(doc)).toBe(true);
+      // And that node is invisible to staging - which is exactly why the move
+      // has to wait for it rather than stage around it.
+      expect(draftImageHashes(doc)).toEqual(["hash-a"]);
+    });
+
+    it("is false once every node carries a hash", () => {
+      expect(draftHasIngestingImages(docWithImages(["hash-a"]))).toBe(false);
     });
   });
 
