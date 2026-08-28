@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import type { ChatTranscriptJumpTarget } from "@/stores/chats/chat-transcript-jump-store";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
@@ -105,10 +104,7 @@ import {
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type {
-  ChatMessage as ChatMessageModel,
-  MessageSegment,
-} from "@/stores/composer/chat-store";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   isWindowedTranscript,
   type ChatSessionState,
@@ -133,6 +129,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  coldJumpOrdinal,
+  hostLocatorForJumpTarget,
+  messageIdForBlock,
+  messageIdForTranscriptTarget,
+  sentMessageAnchorId,
+} from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -666,138 +669,6 @@ function chatTileAccessFlags(
   };
 }
 
-type BackgroundBlockSearchNode =
-  | MessageSegment
-  | {
-      readonly id: string;
-      readonly children: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly files: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly group: {
-        readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
-      };
-    };
-
-function segmentContainsBackgroundBlock(
-  segment: BackgroundBlockSearchNode,
-  blockId: string,
-): boolean {
-  if (segment.id === blockId) return true;
-  return backgroundBlockSearchChildren(segment).some((child) =>
-    segmentContainsBackgroundBlock(child, blockId),
-  );
-}
-
-function backgroundBlockSearchChildren(
-  segment: BackgroundBlockSearchNode,
-): ReadonlyArray<BackgroundBlockSearchNode> {
-  if ("children" in segment) return segment.children;
-  if ("files" in segment) return segment.files;
-  if ("segments" in segment) return segment.segments;
-  if ("group" in segment) return segment.group.segments;
-  return [];
-}
-
-function messageIdForBlock(
-  messages: ReadonlyArray<ChatMessageModel>,
-  blockId: string,
-): string | null {
-  const owner = messages.find((message) =>
-    message.segments.some((segment) =>
-      segmentContainsBackgroundBlock(segment, blockId),
-    ),
-  );
-  return owner?.id ?? null;
-}
-
-/**
- * Resolve a durable protocol message id to the row id used by the rendered
- * transcript. User rows keep their protocol id, while assistant records are
- * projected into turn-keyed rows (`assistant:<turnId>`) and retain the
- * protocol id only as `persistentMessageId`. Terminal notifications point at
- * that durable id, so an id-only lookup silently waits forever for a row that
- * can never exist.
- *
- * Prefer an exact rendered id. When projection split one assistant turn into
- * several rows, choose the trailing matching slice: completion and failure
- * notifications describe the terminal edge of that persisted assistant
- * record, and the completion marker is stamped on the final assistant slice
- * in the current transcript projection.
- */
-function messageIdForTranscriptTarget(
-  messages: ReadonlyArray<ChatMessageModel>,
-  messageId: string,
-): string | null {
-  const exact = messages.find((message) => message.id === messageId);
-  if (exact !== undefined) return exact.id;
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.persistentMessageId === messageId) return message.id;
-  }
-  return null;
-}
-
-/**
- * Resolves a `sent-message` transcript jump: the message holding this chat's
- * own "Sent message" card for one A2A exchange. Matched on receiver + the
- * VERBATIM text because those are the only identifiers the send block and the
- * comm-event row durably share - the sender's block id never reaches the
- * host's capture (origin refs are receiver-side). When the same text went to
- * the same receiver more than once, the send whose start time is nearest the
- * event's capture time wins; both clocks are the same host's.
- */
-function sentMessageAnchorId(
-  messages: ReadonlyArray<ChatMessageModel>,
-  target: {
-    readonly receiverAgentId: string;
-    readonly messageText: string;
-    readonly timestamp: number;
-  },
-): string | null {
-  const candidates: Array<{
-    readonly messageId: string;
-    readonly distance: number;
-  }> = [];
-  const visit = (messageId: string, node: BackgroundBlockSearchNode): void => {
-    if (
-      "kind" in node &&
-      node.kind === "tool" &&
-      node.agentMessageSend !== null &&
-      node.agentMessageSend.receiverAgentId === target.receiverAgentId &&
-      node.agentMessageSend.message === target.messageText
-    ) {
-      candidates.push({
-        messageId,
-        distance: Math.abs(node.startedAt - target.timestamp),
-      });
-    }
-    for (const child of backgroundBlockSearchChildren(node)) {
-      visit(messageId, child);
-    }
-  };
-  for (const message of messages) {
-    for (const segment of message.segments) {
-      visit(message.id, segment);
-    }
-  }
-  let best: { readonly messageId: string; readonly distance: number } | null =
-    null;
-  for (const candidate of candidates) {
-    if (best === null || candidate.distance < best.distance) best = candidate;
-  }
-  return best?.messageId ?? null;
-}
-
 interface BackgroundClickTarget {
   readonly blockId: string;
   readonly card: ChatScrollCardKind;
@@ -857,55 +728,6 @@ const TRANSCRIPT_JUMP_TTL_MS = 30_000;
  * live background item follows that item's card kind; anything else (a settled
  * tool card - the usual shape for a file-write anchor) opens as a tool card.
  */
-/**
- * The ordinal a cold jump target sits at. `null` means "nothing to ask for":
- * the legacy line, or a host-locatable target whose answer has not landed.
- *
- * Module scope rather than a closure over `hostLocatedOrdinal`, which is why
- * that value is a parameter. A function declared in the render body is a new
- * identity every render, so the effect that calls it would have to carry it as
- * a dependency and would re-run on every frame - on the hot path this is
- * deliberately not on.
- */
-function coldJumpOrdinal(
-  transcriptWindow: TranscriptWindow | null,
-  target: ChatTranscriptJumpTarget,
-  hostLocatedOrdinal: number | null,
-): number | null {
-  if (transcriptWindow === null) return null;
-  switch (target.kind) {
-    // The two the host answers: their row id needs rendered models, which a
-    // cold row has none of.
-    case "block":
-    case "sent-message":
-      return hostLocatedOrdinal;
-    case "message":
-      return skeletonOrdinalOf(transcriptWindow, target.messageId);
-    case "event":
-      return skeletonOrdinalOf(
-        transcriptWindow,
-        chatTranscriptEventRowId(target.eventId),
-      );
-    // Ordinal 0 of the WHOLE transcript. The skeleton is whole-chat, so its
-    // first entry names the real first row rather than the top of the
-    // hydrated tail.
-    case "first-message":
-      return transcriptWindow.skeleton[0] === undefined ? null : 0;
-    case "end":
-      return null;
-  }
-}
-
-function skeletonOrdinalOf(
-  transcriptWindow: TranscriptWindow,
-  rowId: string,
-): number | null {
-  const ordinal = transcriptWindow.skeleton.findIndex(
-    (entry) => entry !== undefined && entry.rowId === rowId,
-  );
-  return ordinal < 0 ? null : ordinal;
-}
-
 function transcriptJumpCardKind(
   blockId: string,
   backgroundItems: ReadonlyArray<BackgroundItem>,
@@ -1047,37 +869,18 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     (s) => s.requestTranscriptOrdinal,
   );
   // A jump target this client cannot place on its own, once it is clear it
-  // cannot. `block` and `sent-message` anchors are both found by walking
-  // RENDERED models, so a cold row offers nothing to match against - and unlike
-  // every other kind, failing to match does not mean "not delivered yet", it
-  // means "not hydrated, and hydration is exactly what the jump is blocked on".
-  // So the host is asked where the row is.
-  //
-  // Scoped to the windowed line: with `transcriptWindow === null` the client
-  // holds the whole transcript, so an unmatched anchor genuinely is absent and
-  // there is nothing for the host to find that the client has not already
-  // looked at.
+  // cannot. Failing to match here does not mean "not delivered yet" the way it
+  // does elsewhere - it means "not hydrated, and hydration is exactly what the
+  // jump is blocked on" - so the host is asked where the row is. The per-kind
+  // rule is {@link hostLocatorForJumpTarget}'s.
   const hostLocatorTarget = useMemo<TranscriptRowLocator | null>(() => {
     if (transcriptJump === undefined) return null;
     if (!view.snapshotLoaded) return null;
-    if (view.transcriptWindow === null) return null;
-    const target = transcriptJump.target;
-    if (target.kind === "block") {
-      return messageIdForBlock(view.messages, target.blockId) === null
-        ? { kind: "block", blockId: target.blockId }
-        : null;
-    }
-    if (target.kind === "sent-message") {
-      return sentMessageAnchorId(view.messages, target) === null
-        ? {
-            kind: "sent-message",
-            receiverAgentId: target.receiverAgentId,
-            messageText: target.messageText,
-            timestamp: target.timestamp,
-          }
-        : null;
-    }
-    return null;
+    return hostLocatorForJumpTarget({
+      target: transcriptJump.target,
+      transcriptWindow: view.transcriptWindow,
+      messages: view.messages,
+    });
   }, [
     transcriptJump,
     view.messages,

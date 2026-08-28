@@ -102,6 +102,25 @@ export interface HydratedSpan {
    * does not have to control the wall clock.
    */
   readonly touchedAt: number;
+  /**
+   * The window `clock` value at which the HOST served these record bodies.
+   *
+   * Distinct from {@link touchedAt}, which a viewport report bumps: reading a
+   * span does not make its bodies newer, and conflating the two would let the
+   * span a reader happens to be looking at outrank the one that was just
+   * re-served. This one is written where a span is BUILT or MERGED and never
+   * again.
+   *
+   * It exists because one turn's records reach every span its rows do, and
+   * {@link SPAN_MERGE_MAX_BYTES} means those spans are not always merged into
+   * one. Two spans can therefore hold the same record id, and something has to
+   * decide which body the transcript renders. Ordinal order - which is what a
+   * plain first-wins dedupe gives - decides it by POSITION, so the earliest
+   * span's copy wins however old it is, and a turn re-served with a new body
+   * keeps rendering the previous one. This is the answer to that: the newest
+   * SERVE wins, wherever it sits.
+   */
+  readonly servedAt: number;
 }
 
 export interface TranscriptWindow {
@@ -665,42 +684,14 @@ function skeletonContradicts(
   return false;
 }
 
-function dedupeMessages(
-  groups: readonly (readonly Message[])[],
-): readonly Message[] {
-  const seen = new Set<string>();
-  const out: Message[] = [];
-  for (const group of groups) {
-    for (const message of group) {
-      if (seen.has(message.messageId)) continue;
-      seen.add(message.messageId);
-      out.push(message);
-    }
-  }
-  return out;
-}
-
-function dedupeEvents(
-  groups: readonly (readonly ChatEvent[])[],
-): readonly ChatEvent[] {
-  const seen = new Set<string>();
-  const out: ChatEvent[] = [];
-  for (const group of groups) {
-    for (const event of group) {
-      if (seen.has(event.eventId)) continue;
-      seen.add(event.eventId);
-      out.push(event);
-    }
-  }
-  return out;
-}
-
 /**
- * Concatenate overlapping spans' records, keeping each record id ONCE.
+ * Concatenate groups of records, keeping each record id ONCE.
  *
  * POSITION comes from the first occurrence, because the groups arrive in
  * ordinal order and that ordering is what makes the result transcript-ordered.
- * The BODY comes from `preferred` wherever it holds that id.
+ * The BODY comes from `preferred` wherever it holds that id - so where two
+ * copies of one record disagree, position decides where it renders and
+ * `preferred` decides what it says.
  *
  * The two halves answer different questions and it matters that they are
  * decided separately. A span is only ever merged with a response that arrived
@@ -710,6 +701,9 @@ function dedupeEvents(
  * across a reconnect outrank the authoritative tail that just replaced it: the
  * merge succeeds, the ids update, and the published transcript keeps rendering
  * the stale text with nothing to indicate it.
+ *
+ * {@link dedupeByFreshestSpan} makes the same judgement for spans that did NOT
+ * merge, where "later" is a stamp rather than an argument position.
  */
 function dedupePreferringIncoming<T>(
   groups: readonly (readonly T[])[],
@@ -731,19 +725,12 @@ function dedupePreferringIncoming<T>(
 }
 
 /**
- * Every record id a span holds, messages and events alike.
+ * Does this span hold any of `recordIds`?
  *
- * One set rather than two, because every caller asks the same question of both
- * halves - "does this span still own a copy of that record" - and the two id
- * spaces do not collide in any way this module depends on.
+ * One set for both id spaces, because every caller asks the same question of
+ * both halves - "does this span still hold a copy of that record" - and the two
+ * do not collide in any way this module depends on.
  */
-function spanRecordIds(span: HydratedSpan): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const message of span.messages) ids.add(message.messageId);
-  for (const event of span.events) ids.add(event.eventId);
-  return ids;
-}
-
 function spanSharesRecord(
   span: HydratedSpan,
   recordIds: ReadonlySet<string>,
@@ -768,54 +755,64 @@ function spanSharesRecord(
  * response under the same epoch, so where the two disagree the newer one is
  * the host's current answer.
  *
- * ## A record lives in exactly one span
+ * ## One record, several spans - resolved by FRESHNESS, not by dropping a span
  *
- * That rule used to follow from merging alone, and `SPAN_MERGE_MAX_BYTES` broke
- * it: a steered turn is MANY rows over ONE record set, so its slices can sit in
- * several touching spans that the cap refuses to merge, each holding its own
- * copy of the same turn-level records. Two copies is not a tidiness problem,
- * because nothing downstream picks between them by freshness -
- * {@link hydratedRecords} dedupes in ORDINAL order, so the EARLIEST span's copy
- * wins however old it is. A turn re-served with a new body then keeps rendering
- * the previous one until the unrelated span happens to be evicted.
+ * A steered turn is MANY rows over ONE record set, so its slices can sit in
+ * several spans that never merge: `SPAN_MERGE_MAX_BYTES` refuses to absorb a
+ * touching neighbour past the cap, and a gap in the middle of a turn - `[10,14]`
+ * held, `[15,17]` evicted, `[18,20]` re-fetched - leaves two that do not even
+ * touch. Each carries that turn's whole record set, so the same record id lives
+ * in both.
  *
- * So the incoming copy takes ownership: a span that did not merge and still
- * holds one of the incoming records is dropped outright. Its rows become gaps
- * the planner re-requests, which is the same price every other invalidation
- * here pays, and it restores the invariant {@link holdsEveryRecordFrom} states.
+ * That is only a problem if something picks between the copies by POSITION, and
+ * for a while something did: {@link hydratedRecords} deduped in ordinal order,
+ * so the EARLIEST span's copy won however old it was, and a turn re-served with
+ * a new body kept rendering the previous one. The fix belongs there, and is
+ * there - {@link HydratedSpan.servedAt} makes the newest SERVE win wherever it
+ * sits.
+ *
+ * It must not be fixed HERE, by dropping the sharing span, and the reason is
+ * worth stating because that is what this function used to do. Sharing is
+ * symmetric: `[10,14]` and `[18,20]` hold each other's records, so seating
+ * either one evicts the other. If both are on screen - which is precisely what
+ * a steered turn looks like, an assistant slice, a steer bubble, another slice
+ * - the planner re-requests whichever was just dropped, and its answer drops
+ * the other. Nothing converges, no row ever finishes rendering, and the client
+ * asks the host for the same two ranges for as long as the reader looks at that
+ * turn. Row coverage is what makes a span worth keeping; the body it happens to
+ * hold is not, because another span holding a fresher copy of that body renders
+ * these rows perfectly well.
+ *
+ * The converse - keeping the rows and STRIPPING the shared records - is the
+ * other tempting shape and is unsound for a reason this file makes easy to
+ * miss: {@link evictTranscriptWindowToBudget} drops whole spans by LRU with no
+ * notion of sharing, so the stripped span can outlive the one it borrowed from.
+ * Its rows are then covered (the planner sees no gap) and bodyless (nothing can
+ * render them), which is a silent blank with no route back.
  */
 function insertSpan(
   spans: readonly HydratedSpan[],
   incoming: HydratedSpan,
 ): readonly HydratedSpan[] {
-  const incomingRecordIds = spanRecordIds(incoming);
   const untouched: HydratedSpan[] = [];
   const overlapping: HydratedSpan[] = [];
   // Adjacency is absorbed only while the result stays a unit eviction can
   // reclaim (see SPAN_MERGE_MAX_BYTES). Overlap is not optional: two spans
   // covering one ordinal would place that row twice.
   let mergedBytes = incoming.bytes;
-  // Kept only while it owns no record the incoming span just re-served. Applied
-  // to the DISJOINT case as well as the merge-capped one, because adjacency is
-  // not what makes two spans share records: a gap in the middle of one turn -
-  // `[10,14]` held, `[15,17]` evicted, `[18,20]` re-fetched - leaves two spans
-  // that never touch and both carry that turn's whole record set.
-  const keepUnmerged = (span: HydratedSpan): void => {
-    if (!spanSharesRecord(span, incomingRecordIds)) untouched.push(span);
-  };
   for (const span of spans) {
     const disjoint =
       spanEnd(span) < incoming.fromOrdinal ||
       span.fromOrdinal > spanEnd(incoming);
     if (disjoint) {
-      keepUnmerged(span);
+      untouched.push(span);
       continue;
     }
     const touchesOnly =
       spanEnd(span) === incoming.fromOrdinal ||
       spanEnd(incoming) === span.fromOrdinal;
     if (touchesOnly && mergedBytes + span.bytes > SPAN_MERGE_MAX_BYTES) {
-      keepUnmerged(span);
+      untouched.push(span);
       continue;
     }
     mergedBytes += span.bytes;
@@ -871,6 +868,12 @@ function insertSpan(
     bytes: recordsByteLength(messages, events) + contextBytes,
     contextBytes,
     touchedAt: Math.max(...members.map((span) => span.touchedAt)),
+    // The merged bodies are `dedupePreferringIncoming`'s answer, so the newest
+    // serve among the members is what this span now holds. Taking the MAX is
+    // therefore a statement of fact rather than a heuristic - and taking the
+    // incoming span's stamp alone would be wrong for a member whose records the
+    // incoming one does not carry at all.
+    servedAt: Math.max(...members.map((span) => span.servedAt)),
   };
   return [...untouched, merged].sort(
     (left, right) => left.fromOrdinal - right.fromOrdinal,
@@ -947,6 +950,14 @@ export function applyWindowedSnapshot(
   // 5. The WATCHDOG DEADLINE restarts (`chat-session-store.ts`). A rebuild is a
   //    fresh stream arriving; an aux-only snapshot is not, and must not
   //    postpone a stall already being measured.
+  // 6. The IN-FLIGHT RANGE SLOT is RELEASED (`chat-session-store.ts`). It names
+  //    a request sent on THIS connection, so it is per-subscriber like the
+  //    summary generation: a reconnect mints a fresh subscriber, its state is
+  //    `none`, and the request really did die with the old connection.
+  //    Releasing it on an aux-only snapshot instead re-asks for a range already
+  //    being answered, once per aux frame, and the resulting requests evict the
+  //    original's ledger entry at the cap - so the answer it was waiting for
+  //    arrives untracked and is discarded.
   //
   // Per-view retains. Per-subscriber and per-stream reset. That is the whole
   // rule, and it is a fact about the host rather than a convention here.
@@ -1043,6 +1054,9 @@ export function applyWindowedSnapshot(
       tailContextBytes,
     contextBytes: tailContextBytes,
     touchedAt: clock,
+    // A snapshot's tail is the host's current answer for those rows, so it is a
+    // serve and outranks any older span still holding a copy of the same turn.
+    servedAt: clock,
   };
   const spans = insertSpan(base.spans, tailSpan);
   return pruneSupersededLiveRecords({
@@ -1295,6 +1309,36 @@ export function bodyInvalidatingOrdinals(
 }
 
 /**
+ * The window a frame has just proved unusable: void, at the frame's own
+ * coordinates.
+ *
+ * Every caller has established the same thing by a different route - the host
+ * declared the index invalid, or the client detected a loss the host does not
+ * know about - and the remedy is identical, because there is only one: a
+ * `resnapshot`. The frame's `epoch`, `rowCount` and `indexRevision` are adopted
+ * rather than the held ones so the resnapshot latch
+ * (`resnapshotRequestedForEpoch`) is keyed on the space the client is being
+ * moved INTO, which is the space its next request has to be framed against.
+ */
+function voidedTranscriptWindow(
+  window: TranscriptWindow,
+  input: {
+    readonly epoch: number;
+    readonly rowCount: number;
+    readonly indexRevision: number;
+  },
+): TranscriptWindow {
+  return {
+    ...emptyTranscriptWindow(),
+    epoch: input.epoch,
+    rowCount: input.rowCount,
+    indexRevision: input.indexRevision,
+    invalidated: true,
+    clock: window.clock + 1,
+  };
+}
+
+/**
  * Apply an `indexChanged` delta.
  *
  * The three cases are what the client can actually do to its row set, and each
@@ -1312,6 +1356,37 @@ export function bodyInvalidatingOrdinals(
  * disjoint by construction, so order between them does not matter - but
  * splitting a frame's changes across two applications would leave a skeleton
  * whose LENGTH already equals `rowCount` and which is wrong at one entry.
+ *
+ * ## An epoch MISMATCH is two findings, and only one of them is a straggler
+ *
+ * `appended` and `updated` deliberately retain the epoch, because neither
+ * renumbers an ordinal - so a frame whose epoch differs from this window's is
+ * always evidence of something. Which thing depends on the DIRECTION, and
+ * collapsing the two into one `!==` was a silent data-loss bug.
+ *
+ * An epoch BELOW this window's is a space the client has already left. Its
+ * ordinals were renumbered by the very change that moved this window on, so
+ * nothing in it can be applied and nothing about it is news. Dropped.
+ *
+ * An epoch ABOVE it is a space the client has never REACHED, which is only
+ * possible if the frame that would have carried it here - the snapshot at the
+ * head of that broadcast, or the `reindexed` beside it - was lost. The pump
+ * keeps drop-and-continue for a flaky socket write, so that is an ordinary
+ * outcome and not a broken stream. Dropping it silently is the worst available
+ * answer: the host has already recorded this index as HELD by this client
+ * (`reconcileWindowedIndex` updates its per-subscriber state on emit, not on
+ * delivery), so it will send only deltas from here on, every one of them
+ * stamped with an epoch this client discards. Nothing re-requests anything -
+ * the skeleton is complete, so the completion watchdog is disarmed - and after
+ * a history mutation the chat is typically IDLE, so there is no later broadcast
+ * whose snapshot would repair it. The transcript then renders the superseded
+ * coordinate space for the life of the connection.
+ *
+ * So a newer epoch is handled exactly as `reindexed` is: void the index and let
+ * {@link voidedTranscriptWindow}'s adopted coordinates drive one resnapshot.
+ * That is not a coincidence of implementation - a newer epoch means a
+ * `reindexed` happened and this client did not see it, so it IS the reindexed
+ * case, learned late.
  */
 export function applyIndexChange(
   window: TranscriptWindow,
@@ -1322,21 +1397,14 @@ export function applyIndexChange(
     readonly changes: readonly ChatIndexChange[];
   },
 ): TranscriptWindow {
+  // Before the change kinds are even read: a straggler's `reindexed` describes
+  // a space this window has left, and acting on it would wipe a live window and
+  // rewind it onto dead coordinates.
+  if (input.epoch < window.epoch) return window;
   const invalidated = bodyInvalidatingOrdinals(input.changes);
-  if (invalidated === "all") {
-    return {
-      ...emptyTranscriptWindow(),
-      epoch: input.epoch,
-      rowCount: input.rowCount,
-      indexRevision: input.indexRevision,
-      invalidated: true,
-      clock: window.clock + 1,
-    };
+  if (invalidated === "all" || input.epoch > window.epoch) {
+    return voidedTranscriptWindow(window, input);
   }
-  // Not a rebase: `appended` and `updated` deliberately retain the epoch,
-  // because neither renumbers an ordinal. An epoch that does not match here is
-  // a frame from a coordinate space this client has already left.
-  if (input.epoch !== window.epoch) return window;
 
   // A frame can be LOST without the stream dying: the host's pump surfaces a
   // deterministic send failure as fatal, but keeps drop-and-continue for a
@@ -1357,14 +1425,7 @@ export function applyIndexChange(
     0,
   );
   if (input.rowCount - window.rowCount !== appendedRows) {
-    return {
-      ...emptyTranscriptWindow(),
-      epoch: input.epoch,
-      rowCount: input.rowCount,
-      indexRevision: input.indexRevision,
-      invalidated: true,
-      clock: window.clock + 1,
-    };
+    return voidedTranscriptWindow(window, input);
   }
 
   // The detector for the loss the count above cannot see. Revisions are
@@ -1378,14 +1439,7 @@ export function applyIndexChange(
   // forbids, so it is dropped rather than treated as loss.
   if (input.indexRevision <= window.indexRevision) return window;
   if (input.indexRevision !== window.indexRevision + 1) {
-    return {
-      ...emptyTranscriptWindow(),
-      epoch: input.epoch,
-      rowCount: input.rowCount,
-      indexRevision: input.indexRevision,
-      invalidated: true,
-      clock: window.clock + 1,
-    };
+    return voidedTranscriptWindow(window, input);
   }
 
   const skeleton = [...window.skeleton];
@@ -1442,7 +1496,8 @@ export function applyIndexChange(
 }
 
 /**
- * Drop every span containing a rewritten row.
+ * Drop every span containing a rewritten row - and every span holding a COPY of
+ * what those spans held.
  *
  * The whole span, not the row - and that is forced, not lazy. A span's records
  * are a DEDUPLICATED union across its rows, so there is no client-side way to
@@ -1451,13 +1506,24 @@ export function applyIndexChange(
  * the span and dropping "the row" would mean guessing, and a wrong guess
  * leaves a stale body rendered as current.
  *
- * The span is enough, and that rests on {@link insertSpan}'s ownership rule
- * rather than on geometry. A rewritten row's records are held by every span its
- * TURN reaches, which `SPAN_MERGE_MAX_BYTES` would otherwise allow to be
- * several - and a sharing span left behind keeps drawing the pre-update body,
- * with no gap for the planner to notice. Because no two spans may hold one
- * record, the span containing the changed ordinal is the only one that can hold
- * what changed.
+ * ## Geometry alone is not enough, and this is where that is paid for
+ *
+ * A rewritten row's records are held by every span its TURN reaches, and one
+ * turn's slices routinely sit in several spans that never merged (see
+ * {@link insertSpan}). So the span CONTAINING the changed ordinal is not the
+ * only one that can hold what changed: a reader parked on an earlier slice of
+ * the same turn keeps a copy in a span this ordinal never touches. Left behind,
+ * it is the only copy once the containing span goes - it renders the
+ * pre-update body, and its rows are covered, so the planner sees no gap and
+ * nothing ever re-requests them.
+ *
+ * The reach is therefore computed rather than assumed: the containing spans are
+ * found by ordinal, their record ids are collected, and any span holding one of
+ * those ids goes with them. That is exact - the union of the stale spans'
+ * records is precisely what the host just superseded - and it terminates,
+ * because the trigger is one `updated` frame rather than a seat. Every dropped
+ * span's rows become gaps the planner re-requests, which is the price every
+ * other invalidation here pays.
  *
  * The cost lands where it is cheapest: an `updated` almost always names the
  * streaming row at the tail, whose span the next snapshot re-seeds inline.
@@ -1467,11 +1533,18 @@ function dropSpansForUpdatedOrdinals(
   ordinals: readonly number[],
 ): TranscriptWindow {
   if (ordinals.length === 0) return window;
+  const containsUpdated = (span: HydratedSpan): boolean =>
+    ordinals.some(
+      (ordinal) => ordinal >= span.fromOrdinal && ordinal < spanEnd(span),
+    );
+  const staleRecordIds = new Set<string>();
+  for (const span of window.spans) {
+    if (!containsUpdated(span)) continue;
+    for (const message of span.messages) staleRecordIds.add(message.messageId);
+    for (const event of span.events) staleRecordIds.add(event.eventId);
+  }
   const kept = window.spans.filter(
-    (span) =>
-      !ordinals.some(
-        (ordinal) => ordinal >= span.fromOrdinal && ordinal < spanEnd(span),
-      ),
+    (span) => !containsUpdated(span) && !spanSharesRecord(span, staleRecordIds),
   );
   if (kept.length === window.spans.length) return window;
   return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
@@ -1518,6 +1591,7 @@ export function applyRangeResponse(
     bytes: recordsByteLength(response.messages, response.events) + contextBytes,
     contextBytes,
     touchedAt: clock,
+    servedAt: clock,
   };
   const spans = insertSpan(window.spans, span);
   return pruneSupersededLiveRecords({
@@ -1636,13 +1710,17 @@ export function isTailHydrated(window: TranscriptWindow): boolean {
  *
  * ## The condition
  *
- * A record lives in exactly one span, so "everything after it is held" is
- * precisely "its span runs to the end of the transcript". That used to follow
- * from merging alone and no longer does - `SPAN_MERGE_MAX_BYTES` leaves
- * touching spans unmerged, and one turn's record set reaches every span its
- * rows do. {@link insertSpan} is what carries the invariant now: an unmerged
- * span holding a record the incoming span re-served is dropped rather than kept
- * as a second copy.
+ * "Everything after this record is held" is a question about ORDINAL COVERAGE
+ * from the record's own position onward, and the span that holds it is how that
+ * position is found.
+ *
+ * A record can sit in more than one span - one turn's record set reaches every
+ * span its rows do, and `SPAN_MERGE_MAX_BYTES` means those are not always
+ * merged (see {@link insertSpan}). So the FIRST holder is the one to measure
+ * from, and `spans` is kept sorted by `fromOrdinal`, which makes `find` return
+ * exactly that. Measuring from a later copy would answer a weaker question -
+ * whether everything after the turn's SECOND slice is held - and answer `true`
+ * for a window missing the rows in between.
  *
  * A live record (accepted, not yet placed by the index) is newer than every
  * placed row by construction, so nothing in the transcript follows it except
@@ -1707,22 +1785,78 @@ export function hydratedRecords(window: TranscriptWindow): {
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
 } {
-  // Spans FIRST, live records after, and both facts matter. Chronologically an
-  // unplaced record is the newest thing the client has, so it sorts last
-  // anyway; and the dedupe keeps the first occurrence, so if a copy has already
-  // landed in a span the authoritative one wins here even in the window between
-  // its arrival and the prune.
   return {
-    messages: dedupeMessages([
-      ...window.spans.map((span) => span.messages),
+    messages: dedupeByFreshestSpan(
+      window.spans,
+      (span) => span.messages,
       window.liveMessages,
-    ]),
-    events: dedupeEvents([
-      ...window.spans.map((span) => span.events),
+      (message) => message.messageId,
+    ),
+    events: dedupeByFreshestSpan(
+      window.spans,
+      (span) => span.events,
       window.liveEvents,
-    ]),
+      (event) => event.eventId,
+    ),
     rowContext: hydratedRowContext(window),
   };
+}
+
+/**
+ * Every record the window holds, positioned by ORDINAL and bodied by SERVE.
+ *
+ * The two axes are separate because the same record id can sit in two spans -
+ * one turn's records reach every span its rows do, and `SPAN_MERGE_MAX_BYTES`
+ * means those are not always merged (see {@link insertSpan}). Position has to
+ * come from the earliest span, or the transcript is out of order; the body has
+ * to come from the newest SERVE, or the earliest span's copy renders however
+ * stale it is - which is the defect {@link HydratedSpan.servedAt} exists for.
+ *
+ * Spans FIRST, live records after, and both facts matter. Chronologically an
+ * unplaced record is the newest thing the client has, so it sorts last anyway;
+ * and a live copy never displaces a span's, so if the record has already landed
+ * in a span the authoritative one wins even in the window between its arrival
+ * and the prune. That is a POSITION question, which is why the live records do
+ * not carry a serve stamp and do not compete on one.
+ *
+ * ONE pass and one map, deliberately: this runs on the streaming path (a block
+ * delta republishes `messages`), so it is held to the same standard as
+ * everything else there - a constant factor over the records the window holds,
+ * never a second walk and never a sort.
+ */
+function dedupeByFreshestSpan<T>(
+  spans: readonly HydratedSpan[],
+  pick: (span: HydratedSpan) => readonly T[],
+  live: readonly T[],
+  keyOf: (item: T) => string,
+): readonly T[] {
+  const out: T[] = [];
+  const placed = new Map<string, { index: number; servedAt: number }>();
+  for (const span of spans) {
+    for (const item of pick(span)) {
+      const key = keyOf(item);
+      const seen = placed.get(key);
+      if (seen === undefined) {
+        placed.set(key, { index: out.length, servedAt: span.servedAt });
+        out.push(item);
+        continue;
+      }
+      // The position it already has, the body this span serves. `>` and not
+      // `>=` so an equal stamp keeps the earlier span's copy, which is the same
+      // record either way and one less write.
+      if (span.servedAt > seen.servedAt) {
+        out[seen.index] = item;
+        placed.set(key, { index: seen.index, servedAt: span.servedAt });
+      }
+    }
+  }
+  for (const item of live) {
+    const key = keyOf(item);
+    if (placed.has(key)) continue;
+    placed.set(key, { index: out.length, servedAt: 0 });
+    out.push(item);
+  }
+  return out;
 }
 
 /**

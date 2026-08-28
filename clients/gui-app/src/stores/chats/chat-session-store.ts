@@ -1148,8 +1148,14 @@ export const HYDRATION_REQUEST_TIMEOUT_MS = 30_000;
  * the value just has to be comfortably above the number of re-asks a live
  * connection can stack up. Small enough that the map cannot become a leak on a
  * tab left open against a wedged host.
+ *
+ * That premise is a constraint on the CALLERS, not a property of the cap: it
+ * holds only while nothing mints a request for a range already being answered.
+ * Releasing the dedup slot on a frame that did not end the request breaks it -
+ * eight aux rebroadcasts then evict the very entry the outstanding answer needs
+ * - so a new clear site has to justify itself against this number.
  */
-const MAX_OUTSTANDING_HYDRATION_REQUESTS = 8;
+export const MAX_OUTSTANDING_HYDRATION_REQUESTS = 8;
 
 /**
  * How long a chunked delivery may go quiet before it is treated as stalled
@@ -2548,11 +2554,17 @@ export function createChatSessionStoreWithNotificationDependencies(
      * The range request currently in flight, so a stream of identical
      * viewport reports does not re-send the same ask while the host is
      * answering it. Cleared when a range response arrives (whatever it held -
-     * a partial answer changes the next plan anyway), cleared on every
-     * windowed snapshot (a reconnect's request may have died with its
-     * connection, and the transcript epoch can survive one - without the
-     * clear, an identical re-plan would be suppressed forever), and
-     * superseded by any differently-planned request.
+     * a partial answer changes the next plan anyway), cleared on a windowed
+     * snapshot that RESET this client's connection or its coordinate space (a
+     * reconnect's request died with its connection, and the transcript epoch
+     * can survive one - without the clear, an identical re-plan would be
+     * suppressed forever), and superseded by any differently-planned request.
+     *
+     * On a snapshot that did NEITHER - an aux-only rebroadcast - it is
+     * deliberately kept. The request it names is still being answered, so
+     * releasing the key would let the same range be asked again per aux frame;
+     * see the clear site in `onWindowedSnapshot` for why that also destroys the
+     * answer it was waiting for.
      *
      * Holds no staleness state of its own: that lives in
      * {@link outstandingHydrationRequests}, keyed by the id this names.
@@ -2807,8 +2819,15 @@ export function createChatSessionStoreWithNotificationDependencies(
      * Releasing the slot says nothing about the request's ANSWER: its record
      * in `outstandingHydrationRequests` survives, so an answer that merely
      * took longer than the deadline still seats. Callers that mean "these
-     * ordinals no longer name anything I can use" - a snapshot, a downgrade -
+     * ordinals no longer name anything I can use" - a rebase, a downgrade -
      * must additionally call {@link forgetOutstandingHydration}.
+     *
+     * The converse is not a free action, which is the trap this pairing hides.
+     * Releasing the slot while KEEPING the ledger looks like the conservative
+     * half of the choice and is the one that loses the answer: the re-plan it
+     * permits asks for the same range again, and the new request's ledger entry
+     * evicts an older one at the cap. Call this only for a request that is
+     * genuinely gone, never as a precaution.
      */
     const clearInFlightHydration = (): void => {
       inFlightHydrationRequest = null;
@@ -2949,14 +2968,25 @@ export function createChatSessionStoreWithNotificationDependencies(
       // this frame just superseded.
       for (const [requestId, request] of outstandingHydrationRequests) {
         if (request.superseded === "all") continue;
-        if (invalidated === "all") {
+        // Two ways a frame voids the whole coordinate space rather than some
+        // rows in it, and they must be read together because
+        // {@link applyIndexChange} folds them together for the same reason.
+        //
+        // A `reindexed` is the host saying so. A frame from a NEWER epoch is
+        // this client discovering it: the frame that would have carried the new
+        // space here was lost, so the reindex happened and was not seen. Either
+        // way every outstanding request was framed against a space that no
+        // longer exists, and the window is about to be voided at the new epoch -
+        // so an answer to any of them is unseatable, and the record has to say
+        // that rather than leave a late one looking merely untracked.
+        if (invalidated === "all" || input.epoch > request.epoch) {
           outstandingHydrationRequests.set(requestId, {
             ...request,
             superseded: "all",
           });
           continue;
         }
-        // An `updated` from another epoch says nothing about whether THIS
+        // An `updated` from an OLDER epoch says nothing about whether THIS
         // request's answer is still current: it describes rows in a coordinate
         // space the request was not framed against, and `applyIndexChange`
         // discards it for the same reason.
@@ -3372,16 +3402,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         windowedLine = true;
-        // See the field's own doc: a snapshot means a (re)connection settled,
-        // and any request the previous connection had in flight is gone.
-        clearInFlightHydration();
-        // NOT `forgetOutstandingHydration()` unconditionally - see below. A
-        // snapshot is not only a reconnection on this line: an aux-only
-        // rebroadcast (a queue change, an approval) arrives through this same
-        // handler at the SAME epoch and preserves every span, and discarding
-        // the ledger for one makes a large `loadRange` answer still travelling
-        // on the BULK lane arrive untracked and be rejected as stale. Repeated
-        // aux snapshots could therefore discard every slow response in turn and
+        // NEITHER the dedup slot nor the ledger is cleared here, and both
+        // decisions are deferred to below for the same reason. A snapshot is
+        // not only a reconnection on this line: an aux-only rebroadcast (a
+        // queue change, an approval) arrives through this same handler at the
+        // SAME epoch and preserves every span, and treating one as a
+        // connection reset makes a large `loadRange` answer still travelling on
+        // the BULK lane arrive untracked and be rejected as stale. Repeated aux
+        // snapshots could therefore discard every slow response in turn and
         // leave the visible gap unhydrated indefinitely.
         const epochBeforeSnapshot = get().transcriptWindow.epoch;
         // A fresh snapshot IS the answer an invalidated window was waiting
@@ -3426,6 +3454,43 @@ export function createChatSessionStoreWithNotificationDependencies(
         const rebased = window.epoch !== epochBeforeSnapshot;
         if (rebased || window.invalidated) {
           forgetOutstandingHydration();
+        }
+        // The dedup SLOT, on the same footing - and it was the half left behind.
+        //
+        // Releasing it unconditionally reads as harmless (it only permits a
+        // re-plan) and is not, because the re-plan is not free: the gap is
+        // still unhydrated while the answer is in the air, so the very same
+        // range is planned again, and with the slot empty nothing suppresses
+        // it. Each aux snapshot therefore mints one more `loadRange` for a
+        // range already being answered, and each new request takes a ledger
+        // entry - which is capped at {@link MAX_OUTSTANDING_HYDRATION_REQUESTS}
+        // and evicts the OLDEST. Eight aux frames are enough to evict the
+        // original request's own record, so the answer this client is waiting
+        // for arrives untracked and `rangeResponseIsStale` discards it. Keeping
+        // the ledger while releasing the slot preserved the record and then
+        // pushed it out the back of the same ledger.
+        //
+        // The slot is a fact about the CONNECTION - it names a request sent on
+        // it - which makes it per-SUBSCRIBER on the host, so it resets on the
+        // documented rebuild signal and not on a snapshot's mere arrival. That
+        // is the summary generation's rule and the watchdog deadline's rule,
+        // for the same reason (see `applyWindowedSnapshot`'s "what
+        // `indexRevision === null` means to each counter"): a reconnect mints a
+        // fresh subscriber whose index state is `none`, and `null` is exactly
+        // how that reaches this client. Its request really did die with the
+        // previous connection, and the epoch can survive a reconnect - so
+        // without this release an identical re-plan would be suppressed
+        // forever.
+        //
+        // The other two are the ledger's own cases, kept in step deliberately:
+        // an ordinal in a space this window has left cannot dedup anything, so
+        // a slot holding one is a stale key rather than a live request.
+        if (
+          frame.snapshot.indexRevision === null ||
+          rebased ||
+          window.invalidated
+        ) {
+          clearInFlightHydration();
         }
         // The rebuild boundary for the summary generation tracker. `null` is
         // the host saying it holds no index for THIS subscriber and is about

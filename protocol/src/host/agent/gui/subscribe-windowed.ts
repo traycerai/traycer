@@ -323,12 +323,14 @@ export {
 /**
  * Where a jump target sits in the transcript - `chat.locateRow`.
  *
- * The windowed line's other half of a cross-tile jump. A client resolves most
- * targets itself and reads the ordinal off the skeleton it holds, but a `block`
- * and a `sent-message` anchor are identified by walking RENDERED models, which a
- * cold row has none of. Without this the jump deadlocks rather than degrading:
- * the scroll drives hydration and the scroll is what is being held back, so the
- * target is never requested and the request parks forever.
+ * The windowed line's other half of a cross-tile jump. A client resolves some
+ * targets itself and reads the ordinal off the skeleton it holds, but `block`
+ * and `sent-message` anchors are identified by walking RENDERED models, which a
+ * cold row has none of - and a `message` anchor naming an ASSISTANT record has
+ * no row id to read at all, because those rows are turn-keyed and keep the
+ * durable id only on the rendered model. Without this the jump deadlocks rather
+ * than degrading: the scroll drives hydration and the scroll is what is being
+ * held back, so the target is never requested and the request parks forever.
  */
 export const chatLocateRowRequestSchema = z.object({
   /**

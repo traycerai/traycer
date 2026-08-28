@@ -21,14 +21,15 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 
 /**
- * `locateTranscriptRowOrdinal` answers a cross-tile jump for the two target
+ * `locateTranscriptRowOrdinal` answers a cross-tile jump for the three target
  * kinds a windowed client cannot resolve on its own: a `block` (walking the
- * rendered segment tree) and a `sent-message` (matching an `agentMessageSend`
- * enrichment). The invariant these tests exist to pin is that the ordinal it
- * returns is an index into the SAME enumeration `buildRowSkeleton` publishes -
- * by construction, since both are built from `projectTranscriptRows` - so
- * every assertion here is phrased against the skeleton, never against a
- * hand-counted ordinal.
+ * rendered segment tree), a `sent-message` (matching an `agentMessageSend`
+ * enrichment), and a `message` naming an ASSISTANT record, whose rows are
+ * turn-keyed and therefore never named by the durable id. The invariant these
+ * tests exist to pin is that the ordinal it returns is an index into the SAME
+ * enumeration `buildRowSkeleton` publishes - by construction, since both are
+ * built from `projectTranscriptRows` - so every assertion here is phrased
+ * against the skeleton, never against a hand-counted ordinal.
  */
 
 const previewText: TranscriptPreviewProjection = (content: JsonContent) =>
@@ -510,6 +511,126 @@ describe("locateTranscriptRowOrdinal: sent-message targets", () => {
           messageText: "nothing matches this",
           timestamp: 60,
         },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("locateTranscriptRowOrdinal: message targets", () => {
+  /**
+   * One human turn, one steer, one assistant turn split by it. Enough to make
+   * every distinction this locator has to draw: a user row named by its own id,
+   * a steer row named by the record it steered, and an assistant record that
+   * names TWO rows and no row id at all.
+   */
+  function splitTurnTranscript(): TranscriptRowProjectionInput {
+    return {
+      messages: [
+        humanUserMessage({ messageId: "m-1", timestamp: 1, text: "go" }),
+        humanUserMessage({
+          messageId: "m-steer",
+          timestamp: 5,
+          text: "also do y",
+        }),
+        assistantMessageWithBlocks({
+          messageId: "m-turn",
+          timestamp: 10,
+          turnId: "turn-1",
+          blocks: [
+            {
+              type: "tool_call",
+              blockId: "tc-early",
+              status: "completed",
+              timestamp: 6,
+              toolName: "Read",
+              error: null,
+            },
+            {
+              type: "steer",
+              blockId: "b-steer",
+              status: "completed",
+              timestamp: 7,
+              queueItemId: "q-1",
+              messageId: "m-steer",
+              content: { type: "doc" },
+              mode: "safe_point",
+              sender: null,
+            },
+            {
+              type: "tool_call",
+              blockId: "tc-late",
+              status: "completed",
+              timestamp: 8,
+              toolName: "Write",
+              error: null,
+            },
+          ],
+        }),
+      ],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+  }
+
+  it("resolves an ASSISTANT record, whose rows no id-as-row-id read can find", () => {
+    // The whole reason this kind exists. `m-turn` is not a row id anywhere in
+    // the skeleton, so a client looking it up there waits forever.
+    const input = splitTurnTranscript();
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText);
+    expect(skeleton.map((entry) => entry.rowId)).not.toContain("m-turn");
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "message",
+      messageId: "m-turn",
+    });
+
+    // The TRAILING slice, matching the client's own `messageIdForTranscriptTarget`:
+    // a completion or failure notification describes the terminal edge of the
+    // record, and the two resolvers must not disagree about which row that is.
+    expect(skeleton[ordinal]?.rowId).toBe(
+      assistantSliceRowId("turn-1", 1, true),
+    );
+  });
+
+  it("resolves a USER record to its own row", () => {
+    const input = splitTurnTranscript();
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "message",
+      messageId: "m-1",
+    });
+
+    expect(skeleton[ordinal]?.rowId).toBe("m-1");
+  });
+
+  it("resolves a STEERED record to its steer row, not to the turn that names it", () => {
+    // `m-steer` appears in `steeredMessageIds` on every slice of the turn, so a
+    // search that matched anywhere the id occurs would answer with an assistant
+    // slice - and jump the reader past the bubble they asked for.
+    const input = splitTurnTranscript();
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "message",
+      messageId: "m-steer",
+    });
+
+    expect(skeleton[ordinal]?.rowId).toBe("m-steer");
+  });
+
+  it("returns null for a record the transcript no longer holds", () => {
+    const input = splitTurnTranscript();
+    const rows = projectTranscriptRows(input);
+
+    expect(
+      locateTranscriptRowOrdinal(
+        { rows, messages: input.messages },
+        { kind: "message", messageId: "m-trimmed-by-a-restore" },
       ),
     ).toBeNull();
   });

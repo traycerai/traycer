@@ -11,6 +11,7 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 import {
   createChatSessionStore,
   HYDRATION_REQUEST_TIMEOUT_MS,
+  MAX_OUTSTANDING_HYDRATION_REQUESTS,
   MAX_WATCHDOG_RESTREAMS_PER_EPOCH,
   STREAM_COMPLETION_TIMEOUT_MS,
   type ChatSessionStoreHandle,
@@ -390,6 +391,27 @@ function skeletonChunk(
       ),
       isFinal,
     },
+  };
+}
+
+/**
+ * An aux-only rebroadcast: same epoch, same rows, a HELD index revision.
+ *
+ * This is what a queue change or an approval produces - the host re-sends the
+ * snapshot against an unchanged skeleton and streams nothing. `indexRevision`
+ * is the discriminator (`null` would be the host announcing a rebuild), and it
+ * matches what the client already holds, because a revision that ran AHEAD is a
+ * different frame entirely: it means deltas were lost and the window voids.
+ */
+function auxRebroadcast(input: {
+  readonly rowCount: number;
+  readonly tailFromOrdinal: number;
+  readonly tailMessages: readonly Message[];
+}): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
+  const bootstrap = snapshot(input);
+  return {
+    ...bootstrap,
+    snapshot: { ...bootstrap.snapshot, indexRevision: 0 },
   };
 }
 
@@ -1121,6 +1143,89 @@ describe("chat session viewport hydration: a range answered out of order", () =>
       harness.callbacks().onRange(rangeAnswering(secondRequestId, 0, 5));
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.spans.some((span) => span.fromOrdinal === 0)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * The other half of the same rule the ledger already follows.
+ *
+ * An aux-only rebroadcast is not a connection reset, so it must leave BOTH
+ * records of an outstanding request alone. Keeping the ledger while releasing
+ * the dedup slot is the shape that reads as conservative and destroys the
+ * answer: the released slot permits a re-plan of a range that is still being
+ * answered, and the requests that re-plan mints push the original's ledger
+ * entry out of a capped map.
+ */
+describe("chat session viewport hydration: aux rebroadcasts while a range is in flight", () => {
+  const AUX_FRAMES = MAX_OUTSTANDING_HYDRATION_REQUESTS + 1;
+
+  it("mints no duplicate request, and the original answer still seats", () => {
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      expect(harness.rangeRequests).toHaveLength(1);
+      const inFlightRequestId = harness.lastRangeRequestId();
+
+      // A steady drip of queue changes and approvals while the answer is still
+      // travelling - on the BULK lane, which is where a megabyte of bodies goes
+      // and where it can be overtaken by every one of these.
+      for (let frame = 0; frame < AUX_FRAMES; frame += 1) {
+        harness.callbacks().onWindowedSnapshot(
+          auxRebroadcast({
+            rowCount: 40,
+            tailFromOrdinal: 20,
+            tailMessages: [userMessage("tail", 20)],
+          }),
+        );
+      }
+
+      // The gap is still a gap, so the planner still wants it; the slot is what
+      // says it has already been asked for.
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      harness.callbacks().onRange(rangeAnswering(inFlightRequestId, 10, 20));
+
+      // Its ledger entry survived the aux traffic, so the answer is seated
+      // rather than discarded as untracked.
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("still releases the slot when the rebuild signal says the request died", () => {
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      // A reconnect: a fresh subscriber holds no index, which reaches the
+      // client as `indexRevision: null`. The request really did die with the
+      // previous connection, and the epoch survives one - so a slot kept here
+      // would suppress the identical re-plan forever and strand the gap.
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+        }),
+      );
+
+      expect(harness.rangeRequests).toHaveLength(2);
+      expect(harness.rangeRequests[1]).toMatchObject({
+        fromOrdinal: 10,
+        toOrdinal: 19,
+      });
     } finally {
       harness.handle.dispose();
     }

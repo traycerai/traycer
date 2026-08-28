@@ -10,18 +10,30 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
  *
  * A cross-tile jump has to end at an ORDINAL: on the windowed line the target
  * row is routinely cold, and the only way to get a cold row fetched is to name
- * where it sits. For most target kinds the client derives the row id itself - a
- * delivered message's row id IS its message id, an event's is
+ * where it sits. For some target kinds the client derives the row id itself - a
+ * delivered USER message's row id IS its message id, an event's is
  * `chatTranscriptEventRowId` - and then reads the ordinal straight off the
  * skeleton it already holds.
  *
- * Two kinds cannot be derived that way, and they are the reason this module
+ * Three kinds cannot be derived that way, and they are the reason this module
  * exists. A `block` target is identified by walking the RENDERED segment tree,
  * and a `sent-message` target by matching an `agentMessageSend` enrichment
  * inside one - and a cold row has no rendered models at all. So the client can
  * neither find the row nor learn that it exists, and waiting for it to appear
  * deadlocks: the scroll is what drives hydration and the scroll is what is
  * being held back.
+ *
+ * A `message` target is the third, and it fails for a different reason worth
+ * stating separately, because "a message id is a row id" holds often enough to
+ * look like a rule. It is one only for USER records. An assistant record is
+ * projected into TURN-KEYED rows (`assistant:<turnKey>`, and one per slice when
+ * the turn is split), and keeps its durable id only as the rendered model's
+ * `persistentMessageId` - so the id-as-row-id lookup silently misses, and the
+ * jump waits forever for a row that can never carry that id. The client's own
+ * fallback reads `persistentMessageId` off its RENDERED models, which puts it
+ * back in the cold-row hole above. Terminal notifications point at exactly this
+ * durable id, so the miss lands on "take me to the turn that just finished" in
+ * a chat long enough for that turn to be cold.
  *
  * The host holds the records, so the host answers. This is that answer.
  *
@@ -64,7 +76,7 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
 export const LOCATOR_MESSAGE_TEXT_MAX_CHARS = 64_000;
 
 /**
- * The two jump targets whose row a client cannot identify on its own.
+ * The three jump targets whose row a client cannot identify on its own.
  *
  * A zod schema rather than a bare type because it is also the wire shape - it
  * is re-exported by `host/agent/gui/subscribe-windowed.ts`, which is where a
@@ -89,6 +101,16 @@ export const transcriptRowLocatorSchema = z.discriminatedUnion("kind", [
     messageText: z.string().max(LOCATOR_MESSAGE_TEXT_MAX_CHARS),
     timestamp: z.number(),
   }),
+  /**
+   * A durable record id, for the case the client's own id-as-row-id read
+   * cannot cover: an ASSISTANT record, whose rows are turn-keyed.
+   *
+   * The client asks for this only after its own lookups miss, so answering a
+   * user record here too is not redundancy to remove - it makes the search
+   * total over "the row that renders this record", which is what the caller
+   * asked. A caller that can already place the row does not send the request.
+   */
+  z.object({ kind: z.literal("message"), messageId: z.string() }),
 ]);
 export type TranscriptRowLocator = z.infer<typeof transcriptRowLocatorSchema>;
 
@@ -168,12 +190,61 @@ function sentMessageBlockId(
 }
 
 /**
+ * The row that RENDERS this record, or `null`.
+ *
+ * "Renders" is the discriminating word, and it is what keeps this from being a
+ * scan for the id. A turn's records are named by every row of that turn - an
+ * assistant slice carries the whole turn's `messageIds`, and a steered user
+ * record appears in `steeredMessageIds` on rows that only need it to fold the
+ * turn - so matching anywhere the id occurs would answer with whichever row
+ * happened to mention it. Only the sources that render a record AS THEIR BODY
+ * are consulted: a `user` row, a `steer` row's steered record, and an
+ * assistant slice's own turn records.
+ *
+ * A `stopped-turn` row is deliberately excluded even though it names a
+ * `triggeringMessageId`. That row reports a stop; the record itself has its own
+ * row elsewhere, and that is the one a jump means.
+ *
+ * The LAST match wins, which matters only for a split assistant turn - every
+ * slice names the same records. It is the trailing slice on purpose: the
+ * client's own `messageIdForTranscriptTarget` chooses the trailing match for
+ * the reason it documents (a completion or failure notification describes the
+ * terminal edge of that record), and the two must not disagree, since either
+ * may be the one that answers a given jump.
+ */
+function rowOrdinalByMessageId(
+  rows: readonly TranscriptRowDescriptor[],
+  messageId: string,
+): number | null {
+  let found: number | null = null;
+  rows.forEach((row, ordinal) => {
+    const { source } = row;
+    if (source.kind === "user") {
+      if (source.messageId === messageId) found = ordinal;
+      return;
+    }
+    if (source.kind === "steer") {
+      if (source.steeredMessageId === messageId) found = ordinal;
+      return;
+    }
+    if (
+      source.kind === "assistant-slice" &&
+      source.messageIds.includes(messageId)
+    ) {
+      found = ordinal;
+    }
+  });
+  return found;
+}
+
+/**
  * Where this target sits in the transcript, or `null` if nothing matches it.
  *
  * `null` is an ordinary answer, not a fault: the block may belong to a turn a
- * checkpoint restore removed, or the A2A send may have been captured on the
- * receiver's side only. The caller's degrade for both is the same one it
- * already has for a target that never arrives.
+ * checkpoint restore removed, the A2A send may have been captured on the
+ * receiver's side only, or the record may have been trimmed away. The caller's
+ * degrade for all of them is the same one it already has for a target that
+ * never arrives.
  */
 export function locateTranscriptRowOrdinal(
   transcript: {
@@ -183,6 +254,9 @@ export function locateTranscriptRowOrdinal(
   },
   locator: TranscriptRowLocator,
 ): number | null {
+  if (locator.kind === "message") {
+    return rowOrdinalByMessageId(transcript.rows, locator.messageId);
+  }
   const blockId =
     locator.kind === "block"
       ? locator.blockId

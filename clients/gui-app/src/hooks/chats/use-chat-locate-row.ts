@@ -6,12 +6,17 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 /**
  * The ordinal a cross-tile jump target sits at, when only the host can say.
  *
- * The client resolves most jump targets itself and reads the ordinal off the
- * skeleton it already holds. Two kinds it cannot: a `block` anchor and a
+ * The client resolves some jump targets itself and reads the ordinal off the
+ * skeleton it already holds. Three kinds it cannot. A `block` anchor and a
  * `sent-message` anchor are both found by walking RENDERED models, and a cold
- * row has none. Waiting for such a row is a deadlock rather than a delay - the
- * scroll drives hydration and the scroll is what the unresolved jump is holding
- * back - so the host is asked where the row is and the answer feeds the same
+ * row has none. A `message` anchor naming an ASSISTANT record has no row id to
+ * look up either way: those rows are turn-keyed, and the durable id survives
+ * only as the rendered model's `persistentMessageId` - so the skeleton read
+ * misses and the rendered read needs the very hydration being waited on.
+ *
+ * Waiting for such a row is a deadlock rather than a delay - the scroll drives
+ * hydration and the scroll is what the unresolved jump is holding back - so the
+ * host is asked where the row is and the answer feeds the same
  * `requestTranscriptOrdinal` channel every other cold target uses.
  *
  * Disabled by passing `target: null`, which is the ordinary state: the query

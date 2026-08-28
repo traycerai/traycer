@@ -522,15 +522,75 @@ describe("index deltas", () => {
     expect(reindexed.epoch).toBe(2);
   });
 
-  it("ignores a non-reindexed delta stamped with an epoch it does not hold", () => {
-    const window = windowWithSkeleton(4);
-    const stale = applyIndexChange(window, {
+  it("ignores a non-reindexed delta stamped with an OLDER epoch", () => {
+    // A straggler: its ordinals were renumbered by the change that moved this
+    // window on, so there is nothing to apply and nothing to learn.
+    const window = applyWindowedSnapshot(windowWithSkeleton(4), {
       epoch: 7,
+      rowCount: 4,
+      indexRevision: null,
+      tail: { fromOrdinal: 4, messages: [], events: [] },
+    });
+    const stale = applyIndexChange(window, {
+      epoch: 1,
       rowCount: 99,
       indexRevision: 1,
       changes: [{ type: "appended", entries: skeletonEntries(4, 1) }],
     });
-    expect(stale.rowCount).toBe(4);
+    expect(stale).toBe(window);
+  });
+
+  it("voids the index on a non-reindexed delta stamped with a NEWER epoch", () => {
+    // The other direction is not a straggler, it is a LOSS: the snapshot (or
+    // the `reindexed` beside it) that would have carried the new coordinate
+    // space here never arrived. Discarding this frame the way a straggler is
+    // discarded leaves the client rendering the superseded space while the host
+    // - which records the index as held on EMIT, not on delivery - sends only
+    // deltas from here on. Nothing else re-requests: the skeleton is complete,
+    // so the completion watchdog is disarmed, and a chat that has just been
+    // reindexed by a restore is typically idle, so no later snapshot comes.
+    const held = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+    );
+    expect(held.spans).toHaveLength(1);
+    const ahead = applyIndexChange(held, {
+      epoch: 2,
+      rowCount: 6,
+      indexRevision: 3,
+      changes: [{ type: "appended", entries: skeletonEntries(4, 2) }],
+    });
+    // Identical to what an observed `reindexed` produces, because that is what
+    // this IS - the same reindex, learned late.
+    expect(ahead.invalidated).toBe(true);
+    expect(ahead.spans).toEqual([]);
+    expect(ahead.skeleton).toEqual([]);
+    // The frame's own coordinates are adopted, so the resnapshot this triggers
+    // is asked for - and latched on - the space the client is moving into.
+    expect(ahead.epoch).toBe(2);
+    expect(ahead.rowCount).toBe(6);
+    expect(ahead.indexRevision).toBe(3);
+  });
+
+  it("does not seat the newer epoch's appended entries at the old ordinals", () => {
+    // The failure this prevents is not "the delta was dropped", it is the delta
+    // being APPLIED against a skeleton it does not describe. `rowCount` and the
+    // append cursor both belong to the space the client is leaving, so seating
+    // the entries would put real rows at ordinals they do not occupy - the same
+    // silent mis-seating the append-count detector exists for, one epoch over.
+    const ahead = applyIndexChange(windowWithSkeleton(4), {
+      epoch: 2,
+      rowCount: 5,
+      indexRevision: 1,
+      changes: [{ type: "appended", entries: skeletonEntries(4, 1) }],
+    });
+    expect(ahead.skeleton).toEqual([]);
+    expect(ahead.skeletonComplete).toBe(false);
   });
 });
 
@@ -1630,13 +1690,17 @@ describe("what an overlap keeps", () => {
   });
 });
 
-describe("a record lives in exactly one span", () => {
+describe("one record across several spans", () => {
   /**
    * A steered turn is MANY rows over ONE record set, and `SPAN_MERGE_MAX_BYTES`
    * stops touching spans from always merging - so one turn's slices can sit in
-   * several spans, each holding its own copy of the turn's records. Nothing
-   * downstream picks between two copies by freshness: `hydratedRecords` dedupes
-   * in ORDINAL order, so the earliest span's copy wins however stale it is.
+   * several spans, each holding its own copy of the turn's records.
+   *
+   * Two questions fall out of that, and they are answered in different places.
+   * Which COPY renders is `servedAt`'s job, here in the window. Whether a span
+   * survives is geometry's job, and must not depend on the records, because
+   * record-sharing is SYMMETRIC and a rule that drops the sharer makes two
+   * slices of one turn evict each other forever.
    */
   function spanCarrying(
     window: TranscriptWindow,
@@ -1649,27 +1713,58 @@ describe("a record lives in exactly one span", () => {
     return applyRangeResponse(window, rangeResponse({ epoch: 1, ...input }));
   }
 
-  it("drops an unmerged span still holding a record the incoming span re-served", () => {
-    const stale = spanCarrying(windowWithSkeleton(10), {
+  /** Both slices of one turn, held as disjoint spans with a gap between them. */
+  function splitTurn(
+    window: TranscriptWindow,
+    order: "earlier-first" | "later-first",
+  ): TranscriptWindow {
+    const earlier = {
       fromOrdinal: 0,
       rowIds: ["row-0", "row-1"],
       messages: [messageWithText(userMessage("shared", 1), "old")],
-    });
-    expect(stale.spans).toHaveLength(1);
-    // Disjoint from the first span (ordinals 2-3 are a gap), and carrying the
-    // same record - which is exactly the shape a turn straddling an evicted
-    // slice produces.
-    const reserved = spanCarrying(stale, {
+    };
+    const later = {
       fromOrdinal: 4,
       rowIds: ["row-4", "row-5"],
       messages: [messageWithText(userMessage("shared", 1), "new")],
-    });
-    expect(reserved.spans).toHaveLength(1);
-    expect(reserved.spans[0]?.fromOrdinal).toBe(4);
-    const records = hydratedRecords(reserved);
-    expect(records.messages).toHaveLength(1);
-    expect(JSON.stringify(records.messages[0])).toContain("new");
-  });
+    };
+    return order === "earlier-first"
+      ? spanCarrying(spanCarrying(window, earlier), later)
+      : spanCarrying(spanCarrying(window, later), earlier);
+  }
+
+  it.each(["earlier-first", "later-first"] as const)(
+    "keeps both slices of a split turn when they arrive %s",
+    (order) => {
+      // Ordinals 2-3 are a gap, so these never touch - which is exactly the
+      // shape a turn straddling an evicted slice produces. Dropping the sharer
+      // is unbounded here rather than merely lossy: the drop is symmetric, so
+      // whichever slice is re-fetched evicts the other, and a reader looking at
+      // the whole turn drives that forever.
+      const window = splitTurn(windowWithSkeleton(10), order);
+      expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 4]);
+      // Neither slice is a gap, so nothing re-requests either one.
+      expect(
+        transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 2 }),
+      ).toEqual([]);
+      expect(
+        transcriptHydrationGaps(window, { fromOrdinal: 4, toOrdinal: 6 }),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["earlier-first", "later-first"] as const)(
+    "renders the newest SERVE of a shared record, not the earliest span's, when they arrive %s",
+    (order) => {
+      // The question the dropped-sharer rule was really answering. Position
+      // decides where the record renders; freshness decides what it says, so
+      // the answer does not depend on which slice happens to sit lower.
+      const records = hydratedRecords(splitTurn(windowWithSkeleton(10), order));
+      expect(records.messages).toHaveLength(1);
+      const rendered = JSON.stringify(records.messages[0]);
+      expect(rendered).toContain(order === "earlier-first" ? "new" : "old");
+    },
+  );
 
   it("keeps an unmerged span that shares no record with the incoming one", () => {
     const held = spanCarrying(windowWithSkeleton(10), {
@@ -1685,23 +1780,14 @@ describe("a record lives in exactly one span", () => {
     expect(added.spans).toHaveLength(2);
   });
 
-  it("a rewritten ordinal needs only its own span, because no other holds its records", () => {
+  it("drops every COPY of a rewritten row's records, not only its own span", () => {
     // The reader is parked on an EARLIER slice of one turn while a later slice
-    // is rewritten. Geometry alone would leave this span holding a stale copy
-    // of the very record that changed, with no gap for the planner to notice.
-    // It cannot: seating the later slice took ownership of the shared records,
-    // so the earlier span is already gone by the time the rewrite lands.
-    const earlier = spanCarrying(windowWithSkeleton(10), {
-      fromOrdinal: 0,
-      rowIds: ["row-0", "row-1"],
-      messages: [messageWithText(userMessage("turn-record", 1), "old")],
-    });
-    const later = spanCarrying(earlier, {
-      fromOrdinal: 6,
-      rowIds: ["row-6", "row-7"],
-      messages: [messageWithText(userMessage("turn-record", 1), "new")],
-    });
-    expect(later.spans).toHaveLength(1);
+    // is rewritten. Geometry alone leaves this span holding a stale copy of the
+    // very record that changed - and once the containing span goes it is the
+    // ONLY copy, rendered under rows the planner sees as covered. So the
+    // invalidation follows the records rather than the ordinal.
+    const later = splitTurn(windowWithSkeleton(10), "earlier-first");
+    expect(later.spans).toHaveLength(2);
     const rewritten = applyIndexChange(later, {
       epoch: 1,
       rowCount: 10,
@@ -1709,12 +1795,45 @@ describe("a record lives in exactly one span", () => {
       changes: [
         {
           type: "updated",
-          entries: [{ ordinal: 6, entry: skeletonEntry("row-6", 6) }],
+          entries: [{ ordinal: 4, entry: skeletonEntry("row-4", 4) }],
         },
       ],
     });
     expect(rewritten.spans).toHaveLength(0);
     expect(hydratedRecords(rewritten).messages).toHaveLength(0);
+    // And the rows are gaps again, so the planner re-requests them - which is
+    // what makes dropping the far span a repair rather than a silent deletion.
+    expect(
+      transcriptHydrationGaps(rewritten, { fromOrdinal: 0, toOrdinal: 2 }),
+    ).toEqual([{ fromOrdinal: 0, toOrdinal: 2 }]);
+  });
+
+  it("leaves an unrelated span alone when a row is rewritten", () => {
+    // The other half of the same rule: following the records must not become
+    // "drop everything". A span holding none of the stale turn's records is
+    // untouched.
+    const held = spanCarrying(windowWithSkeleton(10), {
+      fromOrdinal: 0,
+      rowIds: ["row-0", "row-1"],
+      messages: [userMessage("m-0", 1)],
+    });
+    const other = spanCarrying(held, {
+      fromOrdinal: 4,
+      rowIds: ["row-4", "row-5"],
+      messages: [userMessage("m-4", 5)],
+    });
+    const rewritten = applyIndexChange(other, {
+      epoch: 1,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 4, entry: skeletonEntry("row-4", 4) }],
+        },
+      ],
+    });
+    expect(rewritten.spans.map((span) => span.fromOrdinal)).toEqual([0]);
   });
 });
 

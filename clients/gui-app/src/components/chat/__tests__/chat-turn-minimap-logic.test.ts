@@ -195,6 +195,7 @@ describe("chatTurnMinimapItems caching", () => {
           bytes: 32,
           contextBytes: 0,
           touchedAt: 1,
+          servedAt: 1,
         },
       ],
       liveMessages: [],
