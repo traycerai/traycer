@@ -245,7 +245,12 @@ export async function consumeUpdateAttemptAdoption(
   const file = decodeAdoptionFile(parsed);
   if (file === null) return { kind: "absent", cause: "malformed" };
   if (file.nonce !== nonce) return { kind: "absent", cause: "nonce-mismatch" };
-  if (nowMs - file.issuedAtMs > UPDATE_ADOPTION_MAX_AGE_MS) {
+  // Symmetric, like the host-start adoption expiry: a proof more than the
+  // grant window away from now IN EITHER DIRECTION is not a grant anyone can
+  // still use. A signed check never fires for a future-dated `issuedAtMs`
+  // (backward clock step, corrupted stamp), which would honor a stale proof
+  // until the wall clock caught up with it.
+  if (Math.abs(nowMs - file.issuedAtMs) > UPDATE_ADOPTION_MAX_AGE_MS) {
     return { kind: "absent", cause: "expired" };
   }
   if (resolve(file.adoption.hostHomeDir) !== resolve(hostHomeDir)) {

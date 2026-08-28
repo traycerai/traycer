@@ -436,17 +436,8 @@ async function superviseRootMaintenanceExecutor(
     const restoreHolder = async (): Promise<void> => {
       await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {});
     };
-    const settleFailure = async (error: Error): Promise<void> => {
-      if (settled) return;
-      settled = true;
-      // The dispatch tail FIRST, before any teardown or restoration: a
-      // handler still mid-flight holds real work (an `execute`'s service
-      // stop, a `bind-actuator`'s publication), and restoring the holder
-      // under it re-opens exactly the ordering this settlement exists to
-      // close. The tail never rejects (every link catches into `refuse`),
-      // and no new frames can arrive after `close`, so this await is
-      // bounded by work already accepted.
-      await dispatchTail;
+    // Assumes the dispatch tail has ALREADY been awaited by the caller.
+    const settleFailureAfterTail = async (error: Error): Promise<void> => {
       if (actuatorGroupId !== null) {
         if (process.platform === "win32") {
           // Node has no Job-object membership proof. Keep the token published
@@ -461,6 +452,19 @@ async function superviseRootMaintenanceExecutor(
       await restoreHolder();
       reject(error);
     };
+    const settleFailure = async (error: Error): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      // The dispatch tail FIRST, before any teardown or restoration: a
+      // handler still mid-flight holds real work (an `execute`'s service
+      // stop, a `bind-actuator`'s publication), and restoring the holder
+      // under it re-opens exactly the ordering this settlement exists to
+      // close. The tail never rejects (every link catches into `refuse`),
+      // and no new frames can arrive after `close`, so this await is
+      // bounded by work already accepted.
+      await dispatchTail;
+      await settleFailureAfterTail(error);
+    };
     onTermination = (): void => {
       if (settled) return;
       const event = termination;
@@ -469,26 +473,31 @@ async function superviseRootMaintenanceExecutor(
         void settleFailure(event.error).catch(reject);
         return;
       }
-      const completion: { readonly value: unknown } | null = completed;
-      if (completion !== null && event.code === 0) {
-        settled = true;
-        void (async () => {
-          // Same fence as `settleFailure`: a trailing handler must finish
-          // before the holder is restored under it.
-          await dispatchTail;
+      settled = true;
+      void (async () => {
+        // The dispatch tail BEFORE classification, not merely before the
+        // teardown: `completed` is set by a handler QUEUED on the tail, so
+        // an executor that wrote its `complete` frame and closed during the
+        // initial liveness rebind has its completion still in flight right
+        // here. Reading `completed` first classified that clean exit 0 as
+        // `maintenance executor exited (0, none)` — a finished platform
+        // install or uninstall reported as a failure.
+        await dispatchTail;
+        const completion: { readonly value: unknown } | null = completed;
+        if (completion !== null && event.code === 0) {
           if (actuatorGroupId !== null && process.platform !== "win32") {
             await waitForProcessGroupExit(actuatorGroupId);
           }
           await restoreHolder();
           resolve(completion.value);
-        })().catch(reject);
-        return;
-      }
-      void settleFailure(
-        new Error(
-          `maintenance executor exited (${event.code ?? "null"}, ${event.signal ?? "none"})`,
-        ),
-      ).catch(reject);
+          return;
+        }
+        await settleFailureAfterTail(
+          new Error(
+            `maintenance executor exited (${event.code ?? "null"}, ${event.signal ?? "none"})`,
+          ),
+        );
+      })().catch(reject);
     };
     // Arm dispatch and drain whatever the capture accumulated during the
     // rebind, IN THIS ORDER — frames first, then the recorded termination.
@@ -531,7 +540,12 @@ async function handleRootExecutorRequest(
     value.kind === "bind-actuator" &&
     typeof value.pid === "number" &&
     Number.isSafeInteger(value.pid) &&
-    value.pid > 0
+    // > 1, not > 0, same floor as the lock parsers (cross-process-lock,
+    // host-update-attempt-liveness): this value becomes a NEGATED
+    // process-group target, and `kill(-1, ...)` is "every process I may
+    // signal", not group 1 — from a root maintenance lease that is a
+    // system-wide signal.
+    value.pid > 1
   ) {
     await requireCliUpdateMutationCapability(capability, contenderOptions);
     // C remains the publisher, while D's detached group supplies supplemental

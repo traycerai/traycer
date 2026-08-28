@@ -4,7 +4,7 @@ import { lstat, open, rename, stat, unlink, writeFile } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
@@ -686,6 +686,26 @@ export async function rewriteLockLivenessIfToken(
         await temporary.close().catch(() => undefined);
       }
       await rename(temporaryPath, path);
+      // The temp fsync above makes the CONTENT durable; the directory entry
+      // the rename swapped is separate metadata with its own flush. On a
+      // power loss before the directory flushes, the entry reverts to the
+      // pre-rewrite record — no `supervisedProcessGroupId`, no
+      // `retainOnPublisherDeath` — which is the same hazard the temp fsync
+      // closes, arriving through the directory instead of the file. Sync the
+      // directory too. Best-effort where directories cannot be opened
+      // (win32): rename durability there is bounded by the platform, and a
+      // failed dir sync must not turn a completed rename into a refusal.
+      try {
+        const dir = await open(dirname(path), "r");
+        try {
+          await dir.sync();
+        } finally {
+          await dir.close().catch(() => undefined);
+        }
+      } catch {
+        // Windows cannot open directories; elsewhere a failed dir sync
+        // leaves durability at the platform's rename guarantee.
+      }
     } catch {
       // A failed republication is a refusal, not an exception: every other
       // denial in this function returns false, and callers treat a rebind as

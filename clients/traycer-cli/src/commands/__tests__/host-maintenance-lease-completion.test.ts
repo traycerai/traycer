@@ -172,18 +172,38 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
   });
 
   it("settleFailure fences on the dispatch tail before any teardown or restoration", () => {
-    // The tail must be awaited right after `settled = true` and before the
+    // The tail must be awaited right after `settled = true`, and the
     // actuator-group/restore section — restoring the holder under a
     // still-running handler re-opens the race this settlement exists to
-    // close.
+    // close — now lives in `settleFailureAfterTail`, split out so
+    // `onTermination`'s completion path can reuse the same post-tail
+    // teardown (see the completed-after-tail test above). The fence this
+    // test guards is therefore two-part: `settleFailure` must await the
+    // tail before ever calling into `settleFailureAfterTail`, and the
+    // teardown itself must live in the callee that name promises it does.
+    const settleFailureAfterTailIdx = supervisor.indexOf(
+      "const settleFailureAfterTail = async (error: Error): Promise<void> => {",
+    );
     const settleFailureIdx = supervisor.indexOf(
       "const settleFailure = async (error: Error): Promise<void> => {",
     );
     const onTerminationIdx = supervisor.indexOf(
       "onTermination = (): void => {",
     );
-    expect(settleFailureIdx).toBeGreaterThan(-1);
+    expect(settleFailureAfterTailIdx).toBeGreaterThan(-1);
+    expect(settleFailureIdx).toBeGreaterThan(settleFailureAfterTailIdx);
     expect(onTerminationIdx).toBeGreaterThan(settleFailureIdx);
+
+    // The teardown itself lives in `settleFailureAfterTail`, which - per its
+    // own name and comment - assumes the tail has ALREADY been awaited.
+    const afterTailBody = supervisor.slice(
+      settleFailureAfterTailIdx,
+      settleFailureIdx,
+    );
+    expect(afterTailBody).toContain("if (actuatorGroupId !== null)");
+    expect(afterTailBody).toContain("await restoreHolder();");
+
+    // `settleFailure` awaits the tail before ever delegating to it.
     const settleFailureBody = supervisor.slice(
       settleFailureIdx,
       onTerminationIdx,
@@ -192,12 +212,12 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
     const dispatchTailAwaitIdx = settleFailureBody.indexOf(
       "await dispatchTail;",
     );
-    const actuatorGroupIdx = settleFailureBody.indexOf(
-      "if (actuatorGroupId !== null)",
+    const afterTailCallIdx = settleFailureBody.indexOf(
+      "await settleFailureAfterTail(error);",
     );
     expect(settledIdx).toBeGreaterThan(-1);
     expect(dispatchTailAwaitIdx).toBeGreaterThan(settledIdx);
-    expect(actuatorGroupIdx).toBeGreaterThan(dispatchTailAwaitIdx);
+    expect(afterTailCallIdx).toBeGreaterThan(dispatchTailAwaitIdx);
   });
 
   it("the clean-completion path fences on the dispatch tail before waiting on the process group", () => {
@@ -243,6 +263,57 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
     const rethrowIdx = catchBody.indexOf("throw rebindError;");
     expect(killIdx).toBeGreaterThan(-1);
     expect(rethrowIdx).toBeGreaterThan(killIdx);
+  });
+
+  it("bind-actuator's pid guard floors at > 1, not > 0 - pid becomes a negated process-group kill target", () => {
+    // `bind-actuator`'s `value.pid` is later passed as `supervisedProcessGroupId`
+    // and negated for `terminateAndReapProcessGroup`'s `kill(-groupId, ...)`.
+    // `kill(-1, ...)` means "every process this user may signal", not group 1
+    // (init's) - the same floor the lock parsers already apply
+    // (cross-process-lock, host-update-attempt-liveness). A recorded pid of 1
+    // would let a root maintenance lease sign a system-wide kill.
+    const bindActuatorIdx = supervisor.indexOf(
+      'value.kind === "bind-actuator"',
+    );
+    const rebindCallIdx = supervisor.indexOf(
+      "await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {",
+      bindActuatorIdx,
+    );
+    expect(bindActuatorIdx).toBeGreaterThan(-1);
+    expect(rebindCallIdx).toBeGreaterThan(bindActuatorIdx);
+    const guardBody = supervisor.slice(bindActuatorIdx, rebindCallIdx);
+    expect(guardBody).toContain("value.pid > 1");
+    expect(guardBody).not.toContain("value.pid > 0");
+  });
+
+  it("reads `completed` only AFTER the dispatch tail settles, not synchronously at close time", () => {
+    // Pre-fix, `completed` was read into `completion` BEFORE the async IIFE
+    // even started (synchronously, at `close` event time). An executor that
+    // wrote its `complete` frame and closed DURING the initial liveness
+    // rebind has that frame's handler still queued on `dispatchTail` right
+    // here - reading `completed` before awaiting the tail sees it still
+    // `null` and classifies a finished platform install/uninstall as
+    // `maintenance executor exited (0, none)` instead of resolving the real
+    // completion.
+    const onTerminationIdx = supervisor.indexOf(
+      "onTermination = (): void => {",
+    );
+    const completionIIFEIdx = supervisor.indexOf(
+      "void (async () => {",
+      onTerminationIdx,
+    );
+    const dispatchTailAwaitIdx = supervisor.indexOf(
+      "await dispatchTail;",
+      completionIIFEIdx,
+    );
+    const completionReadIdx = supervisor.indexOf(
+      "const completion: { readonly value: unknown } | null = completed;",
+      completionIIFEIdx,
+    );
+    expect(onTerminationIdx).toBeGreaterThan(-1);
+    expect(completionIIFEIdx).toBeGreaterThan(onTerminationIdx);
+    expect(dispatchTailAwaitIdx).toBeGreaterThan(completionIIFEIdx);
+    expect(completionReadIdx).toBeGreaterThan(dispatchTailAwaitIdx);
   });
 });
 

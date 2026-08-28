@@ -326,10 +326,22 @@ describe("lock-path special entries and missing-flag fallback", () => {
 });
 
 describe("cross-process-lock direct coverage - parseLockMetadata / rewriteLockLivenessIfToken", () => {
-  afterEach(() => {
-    // Restore the default (real-delegating) implementation so a later test
-    // in this file never inherits this describe block's override.
-    vi.mocked(nodeRename).mockClear();
+  afterEach(async () => {
+    // `mockClear()` only drops call history - it RETAINS a queued
+    // `mockRejectedValueOnce` implementation, and `rewriteLockLivenessIfToken`
+    // can return before ever calling `rename()` (arbitration busy, lock
+    // absent, token mismatch), so the queued rejection would leak into
+    // whichever `rename()` call happens next, in a later, unrelated test.
+    // `mockReset()` drops the queued implementation too, but it also wipes
+    // this vi.fn's default (real-delegating) implementation, so it must be
+    // restored explicitly for later tests in this file to still get genuine
+    // renames.
+    const actual =
+      await vi.importActual<typeof import("node:fs/promises")>(
+        "node:fs/promises",
+      );
+    vi.mocked(nodeRename).mockReset();
+    vi.mocked(nodeRename).mockImplementation(actual.rename);
   });
 
   it("drops a recorded supervisedProcessGroupId of 1 rather than treating group 1 (init's) as a live supervised actuator", async () => {
@@ -575,6 +587,83 @@ describe("probeAttemptHolder", () => {
       expect(secondEvidence.holder.token).toBe(second.handle.metadata.token);
     }
   });
+
+  it("does not serve a stale cached holder-live verdict across a backward wall-clock step, even with a generous TTL", async () => {
+    const dir = await freshDir();
+    const barrierDir = join(dir, "barrier");
+    await mkdir(barrierDir);
+
+    // A genuine, separate OS process holds the lock, so the fingerprint
+    // (pid | token | start identity) is real and stable - the lock file is
+    // never rewritten below, so it never changes.
+    const worker = spawnLockWorker(dir, barrierDir, 15_000);
+    await waitForFile(join(barrierDir, "held"), 30_000);
+
+    const liveEvidence = await probeAttemptHolder({
+      hostHomeDir: dir,
+      nowMs: 10_000,
+      cacheTtlMs: 60_000,
+    });
+    expect(liveEvidence.kind).toBe("holder-live");
+
+    // Kill the worker directly (not the release handshake), so the lock
+    // file - and therefore the fingerprint - is UNCHANGED: this isolates the
+    // elapsed-time floor from the fingerprint-mismatch path already covered
+    // above. The holder is now genuinely dead while the cached verdict still
+    // says "holder-live".
+    if (worker.pid !== undefined) {
+      process.kill(worker.pid, "SIGKILL");
+      await waitForProcessDeath(worker.pid, 30_000);
+    }
+
+    // A backward clock step: nowMs is EARLIER than the cached atMs (10_000),
+    // even though the fingerprint still matches and cacheTtlMs is generous.
+    // Pre-fix, `elapsedMs = -1` satisfied the strict `-1 < 60_000` and served
+    // the stale "holder-live" verdict for a process that is now provably
+    // dead. Fixed, a negative elapsed is a cache miss and the re-probe below
+    // observes the real, dead state.
+    const staleWindowEvidence = await probeAttemptHolder({
+      hostHomeDir: dir,
+      nowMs: 9_999,
+      cacheTtlMs: 60_000,
+    });
+    expect(staleWindowEvidence.kind).toBe("no-holder");
+  }, 60_000);
+
+  it("does not serve a stale cached holder-live verdict across a backward wall-clock step, with cacheTtlMs: 0", async () => {
+    const dir = await freshDir();
+    const barrierDir = join(dir, "barrier");
+    await mkdir(barrierDir);
+
+    const worker = spawnLockWorker(dir, barrierDir, 15_000);
+    await waitForFile(join(barrierDir, "held"), 30_000);
+
+    const liveEvidence = await probeAttemptHolder({
+      hostHomeDir: dir,
+      nowMs: 10_000,
+      cacheTtlMs: 0,
+    });
+    expect(liveEvidence.kind).toBe("holder-live");
+
+    if (worker.pid !== undefined) {
+      process.kill(worker.pid, "SIGKILL");
+      await waitForProcessDeath(worker.pid, 30_000);
+    }
+
+    // `cacheTtlMs: 0` is the value `verifyAdoptedCapability` passes so every
+    // mutation re-probes its parent - the exact case the fix's comment
+    // calls out. Pre-fix, a backward step made `elapsedMs` negative, and a
+    // negative number satisfies `elapsedMs < 0` even though `0` is meant to
+    // disable caching outright; the stale "holder-live" verdict would have
+    // been served for a dead holder under a `cacheTtlMs` that promises no
+    // caching at all.
+    const staleWindowEvidence = await probeAttemptHolder({
+      hostHomeDir: dir,
+      nowMs: 9_999,
+      cacheTtlMs: 0,
+    });
+    expect(staleWindowEvidence.kind).toBe("no-holder");
+  }, 60_000);
 });
 
 describe("verifyAttemptLockOwnership", () => {

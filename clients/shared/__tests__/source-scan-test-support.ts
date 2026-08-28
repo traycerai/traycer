@@ -36,9 +36,15 @@ export function sliceFrom(
   return sourceText.slice(startAt, endAt);
 }
 
-/** Every match offset of `pattern` in `sourceText`, in source order. */
+/**
+ * Every match offset of `pattern` in `sourceText`, in source order.
+ * The caller's flags are preserved (minus `g`/`y`, re-added as `g`): a bare
+ * `new RegExp(source, "g")` silently dropped `i`/`m`/`s`, so a
+ * case-insensitive caller pattern matched nothing at all.
+ */
 export function offsets(sourceText: string, pattern: RegExp): number[] {
-  return Array.from(sourceText.matchAll(new RegExp(pattern.source, "g"))).map(
+  const flags = `${pattern.flags.replace(/[gy]/g, "")}g`;
+  return Array.from(sourceText.matchAll(new RegExp(pattern.source, flags))).map(
     (match) => match.index ?? -1,
   );
 }

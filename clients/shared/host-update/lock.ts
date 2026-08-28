@@ -501,12 +501,19 @@ export async function probeAttemptHolder(
 
   const fingerprint = holderFingerprint(probe.holder);
   const cached = holderCache.get(lockPath);
-  if (
-    cached !== undefined &&
-    cached.fingerprint === fingerprint &&
-    options.nowMs - cached.atMs < options.cacheTtlMs
-  ) {
-    return cached.evidence;
+  // The elapsed time must be NONNEGATIVE before it can satisfy any TTL: a
+  // backward wall-clock step makes it negative, and a negative age passes
+  // the strict `<` against every TTL — including `cacheTtlMs: 0`, the
+  // value `verifyAdoptedCapability` passes precisely so each mutation
+  // re-probes its parent. Without the floor, a child whose parent died
+  // after a clock step kept reusing the cached live verdict and mutated
+  // under a capability whose publisher was gone. A negative age is a cache
+  // miss; the re-probe below rewrites `atMs` and self-heals.
+  if (cached !== undefined && cached.fingerprint === fingerprint) {
+    const elapsedMs = options.nowMs - cached.atMs;
+    if (elapsedMs >= 0 && elapsedMs < options.cacheTtlMs) {
+      return cached.evidence;
+    }
   }
 
   const evidence = evidenceForVerdict(

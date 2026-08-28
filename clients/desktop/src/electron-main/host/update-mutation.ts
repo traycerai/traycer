@@ -326,7 +326,13 @@ export async function publishRestartTombstoneWithAttempt(
     // Re-check freshness AFTER the flush resolved. Publishing a marker the
     // reader will discard is worse than not publishing: the caller would treat
     // it as a kept promise and proceed to bootout.
-    const ageMs = Date.now() - requestedAtMs;
+    //
+    // SYMMETRIC, like the host-start adoption expiry: the reader's
+    // `isStopIntentWithin` applies an absolute window, so a marker made
+    // FUTURE-dated by a backward clock step is just as discarded as a stale
+    // one — and a signed check here (negative age passes) would publish
+    // exactly that marker, then bootout on the strength of it.
+    const ageMs = Math.abs(Date.now() - requestedAtMs);
     if (ageMs > TOMBSTONE_FLUSH_DEADLINE_MS) {
       // THE SECOND early return past the outer `catch`, and it needs the same
       // cleanup the flush-failure arm above got for Finding 6. That fix was

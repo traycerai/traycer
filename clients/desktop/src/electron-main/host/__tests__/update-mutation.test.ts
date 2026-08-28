@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 
 const loginItemMocks = vi.hoisted(() => ({
   register: vi.fn(),
@@ -696,4 +697,42 @@ describe("publishRestartTombstoneWithAttempt - flush deadline (findings 2 + 6)",
       }
     },
   );
+
+  it("reports not-published/stale, and cleans up the temp file, when a backward clock step during the flush makes requestedAtMs FUTURE-dated beyond the deadline", async () => {
+    const layout = await freshLayout();
+    // `requestedAtMs` is stamped (production line, before this callback ever
+    // runs) at very close to this value.
+    const stampedAroundMs = Date.now();
+    // A holder object rather than a `let`: the assignment happens inside the
+    // hook closure, so control-flow narrowing would type the local as still-
+    // `null` (then `never` under `?.`) at the `finally` below.
+    const dateNowSpy = { current: null as MockInstance<() => number> | null };
+    tombstoneHook.behavior = () => {
+      // Simulate the wall clock stepping BACKWARD during the flush: by the
+      // time the freshness re-check reads `Date.now()` again, it is more
+      // than the 5000ms deadline behind `requestedAtMs` - equivalently,
+      // `requestedAtMs` now looks FUTURE-dated from the re-check's point of
+      // view. Symmetric with the ordinary "too old" case: `Math.abs()`
+      // treats both directions identically, so this must go stale exactly
+      // like a clock that stepped forward would.
+      dateNowSpy.current = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(stampedAroundMs - 5_000 - 10_000);
+      return Promise.resolve();
+    };
+    try {
+      const result = await runWithCapability(layout, (capability) =>
+        publishRestartTombstoneWithAttempt(capability, layout),
+      );
+
+      expect(result.kind).toBe("not-published");
+      if (result.kind !== "not-published") return;
+      expect(result.cause).toContain("went stale during flush");
+      expect(existsSync(hostStopIntentPath(layout.rootDir))).toBe(false);
+      expect(await stopIntentTempFiles(layout.rootDir)).toHaveLength(0);
+    } finally {
+      tombstoneHook.behavior = null;
+      dateNowSpy.current?.mockRestore();
+    }
+  });
 });

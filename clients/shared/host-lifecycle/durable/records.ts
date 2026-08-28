@@ -69,13 +69,23 @@ export type PendingActivation = {
 /** Supported schema versions per durable file family. */
 export const SUBSTRATE_SUPPORTED_VERSIONS: readonly number[] = [1];
 /**
- * The version substrate WRITERS emit — derived from the supported list so a
- * writer can never mint a `v` the decoder here refuses. Writers live in
- * other bundles (Desktop's `update-mutation.ts`); importing this is what
- * keeps their emitted records decodable when the list moves.
+ * The version substrate WRITERS emit. An EXPLICIT rollout choice, not the
+ * tail of `SUBSTRATE_SUPPORTED_VERSIONS`: that list is READ compatibility,
+ * and widening it (say to `[1, 2]` so a new Desktop can read v2 during a
+ * staged rollout) must not silently flip every writer to v2 while older
+ * bundles still refuse it. Writers live in other bundles (Desktop's
+ * `update-mutation.ts`); importing this keeps their emitted records
+ * decodable, and bumping it is a separate, deliberate decision from
+ * widening the read list. The load-time guard below preserves the old
+ * derivation's one guarantee: a writer can never mint a `v` the local
+ * decoder refuses.
  */
-export const SUBSTRATE_RECORD_WRITE_VERSION: number =
-  SUBSTRATE_SUPPORTED_VERSIONS[SUBSTRATE_SUPPORTED_VERSIONS.length - 1];
+export const SUBSTRATE_RECORD_WRITE_VERSION: number = 1;
+if (!SUBSTRATE_SUPPORTED_VERSIONS.includes(SUBSTRATE_RECORD_WRITE_VERSION)) {
+  throw new Error(
+    `SUBSTRATE_RECORD_WRITE_VERSION (${String(SUBSTRATE_RECORD_WRITE_VERSION)}) is not in SUBSTRATE_SUPPORTED_VERSIONS`,
+  );
+}
 export const TRANSITION_SUPPORTED_VERSIONS: readonly number[] = [1];
 export const ACTIVATION_JOURNAL_SUPPORTED_VERSIONS: readonly number[] = [1];
 export const INSTALL_SUPPORTED_VERSIONS: readonly number[] = [1];

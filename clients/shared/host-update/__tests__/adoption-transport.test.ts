@@ -352,6 +352,40 @@ describe("consumeUpdateAttemptAdoption - hand-authored proof edge cases", () => 
     expect(expired).toEqual({ kind: "absent", cause: "expired" });
   });
 
+  it("resolves absent/expired for a FUTURE-dated issuedAtMs beyond the window, symmetric with the backward case above", async () => {
+    const hostHomeDir = await freshHome();
+    // A proof issued far in the future relative to `nowMs` - a backward
+    // wall-clock step on the writer, or a corrupted stamp - is not a grant
+    // anyone can still use, exactly like the too-old case above. The
+    // `Math.abs()` check treats both directions identically.
+    await writeRawAdoptionFile(hostHomeDir, REAL_NONCE, {
+      nonce: REAL_NONCE,
+      issuedAtMs: UPDATE_ADOPTION_MAX_AGE_MS + 1,
+      adoption: { hostHomeDir: resolve(hostHomeDir), holder: fakeHolder({}) },
+    });
+    const consumed = await consumeUpdateAttemptAdoption(
+      hostHomeDir,
+      REAL_NONCE,
+      0,
+    );
+    expect(consumed).toEqual({ kind: "absent", cause: "expired" });
+  });
+
+  it("still adopts a future-dated issuedAtMs that is inside the window", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRawAdoptionFile(hostHomeDir, REAL_NONCE, {
+      nonce: REAL_NONCE,
+      issuedAtMs: UPDATE_ADOPTION_MAX_AGE_MS,
+      adoption: { hostHomeDir: resolve(hostHomeDir), holder: fakeHolder({}) },
+    });
+    const consumed = await consumeUpdateAttemptAdoption(
+      hostHomeDir,
+      REAL_NONCE,
+      0,
+    );
+    expect(consumed.kind).toBe("adopted");
+  });
+
   it("resolves absent/wrong-host-home when the embedded adoption names a different host home than the caller's own", async () => {
     const hostHomeDir = await freshHome();
     const otherHome = await freshHome();
