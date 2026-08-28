@@ -25,7 +25,7 @@ export function TeardownDisclosure(props: {
   const idle = actors.filter((actor) => actor.tone === "idle");
   return (
     <div
-      className="flex w-full min-w-0 flex-col gap-3"
+      className="flex w-full min-w-0 flex-col gap-3 overflow-hidden"
       data-testid="teardown-disclosure"
     >
       {working.length > 0 ? (
@@ -134,7 +134,10 @@ function ActorGroup(props: {
                   : "bg-foreground/3",
               )}
             >
-              <span className="min-w-0 wrap-anywhere text-foreground">
+              <span
+                className="min-w-0 wrap-anywhere text-foreground"
+                data-testid="teardown-holder-label"
+              >
                 {actor.sentence}
               </span>
               {actor.evidence.map((line) => (

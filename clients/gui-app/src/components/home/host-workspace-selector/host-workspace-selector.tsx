@@ -262,6 +262,50 @@ function workspaceSummaryFromBindingEntry(
   };
 }
 
+/**
+ * Working disk facts a row can stage from. A refresh that rewrites the listing
+ * with schema-default `resolvedAt: null` must not wipe a previously resolved
+ * snapshot — that is the working set for Location/Branch, matching how a
+ * settled-busy pill keeps its last good snapshot. First open (never resolved)
+ * keeps the unresolved fallback so git/non-git is not guessed.
+ */
+function lastResolvedWorkspaceSummary(
+  live: WorktreeWorkspaceSummaryV15 | undefined,
+  remembered: WorktreeWorkspaceSummaryV15 | undefined,
+  fallback: WorktreeWorkspaceSummaryV15,
+): WorktreeWorkspaceSummaryV15 {
+  if (live !== undefined && live.resolvedAt !== null) return live;
+  if (remembered !== undefined) return remembered;
+  return live ?? fallback;
+}
+
+function rememberResolvedSummaries(
+  prev: ReadonlyMap<string, WorktreeWorkspaceSummaryV15>,
+  liveByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV15>,
+  bindingEntries: ReadonlyArray<WorktreeBindingEntry>,
+): ReadonlyMap<string, WorktreeWorkspaceSummaryV15> {
+  const bound = new Set(bindingEntries.map((entry) => entry.workspacePath));
+  let changed = false;
+  const next = new Map<string, WorktreeWorkspaceSummaryV15>();
+  for (const [path, summary] of prev) {
+    if (!bound.has(path)) {
+      changed = true;
+      continue;
+    }
+    next.set(path, summary);
+  }
+  for (const [path, live] of liveByPath) {
+    if (!bound.has(path) || live.resolvedAt === null) continue;
+    const prior = next.get(path);
+    if (prior !== undefined && prior.resolvedAt === live.resolvedAt) {
+      continue;
+    }
+    next.set(path, live);
+    changed = true;
+  }
+  return changed ? next : prev;
+}
+
 export type HostWorkspaceSelectorSurface =
   | { readonly kind: "home"; readonly draftId: string | null }
   | BoundOwnerSurface;
@@ -1201,6 +1245,7 @@ function HomeWorkspaceRows(props: {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={handleEditEnvironment}
           readOnly={false}
           // Rendered inline in the fork / add-node dialogs, never inside a
@@ -1261,6 +1306,7 @@ function HomeWorkspaceSummaryControl(props: {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={props.onEditEnvironment}
           refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
@@ -1385,10 +1431,8 @@ function workspaceRunItemForResolvedFolder(input: {
     makePrimaryDisabled: false,
     makePrimaryDisabledReason: null,
     hostClient: input.activeHostClient,
-    modeDisabled: !metadataResolved,
-    modeDisabledReason: metadataResolved
-      ? null
-      : "Waiting for the host to verify this folder.",
+    modeDisabled: false,
+    modeDisabledReason: null,
     removeDisabled: false,
     removeDisabledReason: null,
     removePending: false,
@@ -1592,27 +1636,13 @@ function removeDisabledReasonFor(
  * A row's facts are pending while the listing query's first fetch is in
  * flight, and also once it lands but the host has not resolved that row yet
  * (`resolvedAt === null` - cache-served schema defaults, not disk truth).
+ * Pending is a spinner on the chip only — it must not disable selection.
  */
 function isRowMetadataPending(
   metadataPending: boolean,
   resolvedAt: number | null,
 ): boolean {
   return metadataPending || resolvedAt === null;
-}
-
-/**
- * An unresolved row (`resolvedAt === null`) is served from cache before the
- * host has verified it, so mode switching stays disabled until the facts the
- * switch depends on land.
- */
-function modeDisabledReasonFor(
-  isOwnerActive: boolean,
-  activeRunNotice: string,
-  metadataPending: boolean,
-): string | null {
-  if (isOwnerActive) return activeRunNotice;
-  if (metadataPending) return "Waiting for the host to verify this folder.";
-  return null;
 }
 
 /**
@@ -1760,6 +1790,7 @@ type FolderEditorAction =
     }
   | { readonly type: "stageRemoval"; readonly workspacePath: string }
   | { readonly type: "unstageRemoval"; readonly workspacePath: string }
+  | { readonly type: "discardStaged" }
   | { readonly type: "resumed" };
 function folderEditorReducer(
   state: FolderEditorState,
@@ -1792,6 +1823,16 @@ function folderEditorReducer(
       next.delete(action.workspacePath);
       return { ...state, pendingRemovedPaths: next };
     }
+    case "discardStaged":
+      // Clear overlays Discard itself created. Terminal add/remove commits the
+      // binding immediately and marks dirty WITHOUT resume — that dirty set is
+      // the only bookkeeping that Update still has to resync the PTY, so a
+      // blanket `resumed` here would suppress a required rebind.
+      if (state.pendingRemovedPaths.size === 0) return state;
+      return {
+        ...state,
+        pendingRemovedPaths: new Set<string>(),
+      };
     case "resumed":
       return {
         dirtyPathsSinceResume: new Set<string>(),
@@ -1855,6 +1896,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     readonly refusalReason?: string;
   } | null>(null);
   const [teardownCommitPending, setTeardownCommitPending] = useState(false);
+  const [commitRunPending, setCommitRunPending] = useState(false);
   const teardownRunIdRef = useRef(0);
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
@@ -1923,14 +1965,27 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // to fetch — is `isPending` in v5 but never actually loading, so guard on the
   // active first fetch only.
   const metadataPending = props.hostClient !== null && metadataQuery.isLoading;
+  const [lastResolvedByPath, setLastResolvedByPath] = useState<
+    ReadonlyMap<string, WorktreeWorkspaceSummaryV15>
+  >(() => new Map());
+  const rememberedByPath = rememberResolvedSummaries(
+    lastResolvedByPath,
+    summariesByPath,
+    bindingEntries,
+  );
+  if (rememberedByPath !== lastResolvedByPath) {
+    setLastResolvedByPath(rememberedByPath);
+  }
   const workspaces = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV15>>(
     () =>
-      bindingEntries.map(
-        (entry) =>
-          summariesByPath.get(entry.workspacePath) ??
+      bindingEntries.map((entry) =>
+        lastResolvedWorkspaceSummary(
+          summariesByPath.get(entry.workspacePath),
+          rememberedByPath.get(entry.workspacePath),
           workspaceSummaryFromBindingEntry(entry),
+        ),
       ),
-    [bindingEntries, summariesByPath],
+    [bindingEntries, rememberedByPath, summariesByPath],
   );
 
   // In-epic surfaces address their bound owner host (`props.activeHostId` is
@@ -1964,6 +2019,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const unstageWorktreeEntry = useWorktreeIntentStagingStore(
     (s) => s.unstageEntry,
+  );
+  const clearStagedWorktreeIntent = useWorktreeIntentStagingStore(
+    (s) => s.clear,
   );
   const releaseIntentForDispatch = useWorktreeIntentStagingStore(
     (s) => s.releaseIntentForDispatch,
@@ -2096,11 +2154,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       capture: WorktreeCommitCapture,
       isCancelled: () => boolean = () => false,
     ): void => {
-      if (isCancelled()) return;
+      const settleRun = (): void => {
+        setCommitRunPending(false);
+      };
+      if (isCancelled()) {
+        settleRun();
+        return;
+      }
       if (
         capture.draft !== null &&
         stagedWorktreeIntentIsSuspended(stagedKey)
       ) {
+        settleRun();
         return;
       }
       const stagedEntries = capture.draft?.entries ?? [];
@@ -2108,14 +2173,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       // A just-added git folder may still be waiting for metadata so the default
       // new-worktree seed can be staged. Keep Update enabled, but don't resume
       // until those pending defaults either stage or resolve as no-op.
-      if (pendingDefaultPathsRef.current.size > 0) return;
+      if (pendingDefaultPathsRef.current.size > 0) {
+        settleRun();
+        return;
+      }
       if (
         stagedEntries.length === 0 &&
         editor.dirtyPathsSinceResume.size === 0 &&
         removedWorkspacePaths.length === 0
       ) {
+        settleRun();
         return;
       }
+      setCommitRunPending(true);
       const changedWorkspacePaths = Array.from(
         new Set([
           ...editor.dirtyPathsSinceResume,
@@ -2123,18 +2193,39 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           ...removedWorkspacePaths,
         ]),
       );
+      const committedRemovalPaths: string[] = [];
       const finishAndResume = (): void => {
-        if (isCancelled()) return;
+        // Cancellation may suppress further staged intent from this run, never
+        // the acknowledgment of a host mutation that already committed.
         if (capture.draft !== null) {
           releaseIntentForDispatch(stagedKey, capture.revision);
         }
-        dispatchEditor({ type: "resumed" });
-        handleBindingCommitted(changedWorkspacePaths);
+        if (!isCancelled()) {
+          dispatchEditor({ type: "resumed" });
+          handleBindingCommitted(changedWorkspacePaths);
+          return;
+        }
+        const committed = Array.from(
+          new Set([
+            ...committedRemovalPaths,
+            ...stagedEntries.map((entry) => entry.workspacePath),
+          ]),
+        );
+        if (committed.length > 0) {
+          handleBindingCommitted(committed);
+        }
       };
       const createThenResume = (): void => {
-        if (isCancelled()) return;
+        if (isCancelled()) {
+          if (committedRemovalPaths.length > 0) {
+            handleBindingCommitted(committedRemovalPaths);
+          }
+          settleRun();
+          return;
+        }
         if (stagedEntries.length === 0) {
           finishAndResume();
+          settleRun();
           return;
         }
         void worktreeCreateMutation
@@ -2164,8 +2255,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               },
             });
             trackUserInitiatedWorktreeWrite(stagedEntries, result);
+            settleRun();
           })
           .catch((error: unknown) => {
+            settleRun();
+            if (isCancelled()) return;
             if (!isWorktreeRebindBlocked(error)) return;
             const live = readLiveCommitCapture();
             const dropped = droppedRunDirectoriesFromDraft({
@@ -2201,16 +2295,47 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   workspacePath,
                 })
                 .then(() => {
-                  if (isCancelled()) return;
                   pendingDefaultPathsRef.current.delete(workspacePath);
                   unstageWorktreeEntry(stagedKey, workspacePath);
+                  committedRemovalPaths.push(workspacePath);
                 });
             }),
           Promise.resolve(),
         )
         .then(() => {
-          if (isCancelled()) return;
+          if (isCancelled()) {
+            if (committedRemovalPaths.length > 0) {
+              handleBindingCommitted(committedRemovalPaths);
+            }
+            settleRun();
+            return;
+          }
           createThenResume();
+        })
+        .catch((error: unknown) => {
+          if (committedRemovalPaths.length > 0) {
+            handleBindingCommitted(committedRemovalPaths);
+            for (const path of committedRemovalPaths) {
+              dispatchEditor({ type: "unstageRemoval", workspacePath: path });
+            }
+          }
+          settleRun();
+          if (isCancelled()) return;
+          if (committedRemovalPaths.length >= removedWorkspacePaths.length) {
+            return;
+          }
+          const failedPath =
+            removedWorkspacePaths[committedRemovalPaths.length];
+          reportableErrorToast(
+            folderRemovalFailureMessage(failedPath, error),
+            undefined,
+            {
+              title: "Workspace update incomplete",
+              message: null,
+              code: null,
+              source: "Worktree update",
+            },
+          );
         });
     },
     [
@@ -2238,7 +2363,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       }),
     );
     if (snapshot.holders.length === 0) {
-      applyStagedFoldersAndResume(capture);
+      const runId = ++teardownRunIdRef.current;
+      applyStagedFoldersAndResume(
+        capture,
+        () => teardownRunIdRef.current !== runId,
+      );
       return;
     }
     setTeardownDialog({
@@ -2271,6 +2400,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     },
     [stagedKey, unstageWorktreeEntry],
   );
+  const discardStagedFolders = useCallback((): void => {
+    // Same per-run token as Cancel: an in-flight captured create must not
+    // apply/resurrect the choice the user just abandoned.
+    teardownRunIdRef.current += 1;
+    setTeardownCommitPending(false);
+    setTeardownDialog(null);
+    clearStagedWorktreeIntent(stagedKey);
+    dispatchEditor({ type: "discardStaged" });
+  }, [clearStagedWorktreeIntent, stagedKey]);
   // Phase-1 GUI-composed teardown: stop disclosed owner-scoped holders
   // (managed-command stop, agent.stop) before removeBindingEntry /
   // worktree.create. create has no commitIntent (protocol frozen behind
@@ -2300,6 +2438,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     const runId = ++teardownRunIdRef.current;
     setTeardownCommitPending(true);
+    setCommitRunPending(true);
     const isCancelled = (): boolean => teardownRunIdRef.current !== runId;
     const failures = await runGuiComposedTeardown({
       stopTargets: dialog.capture.stopTargets,
@@ -2318,10 +2457,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       isCancelled,
     });
     if (isCancelled()) {
+      setCommitRunPending(false);
       return;
     }
     setTeardownCommitPending(false);
     if (failures.length > 0) {
+      setCommitRunPending(false);
       setTeardownDialog({
         ...dialog,
         failures: failuresByHolderKey(failures),
@@ -2667,9 +2808,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const branchPrefixWarning = branchDefault.warning;
       const currentBranch = branchForSummary(ws);
       const otherWorktrees = ws.worktrees.filter((w) => !w.isMain);
+      const liveResolvedAt =
+        summariesByPath.get(ws.workspacePath)?.resolvedAt ?? ws.resolvedAt;
       const rowMetadataPending = isRowMetadataPending(
         metadataPending,
-        ws.resolvedAt,
+        liveResolvedAt,
       );
       const rowIsGitRepo = ws.resolvedAt !== null && ws.isGitRepo;
       const branchLabel = workspaceRunBranchLabel({
@@ -2690,6 +2833,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         rowMetadataPending,
         rowIsGitRepo,
         branchLabel,
+        stagedEntry,
         emit: emitForFolder(ws),
       };
     },
@@ -2700,6 +2844,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       pendingBranchByPath,
       pendingRemovePaths,
       stagedEntryByPath,
+      summariesByPath,
       surface.binding,
     ],
   );
@@ -2724,6 +2869,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             rowMetadataPending,
             rowIsGitRepo,
             branchLabel,
+            stagedEntry,
             emit,
           } = deriveInEpicRowState(ws);
           // Presence is per-(host, path) display state — never stored on the
@@ -2863,12 +3009,14 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             makePrimaryDisabled: false,
             makePrimaryDisabledReason: null,
             hostClient: props.hostClient,
-            modeDisabled: rowMetadataPending,
-            modeDisabledReason: modeDisabledReasonFor(
-              false,
-              activeRunNotice,
-              rowMetadataPending,
-            ),
+            // Snapshot fetch (isLoading / unresolved cache defaults) must
+            // never gate selection — the draft picker's first principle.
+            // Binding-derived mode/branch stay editable; the chip spinner
+            // is the only in-flight affordance. Commit controls (Update)
+            // may disable on their own pending flag.
+            modeDisabled: false,
+            modeDisabledReason: null,
+            hasStagedIntent: stagedEntry !== null,
             removeDisabled:
               activeRunLocksBinding ||
               removePending ||
@@ -2881,11 +3029,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onEmit: emit,
             onMakePrimary: () => undefined,
             onSelectMode: (nextMode) => {
-              // Unresolved rows (`resolvedAt === null`) have no verified git
-              // facts yet - the mode switch itself is disabled for them
-              // (`modeDisabled` above), but guard here too since this closure
-              // outlives that render.
-              if (ws.resolvedAt === null) return;
               emitRowMode({
                 currentBranch,
                 currentIntent,
@@ -3116,8 +3259,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               editor.dirtyPathsSinceResume.size > 0 ||
               editor.pendingRemovedPaths.size > 0
             }
-            updatePending={worktreeCreatePending}
-            onDiscardStaged={null}
+            updatePending={worktreeCreatePending || commitRunPending}
+            onDiscardStaged={discardStagedFolders}
+            discardDisabled={commitRunPending || teardownCommitPending}
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
@@ -3155,6 +3299,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         onDefer={() => {
           teardownRunIdRef.current += 1;
           setTeardownCommitPending(false);
+          setCommitRunPending(false);
           const restore = teardownDialog?.restoreRemovalOnDismiss;
           if (restore !== null && restore !== undefined) {
             dispatchEditor({
@@ -3171,6 +3316,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         onDismiss={() => {
           teardownRunIdRef.current += 1;
           setTeardownCommitPending(false);
+          setCommitRunPending(false);
           const restore = teardownDialog?.restoreRemovalOnDismiss;
           if (restore !== null && restore !== undefined) {
             dispatchEditor({
@@ -3193,6 +3339,17 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 // default (new worktree); a non-git folder can only be Local. The seeding effect
 // stages a pick shortly after mount, so this is the transient pre-seed state. A
 // supported staged entry's own kind wins.
+function folderRemovalFailureMessage(
+  workspacePath: string,
+  error: unknown,
+): string {
+  const folder = workspaceFolderName(workspacePath);
+  const hostMessage =
+    error instanceof Error && error.message.length > 0 ? error.message : null;
+  const detail = hostMessage === null ? "" : ` (${hostMessage})`;
+  return `Couldn't update "${folder}"${detail}. The change is still staged - press Update to retry.`;
+}
+
 function stagedCommitRefusalReason(input: {
   readonly capture: WorktreeCommitCapture;
   readonly stagedKey: WorktreeStagingKey;

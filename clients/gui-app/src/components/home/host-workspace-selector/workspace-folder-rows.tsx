@@ -32,6 +32,9 @@ export function WorkspaceFolderRows(props: {
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
+  readonly onDiscardStaged?: (() => void) | null;
+  readonly discardDisabled: boolean;
+  readonly draftPending?: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly readOnly: boolean;
   readonly bindingResolved: boolean;
@@ -110,11 +113,19 @@ export function WorkspaceFolderRows(props: {
         pending={props.updatePending}
       />
     );
+  const discardButton = (
+    <DiscardStagedButton
+      onDiscardStaged={props.onDiscardStaged}
+      discardDisabled={props.discardDisabled}
+      draftPending={props.draftPending === true}
+    />
+  );
 
   const workspaceActions = (
     <div className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
       {addFolder}
       {props.recentWorkspaces}
+      {discardButton}
       {updateButton === null ? null : (
         <div className="ml-auto shrink-0">{updateButton}</div>
       )}
@@ -179,6 +190,38 @@ export function WorkspaceFolderRows(props: {
       </div>
       {trailing}
     </div>
+  );
+}
+
+function DiscardStagedButton(props: {
+  readonly onDiscardStaged: (() => void) | null | undefined;
+  readonly discardDisabled: boolean;
+  readonly draftPending: boolean;
+}) {
+  const discardStaged = props.onDiscardStaged;
+  if (
+    discardStaged === undefined ||
+    discardStaged === null ||
+    !props.draftPending
+  ) {
+    return null;
+  }
+  return (
+    <button
+      type="button"
+      data-testid="folder-discard-staged"
+      disabled={props.discardDisabled}
+      aria-disabled={props.discardDisabled ? true : undefined}
+      tabIndex={props.discardDisabled ? -1 : undefined}
+      onClick={discardStaged}
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+        props.discardDisabled &&
+          "pointer-events-none cursor-not-allowed opacity-50",
+      )}
+    >
+      Discard changes
+    </button>
   );
 }
 

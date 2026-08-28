@@ -391,10 +391,26 @@ describe("ws-protocol canonical Zod schemas", () => {
         error: {
           code: "WORKTREE_HOLDERS_CHANGED",
           message: "holders changed",
+          holdersRevision: "a".repeat(64),
+        },
+      });
+      expect(parsed.error?.holdersRevision).toBe("a".repeat(64));
+    });
+
+    it("sanitizes a non-digest holdersRevision to absent rather than passing it through", () => {
+      const parsed = hostResponseFrameSchema.parse({
+        kind: "response",
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 2 },
+        result: null,
+        error: {
+          code: "WORKTREE_HOLDERS_CHANGED",
+          message: "holders changed",
           holdersRevision: "rev-abc",
         },
       });
-      expect(parsed.error?.holdersRevision).toBe("rev-abc");
+      expect(parsed.error?.holdersRevision).toBeUndefined();
     });
 
     it("sanitizes a malformed holdersRevision instead of rejecting the envelope", () => {

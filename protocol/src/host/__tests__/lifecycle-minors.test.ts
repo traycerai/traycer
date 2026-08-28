@@ -58,6 +58,8 @@ const holder = {
   label: "Chat is mid-turn",
 };
 
+const HOLDERS_REVISION_DIGEST = "a".repeat(64);
+
 describe("WORKTREE_BUSY typed holders", () => {
   it("parses a full holder and round-trips", () => {
     const parsed = worktreeBusyHolderSchema.parse(holder);
@@ -104,10 +106,10 @@ describe("WORKTREE_BUSY typed holders", () => {
       code: "WORKTREE_BUSY",
       message: "busy",
       holders: [holder],
-      holdersRevision: "rev-1",
+      holdersRevision: HOLDERS_REVISION_DIGEST,
     });
     expect(parsed.holders).toEqual([holder]);
-    expect(parsed.holdersRevision).toBe("rev-1");
+    expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
   });
 
   it("sanitizes malformed holders on the WS and mux error envelopes", () => {
@@ -276,8 +278,6 @@ describe("worktree.delete@1.1 stopOwners", () => {
     expect(parsed).not.toHaveProperty("stopOwners");
   });
 });
-
-const HOLDERS_REVISION_DIGEST = "a".repeat(64);
 
 describe("worktree.delete@1.2 expectedHoldersRevision", () => {
   const deleteRegistry = hostRpcRegistry["worktree.delete"];
@@ -502,14 +502,27 @@ describe("worktree.deleteByPath@1.2 expectedHoldersRevision", () => {
       reason: "holders changed",
       code: "WORKTREE_HOLDERS_CHANGED",
       holders: [{ ...holder, holderId: "chat:chat-1" }],
-      holdersRevision: "rev-abc",
+      holdersRevision: HOLDERS_REVISION_DIGEST,
       hasBinaryPayload: false,
     });
     expect(parsed.kind).toBe("failed");
     if (parsed.kind === "failed") {
       expect(parsed.code).toBe("WORKTREE_HOLDERS_CHANGED");
       expect(parsed.holders?.[0]?.holderId).toBe("chat:chat-1");
-      expect(parsed.holdersRevision).toBe("rev-abc");
+      expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+    }
+  });
+
+  it("1.2 failed frame sanitizes a non-digest holdersRevision to absent", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.parse({
+      kind: "failed",
+      reason: "holders changed",
+      holdersRevision: "rev-abc",
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.holdersRevision).toBeUndefined();
     }
   });
 
@@ -594,11 +607,19 @@ describe("worktree.listHolders@1.0", () => {
     expect(parsed.holders).toEqual([holder]);
   });
 
-  it("response accepts holdersRevision", () => {
+  it("response accepts a digest holdersRevision", () => {
     const parsed = worktreeListHoldersResponseSchema.parse({
+      holders: [holder],
+      holdersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+  });
+
+  it("response rejects a non-digest holdersRevision", () => {
+    const parsed = worktreeListHoldersResponseSchema.safeParse({
       holders: [holder],
       holdersRevision: "rev-abc",
     });
-    expect(parsed.holdersRevision).toBe("rev-abc");
+    expect(parsed.success).toBe(false);
   });
 });

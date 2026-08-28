@@ -11,10 +11,12 @@
  */
 import { z } from "zod";
 import {
+  HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyHoldersSchema,
   worktreeBusyOwnerRefSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export {
+  HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
@@ -881,12 +883,9 @@ export type WorktreeDeleteRequestV11 = z.infer<
 >;
 
 /**
- * Host-computed SHA-256 hex digest of a holder inventory. Present
- * consent must be a real digest — empty and non-digest strings are
- * rejected rather than silently treated as "no consent".
+ * Present consent must be a real digest — empty and non-digest
+ * strings are rejected rather than silently treated as "no consent".
  */
-export const HOLDERS_REVISION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
-
 export const expectedHoldersRevisionFieldSchema = z
   .string()
   .regex(HOLDERS_REVISION_DIGEST_PATTERN)
@@ -928,12 +927,11 @@ export function refineConsentRevisionRequiresStopOwners(
  * `expectedHoldersRevision`. A 1.1 client talking to a 1.2 host is
  * upgraded with the field absent.
  */
-export const worktreeDeleteRequestSchemaV12 =
-  worktreeDeleteRequestSchemaV11
-    .extend({
-      expectedHoldersRevision: expectedHoldersRevisionFieldSchema,
-    })
-    .superRefine(refineConsentRevisionRequiresStopOwners);
+export const worktreeDeleteRequestSchemaV12 = worktreeDeleteRequestSchemaV11
+  .extend({
+    expectedHoldersRevision: expectedHoldersRevisionFieldSchema,
+  })
+  .superRefine(refineConsentRevisionRequiresStopOwners);
 export type WorktreeDeleteRequestV12 = z.infer<
   typeof worktreeDeleteRequestSchemaV12
 >;
@@ -972,9 +970,12 @@ export const worktreeListHoldersResponseSchema = z.object({
   holders: worktreeBusyHoldersSchema,
   /**
    * Host-computed digest of `holders`. Optional so a pre-revision
-   * response still parses; a current host always emits it.
+   * response still parses; a current host always emits it. Present
+   * values must match `HOLDERS_REVISION_DIGEST_PATTERN` so a client
+   * can echo the field as `expectedHoldersRevision` without a parse
+   * round-trip failing.
    */
-  holdersRevision: z.string().optional(),
+  holdersRevision: z.string().regex(HOLDERS_REVISION_DIGEST_PATTERN).optional(),
 });
 export type WorktreeListHoldersResponse = z.infer<
   typeof worktreeListHoldersResponseSchema

@@ -65,13 +65,22 @@ export const worktreeBusyHoldersWireFieldSchema = worktreeBusyHoldersSchema
   .catch(undefined);
 
 /**
+ * Host-computed SHA-256 hex digest of a holder inventory. Shared by
+ * consent (`expectedHoldersRevision`), listHolders, and failure-frame
+ * wire fields so a value that parses on read can be echoed as consent.
+ */
+export const HOLDERS_REVISION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+
+/**
  * Host-computed digest of the actor-grouped inventory. Optional so a
  * pre-revision host still parses; a current host always emits it next
- * to `holders`. Malformed values sanitize to absent rather than
- * rejecting the envelope.
+ * to `holders`. Non-digest and malformed values sanitize to absent
+ * rather than rejecting the envelope — leniency on the failure path,
+ * never a string that would fail consent echo.
  */
 export const holdersRevisionWireFieldSchema = z
   .string()
+  .regex(HOLDERS_REVISION_DIGEST_PATTERN)
   .optional()
   .catch(undefined);
 
