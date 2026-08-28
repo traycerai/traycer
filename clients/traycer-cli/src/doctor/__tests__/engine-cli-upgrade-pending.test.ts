@@ -537,7 +537,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
         livePath: liveBinaryPath,
         stagedBinaryPath,
         errorMessage: "EBUSY",
-        serviceStartError: null,
+        serviceStartError: "launchctl kickstart failed: Input/output error",
       }),
       { encoding: "utf8", mode: 0o600 },
     );
@@ -555,6 +555,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(pending).toBeDefined();
     expect(pending?.title).toContain("missing");
     expect(pending?.terminalCommand).toMatch(/traycer cli upgrade/);
+    expect(pending?.message).toContain("Input/output error");
+    expect(pending?.details?.serviceStartError).toBe(
+      "launchctl kickstart failed: Input/output error",
+    );
   });
 
   // The NORMAL on-disk state for "helper swapped the CLI, then could not start

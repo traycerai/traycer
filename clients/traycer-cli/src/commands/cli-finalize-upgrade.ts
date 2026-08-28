@@ -265,7 +265,7 @@ async function startServiceBestEffort(
   }
 }
 
-async function writePostFinalizeMarkerFile(
+export async function writePostFinalizeMarkerFile(
   markerPath: string,
   marker: PostFinalizeMarker,
 ): Promise<void> {

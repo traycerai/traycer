@@ -3,6 +3,7 @@ import {
   finalizePendingCliUpgrade,
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
+import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -14,6 +15,7 @@ import {
   type ServiceLabel,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
+import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
   defaultSpawnImpl,
   defaultWriteImpl,
@@ -210,7 +212,46 @@ export async function restartWithPendingCliUpgradeFinalize(
   }
 
   if (!helperOwnsServiceStart) {
-    await args.controller.relaunchAfterRestart(args.label, stop);
+    // The in-process path can replace the binary successfully and then fail
+    // to update the manifest. Preserve the same `swapped` evidence as the
+    // detached helper so the next restart can reconcile the stale pending
+    // record instead of misclassifying the moved staged file as missing.
+    if (finalize.status === "manifest-update-failed") {
+      let relaunchError: unknown = null;
+      try {
+        await args.controller.relaunchAfterRestart(args.label, stop);
+      } catch (err) {
+        relaunchError = err;
+      }
+      let markerWriteError: unknown = null;
+      try {
+        await writePostFinalizeMarkerFile(
+          cliPostFinalizeMarkerPath(args.environment),
+          {
+            status: "swapped",
+            attemptedAt: new Date().toISOString(),
+            livePath: finalize.livePath,
+            stagedBinaryPath: finalize.stagedBinaryPath,
+            errorMessage: finalize.errorMessage,
+            serviceStartError:
+              relaunchError === null
+                ? null
+                : relaunchError instanceof Error
+                  ? relaunchError.message
+                  : String(relaunchError),
+          },
+        );
+      } catch (err) {
+        markerWriteError = err;
+      }
+      // Preserve lifecycle failure precedence if both operations fail: the
+      // host is still down, which is more urgent than lost reconciliation
+      // evidence. A marker-only failure is still returned to the caller.
+      if (relaunchError !== null) throw relaunchError;
+      if (markerWriteError !== null) throw markerWriteError;
+    } else {
+      await args.controller.relaunchAfterRestart(args.label, stop);
+    }
   }
 
   return {

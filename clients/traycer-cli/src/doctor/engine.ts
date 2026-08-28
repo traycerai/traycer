@@ -544,14 +544,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // already covers, since that card appends the same `serviceStartError` to
   // its own message. That is precisely `markerDescribesUpgrade`, so it is
   // asked here rather than approximated by "is anything pending".
-  const markerCoveredByPendingCard =
+  const matchingPendingMarker =
     pendingUpgrade !== null &&
     finalizeMarker.status === "present" &&
     markerDescribesUpgrade(finalizeMarker.marker, {
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
       livePath: pendingUpgrade.binaryPath,
       stagedAt: pendingUpgrade.pending.stagedAt,
-    });
+    })
+      ? finalizeMarker.marker
+      : null;
+  const markerCoveredByPendingCard = matchingPendingMarker !== null;
+  const pendingMarkerServiceStartError =
+    matchingPendingMarker?.serviceStartError ?? null;
   if (
     !markerCoveredByPendingCard &&
     finalizeMarker.status === "present" &&
@@ -691,7 +696,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         message:
           `cli upgrade has pendingUpgrade=${pendingUpgrade.pending.version} but ` +
           `the staged binary at ${pendingUpgrade.pending.stagedBinaryPath} ` +
-          "is no longer on disk. Re-run 'traycer cli upgrade' to re-stage.",
+          "is no longer on disk. Re-run 'traycer cli upgrade' to re-stage." +
+          (pendingMarkerServiceStartError === null
+            ? ""
+            : ` The finalize helper also could not restart the host service: ${pendingMarkerServiceStartError}`),
         fixAction: null,
         terminalCommand: `traycer cli upgrade`,
         details: {
@@ -702,6 +710,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           currentVersion: pendingUpgrade.currentVersion,
           binaryPath: pendingUpgrade.binaryPath,
           finalizeMarker: finalizeMarkerDetail(finalizeMarker),
+          serviceStartError: pendingMarkerServiceStartError,
         },
       });
     } else {
