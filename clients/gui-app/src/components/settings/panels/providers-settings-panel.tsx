@@ -97,6 +97,7 @@ import {
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type ProviderId = ProviderCliState["providerId"];
+type ProviderProfile = ProviderCliState["profiles"][number];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
   HostRpcError
@@ -172,6 +173,19 @@ function resolveTabForProvider(
   const tabs = resolveSupportedTabs(providerTabInputs(state));
   if (tabs.includes(preferred)) return preferred;
   return tabs[0] ?? "general";
+}
+
+function initialSelectedProfileId(
+  profiles: readonly ProviderProfile[],
+  focusProfileId: string | null,
+): string | null {
+  if (focusProfileId !== null) {
+    const focused = profiles.find(
+      (profile) => profile.profileId === focusProfileId,
+    );
+    if (focused !== undefined) return profileCommitId(focused);
+  }
+  return defaultSelectedProfileId(profiles);
 }
 
 // NOTE: the per-tab "has content" dot that used to render here is gone on
@@ -1007,10 +1021,7 @@ function ProviderDetail({
   // (and this `useState`'s lazy initializer) whenever the active provider
   // changes.
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () =>
-      state.profiles.some((profile) => profile.profileId === initialProfileId)
-        ? initialProfileId
-        : defaultSelectedProfileId(state.profiles),
+    () => initialSelectedProfileId(state.profiles, initialProfileId),
   );
   const setEnabled = useProvidersSetEnabled();
   const setProfileEnabled = useProvidersSetProfileEnabledForClient(
