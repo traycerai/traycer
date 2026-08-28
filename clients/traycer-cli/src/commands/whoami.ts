@@ -48,7 +48,7 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
       message:
         result.effect === "none"
           ? "Could not reach the authn service; check your network."
-          : "Could not reach the authn service while refreshing the stored credentials; the refresh token was spent and the result is unknown. Check your network, and run `traycer login` if the next command fails to authenticate.",
+          : "Could not reach the authn service while refreshing the stored credentials; the refresh may or may not have gone through, so the stored credentials may now be stale. Check your network, and run `traycer login` if the next command fails to authenticate.",
       // The error path carries the effect too: a network failure can land
       // AFTER a spend, and this envelope is the only thing the caller gets.
       details: { credentialUpdate: result.effect },
@@ -192,6 +192,6 @@ function humanEffectSuffix(effect: ValidationEffect): string {
     case "token-rotated":
       return " Refreshed the stored access token.";
     case "token-rotation-unconfirmed":
-      return " WARNING: the access token was refreshed but the local save did not confirm - the stored credentials may be stale. Run `traycer login` if the next command fails to authenticate.";
+      return " WARNING: a token refresh was attempted and could not be confirmed - the stored credentials may be stale. Run `traycer login` if the next command fails to authenticate.";
   }
 }

@@ -14,10 +14,13 @@ import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
  * by spending the refresh token. `whoami` reports this so the command that looks
  * observational can say what it actually changed (CLI-018).
  *
- *   - `none`                        -> nothing was written. Every outcome
- *                                      mapped here is a guard that returned
- *                                      BEFORE the write, so this is a
- *                                      certainty, not an assumption.
+ *   - `none`                        -> no mutation THIS command asked for
+ *                                      changed the file. Every outcome mapped
+ *                                      here is a guard that returned BEFORE
+ *                                      the write, so this is a certainty, not
+ *                                      an assumption. Its one boundary is
+ *                                      spelled out under "what `none` does not
+ *                                      cover" below.
  *   - `profile-refreshed`           -> the cached `user` block was updated
  *                                      from the server; the token pair is
  *                                      untouched.
@@ -59,6 +62,21 @@ import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
  * Encoding the difference would be encoding a distinction that is not
  * observable anyway - a sibling can land its write the instant after this
  * process looks - and both branches carry the same remedy, which is none.
+ *
+ * ## What `none` does not cover
+ *
+ * This field describes the mutations this command REQUESTED. It does not
+ * describe the store's WAL recovery preamble, which runs under the lock before
+ * any guard and finishes whatever mutation a previous process durably recorded
+ * and did not complete - a pending sign-out, say, whose delete this process
+ * ends up performing on its way to a `deleted` outcome.
+ *
+ * That is deliberate, not an oversight. The recovery completes an intent that
+ * was committed before this command started; any process touching the file
+ * would complete it, and attributing it here would credit `whoami` with a
+ * decision `logout` made. The user-visible consequence is reported where it
+ * belongs - the outcome is `rejected`, and the command says the credentials
+ * are gone and to sign in again.
  */
 export type ValidationEffect =
   | "none"

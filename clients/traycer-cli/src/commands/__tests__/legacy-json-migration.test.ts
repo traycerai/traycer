@@ -393,7 +393,11 @@ describe("whoami runner migration", () => {
     expect(error.details).toMatchObject({
       credentialUpdate: "token-rotation-unconfirmed",
     });
-    expect(String(error.message)).toContain("refresh token was spent");
+    // The message must NOT assert a spend: `refresh-network` means the request
+    // may never have reached the server, which is the whole reason the effect
+    // is "unconfirmed" rather than a definite rotation.
+    expect(String(error.message)).not.toContain("was spent");
+    expect(String(error.message)).toContain("may or may not have gone through");
   });
 
   it("emits a single error envelope with code=E_AUTH_NETWORK and exits 2 on a network failure", async () => {
