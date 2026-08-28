@@ -105,6 +105,7 @@ import {
   runAfterPaneActivationFocusIntent,
   usePaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -256,13 +257,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const coarsePointer = useCoarsePointer();
   const listRef = useRef<VirtuosoHandle | null>(null);
   const { openSettings } = useSystemTabModalActions();
-  const openProviderSettings = useCallback(() => {
-    closeOnly();
-    openSettings({
-      section: "providers",
-      resetToGeneral: false,
-    });
-  }, [closeOnly, openSettings]);
 
   useEffect(() => {
     if (activityEnabled || !visibleOpen) return;
@@ -601,6 +595,32 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       selection.profileId,
     ],
   );
+  function openProviderSettings(): void {
+    // Settings has its own host scope. The picker may be following the
+    // app-wide default (`runTargetHostId === null`), so hand Settings the
+    // concrete host backing this picker rather than the follow-default
+    // sentinel; otherwise a remembered Settings scope could win instead.
+    const focusHostId =
+      runTargetClient === null
+        ? runTargetHostId
+        : runTargetClient.getActiveHostId();
+    closeOnly();
+    const focus = useProvidersFocusStore.getState();
+    focus.setProfileFocus({
+      harnessId: resolvedActiveProviderId,
+      hostId: focusHostId,
+      // Provider settings uses the wire profile identity. The picker uses
+      // `null` for that same ambient row at commit sites, so restore its wire
+      // sentinel before handing the one-shot focus intent across surfaces.
+      profileId: activePanelProfileId ?? "ambient",
+      startSignIn: false,
+    });
+    focus.setFocusTab("usage");
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+    });
+  }
   // Falls back to the fallback harness list's label while the catalog hasn't
   // resolved the active provider yet (e.g. still loading).
   const activePanelLabel = useMemo(
