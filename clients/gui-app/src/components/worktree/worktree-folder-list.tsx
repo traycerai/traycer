@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/command";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { cn } from "@/lib/utils";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
@@ -115,9 +116,11 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                     className="min-w-0 flex-1"
                   >
                     <div className="truncate font-medium">{label}</div>
-                    <StartTruncatedText className="block min-w-0 text-ui-xs text-muted-foreground">
-                      {secondary}
-                    </StartTruncatedText>
+                    <FilePathTooltip content={secondary} side="bottom">
+                      <StartTruncatedText className="block min-w-0 text-ui-xs text-muted-foreground">
+                        {secondary}
+                      </StartTruncatedText>
+                    </FilePathTooltip>
                   </div>
                   {badge === null ? null : (
                     <WorktreeRowStatusBadge
