@@ -85,7 +85,7 @@ export interface ProfileUsageComparisonEntry {
   readonly refresh: () => Promise<void>;
   /** Non-forced sibling of `refresh` for AUTOMATIC callers (the composer
    *  banner's single unknown-destination check). On the queue-backed
-   *  `ephemeralProcess` lane (claude-code / codex - the only providers with
+   *  `ephemeralProcess` lane (claude-code / codex / grok - the providers with
    *  managed profiles, so the only ones this automatic check ever runs on) it
    *  passes `force: false`, so it no-ops on still-fresh cache and honors the
    *  post-`usage_fetch_failed` cool-down instead of re-tripping a server-side
