@@ -57,19 +57,6 @@ const ACCEPTED = {
   registrationId: "native-1",
 } as const;
 
-const HANDOFF = {
-  kind: "electronTabHandoff",
-  hasBinaryPayload: false,
-  requestId: "req-handoff-1",
-  sessionId: "session-1",
-  tabId: "tab-minted-9",
-  registrationId: "native-1",
-  capturedUrl: "https://example.com/agent",
-  capturedStorageState: null,
-  siblingTabs: [],
-  reason: "gui-quit",
-} as const;
-
 describe("browser.sessions Electron tab birth", () => {
   it("requires the complete host-owned birth identity", () => {
     const parsed = browserSessionsServerFrameSchema.safeParse(CREATE_REQUEST);
@@ -152,55 +139,20 @@ describe("browser.sessions Electron tab birth", () => {
     );
   });
 
-  it("hands off the exact durable tab incarnation, never a presentation tile", () => {
-    const parsed = browserSessionsClientFrameSchema.safeParse(HANDOFF);
-    expect(parsed.success).toBe(true);
-    if (parsed.success) expect(parsed.data).toEqual(HANDOFF);
-
-    for (const key of ["sessionId", "tabId", "registrationId"] as const) {
-      const incomplete: Record<string, unknown> = { ...HANDOFF };
-      delete incomplete[key];
-      expect(
-        browserSessionsClientFrameSchema.safeParse(incomplete).success,
-      ).toBe(false);
-    }
-
-    const {
-      sessionId: _sessionId,
-      tabId: _tabId,
-      registrationId: _registrationId,
-      ...withoutIdentity
-    } = HANDOFF;
+  it("no longer carries a live Electron-to-headless handoff frame", () => {
     expect(
       browserSessionsClientFrameSchema.safeParse({
-        ...withoutIdentity,
-        tileInstanceId: "tile-legacy",
+        kind: "electronTabHandoff",
+        hasBinaryPayload: false,
+        requestId: "req-handoff-1",
+        sessionId: "session-1",
+        tabId: "tab-minted-9",
+        registrationId: "native-1",
+        capturedUrl: "https://example.com/agent",
+        capturedStorageState: null,
+        siblingTabs: [],
+        reason: "gui-quit",
       }).success,
-    ).toBe(false);
-
-    const withSibling = {
-      ...HANDOFF,
-      siblingTabs: [
-        {
-          tabId: "tab-minted-10",
-          registrationId: "native-2",
-          url: "https://example.com/sibling",
-          capturedStorageState: null,
-        },
-      ],
-    } as const;
-    expect(
-      browserSessionsClientFrameSchema.safeParse(withSibling).success,
-    ).toBe(true);
-    const siblingWithoutIncarnation = {
-      ...withSibling,
-      siblingTabs: withSibling.siblingTabs.map(
-        ({ registrationId: _registrationId, ...sibling }) => sibling,
-      ),
-    };
-    expect(
-      browserSessionsClientFrameSchema.safeParse(siblingWithoutIncarnation)
-        .success,
     ).toBe(false);
   });
 });

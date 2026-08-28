@@ -18,7 +18,7 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger } from "@/lib/logger";
 import { flushLiveReadingPositions } from "@/lib/reading-position";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { drainElectronTabHandoffs } from "@/lib/browser-view/sessions/electron-tabs";
+import { captureFinalPrimaryProfiles } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -56,7 +56,7 @@ interface FreshUnsyncedSnapshotResponse {
   readonly snapshot: ReadonlyArray<UnsyncedEditsEntry>;
 }
 
-interface BrowserHandoffDrainRequest {
+interface FinalBrowserCaptureRequest {
   readonly requestId: string;
 }
 
@@ -91,10 +91,10 @@ interface AppLifecycleWindowBridge {
   respondFreshUnsyncedSnapshot?: (
     reply: FreshUnsyncedSnapshotResponse,
   ) => Promise<void>;
-  onDrainBrowserHandoffs?: (
-    handler: (request: BrowserHandoffDrainRequest) => void,
+  onCaptureFinalBrowserState?: (
+    handler: (request: FinalBrowserCaptureRequest) => void,
   ) => { dispose: () => void };
-  respondBrowserHandoffsDrained?: (reply: {
+  respondFinalBrowserStateCaptured?: (reply: {
     readonly requestId: string;
   }) => Promise<void>;
 }
@@ -202,23 +202,26 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     };
   }, [appLifecycle, registry]);
 
+  // Main asks for one final browser capture before the desktop route goes
+  // away. There is no live Electron -> headless handoff any more: the host
+  // suspends the session and re-materializes it later from the durable tab
+  // URLs plus the primary-profile store, so what has to be fresh before this
+  // window's `browser.sessions` streams close is that store.
   useEffect(() => {
-    const onDrain = appLifecycle?.onDrainBrowserHandoffs;
-    const respond = appLifecycle?.respondBrowserHandoffsDrained;
-    if (onDrain === undefined || respond === undefined) return;
-    const subscription = onDrain((request) => {
-      // `allSettled`, not `then`: a drain REJECTS when `browser.sessions`
-      // disconnects mid-handoff (`rejectOwnedElectronTabHandoffAcks`), and
-      // swallowing that without replying left main's waiter to sit out its
-      // full `BROWSER_HANDOFF_DRAIN_TIMEOUT_MS` - a 10s stall on every quit
-      // and every window close that hits it. A failed drain is still "drained
-      // as far as this renderer can tell", so it must be reported, not
-      // withheld. Same shape as the fresh-snapshot reply above.
-      void Promise.allSettled([drainElectronTabHandoffs()])
+    const onCapture = appLifecycle?.onCaptureFinalBrowserState;
+    const respond = appLifecycle?.respondFinalBrowserStateCaptured;
+    if (onCapture === undefined || respond === undefined) return;
+    const subscription = onCapture((request) => {
+      // `allSettled`, not `then`: a capture that fails is still "as captured
+      // as this renderer can manage", and withholding the reply left main's
+      // waiter to sit out its full timeout - a multi-second stall on every
+      // quit and every window close that hit it. Same shape as the
+      // fresh-snapshot reply above.
+      void Promise.allSettled([captureFinalPrimaryProfiles()])
         .then(() => respond({ requestId: request.requestId }))
         .catch((error: unknown) => {
           appLogger.error(
-            "[quit-intercept] browser handoff drain reply failed",
+            "[quit-intercept] final browser capture reply failed",
             { requestId: request.requestId },
             error,
           );

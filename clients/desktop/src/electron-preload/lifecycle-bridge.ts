@@ -5,9 +5,9 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   AppLifecycleBridge,
-  BrowserHandoffDrainRequest,
-  BrowserHandoffDrainResponse,
   CrossWindowUnsyncableReport,
+  FinalBrowserCaptureRequest,
+  FinalBrowserCaptureResponse,
   FreshUnsyncedSnapshotRequest,
   FreshUnsyncedSnapshotResponse,
   QuitDecisionResponse,
@@ -58,14 +58,14 @@ export function buildLifecycleBridge(): LifecycleBridgeSurface {
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
           reply,
         ) as Promise<void>,
-      onDrainBrowserHandoffs: (handler) =>
-        subscribe<BrowserHandoffDrainRequest>(
-          RunnerHostEvent.drainBrowserHandoffs,
+      onCaptureFinalBrowserState: (handler) =>
+        subscribe<FinalBrowserCaptureRequest>(
+          RunnerHostEvent.captureFinalBrowserState,
           handler,
         ),
-      respondBrowserHandoffsDrained: (reply: BrowserHandoffDrainResponse) =>
+      respondFinalBrowserStateCaptured: (reply: FinalBrowserCaptureResponse) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserHandoffsDrained,
+          RunnerHostInvoke.finalBrowserStateCaptured,
           reply,
         ) as Promise<void>,
       unsyncableWorkAcrossWindows: () =>

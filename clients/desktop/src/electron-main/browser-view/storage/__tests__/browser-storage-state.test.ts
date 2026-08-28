@@ -4,7 +4,6 @@ import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserPrimaryProfile,
-  captureBrowserViewStorageState,
   seedBrowserViewCookies,
   type BrowserPrimaryProfileCaptureDependencies,
   type BrowserPrimaryProfileOriginSnapshot,
@@ -170,87 +169,6 @@ describe("seedBrowserViewCookies", () => {
   });
 });
 
-describe("captureBrowserViewStorageState", () => {
-  it("captures host-only cookie scope without widening it", async () => {
-    const scripts: string[] = [];
-    const captured = await captureBrowserViewStorageState(
-      { origin: "http://localhost:3000" },
-      {
-        getURL: () => "http://localhost:3000/dashboard",
-        executeJavaScript: (script, userGesture) => {
-          scripts.push(`${userGesture ? "gesture" : "no-gesture"}:${script}`);
-          return Promise.resolve([{ name: "token", value: "abc" }]);
-        },
-        session: fakeSession("http://localhost:3000", [
-          {
-            name: "sid",
-            value: "cookie",
-            domain: ".localhost",
-            hostOnly: true,
-            path: "/",
-            secure: false,
-            httpOnly: true,
-            session: true,
-            sameSite: "lax",
-          },
-        ]),
-      },
-    );
-
-    expect(captured).toEqual({
-      storageState: {
-        cookies: [
-          {
-            name: "sid",
-            value: "cookie",
-            domain: "localhost",
-            path: "/",
-            expires: -1,
-            httpOnly: true,
-            secure: false,
-            sameSite: "Lax",
-          },
-        ],
-        origins: [
-          {
-            origin: "http://localhost:3000",
-            localStorage: [{ name: "token", value: "abc" }],
-          },
-        ],
-      },
-      cookieCount: 1,
-      cookieDomains: ["localhost"],
-      localStorageCount: 1,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    });
-    expect(scripts).toHaveLength(1);
-  });
-
-  it("returns cookies without inventing local storage when navigation races capture", async () => {
-    let currentUrl = "https://example.test/start";
-    await expect(
-      captureBrowserViewStorageState(
-        { origin: "https://example.test" },
-        {
-          getURL: () => currentUrl,
-          executeJavaScript: () => {
-            currentUrl = "https://other.test";
-            return Promise.resolve([{ name: "stale", value: "value" }]);
-          },
-          session: fakeSession("https://example.test", []),
-        },
-      ),
-    ).resolves.toMatchObject({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: false,
-    });
-  });
-});
-
 describe("captureBrowserPrimaryProfile", () => {
   it("preserves host-only and domain cookie scope", async () => {
     const cookieGetFilters: Array<{ readonly url?: string }> = [];
@@ -307,6 +225,7 @@ describe("captureBrowserPrimaryProfile", () => {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
           {
             name: "domain-cookie",
@@ -317,6 +236,7 @@ describe("captureBrowserPrimaryProfile", () => {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins,
@@ -418,6 +338,7 @@ function storageCookie(name: string): {
   readonly httpOnly: boolean;
   readonly secure: boolean;
   readonly sameSite: "Lax";
+  readonly partitionKey: null;
 } {
   return {
     name,
@@ -428,6 +349,7 @@ function storageCookie(name: string): {
     httpOnly: false,
     secure: false,
     sameSite: "Lax",
+    partitionKey: null,
   };
 }
 

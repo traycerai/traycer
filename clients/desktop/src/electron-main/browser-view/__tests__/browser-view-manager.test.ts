@@ -13,7 +13,6 @@ import type {
   ManagedBrowserView,
 } from "../browser-view-port";
 import type {
-  BrowserViewElectronTabHandoffChange,
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
@@ -34,7 +33,6 @@ import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
 } from "../browser-session";
-import type { BrowserStorageStateCaptureResult } from "../storage/browser-storage-state";
 
 type BrowserViewManagerOptions = ConstructorParameters<
   typeof BrowserViewManager
@@ -620,8 +618,6 @@ interface Harness {
   readonly downloads: BrowserViewDownloadChange[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
   readonly openTileRequests: BrowserViewOpenTileRequest[];
-  readonly electronTabHandoffNotifications: BrowserViewElectronTabHandoffChange[];
-  readonly electronTabHandoffWindowIds: string[];
   readonly snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[];
   readonly annotationEvents: BrowserAnnotationSessionIpcEvent[];
   readonly annotationAttached: BrowserAnnotationAttachedIpcEvent[];
@@ -634,26 +630,10 @@ interface Harness {
 }
 
 type HarnessOptions = {
-  readonly captureStorageState?: BrowserViewManagerOptions["captureStorageState"];
-  readonly notifyElectronTabHandoff?: (
-    windowId: string,
-    change: BrowserViewElectronTabHandoffChange,
-  ) => boolean;
   readonly boundsStreamLogIntervalMs?: number;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
 };
-
-const DEFAULT_CAPTURE_STORAGE_STATE: BrowserViewManagerOptions["captureStorageState"] =
-  (_input, _webContents): Promise<BrowserStorageStateCaptureResult> =>
-    Promise.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    });
 
 /**
  * `send` is channel-keyed and payload-agnostic by design, so the harness
@@ -685,9 +665,6 @@ function createHarnessWithOptions(
   const downloads: BrowserViewDownloadChange[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
   const openTileRequests: BrowserViewOpenTileRequest[] = [];
-  const electronTabHandoffNotifications: BrowserViewElectronTabHandoffChange[] =
-    [];
-  const electronTabHandoffWindowIds: string[] = [];
   const snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[] = [];
   const annotationEvents: BrowserAnnotationSessionIpcEvent[] = [];
   const annotationAttached: BrowserAnnotationAttachedIpcEvent[] = [];
@@ -770,27 +747,11 @@ function createHarnessWithOptions(
         case RunnerHostEvent.browserViewAnnotationAttached:
           record(annotationAttached, payload);
           return true;
-        case RunnerHostEvent.browserViewElectronTabHandoff: {
-          const change =
-            asPayload<BrowserViewElectronTabHandoffChange>(payload);
-          const delivered =
-            harnessOptions?.notifyElectronTabHandoff?.(windowId, change) ??
-            true;
-          if (!delivered) return false;
-          electronTabHandoffWindowIds.push(windowId);
-          electronTabHandoffNotifications.push(change);
-          return true;
-        }
         default:
           throw new Error(`unexpected browser-view channel: ${channel}`);
       }
     },
     seedStorageState: () => Promise.resolve(),
-    captureStorageState: (input, webContents) => {
-      return (
-        harnessOptions?.captureStorageState ?? DEFAULT_CAPTURE_STORAGE_STATE
-      )(input, webContents);
-    },
     observePrimaryProfileOrigin: (url) => {
       primaryProfileObservedUrls.push(url);
     },
@@ -808,8 +769,6 @@ function createHarnessWithOptions(
     downloads,
     certificateErrors,
     openTileRequests,
-    electronTabHandoffNotifications,
-    electronTabHandoffWindowIds,
     snapshotInvalidations,
     annotationEvents,
     annotationAttached,
@@ -828,7 +787,7 @@ function createHarnessWithOptions(
   };
 }
 
-/** Flush the async closeEntry → electron-tab handoff → capture chain. */
+/** Flush the async closeEntry → native teardown chain. */
 async function flushCloseEntry(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -1287,7 +1246,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
 
     harness.manager.dispose();
     await flushCloseEntry();
-    expect(harness.electronTabHandoffWindowIds).toEqual(["window-2"]);
+    expect(view.webContents.closeCalls).toBe(1);
   });
 
   it("transfers a provisioning tab's lifecycle lease before awaiting readiness", async () => {
@@ -1545,11 +1504,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ).toBe(0);
   });
 
-  it("serializes ensure behind an in-flight close for the same native identity", async () => {
-    const capture = Promise.withResolvers<BrowserStorageStateCaptureResult>();
-    const harness = createHarnessWithOptions({
-      captureStorageState: () => capture.promise,
-    });
+  it("gives a re-ensure of a released identity a fresh incarnation, never the destroyed guest", async () => {
+    const harness = createHarness();
     const input = {
       hostId: "host-1",
       sessionId: "session-1",
@@ -1562,8 +1518,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstView = harness.views[0];
     if (firstView === undefined) throw new Error("expected native guest");
 
-    const handoff = harness.manager.handoff.drainForWindow("window-1");
-    await flushCloseEntry();
     const firstRelease = harness.manager.releaseTab({
       hostId: input.hostId,
       sessionId: input.sessionId,
@@ -1578,58 +1532,30 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     const replacement = harness.manager.ensureTab("window-1", input);
 
-    expect(harness.views).toHaveLength(1);
-    expect(firstView.webContents.closeCalls).toBe(0);
-
-    capture.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    });
+    // The duplicate reports `false`: destroying a guest is now ATOMIC, so by
+    // the time it is asked the incarnation is already out of the registry.
+    // This pair used to read `[true, true]`, and only because the test armed a
+    // handoff capture first - `destroyEntry` awaited it and kept the identity
+    // reserved across the gap. A plain release has always come back `false`;
+    // the capture was the whole reason a second caller could still see one.
     await expect(
-      Promise.all([handoff, firstRelease, duplicateRelease]),
-    ).resolves.toEqual([undefined, true, true]);
-    await expect(replacement).resolves.toMatchObject({
+      Promise.all([firstRelease, duplicateRelease]),
+    ).resolves.toEqual([true, false]);
+    const replaced = await replacement;
+    expect(replaced).toMatchObject({
       hostId: input.hostId,
       sessionId: input.sessionId,
       tabId: input.tabId,
     });
+    // The durable identity is reused; the native incarnation behind it is not.
+    // A re-ensure that restored the destroyed guest is the failure this
+    // guards - the entry must be gone from the registry, not merely marked.
+    expect(replaced.registrationId).not.toBe(ready.registrationId);
     expect(firstView.webContents.closeCalls).toBe(1);
     expect(harness.views).toHaveLength(2);
   });
 
-  it("leaves a native handoff retryable when renderer delivery fails", async () => {
-    let rendererAvailable = false;
-    const harness = createHarnessWithOptions({
-      notifyElectronTabHandoff: () => rendererAvailable,
-    });
-    const provisioned = await harness.manager.ensureTab("window-1", {
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      requestedUrl: "https://example.com/",
-      seedStorageState: null,
-    });
-    await harness.manager.acceptTab(provisioned);
-
-    await expect(
-      harness.manager.handoff.drainForWindow("window-1"),
-    ).rejects.toThrow("Electron tab handoff could not be delivered");
-    expect(harness.electronTabHandoffNotifications).toEqual([]);
-
-    rendererAvailable = true;
-
-    await expect(
-      harness.manager.handoff.drainForWindow("window-1"),
-    ).resolves.toBeUndefined();
-    expect(harness.electronTabHandoffNotifications).toHaveLength(1);
-    harness.manager.dispose();
-  });
-
-  it("hands off and closes only native sessions owned by the closing window", async () => {
+  it("closes only the native sessions owned by the closing window", async () => {
     const harness = createHarness();
     const closing = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
@@ -1651,13 +1577,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
 
-    await harness.manager.handoff.drainForWindow("window-1");
-    expect(harness.electronTabHandoffWindowIds).toEqual(["window-1"]);
-    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
-      sessionId: "session-closing",
-      tabId: "tab-closing",
-    });
-
     await harness.manager.closeNativeSessionsForWindow("window-1");
     expect(harness.views[0]?.webContents.closeCalls).toBe(1);
     expect(harness.views[1]?.webContents.closeCalls).toBe(0);
@@ -1667,57 +1586,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await flushCloseEntry();
   });
 
-  it("hands off a detached native tab by exact identity and incarnation", async () => {
-    const harness = createHarness();
-    const ready = await harness.manager.ensureTab("window-1", {
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      requestedUrl: "https://example.com/",
-      seedStorageState: null,
-    });
-    await harness.manager.acceptTab(ready);
-
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.electronTabHandoffNotifications).toEqual([
-      {
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: ready.registrationId,
-        capturedUrl: "https://example.com/",
-        capturedStorageState: { cookies: [], origins: [] },
-        siblingTabs: [],
-        reason: "gui-quit",
-      },
-    ]);
-  });
-
-  it("reads the live document URL when handing off a native tab", async () => {
-    const harness = createHarness();
-    const ready = await harness.manager.ensureTab("window-1", {
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      requestedUrl: "https://example.com/",
-      seedStorageState: null,
-    });
-    await harness.manager.acceptTab(ready);
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected native guest");
-
-    await view.webContents.loadURL("https://www.thecapitalgrille.com/");
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.electronTabHandoffNotifications[0]?.capturedUrl).toBe(
-      "https://www.thecapitalgrille.com/",
-    );
-  });
-
-  it("excludes an unaccepted sibling from session handoff", async () => {
+  it("destroys every guest on dispose, accepted or still provisional", async () => {
     const harness = createHarness();
     const accepted = await harness.manager.ensureTab("window-1", {
       hostId: "host-1",
@@ -1738,11 +1607,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     harness.manager.dispose();
     await flushCloseEntry();
 
-    expect(harness.electronTabHandoffNotifications).toHaveLength(1);
-    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
-      tabId: "accepted-tab",
-      siblingTabs: [],
-    });
+    // Native teardown only: the host suspends the session to dormant when the
+    // route goes away, so nothing here reports a durable tab as closed.
     expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
       1, 1,
     ]);

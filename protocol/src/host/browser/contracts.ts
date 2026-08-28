@@ -132,18 +132,29 @@ export type BrowserSessionsOpenRequest = z.infer<
   typeof browserSessionsOpenRequestSchema
 >;
 
-export const browserStorageCookieSchema = z
-  .object({
-    name: z.string(),
-    value: z.string(),
-    domain: z.string(),
-    path: z.string(),
-    expires: z.number(),
-    httpOnly: z.boolean(),
-    secure: z.boolean(),
-    sameSite: z.enum(["Strict", "Lax", "None"]),
-  })
-  .strict();
+/**
+ * Deliberately NOT `.strict()`: Chrome emits cookie fields the contract does
+ * not model (`_crHasCrossSiteAncestor`, …) and they change between Chromium
+ * majors. Unknown keys are stripped, not rejected — a strict parse here failed
+ * every capture and materialized native tabs logged out.
+ *
+ * `partitionKey` IS modelled, because dropping it silently merges a partitioned
+ * cookie into the unpartitioned jar on restore. It is the storage-state STRING
+ * form; a producer holding CDP's `{topLevelSite, hasCrossSiteAncestor}` object
+ * must flatten it before it reaches this schema, and Electron's cookies API has
+ * no partition key at all, so its producers send `null`.
+ */
+export const browserStorageCookieSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+  domain: z.string(),
+  path: z.string(),
+  expires: z.number(),
+  httpOnly: z.boolean(),
+  secure: z.boolean(),
+  sameSite: z.enum(["Strict", "Lax", "None"]),
+  partitionKey: z.string().nullable(),
+});
 export type BrowserStorageCookie = z.infer<typeof browserStorageCookieSchema>;
 
 export const browserStorageLocalStorageEntrySchema = z
@@ -364,19 +375,6 @@ export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
 
-/** One tab captured alongside the tab being handed off to headless. */
-export const browserElectronTabHandoffSiblingSchema = z
-  .object({
-    tabId: z.string(),
-    registrationId: z.string(),
-    url: z.string(),
-    capturedStorageState: browserStorageStateSchema.nullable(),
-  })
-  .strict();
-export type BrowserElectronTabHandoffSibling = z.infer<
-  typeof browserElectronTabHandoffSiblingSchema
->;
-
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -460,22 +458,6 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       storageState: browserStorageStateSchema.nullable(),
       status: z.enum(["captured", "unavailable", "failed"]),
       reason: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      // Captures one exact native incarnation before teardown. Sibling state is
-      // grouped into the same frame so the host can hand off the session once.
-      // Null storage means desktop could not safely capture it.
-      kind: z.literal("electronTabHandoff"),
-      ...requestFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      registrationId: z.string(),
-      capturedUrl: z.string(),
-      capturedStorageState: browserStorageStateSchema.nullable(),
-      siblingTabs: z.array(browserElectronTabHandoffSiblingSchema),
-      reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
     })
     .strict(),
 ]);

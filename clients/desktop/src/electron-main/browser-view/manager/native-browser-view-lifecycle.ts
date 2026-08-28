@@ -6,17 +6,11 @@ type ActivationState =
   | { readonly kind: "provisioned"; seedScriptId: string | null }
   | { readonly kind: "accepted"; seedScriptId: string | null };
 
-type HandoffState =
-  | { readonly kind: "available" }
-  | { readonly kind: "capturing"; readonly promise: Promise<void> }
-  | { readonly kind: "handed-off" };
-
 /** Owns the legal lifecycle transitions of one host-owned Electron guest. */
 export class NativeBrowserViewLifecycle {
   private readonly provisioning =
     Promise.withResolvers<BrowserViewNativeTabCapability>();
   private activation: ActivationState = { kind: "provisioning" };
-  private handoff: HandoffState = { kind: "available" };
 
   get provisioned(): Promise<BrowserViewNativeTabCapability> {
     return this.provisioning.promise;
@@ -24,14 +18,6 @@ export class NativeBrowserViewLifecycle {
 
   get accepted(): boolean {
     return this.activation.kind === "accepted";
-  }
-
-  get canHandoff(): boolean {
-    return this.accepted && this.handoff.kind === "available";
-  }
-
-  get pendingHandoffCapture(): Promise<void> | null {
-    return this.handoff.kind === "capturing" ? this.handoff.promise : null;
   }
 
   completeProvisioning(
@@ -68,17 +54,5 @@ export class NativeBrowserViewLifecycle {
     const seedScriptId = this.activation.seedScriptId;
     this.activation.seedScriptId = null;
     return seedScriptId;
-  }
-
-  beginHandoffCapture(promise: Promise<void>): boolean {
-    if (!this.canHandoff) return false;
-    this.handoff = { kind: "capturing", promise };
-    return true;
-  }
-
-  finishHandoffCapture(promise: Promise<void>, delivered: boolean): void {
-    if (this.handoff.kind === "capturing" && this.handoff.promise === promise) {
-      this.handoff = delivered ? { kind: "handed-off" } : { kind: "available" };
-    }
   }
 }

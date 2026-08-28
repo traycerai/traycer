@@ -7,6 +7,7 @@ import {
   BrowserSessionsProvider,
 } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { captureFinalPrimaryProfiles } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -333,9 +334,6 @@ class FakeBridge {
   readonly onNativeTabStatusChange = vi.fn<
     BrowserViewBridge["onNativeTabStatusChange"]
   >(() => ({ dispose: () => {} }));
-  readonly onElectronTabHandoff = vi.fn<
-    BrowserViewBridge["onElectronTabHandoff"]
-  >(() => ({ dispose: () => {} }));
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
   >(() =>
@@ -352,6 +350,7 @@ class FakeBridge {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins: [],
@@ -425,6 +424,13 @@ function electronLifecycleReadinessFrames(
   frames: ReadonlyArray<Record<string, unknown>>,
 ): ReadonlyArray<Record<string, unknown>> {
   return frames.filter((frame) => frame.kind === "electronTabLifecycleReady");
+}
+
+function framesOfKind(
+  frames: ReadonlyArray<Record<string, unknown>>,
+  kind: string,
+): ReadonlyArray<Record<string, unknown>> {
+  return frames.filter((frame) => frame.kind === kind);
 }
 
 function electronProvisionedFrames(
@@ -1402,5 +1408,114 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
       stream.emitStatus("open");
     });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
+  });
+});
+
+/**
+ * The host no longer accepts a live Electron -> headless handoff. Everything
+ * that has to survive the desktop route going away (quit, window close) rides
+ * on the durable primary-profile store, so the quit path refreshes it once per
+ * live stream and destroys the native views WITHOUT reporting the durable tabs
+ * as closed.
+ */
+describe("BrowserSessionsProvider final capture before route loss", () => {
+  beforeEach(() => {
+    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
+    installTransport(false);
+    hookState.browserViewBridge = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    hookState.browserViewBridge = null;
+  });
+
+  it("sends one primaryProfileCaptured per live stream and no closeTab", async () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    const hostATransport = installTransportForHost(
+      "host-a",
+      "ws://host-a/stream",
+    );
+    const hostBTransport = installTransportForHost(
+      "host-b",
+      "ws://host-b/stream",
+    );
+    const hostClientA = createTestHostClient("user-a");
+    const hostClientB = createTestHostClient("user-b");
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientA,
+      "shared-owner-identity",
+    );
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientB,
+      "shared-owner-identity",
+    );
+
+    render(
+      <>
+        <BrowserSessionsHostProvider
+          hostId="host-a"
+          hostClient={hostClientA}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-a" />
+        </BrowserSessionsHostProvider>
+        <BrowserSessionsHostProvider
+          hostId="host-b"
+          hostClient={hostClientB}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-b" />
+        </BrowserSessionsHostProvider>
+      </>,
+    );
+    await waitFor(() => {
+      expect(hostATransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(hostBTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const hostAStream = hostATransport.wsStreamClient.sessions[0];
+    const hostBStream = hostBTransport.wsStreamClient.sessions[0];
+    act(() => {
+      hostAStream.emitStatus("open");
+      hostBStream.emitStatus("open");
+    });
+
+    let drained = false;
+    const drain = captureFinalPrimaryProfiles().then(() => {
+      drained = true;
+    });
+
+    await waitFor(() => {
+      expect(
+        framesOfKind(hostAStream.sentFrames, "primaryProfileCaptured"),
+      ).toHaveLength(1);
+      expect(
+        framesOfKind(hostBStream.sentFrames, "primaryProfileCaptured"),
+      ).toHaveLength(1);
+    });
+    expect(bridge.capturePrimaryProfile).toHaveBeenCalledTimes(2);
+    expect(
+      framesOfKind(hostAStream.sentFrames, "primaryProfileCaptured")[0],
+    ).toMatchObject({ status: "captured", reason: null });
+    // Each stream also asks for the one ordered round trip that proves the
+    // capture left this renderer, and holds the quit until it comes back.
+    expect(framesOfKind(hostAStream.sentFrames, "ping")).toHaveLength(1);
+    expect(framesOfKind(hostBStream.sentFrames, "ping")).toHaveLength(1);
+    expect(drained).toBe(false);
+
+    // The durable tabs are NOT closed: the host suspends the session to
+    // dormant on route loss and re-materializes the same tab ids later.
+    expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
+    expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
+
+    act(() => {
+      hostAStream.emit({ kind: "pong", hasBinaryPayload: false }, null);
+      hostBStream.emit({ kind: "pong", hasBinaryPayload: false }, null);
+    });
+    await drain;
+    expect(drained).toBe(true);
+    expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
+    expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
   });
 });

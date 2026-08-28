@@ -34,7 +34,6 @@ import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
-  captureBrowserViewStorageState,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
 import { trustBrowserCertificate } from "../app/cert-trust";
@@ -83,7 +82,6 @@ export function registerBrowserViewIpc(
     send: (windowId, channel, payload) =>
       bridge.safeSendToWindow(windowId, channel, payload),
     seedStorageState: seedBrowserViewCookies,
-    captureStorageState: captureBrowserViewStorageState,
     observePrimaryProfileOrigin: (url, webContents) => {
       primaryProfileSnapshots.observe(url, webContents);
     },

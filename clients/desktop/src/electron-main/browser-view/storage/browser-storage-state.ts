@@ -18,8 +18,6 @@ import type {
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
 
-// The protocol shape has no partition key, so seed/capture cannot preserve
-// CHIPS identity.
 const desktopStorageCookieSchema = protocolStorageCookieSchema.transform(
   (cookie) => ({
     ...cookie,
@@ -80,15 +78,6 @@ export interface BrowserStorageCaptureWebContents {
 }
 
 export type BrowserPrimaryProfileOriginSnapshot = BrowserStorageOrigin;
-
-export interface BrowserStorageStateCaptureResult {
-  readonly storageState: ProtocolStorageState;
-  readonly cookieCount: number;
-  readonly cookieDomains: readonly string[];
-  readonly localStorageCount: number;
-  readonly localStorageAvailable: boolean;
-  readonly localStorageReason: string | null;
-}
 
 export interface BrowserPrimaryProfileCaptureDependencies {
   readonly readCryptoState: () => BrowserCookieCryptoState;
@@ -219,39 +208,6 @@ export async function seedBrowserViewCookies(
   await webContents.session.cookies.flushStore();
 }
 
-export async function captureBrowserViewStorageState(
-  input: { readonly origin: string },
-  webContents: BrowserStorageCaptureWebContents & BrowserStorageSeedWebContents,
-): Promise<BrowserStorageStateCaptureResult> {
-  const origin = parseHttpOrigin(input.origin);
-  const browserSession = webContents.session;
-  await browserSession.cookies.flushStore();
-  const cookies = (await browserSession.cookies.get({ url: origin })).map(
-    toStorageCookie,
-  );
-  const capturedCookies = cookies.map(toProtocolStorageCookie);
-  const localStorage = await captureLocalStorageForOrigin(origin, webContents);
-  // Omit the origin entirely when its localStorage capture was unavailable
-  // (e.g. the tile navigated away from `origin` mid-capture) rather than
-  // reporting `{origin, localStorage: []}` - an absent entry means "unknown",
-  // so a merge downstream cannot mistake it for a genuinely empty origin and
-  // erase a good cached value.
-  const origins = localStorage.available
-    ? [{ origin, localStorage: [...localStorage.entries] }]
-    : [];
-  return {
-    storageState: {
-      cookies: capturedCookies,
-      origins,
-    },
-    cookieCount: cookies.length,
-    cookieDomains: uniqueSorted(cookies.map((cookie) => cookie.domain)),
-    localStorageCount: localStorage.entries.length,
-    localStorageAvailable: localStorage.available,
-    localStorageReason: localStorage.reason,
-  };
-}
-
 function parseStorageState(value: ProtocolStorageState): DesktopStorageState {
   return desktopStorageStateSchema.parse(value);
 }
@@ -324,6 +280,10 @@ function toStorageCookie(cookie: Cookie): DesktopStorageCookie {
     httpOnly: cookie.httpOnly === true,
     secure: cookie.secure === true,
     sameSite: playwrightSameSite(cookie.sameSite),
+    // Electron's cookies API exposes no partition key, so every cookie this
+    // shell captures is unpartitioned by construction. `null` says exactly
+    // that; it is not a lost value.
+    partitionKey: null,
   };
 }
 
@@ -444,10 +404,6 @@ function readCookiePath(value: string | undefined): string {
     throw new Error("Browser storageState cookie path is invalid");
   }
   return path;
-}
-
-function uniqueSorted(values: readonly string[]): readonly string[] {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 const URL_SCOPE_SYNTAX_PATTERN = /[@:/\\\s\x00-\x1F\x7F]/u;

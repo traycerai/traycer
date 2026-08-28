@@ -70,11 +70,18 @@ export interface FreshUnsyncedSnapshotResponse {
   readonly snapshot: UnsyncedEditsSnapshot;
 }
 
-export interface BrowserHandoffDrainRequest {
+/**
+ * Main asks one renderer for a final browser capture before its desktop route
+ * goes away (quit, window close). The host no longer takes a live Electron ->
+ * headless handoff: it suspends the session to dormant and re-materializes it
+ * later, so the renderer's job is to refresh the durable primary-profile
+ * store, not to ship per-tab state.
+ */
+export interface FinalBrowserCaptureRequest {
   readonly requestId: string;
 }
 
-export interface BrowserHandoffDrainResponse {
+export interface FinalBrowserCaptureResponse {
   readonly requestId: string;
 }
 
@@ -92,11 +99,11 @@ export interface AppLifecycleBridge {
   respondFreshUnsyncedSnapshot(
     reply: FreshUnsyncedSnapshotResponse,
   ): Promise<void>;
-  onDrainBrowserHandoffs(
-    handler: (request: BrowserHandoffDrainRequest) => void,
+  onCaptureFinalBrowserState(
+    handler: (request: FinalBrowserCaptureRequest) => void,
   ): Disposable;
-  respondBrowserHandoffsDrained(
-    reply: BrowserHandoffDrainResponse,
+  respondFinalBrowserStateCaptured(
+    reply: FinalBrowserCaptureResponse,
   ): Promise<void>;
   /**
    * Every Epic holding work that can never sync, across ALL windows.

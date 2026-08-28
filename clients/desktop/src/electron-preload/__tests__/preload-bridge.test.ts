@@ -952,6 +952,7 @@ describe("preload new-capability wiring", () => {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins: [],

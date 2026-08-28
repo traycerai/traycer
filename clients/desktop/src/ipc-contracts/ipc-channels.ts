@@ -111,7 +111,8 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
-  browserHandoffsDrained: "runnerHost:appLifecycle:browserHandoffsDrained",
+  finalBrowserStateCaptured:
+    "runnerHost:appLifecycle:finalBrowserStateCaptured",
   // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
   // holds only its own Epic session registry, while `appUpdateInstall`
   // restarts the whole app and its quit path deliberately skips the
@@ -380,7 +381,7 @@ export const RunnerHostEvent = {
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   quitRequested: "runnerHost:event:quitRequested",
   getFreshUnsyncedSnapshot: "runnerHost:event:getFreshUnsyncedSnapshot",
-  drainBrowserHandoffs: "runnerHost:event:drainBrowserHandoffs",
+  captureFinalBrowserState: "runnerHost:event:captureFinalBrowserState",
   windowsChange: "runnerHost:event:windows:change",
   ownershipChange: "runnerHost:event:windows:ownership:change",
   perWindowStateChange: "runnerHost:event:windows:perWindowState:change",
@@ -412,8 +413,6 @@ export const RunnerHostEvent = {
   zoomChange: "runnerHost:event:zoom:change",
   browserViewNativeTabStatusChange:
     "runnerHost:event:browserView:nativeTab:statusChange",
-  browserViewElectronTabHandoff:
-    "runnerHost:event:browserView:electronTab:handoff",
   browserViewFindChange: "runnerHost:event:browserView:findChange",
   browserViewDownloadChange: "runnerHost:event:browserView:downloadChange",
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
