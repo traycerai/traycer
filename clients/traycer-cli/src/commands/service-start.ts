@@ -93,17 +93,12 @@ export const serviceStartCommand: CommandFn = async (
       // Read INSIDE the lock: a registration observed before acquiring it can
       // be gone by the time the start runs.
       //
-      // ADVISORY, not a gate. On Windows `statusService` maps every
-      // `schtasks /Query` failure - a timeout, a transient access denial - to
-      // `not-installed`, so refusing on it meant a genuinely registered
-      // service could not be started whenever the preliminary query happened
-      // to fail. The platform start is the authoritative attempt; this read
-      // only decides what to SAY when that attempt fails.
-      // BEST-EFFORT. A Linux manifest stat or a macOS `launchctl print` that
-      // fails must not stop the authoritative start attempt - that would leave
-      // a registered, stopped host down because an inspection failed, which is
-      // the same "advisory read used as a gate" defect this probe was already
-      // demoted for once.
+      // ADVISORY and BEST-EFFORT, not a gate. On Windows `statusService` maps
+      // every `schtasks /Query` failure - a timeout, a transient access denial
+      // - to `not-installed`, and a Linux manifest stat or a macOS
+      // `launchctl print` can simply fail. Neither may stop the authoritative
+      // start attempt: that would leave a registered, stopped host down
+      // because an INSPECTION failed. This read only decides what to SAY.
       const before = await statusBestEffort(controller, label);
       // Already running: report it and touch NOTHING. The platform start is
       // skipped deliberately rather than relied on to no-op, because on
@@ -118,13 +113,13 @@ export const serviceStartCommand: CommandFn = async (
       // launchctl kickstart and `systemctl --user start` genuinely do no-op,
       // so returning early costs those platforms nothing and gives all three
       // one answer.
-      // `running` is not enough on its own. Every platform's `statusService`
-      // derives it from `isProcessAlive(pid)` over pid metadata, so stale
-      // metadata naming a RECYCLED pid - or an indeterminate OS probe - reports
-      // a running host that is not there. Skipping the start on that leaves a
-      // genuinely stopped host down until someone repairs the metadata, which
-      // is the opposite of what this command was asked to do. Confirm the
-      // recorded process is genuinely serving before taking the shortcut.
+      //
+      // `running` alone is not enough, twice over. It is derived from
+      // `isProcessAlive(pid)` over pid metadata, so stale metadata naming a
+      // RECYCLED pid reports a host that is not there - hence the positive
+      // liveness confirmation. And even confirmed, it cannot attribute the
+      // process to the service manager; the summary says so rather than
+      // claiming the service was already running.
       const runningConfirmed =
         before?.state === "running" &&
         (await isHostPositivelyServing(environment));
@@ -139,6 +134,7 @@ export const serviceStartCommand: CommandFn = async (
           exitCode: 0,
         };
       }
+
       ctx.progress({
         stage: "start",
         message: `starting service '${label.id}'`,
@@ -218,7 +214,15 @@ function humanSummary(
 ): string {
   const pid = after?.pid ?? null;
   if (alreadyRunning) {
-    return `service '${labelId}' was already running${pid === null ? "" : ` (pid ${pid})`}`;
+    // Deliberately says "a host", not "the service". Nothing here can attribute
+    // the running process to the SERVICE MANAGER: Linux and Windows both derive
+    // `running` from the environment's shared pid metadata plus
+    // `isProcessAlive`, so a foreground `traycer host start` in another
+    // terminal satisfies it while the registration sits inactive. Claiming the
+    // service was already running there would report success for a background
+    // start that never happened, and the host would disappear when that
+    // terminal closed.
+    return `a host is already serving this environment${pid === null ? "" : ` (pid ${pid})`}, so no start was requested. If you started it with 'traycer host start' in a terminal, the background service is NOT running - stop it, then run this again`;
   }
   // "requested", not "started": every backend returns once the service
   // manager has ACCEPTED the launch, and a job that is registered but

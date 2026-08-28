@@ -205,7 +205,14 @@ describe("serviceStartCommand", () => {
       alreadyRunning: true,
     });
     expect(result.exitCode).toBe(0);
-    expect(result.human ?? "").toContain("already running");
+    // "a host", not "the service": nothing here can attribute the running
+    // process to the SERVICE MANAGER, since Linux and Windows both derive
+    // `running` from shared pid metadata. A foreground `traycer host start`
+    // satisfies it while the registration sits inactive, and claiming the
+    // service was already running there reports success for a background start
+    // that never happened.
+    expect(result.human ?? "").toContain("a host is already serving");
+    expect(result.human ?? "").toContain("traycer host start");
   });
 
   // `statusService` derives `running` from `isProcessAlive(pid)` over pid

@@ -170,7 +170,6 @@ export function startLogTail(options: LogTailOptions): LogTail {
       const handle = await open(options.path, "r");
       try {
         const stats = await handle.stat();
-        missingRetries = 0;
         if (establishEofOnFirstRead) {
           // First readable observation after an unreadable start: adopt its
           // end rather than replaying everything that was already there - and
@@ -222,6 +221,13 @@ export function startLogTail(options: LogTailOptions): LogTail {
       } finally {
         await handle.close();
       }
+      // Reset only after the WHOLE cycle - open, stat, read, close - has
+      // succeeded. Resetting right after the stat meant a persistent later
+      // failure (an `EIO` read, a close that always throws) took the counter
+      // from zero to one on every poll, so `maxMissingRetries` was never
+      // reached, `onExhausted` never fired, and `host logs --follow` could sit
+      // forever emitting nothing.
+      missingRetries = 0;
     } catch (cause) {
       // A CONFIRMED disappearance is the one error that licenses a rewind on
       // the next successful open - see `sawFileMissing`. Everything else
