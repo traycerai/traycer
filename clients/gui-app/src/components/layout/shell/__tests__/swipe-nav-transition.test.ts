@@ -4,6 +4,7 @@ import {
   findSnapshotSource,
   SWIPE_NAV_EXCLUDE_ATTRIBUTE,
   SWIPE_NAV_SCREEN_ATTRIBUTE,
+  type ScreenSnapshot,
 } from "@/components/layout/shell/screen-snapshot";
 import {
   clearScreenSnapshots,
@@ -221,7 +222,7 @@ describe("readHistoryEntryKey", () => {
 });
 
 describe("the snapshot cache", () => {
-  function snapshotOf(text: string) {
+  function snapshotOf(text: string): ScreenSnapshot {
     const node = document.createElement("div");
     node.textContent = text;
     return { node };

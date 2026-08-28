@@ -590,21 +590,22 @@ export function createPersistentMemoryHistory(
       // so the state passed to THIS replace survives - the stack stays in
       // agreement with the location TanStack caches after a replace, instead
       // of diverging until the next real navigation.
-      let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
         entries.splice(index - 1, 1);
         states.splice(index - 1, 1);
         index -= 1;
-        collapsedNeighbour = true;
       }
       if (index < entries.length - 1 && entries[index + 1] === path) {
         entries.splice(index + 1, 1);
         states.splice(index + 1, 1);
-        collapsedNeighbour = true;
       }
-      if (collapsedNeighbour) {
-        restampIndices(states);
-      }
+      // Unconditionally, not only after a collapse: the replaced state arrives
+      // carrying TanStack's CACHED `__TSR_index`, which a prior load-free
+      // `prune` (it never calls `history.notify()`) may have left stale - the
+      // same reason the push path re-stamps unconditionally. Without this, a
+      // non-collapsing replace stores the stale index and an array position
+      // diverges from its stamp until the next structural mutation.
+      restampIndices(states);
       persistState(windowId, entries, index);
       notifyController();
     },

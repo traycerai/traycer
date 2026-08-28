@@ -2082,6 +2082,32 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.dragStarts).toEqual(["back"]);
     });
 
+    // DIRECTION LOCK, the axis half: past activation the classifier is never
+    // consulted again, so a drag that curves sharply downward afterwards is
+    // still this gesture's - a thumb arcing across a phone does not travel a
+    // straight line, and re-classifying mid-drag would drop the screen it is
+    // carrying.
+    it("keeps a followed drag that curves off-axis after activation", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      // Far more vertical than horizontal from here - travel that would have
+      // failed the classifier had it still been asked.
+      dispatchPointer("pointermove", {
+        clientX: 70,
+        clientY: 460,
+        target: document.body,
+        timeStamp: 200,
+        pointerId: 1,
+        isPrimary: true,
+      });
+      lift("pointerup", 300);
+
+      expect(probe.dragTravel).toEqual([52, 62]);
+      expect(probe.releases).toHaveLength(1);
+    });
+
     // A release is judged on what the hand was doing when it let go, so the
     // speed comes from the last move rather than from the gesture's average -
     // the difference between a long slow drag finished with a flick and the

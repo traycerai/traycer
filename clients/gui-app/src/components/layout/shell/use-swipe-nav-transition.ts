@@ -12,6 +12,7 @@ import {
   findSnapshotSource,
 } from "@/components/layout/shell/screen-snapshot";
 import {
+  clearScreenSnapshots,
   readHistoryEntryKey,
   readScreenSnapshot,
   rememberScreenSnapshot,
@@ -102,6 +103,12 @@ export function useSwipeNavTransition(
   // Whether the settle in flight has already navigated. A cancel settle has
   // not, which is what makes it safe to interrupt.
   const committedRef = useRef(false);
+  // Travel already banked when a finger took the layers over mid-settle, in
+  // px. The new pointer measures its own travel from zero, but the layers it
+  // inherited are not at zero - without this offset the takeover's first move
+  // would snap them back toward rest, and the release would be judged on a
+  // fraction of the distance the layers have actually covered.
+  const takeoverTravelPxRef = useRef(0);
   const navigateRef = useRef(navigate);
   const reducedMotion = useReducedMotion();
   const reducedMotionRef = useRef(reducedMotion);
@@ -143,6 +150,11 @@ export function useSwipeNavTransition(
     return () => {
       settleRef.current?.stop();
       settleRef.current = null;
+      // Up to four frozen DOM trees are held for the swipes this hook serves;
+      // nothing else reads them, so they leave when it does. A remount refills
+      // the cache on the next navigation, and a gesture that arrives before
+      // then falls back to the instant step it already has.
+      clearScreenSnapshots();
     };
   }, []);
 
@@ -163,6 +175,9 @@ export function useSwipeNavTransition(
         if (active.direction !== direction) return "decline";
         settleRef.current?.stop();
         settleRef.current = null;
+        // The layers stay wherever the settle had carried them, and the new
+        // pointer's travel is measured on top of that - not from rest.
+        takeoverTravelPxRef.current = progress.get() * active.widthPx;
         return "follow";
       }
       // Direct manipulation is the finger, not motion the interface chose to
@@ -186,6 +201,7 @@ export function useSwipeNavTransition(
       if (widthPx <= 0) return "instant";
       const outgoing = captureScreenSnapshot(source);
       if (outgoing === null) return "instant";
+      takeoverTravelPxRef.current = 0;
       progress.set(0);
       const next: SwipeNavTransitionView = {
         direction,
@@ -205,7 +221,8 @@ export function useSwipeNavTransition(
     (travelPx: number): void => {
       const active = viewRef.current;
       if (active === null) return;
-      const fraction = travelPx / active.widthPx;
+      const fraction =
+        (takeoverTravelPxRef.current + travelPx) / active.widthPx;
       progress.set(Math.min(1, Math.max(0, fraction)));
     },
     [progress],
@@ -217,7 +234,11 @@ export function useSwipeNavTransition(
       if (active === null) return;
       settleRef.current?.stop();
       const commits = swipeNavCommits({
-        travelPx: release.travelPx,
+        // The distance the LAYERS have covered, not the distance this pointer
+        // has: a takeover inherits the interrupted settle's travel, and a
+        // release judged on the new pointer alone would spring back a screen
+        // that is visibly most of the way there.
+        travelPx: takeoverTravelPxRef.current + release.travelPx,
         widthPx: active.widthPx,
         velocityPxPerS: release.velocityPxPerS,
         cancelled: release.cancelled,

@@ -43,8 +43,10 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  * on a back swipe, the way the platform does, is a gesture of its own with its
  * own follow-the-finger tracking and is deliberately not attempted here.
  *
- * Both are read at pointer-down rather than subscribed to: the listeners are
- * installed once, and the answer is only needed at the instant a finger lands.
+ * Both are read imperatively rather than subscribed to: the listeners are
+ * installed once, and the recognizer asks at pointer-down and again on every
+ * move the gesture has not yet activated on. Past activation the drag is
+ * locked and neither claim is consulted again.
  */
 export function useMobileHistorySwipes(): ReactElement | null {
   const router = useRouter();
