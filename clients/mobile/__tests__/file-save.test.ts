@@ -54,14 +54,18 @@ function writtenBytes(): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function request(name: string, bytes: Uint8Array) {
+function requestOfType(name: string, bytes: Uint8Array, type: string) {
   return {
     name,
-    type: "image/png",
+    type,
     // A fresh, exactly-sized buffer: `bytes.buffer` on a subarray would carry
     // the whole backing store.
     bytes: bytes.slice().buffer,
   };
+}
+
+function request(name: string, bytes: Uint8Array) {
+  return requestOfType(name, bytes, "image/png");
 }
 
 beforeEach(() => {
@@ -158,8 +162,9 @@ describe("MobileFileSave", () => {
       request("   ", new Uint8Array([1])),
     );
 
-    expect(stagedBaseName(0)).toBe("traycer-export");
-    expect(saved).toEqual({ name: "traycer-export", path: null });
+    // The fallback stem, then the extension the blob's own type names.
+    expect(stagedBaseName(0)).toBe("traycer-export.png");
+    expect(saved).toEqual({ name: "traycer-export.png", path: null });
   });
 
   it("falls back for a padded dot, which names the staging directory itself", async () => {
@@ -167,13 +172,19 @@ describe("MobileFileSave", () => {
     // `.../.` is the directory rather than a file in it.
     await new MobileFileSave().saveFile(request(" . ", new Uint8Array([1])));
 
-    expect(stagedBaseName(0)).toBe("traycer-export");
+    // The property is that it names a FILE, not the directory or its parent -
+    // asserted as such, so the fallback's exact spelling stays free to move.
+    expect(stagedBaseName(0)).not.toBe(".");
+    expect(stagedBaseName(0)).not.toBe("..");
+    expect(stagedBaseName(0).startsWith("traycer-export")).toBe(true);
   });
 
   it("falls back for a padded double dot, which names the parent", async () => {
     await new MobileFileSave().saveFile(request(" .. ", new Uint8Array([1])));
 
-    expect(stagedBaseName(0)).toBe("traycer-export");
+    expect(stagedBaseName(0)).not.toBe(".");
+    expect(stagedBaseName(0)).not.toBe("..");
+    expect(stagedBaseName(0).startsWith("traycer-export")).toBe(true);
   });
 
   it("stages a repeat of the same name somewhere else, so it cannot overwrite the first", async () => {
@@ -233,6 +244,39 @@ describe("MobileFileSave", () => {
     );
 
     expect(stagedBaseName(0)).toBe("mermaid-diagram.png");
+  });
+
+  it("gives an extensionless name one from the blob's own type", async () => {
+    // `imageFileName` returns a source URL's last path segment verbatim, so an
+    // attachment URL ending in an id arrives here with no extension. The sheet
+    // is handed a file URI and nothing else, so the OS infers the type from
+    // the path - extensionless reads as generic data, and "Save Image" is not
+    // offered for it.
+    const saved = await new MobileFileSave().saveFile(
+      requestOfType("a1b2c3d4", new Uint8Array([1]), "image/png"),
+    );
+
+    expect(stagedBaseName(0)).toBe("a1b2c3d4.png");
+    // The confirmation names what the user actually got.
+    expect(saved).toEqual({ name: "a1b2c3d4.png", path: null });
+  });
+
+  it("leaves a name that already carries an extension alone", async () => {
+    await new MobileFileSave().saveFile(
+      requestOfType("photo.jpeg", new Uint8Array([1]), "image/png"),
+    );
+
+    // The suggestion wins over the type: renaming someone's file on the way
+    // out is not this seam's call.
+    expect(stagedBaseName(0)).toBe("photo.jpeg");
+  });
+
+  it("invents no extension for a type it cannot name one for", async () => {
+    await new MobileFileSave().saveFile(
+      requestOfType("payload", new Uint8Array([1]), "application/x-unknown"),
+    );
+
+    expect(stagedBaseName(0)).toBe("payload");
   });
 
   it("never offers a re-open route, having learned no path to re-open", () => {

@@ -116,19 +116,56 @@ function boundFileNameBytes(name: string): string {
 }
 
 /**
+ * Extensions for the media types this seam actually carries: images from the
+ * chat lightbox and the Mermaid / usage exports, and the artifact export's own
+ * formats. Deliberately a lookup rather than a guess - a name is only given an
+ * extension when the type names one unambiguously.
+ */
+const EXTENSION_BY_MEDIA_TYPE = new Map<string, string>([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/gif", "gif"],
+  ["image/webp", "webp"],
+  ["image/svg+xml", "svg"],
+  ["text/markdown", "md"],
+  ["application/pdf", "pdf"],
+  ["application/zip", "zip"],
+]);
+
+/**
+ * The name with an extension derived from the blob's own type, when it has
+ * none of its own and the type names one.
+ *
+ * The share sheet is handed a file URI and nothing else, so the OS infers the
+ * type from the path - an extensionless file reads as generic data, which
+ * costs the user the image-specific destinations ("Save Image") and can leave
+ * the receiving app unable to open what it was given. Extensionless names do
+ * reach here: `imageFileName` returns a source URL's last path segment
+ * verbatim, and an attachment URL ending in an id has no extension to keep.
+ */
+function withDerivedExtension(name: string, mediaType: string): string {
+  if (name.includes(".")) return name;
+  const extension = EXTENSION_BY_MEDIA_TYPE.get(mediaType);
+  return extension === undefined ? name : `${name}.${extension}`;
+}
+
+/**
  * The suggested name reduced to a single path segment. Callers compose names
  * from user content (an image's alt text, an epic's title), so a separator in
  * one would otherwise choose a directory - and an empty result would write to
  * the export directory itself.
  */
-function toFileName(suggested: string): string {
+function toFileName(suggested: string, mediaType: string): string {
   const leaf = suggested.split(/[\\/]/).at(-1) ?? "";
   // Trimmed BEFORE the leading dots are stripped, or surrounding whitespace
   // hides them from the strip: `" . "` would survive as `"."` and `" .. "` as
   // `".."`, naming the staging directory itself or its parent rather than a
   // file in it. The second trim catches what removing the dots exposes.
   const trimmed = leaf.trim().replace(/^\.+/, "").trim();
-  return trimmed.length === 0 ? "traycer-export" : boundFileNameBytes(trimmed);
+  const named = trimmed.length === 0 ? "traycer-export" : trimmed;
+  // Extension first, byte bound second: the bound is what has to hold, and it
+  // preserves whatever extension the name ends up with.
+  return boundFileNameBytes(withDerivedExtension(named, mediaType));
 }
 
 /**
@@ -171,7 +208,7 @@ export class MobileFileSave implements IFileSaveHost {
   readonly openSavedFile = null;
 
   async saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null> {
-    const name = toFileName(request.name);
+    const name = toFileName(request.name, request.type);
     const written = await Filesystem.writeFile({
       path: stagingPath(name),
       data: toBase64(request.bytes),
