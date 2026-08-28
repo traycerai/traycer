@@ -516,6 +516,12 @@ async function posixPidOwnsPort(
   let stdout: string;
   try {
     const result = await executePortProbe("lsof", [
+      // `-w` suppresses lsof's warning chatter (unreadable /proc entries,
+      // un-stat-able filesystems - routine inside containers). Without it the
+      // empty-stderr requirement below would misread a warning as a probe
+      // failure and refuse to certify perfectly good results on exactly the
+      // machines where this repair is most likely to be needed.
+      "-w",
       "-nP",
       `-iTCP:${port}`,
       "-sTCP:LISTEN",
@@ -543,11 +549,23 @@ async function posixPidOwnsPort(
     // (no listener on the port). That's a legitimate "no-listener"
     // signal, NOT a probe failure - distinguish it so the caller can
     // emit a clearer message than "couldn't verify".
+    //
+    // EMPTY STDERR IS PART OF THAT SIGNAL, because lsof overloads exit 1 for
+    // BOTH "nothing matched" and "an error occurred". A transient permission
+    // or /proc-inspection failure therefore looks identical to a clean empty
+    // result from exit code and stdout alone. That ambiguity used to be
+    // cheap: `no-listener` only ever produced a refusal ("nothing to free").
+    // Post-kill verification promoted it to the sole success verdict, so the
+    // same ambiguity would now certify a release over a port that is still
+    // held. `-w` above removes the routine warning noise that would otherwise
+    // make this check trigger constantly, leaving stderr as a real signal.
     if (
       info.code === 1 &&
       (info.stdout === undefined || info.stdout.length === 0)
     ) {
-      return { owns: false, actualPid: null, probe: "no-listener" };
+      return info.stderr === undefined || info.stderr.length === 0
+        ? { owns: false, actualPid: null, probe: "no-listener" }
+        : { owns: false, actualPid: null, probe: "unsupported" };
     }
     // Anything else (exit 2+, killed by signal, etc.) is a genuine
     // probe failure we can't reason about - re-throw so the runner

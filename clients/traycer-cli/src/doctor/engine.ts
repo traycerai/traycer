@@ -418,11 +418,18 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       title: "CLI upgrade finalize marker is unreadable",
       message:
         `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be read: ` +
-        `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed, ` +
-        "and 'traycer host restart' will discard the marker as invalid rather than acting on it. " +
-        "If a CLI upgrade appears stuck, re-run 'traycer cli upgrade' to re-stage it.",
-      fixAction: null,
-      terminalCommand: `traycer cli upgrade`,
+        `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed. ` +
+        "Run 'traycer host restart': its reconcile step discards a marker it cannot parse, which clears this. " +
+        "If a CLI upgrade still appears stuck afterwards, re-run 'traycer cli upgrade' to re-stage it.",
+      // `host restart` is the command that actually clears this. The previous
+      // `traycer cli upgrade` was inert against the reported condition - it
+      // never touches post-finalize.json, so an already-current CLI would
+      // leave the same marker in place and every later doctor run would
+      // repeat the identical warning. Offering a command that cannot resolve
+      // what it is offered for is the CLI-006 defect wearing different
+      // clothes: the string parses, it just does not do the job.
+      fixAction: "host-restart",
+      terminalCommand: `traycer host restart`,
       details: {
         markerPath: cliPostFinalizeMarkerPath(opts.environment),
         errorMessage: finalizeMarker.errorMessage,
@@ -440,6 +447,45 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const pendingUpgrade = await readPendingCliUpgrade({
     environment: opts.environment,
   });
+  // A SWAPPED MARKER CARRYING A SERVICE-START FAILURE, on a manifest with
+  // nothing pending. This is not an exotic combination - it is the NORMAL
+  // on-disk state for that failure, which is why gating marker interpretation
+  // on `pendingUpgrade !== null` lost it entirely.
+  //
+  // The ordering in `commands/cli-finalize-upgrade.ts` is: run the swap
+  // (`finalizePendingCliUpgrade`, which CLEARS `pendingUpgrade` on success),
+  // then try to start the service, then write the marker recording whether
+  // that start failed. So by the time a `serviceStartError` exists to report,
+  // the pending record it would have been attached to is already gone.
+  //
+  // Other probes will notice the host is not running, but none of them can
+  // say WHY - and the helper's own error is the only artifact that explains
+  // it. Reported whenever present, independently of pending state.
+  if (
+    pendingUpgrade === null &&
+    finalizeMarker.status === "present" &&
+    finalizeMarker.marker.status === "swapped" &&
+    finalizeMarker.marker.serviceStartError !== null
+  ) {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
+      severity: "warning",
+      title: "CLI upgrade completed but the host service did not start",
+      message:
+        `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
+        `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry; ` +
+        "the host is simply down. Start it with 'traycer host restart'.",
+      fixAction: "host-restart",
+      terminalCommand: `traycer host restart`,
+      details: {
+        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        attemptedAt: finalizeMarker.marker.attemptedAt,
+        serviceStartError: finalizeMarker.marker.serviceStartError,
+        livePath: finalizeMarker.marker.livePath,
+        stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
+      },
+    });
+  }
   if (pendingUpgrade !== null) {
     // A marker that already settled the swap outranks everything below it:
     // the manifest still says "pending", but the disk says otherwise, and

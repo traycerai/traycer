@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -481,6 +482,67 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(pending).toBeDefined();
     expect(pending?.title).toContain("missing");
     expect(pending?.terminalCommand).toMatch(/traycer cli upgrade/);
+  });
+
+  // The NORMAL on-disk state for "helper swapped the CLI, then could not start
+  // the service": `finalizePendingCliUpgrade` clears pendingUpgrade on success
+  // and the marker recording the service-start failure is written afterwards.
+  // Gating marker interpretation on `pendingUpgrade !== null` therefore lost
+  // the helper's error in exactly the case it exists to explain.
+  it("reports a swapped marker's serviceStartError even though the pending upgrade is already cleared", async () => {
+    stageDoctorMocks();
+    const cliDir = join(workHome, ".traycer", "cli");
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: "1.5.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: liveBinaryPath,
+          source: "manual",
+          // Already cleared by the successful swap - the point of the test.
+          pendingUpgrade: null,
+        },
+        null,
+        2,
+      ),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const markerPath = join(cliDir, "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: null,
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.message).toContain("Input/output error");
+    expect(issue?.terminalCommand).toMatch(/traycer host restart/);
+    // Not an upgrade to retry - the upgrade worked; only the service is down.
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
+    ).toBeUndefined();
+    // Still observational.
+    expect(existsSync(markerPath)).toBe(true);
   });
 
   // `readPostFinalizeMarker` separates `invalid` from `absent` precisely so the

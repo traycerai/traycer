@@ -355,6 +355,30 @@ describe.skipIf(process.platform === "win32")(
       expect(result.holderPid).toBe(TARGET_PID);
     });
 
+    // lsof overloads exit 1 for BOTH "nothing matched" and "an error
+    // occurred", so an exit-1-with-empty-stdout result is only a clean
+    // no-listener signal when stderr is also empty. Certifying a release off
+    // an errored probe is the same false success this verification exists to
+    // prevent - it would just arrive through a probe failure instead.
+    it("unverified, never released: lsof exits 1 with empty stdout but writes to stderr", async () => {
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = {
+        kind: "error",
+        err: { code: 1, stdout: "", stderr: "lsof: no pwd entry for UID 1000" },
+      };
+
+      const pending = killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
+      const result = await pending;
+
+      expect(result.release).toBe("unverified");
+      expect(result.release).not.toBe("released");
+    });
+
     it("still-held: target stays alive and keeps the port past the deadline", async () => {
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = ownsPort(TARGET_PID);

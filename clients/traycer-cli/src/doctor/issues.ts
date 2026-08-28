@@ -70,6 +70,13 @@ export const DOCTOR_ISSUE_CODES = {
   // upgrade right now, and staying silent about it would let doctor call the
   // CLI-upgrade state clean while an unparseable file sits on disk.
   CLI_UPGRADE_MARKER_UNREADABLE: "CLI_UPGRADE_MARKER_UNREADABLE",
+  // The finalize helper swapped the CLI successfully and then could not start
+  // the host service. Its own error is the only artifact that explains a host
+  // that is down for this particular reason, and it is recorded in the marker
+  // AFTER `pendingUpgrade` has already been cleared by the successful swap -
+  // so it is only visible to a reader who looks at markers independently of
+  // pending state. Not an upgrade to retry: the upgrade worked.
+  CLI_UPGRADE_SERVICE_START_FAILED: "CLI_UPGRADE_SERVICE_START_FAILED",
   // The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the
   // Desktop app points into its own bundle; removing or replacing the app
   // leaves it dangling. `ls` (lstat) still shows the file while executing
