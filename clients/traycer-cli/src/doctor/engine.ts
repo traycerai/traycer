@@ -422,9 +422,22 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     // marker's CONTENTS cannot tell us: reconciliation removes an unparseable
     // marker with `safeUnlink`, which swallows its errors, so on a directory
     // this user cannot write to the restart completes and the marker - and
-    // this warning - survive untouched, forever. Promising the repair without
-    // checking is the same unearned claim this PR exists to remove, one level
-    // up. `W_OK` on the parent is exactly the precondition `unlink` needs.
+    // this warning - survive untouched, forever.
+    //
+    // `W_OK` on the parent is NECESSARY but not SUFFICIENT, and the copy below
+    // is written to match exactly that. A readable marker owned by another
+    // user inside a writable STICKY directory passes this check and still
+    // fails to unlink with EPERM, and Windows ACL delete rights can diverge
+    // from writability in their own ways. Establishing deletability for real
+    // would mean ownership plus sticky-bit inspection on POSIX and an ACL
+    // query on Windows - and a wrong prediction in EITHER direction is worse
+    // than not predicting: refusing to name the repair that would have worked,
+    // or promising one that cannot.
+    //
+    // So the negative result is still asserted (a non-writable directory
+    // definitely cannot be unlinked from, which is worth saying outright), and
+    // the positive one is described rather than guaranteed: try the restart,
+    // and here is what it means if the warning survives it.
     const markerDirWritable = await access(
       dirname(cliPostFinalizeMarkerPath(opts.environment)),
       fsConstants.W_OK,
@@ -440,8 +453,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be parsed: ` +
         `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed. ` +
         (markerDirWritable
-          ? "Run 'traycer host restart': its reconcile step discards a marker it cannot parse, which clears this. " +
-            "If a CLI upgrade still appears stuck afterwards, re-run 'traycer cli upgrade' to re-stage it."
+          ? "Run 'traycer host restart': its reconcile step attempts to discard a marker it cannot parse. " +
+            "If this warning is still here afterwards, the file's own ownership or permissions are preventing deletion " +
+            "(a marker left by another user, for example) - remove it by hand. " +
+            "If a CLI upgrade still appears stuck after that, re-run 'traycer cli upgrade' to re-stage it."
           : "Its directory is not writable by this user, so 'traycer host restart' cannot delete it either - " +
             "its reconcile step would complete while leaving this warning in place. " +
             "Fix the ownership or permissions on that directory first."),
