@@ -418,7 +418,13 @@ function collapseAdjacentDuplicates(
       return [...collapsed, entry];
     }
     if (entry.wasCurrent) {
-      collapsed[collapsed.length - 1] = { ...previous, wasCurrent: true };
+      // The CURRENT entry wins the collapse wholesale - state and key, not
+      // only the marker. The prune is load-free, so the router's cached
+      // location keeps carrying the current entry's key; a survivor wearing
+      // the earlier entry's key would make everything filed against the
+      // cached identity (frozen-screen snapshots among it) unreachable, and
+      // could resurface whatever was filed under the earlier one instead.
+      collapsed[collapsed.length - 1] = entry;
     }
     return collapsed;
   }, []);
