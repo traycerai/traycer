@@ -1,5 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
-import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import {
+  BROWSER_VIEW_VIEWPORT_PRESET_IDS,
+  type BrowserViewViewportPresetId,
+} from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { TILE_KIND_BROWSER_SESSION } from "../tile-kinds";
 import type { BrowserSessionTileRef } from "../types";
@@ -21,10 +24,8 @@ function isBrowserViewportPreset(
   value: unknown,
 ): value is BrowserViewViewportPresetId {
   return (
-    value === "responsive" ||
-    value === "mobile" ||
-    value === "tablet" ||
-    value === "desktop"
+    typeof value === "string" &&
+    BROWSER_VIEW_VIEWPORT_PRESET_IDS.some((preset) => preset === value)
   );
 }
 

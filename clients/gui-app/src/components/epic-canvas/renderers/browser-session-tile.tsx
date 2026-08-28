@@ -2,11 +2,9 @@ import { useEffect } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { ElectronTabSurface } from "./agent-browser-tile";
 import { BrowserPeekTile, type BrowserPeekNode } from "./browser-peek-tile";
-import { BrowserSessionsHostProvider } from "./browser-sessions-provider";
+import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
-import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
@@ -128,24 +126,13 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
   );
 }
 
-function CrossHostBrowserSessionTile(props: BrowserSessionTileProps) {
-  const hostClient = useTabHostClient();
+export function BrowserSessionTile(props: BrowserSessionTileProps) {
   return (
-    <BrowserSessionsHostProvider
+    <BrowserSessionsHostBoundary
       hostId={props.node.hostId}
-      hostClient={hostClient}
       epicId={props.epicId}
     >
       <BrowserSessionTileFromProvider {...props} />
-    </BrowserSessionsHostProvider>
-  );
-}
-
-export function BrowserSessionTile(props: BrowserSessionTileProps) {
-  const canvasHostId = useCanvasHostId();
-  return props.node.hostId === canvasHostId ? (
-    <BrowserSessionTileFromProvider {...props} />
-  ) : (
-    <CrossHostBrowserSessionTile {...props} />
+    </BrowserSessionsHostBoundary>
   );
 }

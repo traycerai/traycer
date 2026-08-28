@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
-import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator";
+import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator-bridge";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-find-owner-bridge";
 import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-bridge";

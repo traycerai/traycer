@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Bug, Camera, Globe2, Send } from "lucide-react";
 import { toast } from "sonner";
 
@@ -36,6 +37,18 @@ import {
   type TilePane,
 } from "@/stores/epics/canvas/tile-tree";
 
+/**
+ * The browser tile a chat composer would attach from: the store holds both
+ * halves already (the tile ref by identity, the pane by id), so the selector
+ * returns exactly those two and `useShallow` settles re-renders. The tile KEY
+ * is derived below rather than selected, because building it inside the
+ * selector allocates a fresh object on every store tick.
+ */
+interface BrowserContextPointer {
+  readonly tile: BrowserSessionTileRef;
+  readonly paneId: string;
+}
+
 interface BrowserContextCandidate {
   readonly tile: BrowserSessionTileRef;
   readonly tileKey: BrowserViewTileKey;
@@ -46,11 +59,6 @@ interface ResolvedBrowserContextCandidate extends BrowserContextCandidate {
   readonly pageUrl: string;
 }
 
-const browserContextCandidateCache = new WeakMap<
-  EpicCanvasState,
-  Map<string, BrowserContextCandidate | null>
->();
-
 export function BrowserComposerContextChip(props: {
   readonly chatId: string;
   readonly chatInstanceId: string;
@@ -59,11 +67,12 @@ export function BrowserComposerContextChip(props: {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
   const sessions = useMaybeBrowserSessionsContext();
-  const pointer = useEpicCanvasStore((state) =>
-    selectStableBrowserContextCandidate(
-      state.canvasByTabId[props.viewTabId] ?? null,
-      props.viewTabId,
-      props.chatInstanceId,
+  const pointer = useEpicCanvasStore(
+    useShallow((state) =>
+      selectBrowserContextPointer(
+        state.canvasByTabId[props.viewTabId] ?? null,
+        props.chatInstanceId,
+      ),
     ),
   );
   const session = sessions?.items.find(
@@ -78,12 +87,18 @@ export function BrowserComposerContextChip(props: {
       session?.runtime.kind === "electron" &&
       tab !== undefined
         ? {
-            ...pointer,
+            tile: pointer.tile,
+            tileKey: {
+              viewTabId: props.viewTabId,
+              paneId: pointer.paneId,
+              tileInstanceId: pointer.tile.instanceId,
+              pageSessionId: pointer.tile.id,
+            },
             title: tab.title ?? "Browser",
             pageUrl: tab.url,
           }
         : null,
-    [pointer, session?.runtime, tab],
+    [pointer, props.viewTabId, session?.runtime, tab],
   );
   const [pendingLevel, setPendingLevel] =
     useState<BrowserDebugAttachLevel | null>(null);
@@ -194,59 +209,13 @@ function networkEntriesForLevel(
   return [];
 }
 
-function selectBrowserContextCandidate(
+function selectBrowserContextPointer(
   canvas: EpicCanvasState | null,
-  viewTabId: string,
   chatInstanceId: string,
-): BrowserContextCandidate | null {
+): BrowserContextPointer | null {
   if (canvas === null || canvas.root === null) return null;
   const panes = panesSharingGroupWithTile(canvas.root, chatInstanceId);
-  const candidates = panes.flatMap((pane) =>
-    activeBrowserInPane(canvas, pane, viewTabId),
-  );
-  return candidates[0] ?? null;
-}
-
-function selectStableBrowserContextCandidate(
-  canvas: EpicCanvasState | null,
-  viewTabId: string,
-  chatInstanceId: string,
-): BrowserContextCandidate | null {
-  if (canvas === null) return null;
-  const key = `${viewTabId}\u0000${chatInstanceId}`;
-  const byKey = getBrowserContextCandidateCache(canvas);
-  const previous = byKey.get(key);
-  const next = selectBrowserContextCandidate(canvas, viewTabId, chatInstanceId);
-  if (browserContextCandidatesEqual(previous, next)) {
-    return previous ?? null;
-  }
-  byKey.set(key, next);
-  return next;
-}
-
-function getBrowserContextCandidateCache(
-  canvas: EpicCanvasState,
-): Map<string, BrowserContextCandidate | null> {
-  const existing = browserContextCandidateCache.get(canvas);
-  if (existing !== undefined) return existing;
-  const next = new Map<string, BrowserContextCandidate | null>();
-  browserContextCandidateCache.set(canvas, next);
-  return next;
-}
-
-function browserContextCandidatesEqual(
-  a: BrowserContextCandidate | null | undefined,
-  b: BrowserContextCandidate | null,
-): boolean {
-  if (a === b) return true;
-  if (a === undefined || a === null || b === null) return false;
-  return (
-    a.tile === b.tile &&
-    a.tileKey.viewTabId === b.tileKey.viewTabId &&
-    a.tileKey.paneId === b.tileKey.paneId &&
-    a.tileKey.tileInstanceId === b.tileKey.tileInstanceId &&
-    a.tileKey.pageSessionId === b.tileKey.pageSessionId
-  );
+  return panes.flatMap((pane) => activeBrowserInPane(canvas, pane))[0] ?? null;
 }
 
 function panesSharingGroupWithTile(
@@ -282,23 +251,12 @@ function layoutContainsTile(
 function activeBrowserInPane(
   canvas: EpicCanvasState,
   pane: TilePane,
-  viewTabId: string,
-): BrowserContextCandidate[] {
+): BrowserContextPointer[] {
   if (pane.activeTabId === null) return [];
   const tile = canvas.tilesByInstanceId[pane.activeTabId];
   if (tile === undefined) return [];
   if (!isBrowserSessionTileRef(tile)) return [];
-  return [
-    {
-      tile,
-      tileKey: {
-        viewTabId,
-        paneId: pane.id,
-        tileInstanceId: tile.instanceId,
-        pageSessionId: tile.id,
-      },
-    },
-  ];
+  return [{ tile, paneId: pane.id }];
 }
 
 function emptyDebugSnapshot(

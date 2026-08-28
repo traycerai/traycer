@@ -6,6 +6,8 @@ import type {
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/browser-link-routing-core";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
+import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
 import type {
   BrowserCookieCryptoState,
   BrowserViewCertificateErrorChange,
@@ -15,11 +17,6 @@ import type {
   BrowserViewViewportPresetId,
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
-
-interface AddressDraft {
-  readonly sourceUrl: string | null;
-  readonly value: string;
-}
 
 interface UseElectronTabChromeArgs {
   readonly control: (
@@ -74,10 +71,6 @@ export function useElectronTabChrome(
     initialViewportPreset,
     onAttemptedUrl,
   } = args;
-  const [addressDraft, setAddressDraft] = useState<AddressDraft>({
-    sourceUrl: null,
-    value: "",
-  });
   const [viewportPreset, setViewportPreset] =
     useState<BrowserViewViewportPresetId>(initialViewportPreset);
   const [downloads, setDownloads] = useState<
@@ -88,13 +81,13 @@ export function useElectronTabChrome(
   const [certificateProceeding, setCertificateProceeding] = useState(false);
 
   const liveUrl = statusUrl.length > 0 ? statusUrl : initialUrl;
-  const addressValue =
-    addressDraft.sourceUrl === liveUrl ? addressDraft.value : liveUrl;
+  const draft = useAddressDraft(liveUrl);
+  const addressValue = draft.addressValue;
 
   useEffect(() => {
     if (surfaceServices === null) return;
     const subscription = surfaceServices.onDownloadChange((change) => {
-      if (!isChangeForTile(change, tileKey)) return;
+      if (!isSameBrowserViewTile(change, tileKey)) return;
       setDownloads((current) => upsertDownload(current, change));
     });
     return () => {
@@ -105,7 +98,7 @@ export function useElectronTabChrome(
   useEffect(() => {
     if (surfaceServices === null) return;
     const subscription = surfaceServices.onCertificateError((change) => {
-      if (!isChangeForTile(change, tileKey)) return;
+      if (!isSameBrowserViewTile(change, tileKey)) return;
       setCertificateProceeding(false);
       setCertificateError(change);
     });
@@ -119,7 +112,7 @@ export function useElectronTabChrome(
   ): void => {
     event.preventDefault();
     const nextUrl = normalizeBrowserAddressInput(addressValue);
-    setAddressDraft({ sourceUrl: nextUrl, value: nextUrl });
+    draft.onAddressSubmitted(nextUrl);
     if (nextUrl === liveUrl) return;
     onAttemptedUrl(nextUrl);
     setCertificateError(null);
@@ -192,9 +185,8 @@ export function useElectronTabChrome(
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
     onNavigate: navigateToAddress,
-    onAddressChange: (value) => {
-      setAddressDraft({ sourceUrl: liveUrl, value });
-    },
+    onAddressChange: draft.onAddressChange,
+    onAddressFocusChange: draft.onAddressFocusChange,
     onBack: goBack,
     onForward: goForward,
     onReload: reload,
@@ -222,18 +214,6 @@ export function useElectronTabChrome(
     proceedCertificate,
     viewportPreset,
   };
-}
-
-function isChangeForTile(
-  change: BrowserViewTileKey,
-  key: BrowserViewTileKey,
-): boolean {
-  return (
-    change.viewTabId === key.viewTabId &&
-    change.paneId === key.paneId &&
-    change.tileInstanceId === key.tileInstanceId &&
-    change.pageSessionId === key.pageSessionId
-  );
 }
 
 function upsertDownload(

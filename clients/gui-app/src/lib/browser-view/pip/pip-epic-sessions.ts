@@ -8,11 +8,11 @@
  * Plain object (not a hook-per-host) so the host set can be data-driven.
  * Dispose closes every subscription; there is no retained detached state.
  */
-import {
-  browserSessionsServerFrameSchema,
-  type BrowserSessionInfo,
-  type BrowserSessionsServerFrame,
+import type {
+  BrowserSessionInfo,
+  BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
+import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
 import {
@@ -20,8 +20,6 @@ import {
   browserSessionsReducer,
 } from "../sessions/browser-sessions-stream";
 import { applyPipCaption, applyPipHostLifecycle } from "./pip-store";
-
-const BROWSER_SESSIONS_METHOD = "browser.sessions";
 
 interface HostSlot {
   readonly hostId: string;
@@ -99,45 +97,27 @@ export class RemotePipSessionsManager {
     slot.generation += 1;
     const generation = slot.generation;
     let transport: DurableStreamTransport | null = null;
-    let closed = false;
     try {
       const openedTransport = this.openTransport(slot.hostId);
       transport = openedTransport;
-      const session = openedTransport.wsStreamClient.subscribe(
-        BROWSER_SESSIONS_METHOD,
-        { epicId: this.epicId },
-      );
-      session.onServerFrame((envelope, binaryPayload) => {
-        if (closed || slot.generation !== generation) return;
-        if (binaryPayload !== null) {
-          appLogger.error(
-            "[pip] rejected binary browser.sessions frame",
-            { hostId: slot.hostId, byteLength: binaryPayload.byteLength },
-            new Error("browser.sessions does not accept binary server frames."),
-          );
-          return;
-        }
-        const parsed = browserSessionsServerFrameSchema.safeParse(envelope);
-        if (!parsed.success) {
-          appLogger.error(
-            "[pip] rejected invalid browser.sessions frame",
-            { hostId: slot.hostId, issues: parsed.error.message },
-            parsed.error,
-          );
-          return;
-        }
-        this.applyFrame(slot, parsed.data);
-      });
-      session.onStatusChange((status, reason) => {
-        if (closed || slot.generation !== generation) return;
-        const lifecycle = browserSessionsLifecycle(status, reason);
-        applyPipHostLifecycle(this.epicId, slot.hostId, lifecycle);
+      const stream = new BrowserSessionsStreamClient({
+        wsStreamClient: openedTransport.wsStreamClient,
+        epicId: this.epicId,
+        callbacks: {
+          onServerFrame: (frame) => {
+            if (slot.generation !== generation) return;
+            this.applyFrame(slot, frame);
+          },
+          onConnectionStatus: (status, reason) => {
+            if (slot.generation !== generation) return;
+            const lifecycle = browserSessionsLifecycle(status, reason);
+            applyPipHostLifecycle(this.epicId, slot.hostId, lifecycle);
+          },
+        },
       });
       slot.close = () => {
-        if (closed) return;
-        closed = true;
         try {
-          session.close();
+          stream.close();
         } finally {
           openedTransport.close();
         }

@@ -11,7 +11,6 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
-import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
@@ -58,39 +57,57 @@ export function usePipOwnedFrame(
     auth,
   );
   const bridge = runnerHost?.browserView ?? null;
-  const useNative = binding !== null && bridge !== null;
   const enabled = captureTarget !== null;
   const { owned, setOwned } = usePipFrameOwner(
     displayedSelectionId,
     selectionId,
   );
-  const clientHandle = usePipHostClientHandle(client);
 
-  usePipNativeCaptureArm({
+  // One arm for both transports. Every value below is render-stable (the
+  // binding comes from the Electron-tab directory store, the client from the
+  // stream-client cache), so this is the real capture identity rather than a
+  // string proxy for it.
+  useEffect(() => {
+    if (!enabled || selectionId === null) return;
+    const onUrl = (src: string): void => {
+      setOwned((previous) => {
+        if (previous !== null && previous.src !== src) {
+          URL.revokeObjectURL(previous.src);
+        }
+        return { selectionId, src };
+      });
+    };
+    if (binding !== null && bridge !== null) {
+      return startNativePipCapture({
+        binding,
+        bridge,
+        epicId,
+        selectionId,
+        onUrl,
+      });
+    }
+    if (client === null || sessionId.length === 0 || tabId.length === 0) return;
+    return startHeadlessPipCapture({
+      client,
+      epicId,
+      selectionId,
+      onUrl,
+      sessionId,
+      tabId,
+    });
+  }, [
     binding,
     bridge,
-    selectionId,
-    enabled: enabled && useNative,
+    client,
+    enabled,
     epicId,
-    setOwned,
-  });
-  usePipHeadlessCaptureArm({
     selectionId,
-    clientHandle,
-    enabled: enabled && !useNative && sessionId.length > 0 && tabId.length > 0,
-    epicId,
-    hostId,
     sessionId,
     setOwned,
     tabId,
-  });
+  ]);
 
   return frameSrcFor(owned, displayedSelectionId);
-}
-
-interface PipHostClientHandle {
-  readonly get: () => IHostStreamClient<HostStreamRpcRegistry> | null;
-  readonly subscribe: (onChange: () => void) => () => void;
 }
 
 function pipCaptureCoordinates(snapshot: PipSnapshot): {
@@ -110,156 +127,6 @@ function pipCaptureCoordinates(snapshot: PipSnapshot): {
     sessionId: captureTarget?.sessionId ?? "",
     tabId: captureTarget?.tabId ?? "",
   };
-}
-
-function usePipHostClientHandle(
-  client: IHostStreamClient<HostStreamRpcRegistry> | null,
-): PipHostClientHandle {
-  const storeRef = useRef<{
-    client: IHostStreamClient<HostStreamRpcRegistry> | null;
-    readonly listeners: Set<() => void>;
-  }>({
-    client,
-    listeners: new Set(),
-  });
-  const [handle] = useState<PipHostClientHandle>(() => ({
-    get: () => storeRef.current.client,
-    subscribe: (onChange) => {
-      storeRef.current.listeners.add(onChange);
-      return () => {
-        storeRef.current.listeners.delete(onChange);
-      };
-    },
-  }));
-
-  useEffect(() => {
-    const store = storeRef.current;
-    if (store.client === client) return;
-    store.client = client;
-    for (const listener of store.listeners) listener();
-  });
-
-  return handle;
-}
-
-function nativeTabBindingKey(binding: ElectronTabBinding): string {
-  return compositeKey(
-    binding.hostId,
-    binding.sessionId,
-    binding.tabId,
-    binding.registrationId,
-  );
-}
-
-function usePipNativeCaptureArm(input: {
-  readonly enabled: boolean;
-  readonly binding: ElectronTabBinding | null;
-  readonly bridge: BrowserViewBridge | null;
-  readonly selectionId: string | null;
-  readonly epicId: string;
-  readonly setOwned: Dispatch<SetStateAction<OwnedPipFrame | null>>;
-}): void {
-  const tileKey =
-    input.enabled && input.binding !== null
-      ? compositeKey(
-          nativeTabBindingKey(input.binding),
-          input.selectionId ?? "",
-        )
-      : null;
-  const argsRef = useRef(input);
-  useEffect(() => {
-    argsRef.current = input;
-  });
-  useEffect(() => {
-    if (tileKey === null) return;
-    const args = argsRef.current;
-    if (
-      args.binding === null ||
-      args.bridge === null ||
-      args.selectionId === null
-    ) {
-      return;
-    }
-    const liveSelectionId = args.selectionId;
-    return startNativePipCapture({
-      binding: args.binding,
-      bridge: args.bridge,
-      epicId: args.epicId,
-      selectionId: liveSelectionId,
-      onUrl: (src) => {
-        args.setOwned((prev) => {
-          if (prev !== null && prev.src !== src) URL.revokeObjectURL(prev.src);
-          return { selectionId: liveSelectionId, src };
-        });
-      },
-    });
-  }, [tileKey]);
-}
-
-function usePipHeadlessCaptureArm(input: {
-  readonly enabled: boolean;
-  readonly hostId: string;
-  readonly sessionId: string;
-  readonly tabId: string;
-  readonly selectionId: string | null;
-  readonly epicId: string;
-  readonly clientHandle: PipHostClientHandle;
-  readonly setOwned: Dispatch<SetStateAction<OwnedPipFrame | null>>;
-}): void {
-  const latchKey = input.enabled
-    ? compositeKey(
-        input.hostId,
-        input.sessionId,
-        input.tabId,
-        input.selectionId ?? "",
-      )
-    : null;
-  const argsRef = useRef(input);
-  useEffect(() => {
-    argsRef.current = input;
-  });
-  useEffect(() => {
-    if (latchKey === null) return;
-    const handle = argsRef.current.clientHandle;
-    let disposed = false;
-    let closeStream: (() => void) | undefined;
-    let openedInstanceId: string | null = null;
-
-    const sync = (): void => {
-      if (disposed) return;
-      const args = argsRef.current;
-      const next = handle.get();
-      const nextId = next === null ? null : next.instanceId;
-      if (nextId === openedInstanceId) return;
-      closeStream?.();
-      closeStream = undefined;
-      openedInstanceId = nextId;
-      if (next === null || args.selectionId === null) return;
-      const liveSelectionId = args.selectionId;
-      closeStream = startHeadlessPipCapture({
-        client: next,
-        epicId: args.epicId,
-        selectionId: liveSelectionId,
-        onUrl: (src) => {
-          args.setOwned((prev) => {
-            if (prev !== null && prev.src !== src)
-              URL.revokeObjectURL(prev.src);
-            return { selectionId: liveSelectionId, src };
-          });
-        },
-        sessionId: args.sessionId,
-        tabId: args.tabId,
-      });
-    };
-
-    const unsubscribe = handle.subscribe(sync);
-    sync();
-    return () => {
-      disposed = true;
-      unsubscribe();
-      closeStream?.();
-    };
-  }, [latchKey]);
 }
 
 function frameSrcFor(

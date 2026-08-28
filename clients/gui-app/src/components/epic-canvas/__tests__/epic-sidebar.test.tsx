@@ -107,6 +107,8 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
     props.children,
+  BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+    props.children,
 }));
 
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({

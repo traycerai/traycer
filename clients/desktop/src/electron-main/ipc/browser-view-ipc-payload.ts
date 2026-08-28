@@ -8,7 +8,7 @@ import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
 } from "../../ipc-contracts/browser-annotation-types";
-import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "../../ipc-contracts/browser-view-types";
+import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewAttachSurface,
   BrowserViewBoundsUpdate,
@@ -22,8 +22,8 @@ import type {
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayRelease,
-} from "../../ipc-contracts/browser-view-types";
-import type { PipCaptureStartInput } from "../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
+import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
 
 const nonEmptyStringSchema = z.string().min(1);
 const viewportPresetSchema = z.enum(BROWSER_VIEW_VIEWPORT_PRESET_IDS);

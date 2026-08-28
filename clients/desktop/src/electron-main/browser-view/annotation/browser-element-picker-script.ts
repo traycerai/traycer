@@ -3,8 +3,14 @@ import type {
   BrowserViewElementBoundingBox,
   BrowserViewElementCapture,
   BrowserViewElementStyle,
-} from "../../../ipc-contracts/browser-view-types";
-import { clamp, isRecord } from "../guards";
+} from "@traycer-clients/shared/platform/browser-view";
+import {
+  boundedString,
+  boundedStringOrNull,
+  clamp,
+  finiteNumber,
+  isRecord,
+} from "../guards";
 
 /**
  * Bounded per-element capture sanitizer shared by the annotation overlay.
@@ -75,10 +81,6 @@ export const ELEMENT_PICKER_STYLE_PROPS: readonly string[] = [
 export function sanitizeElementCapture(
   value: unknown,
 ): BrowserViewElementCapture | null {
-  return sanitizeCapture(value);
-}
-
-function sanitizeCapture(value: unknown): BrowserViewElementCapture | null {
   if (!isRecord(value)) return null;
   const outerHtml = boundedString(
     value.outerHtml,
@@ -214,18 +216,4 @@ function clampCoordinate(value: unknown): number {
 
 function clampSize(value: unknown): number {
   return clamp(finiteNumber(value), 0, ELEMENT_PICKER_BBOX_MAX);
-}
-
-function boundedString(value: unknown, max: number, fallback: string): string {
-  if (typeof value !== "string") return fallback;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function boundedStringOrNull(value: unknown, max: number): string | null {
-  if (typeof value !== "string" || value.length === 0) return null;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function finiteNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

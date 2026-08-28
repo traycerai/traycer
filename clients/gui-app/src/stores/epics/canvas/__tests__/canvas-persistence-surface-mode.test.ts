@@ -32,31 +32,34 @@ describe("canvas PiP geometry persistence", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("migrates legacy geometry, keeps the new shape, and drops malformed entries", () => {
+  it("keeps anchored geometry and drops malformed entries", () => {
     const state = sanitizePersistedCanvasState({
       tabsById: {},
       pipGeometryByEpicId: {
-        "epic-legacy": { x: 12, y: 24, width: 320, height: 200 },
         "epic-good": {
           anchorX: 332,
           anchorY: 224,
           previewWidth: 320,
           previewHeight: 200,
         },
-        "epic-string": { x: "12", y: 24, width: 320, height: 200 },
-        "epic-nan": { x: Number.NaN, y: 24, width: 320, height: 200 },
-        "epic-missing": { x: 12, y: 24, width: 320 },
+        "epic-string": {
+          anchorX: "332",
+          anchorY: 224,
+          previewWidth: 320,
+          previewHeight: 200,
+        },
+        "epic-nan": {
+          anchorX: Number.NaN,
+          anchorY: 224,
+          previewWidth: 320,
+          previewHeight: 200,
+        },
+        "epic-missing": { anchorX: 332, anchorY: 224, previewWidth: 320 },
         "epic-not-object": "nope",
       },
     });
 
     expect(state.pipGeometryByEpicId).toEqual({
-      "epic-legacy": {
-        anchorX: 332,
-        anchorY: 224,
-        previewWidth: 320,
-        previewHeight: 200,
-      },
       "epic-good": {
         anchorX: 332,
         anchorY: 224,

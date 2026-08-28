@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from "react";
 import {
   type BrowserCdpResult,
   type BrowserSessionsClientFrame,
@@ -6,7 +5,6 @@ import {
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserViewAttachSurface,
-  BrowserViewElectronTabControlAction,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabKey,
   BrowserViewNativeTabStatusChange,
@@ -14,6 +12,26 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import { appLogger } from "@/lib/logger";
 import { compositeKey } from "../tiles/browser-view-keys";
+import { ignoreError } from "../ignore-error";
+import {
+  type ElectronTabSurfaceLease,
+  nativeTabKey,
+  publishElectronTabBinding,
+  registerElectronTabHandoffAck,
+  rejectOwnedElectronTabHandoffAcks,
+  removeOwnedElectronTabBinding,
+  removeOwnedElectronTabBindings,
+  settleElectronTabHandoffAck,
+} from "./electron-tab-directory";
+
+export {
+  drainElectronTabHandoffs,
+  useElectronTabBindingOnHost,
+} from "./electron-tab-directory";
+export type {
+  ElectronTabBinding,
+  ElectronTabSurfaceLease,
+} from "./electron-tab-directory";
 
 type CreateElectronTabFrame = Extract<
   BrowserSessionsServerFrame,
@@ -35,47 +53,10 @@ type ActionAckFrame = Extract<
   BrowserSessionsServerFrame,
   { readonly kind: "actionAck" }
 >;
-type ElectronTabSurfaceBinding = Omit<
-  BrowserViewAttachSurface,
-  keyof BrowserViewNativeTabCapability
->;
-
 interface ElectronTabsOptions {
   readonly hostId: string;
   readonly native: BrowserViewBridge | null;
   readonly sendFrame: (frame: BrowserSessionsClientFrame) => void;
-}
-
-export interface ElectronTabBinding extends BrowserViewNativeTabCapability {
-  readonly control: (
-    action: BrowserViewElectronTabControlAction,
-  ) => Promise<void>;
-  readonly bindSurface: (
-    input: ElectronTabSurfaceBinding,
-  ) => Promise<ElectronTabSurfaceLease>;
-}
-
-interface ElectronTabDirectoryEntry {
-  readonly owner: symbol;
-  readonly binding: ElectronTabBinding;
-}
-
-const directory = new Map<string, ElectronTabDirectoryEntry>();
-const directoryListeners = new Set<() => void>();
-const pendingHandoffAcks = new Map<
-  string,
-  {
-    readonly owner: symbol;
-    readonly promise: Promise<void>;
-    readonly resolve: () => void;
-    readonly reject: (cause: Error) => void;
-  }
->();
-
-export async function drainElectronTabHandoffs(): Promise<void> {
-  await Promise.all(
-    Array.from(pendingHandoffAcks.values(), (pending) => pending.promise),
-  );
 }
 
 interface ElectronTabBirth {
@@ -102,8 +83,34 @@ export interface ElectronTabs {
   dispose(): void;
 }
 
-export interface ElectronTabSurfaceLease {
-  detach(): Promise<void>;
+/**
+ * A birth's position in the create -> provision -> accept lifecycle. `accepted`
+ * outranks `retired` deliberately: cancelling a birth the host already accepted
+ * must not make it look releasable.
+ */
+type ElectronTabBirthStatus =
+  | "pending"
+  | "provisioned"
+  | "accepted"
+  | "retired";
+
+function birthStatus(birth: ElectronTabBirth): ElectronTabBirthStatus {
+  const provisioned = birth.provisioned;
+  if (
+    provisioned !== null &&
+    birth.accepted?.registrationId === provisioned.registrationId
+  ) {
+    return "accepted";
+  }
+  if (birth.cancelled) return "retired";
+  return provisioned === null ? "pending" : "provisioned";
+}
+
+/** The provisioning the host accepted, or `null` while it has not. */
+function acceptedProvisioning(
+  birth: ElectronTabBirth,
+): BrowserViewNativeTabCapability | null {
+  return birthStatus(birth) === "accepted" ? birth.provisioned : null;
 }
 
 /**
@@ -128,11 +135,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 
   const rejectPendingHandoffs = (message: string): void => {
-    for (const [requestId, pending] of pendingHandoffAcks) {
-      if (pending.owner !== owner) continue;
-      pendingHandoffAcks.delete(requestId);
-      pending.reject(new Error(message));
-    }
+    rejectOwnedElectronTabHandoffAcks(owner, message);
   };
 
   const sendCurrentTabState = (
@@ -161,7 +164,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         registrationId,
       })
       .then(() => {
-        removeOwnedDirectoryEntry(tabKey, owner, registrationId);
+        removeOwnedElectronTabBinding(owner, tabKey, registrationId);
         if (birthByRequestId.get(birth.create.requestId) === birth) {
           birthByRequestId.delete(birth.create.requestId);
         }
@@ -192,23 +195,18 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       requestIdByTabKey.delete(tabKey);
     }
     if (birth.provisioned !== null) {
-      removeOwnedDirectoryEntry(
-        tabKey,
+      removeOwnedElectronTabBinding(
         owner,
+        tabKey,
         birth.provisioned.registrationId,
       );
     }
   };
 
   function rollbackUnacceptedBirth(birth: ElectronTabBirth): void {
-    if (
-      birth.provisioned !== null &&
-      birth.accepted?.registrationId === birth.provisioned.registrationId
-    ) {
-      return;
-    }
+    if (birthStatus(birth) === "accepted") return;
     retireBirth(birth);
-    void releaseBirth(birth).catch(() => undefined);
+    void releaseBirth(birth).catch(ignoreError);
   }
 
   const ensureNativeSubscriptions = (native: BrowserViewBridge): void => {
@@ -244,22 +242,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         return;
       }
       const requestId = crypto.randomUUID();
-      let settle: (() => void) | null = null;
-      let fail: ((cause: Error) => void) | null = null;
-      const promise = new Promise<void>((resolve, reject) => {
-        settle = resolve;
-        fail = reject;
-      });
-      // ACKs can arrive when no quit drain is observing. Keep the original
-      // promise rejectable for active drains without leaking globally.
-      void promise.catch(() => undefined);
-      const pending = {
-        owner,
-        promise,
-        resolve: () => settle?.(),
-        reject: (cause: Error) => fail?.(cause),
-      };
-      pendingHandoffAcks.set(requestId, pending);
+      registerElectronTabHandoffAck(requestId, owner);
       try {
         sendOnCurrentConnection({
           kind: "electronTabHandoff",
@@ -279,8 +262,9 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           reason: change.reason,
         });
       } catch (cause: unknown) {
-        pendingHandoffAcks.delete(requestId);
-        pending.reject(
+        settleElectronTabHandoffAck(
+          requestId,
+          owner,
           cause instanceof Error ? cause : new Error(String(cause)),
         );
         throw cause;
@@ -293,14 +277,8 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 
   const activateAcceptedBirth = (birth: ElectronTabBirth): void => {
-    const provisioned = birth.provisioned;
-    if (
-      birth.activated ||
-      provisioned === null ||
-      birth.accepted?.registrationId !== provisioned.registrationId
-    ) {
-      return;
-    }
+    const provisioned = acceptedProvisioning(birth);
+    if (birth.activated || provisioned === null) return;
     birth.activated = true;
     void birth.native
       .acceptTab({
@@ -319,43 +297,32 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 
   const publishAcceptedBirth = (birth: ElectronTabBirth): void => {
-    const provisioned = birth.provisioned;
-    if (
-      birth.published ||
-      provisioned === null ||
-      birth.accepted?.registrationId !== provisioned.registrationId
-    ) {
-      return;
-    }
+    const provisioned = acceptedProvisioning(birth);
+    if (birth.published || provisioned === null) return;
     birth.published = true;
     const create = birth.create;
-    const key = nativeTabKey(options.hostId, create.sessionId, create.tabId);
-    directory.set(key, {
-      owner,
-      binding: {
-        hostId: options.hostId,
-        sessionId: create.sessionId,
-        tabId: create.tabId,
-        registrationId: provisioned.registrationId,
-        control: (action) =>
-          birth.native.controlElectronTab({
-            hostId: options.hostId,
-            sessionId: create.sessionId,
-            tabId: create.tabId,
-            registrationId: provisioned.registrationId,
-            action,
-          }),
-        bindSurface: (input) =>
-          bindSurface({
-            ...input,
-            hostId: options.hostId,
-            sessionId: create.sessionId,
-            tabId: create.tabId,
-            registrationId: provisioned.registrationId,
-          }),
-      },
+    publishElectronTabBinding(owner, {
+      hostId: options.hostId,
+      sessionId: create.sessionId,
+      tabId: create.tabId,
+      registrationId: provisioned.registrationId,
+      control: (action) =>
+        birth.native.controlElectronTab({
+          hostId: options.hostId,
+          sessionId: create.sessionId,
+          tabId: create.tabId,
+          registrationId: provisioned.registrationId,
+          action,
+        }),
+      bindSurface: (input) =>
+        bindSurface({
+          ...input,
+          hostId: options.hostId,
+          sessionId: create.sessionId,
+          tabId: create.tabId,
+          registrationId: provisioned.registrationId,
+        }),
     });
-    notifyDirectoryListeners();
   };
 
   const acceptCreate = (frame: CreateElectronTabFrame): Promise<void> => {
@@ -431,7 +398,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
               "identity_violation",
               identityMessage(frame),
             );
-            void birth.native.releaseTab(provisioned).catch(() => undefined);
+            void birth.native.releaseTab(provisioned).catch(ignoreError);
             retireBirth(birth);
             return;
           }
@@ -502,8 +469,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       !connected ||
       birth === undefined ||
       birth.cancelled ||
-      birth.provisioned === null ||
-      birth.accepted?.registrationId !== birth.provisioned.registrationId
+      acceptedProvisioning(birth) === null
     ) {
       throw new Error("Electron tab is not accepted.");
     }
@@ -513,8 +479,10 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         throw new Error("Electron tab is not accepted.");
       }
       const previous = birth.activeSurface;
-      birth.activeSurface = null;
       if (previous !== null) {
+        // Keep the old binding recorded until the native detach actually
+        // resolves: a rejected detach leaves the surface attached, so the
+        // failed bind must leave a retry able to detach it again.
         await birth.native.detachSurface({
           hostId: previous.input.hostId,
           sessionId: previous.input.sessionId,
@@ -522,6 +490,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           registrationId: previous.input.registrationId,
           bindingId: previous.input.bindingId,
         });
+        birth.activeSurface = null;
       }
       await birth.native.attachSurface(input);
       birth.activeSurface = { token, input };
@@ -529,7 +498,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         sendCurrentTabState(birth, birth.lastStatus);
       }
     });
-    birth.surfaceMutation = attach.catch(() => undefined);
+    birth.surfaceMutation = attach.catch(ignoreError);
     await attach;
     let detached = false;
     return {
@@ -538,10 +507,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         detached = true;
         const detach = birth.surfaceMutation.then(async () => {
           if (birth.activeSurface?.token !== token) return;
-          birth.activeSurface = null;
-          if (birth.lastStatus !== null) {
-            sendCurrentTabState(birth, birth.lastStatus);
-          }
           await birth.native.detachSurface({
             hostId: input.hostId,
             sessionId: input.sessionId,
@@ -549,8 +514,12 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
             registrationId: input.registrationId,
             bindingId: input.bindingId,
           });
+          birth.activeSurface = null;
+          if (birth.lastStatus !== null) {
+            sendCurrentTabState(birth, birth.lastStatus);
+          }
         });
-        birth.surfaceMutation = detach.catch(() => undefined);
+        birth.surfaceMutation = detach.catch(ignoreError);
         await detach;
       },
     };
@@ -613,18 +582,14 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     }
   }
 
-  const handleActionAck = (frame: ActionAckFrame): boolean => {
-    const pending = pendingHandoffAcks.get(frame.requestId);
-    if (pending?.owner !== owner) return false;
-    pendingHandoffAcks.delete(frame.requestId);
-    if (frame.ok) pending.resolve();
-    else {
-      pending.reject(
-        new Error(frame.reason ?? "Electron tab handoff was rejected."),
-      );
-    }
-    return true;
-  };
+  const handleActionAck = (frame: ActionAckFrame): boolean =>
+    settleElectronTabHandoffAck(
+      frame.requestId,
+      owner,
+      frame.ok
+        ? null
+        : new Error(frame.reason ?? "Electron tab handoff was rejected."),
+    );
 
   const handleAccepted = (frame: ElectronTabAcceptedFrame): void => {
     const birth = birthByRequestId.get(frame.requestId);
@@ -675,7 +640,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       for (const birth of birthByRequestId.values()) {
         rollbackUnacceptedBirth(birth);
       }
-      removeOwnedDirectoryEntries(owner);
+      removeOwnedElectronTabBindings(owner);
     },
     dispose: () => {
       disposed = true;
@@ -686,7 +651,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       }
       disposeNativeSubscriptions?.();
       disposeNativeSubscriptions = null;
-      removeOwnedDirectoryEntries(owner);
+      removeOwnedElectronTabBindings(owner);
       rejectPendingHandoffs(
         "Electron tab handoff transport closed before acknowledgement.",
       );
@@ -694,78 +659,17 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 }
 
-function findElectronTabBindingOnHost(
-  sessionId: string,
-  tabId: string,
-  hostId: string,
-): ElectronTabBinding | null {
-  return directory.get(nativeTabKey(hostId, sessionId, tabId))?.binding ?? null;
-}
-
-export function useElectronTabBindingOnHost(
-  sessionId: string,
-  tabId: string,
-  hostId: string,
-): ElectronTabBinding | null {
-  return useSyncExternalStore(
-    subscribeDirectory,
-    () => findElectronTabBindingOnHost(sessionId, tabId, hostId),
-    () => null,
-  );
-}
-
-function subscribeDirectory(listener: () => void): () => void {
-  directoryListeners.add(listener);
-  return () => {
-    directoryListeners.delete(listener);
-  };
-}
-
-function notifyDirectoryListeners(): void {
-  for (const listener of directoryListeners) listener();
-}
-
-function removeOwnedDirectoryEntry(
-  key: string,
-  owner: symbol,
-  registrationId: string,
-): void {
-  const entry = directory.get(key);
-  if (
-    entry?.owner !== owner ||
-    entry.binding.registrationId !== registrationId
-  ) {
-    return;
-  }
-  directory.delete(key);
-  notifyDirectoryListeners();
-}
-
-function removeOwnedDirectoryEntries(owner: symbol): void {
-  let removed = false;
-  for (const [key, entry] of directory) {
-    if (entry.owner !== owner) continue;
-    directory.delete(key);
-    removed = true;
-  }
-  if (removed) notifyDirectoryListeners();
-}
-
 function sendTabState(
   options: ElectronTabsOptions,
   birth: ElectronTabBirth,
   change: BrowserViewNativeTabStatusChange,
 ): void {
-  if (
-    birth.provisioned === null ||
-    birth.accepted?.registrationId !== birth.provisioned.registrationId
-  ) {
-    return;
-  }
+  const provisioned = acceptedProvisioning(birth);
+  if (provisioned === null) return;
   options.sendFrame({
     kind: "electronTabState",
     hasBinaryPayload: false,
-    registrationId: birth.provisioned.registrationId,
+    registrationId: provisioned.registrationId,
     sessionId: birth.create.sessionId,
     tabId: birth.create.tabId,
     url: change.url,
@@ -820,14 +724,6 @@ function createFailureFrame(
     code,
     message,
   };
-}
-
-function nativeTabKey(
-  hostId: string,
-  sessionId: string,
-  tabId: string,
-): string {
-  return compositeKey(hostId, sessionId, tabId);
 }
 
 function sameNativeKey(
@@ -896,12 +792,7 @@ function canReplaceElectronTabBirth(
   previous: ElectronTabBirth | undefined,
 ): boolean {
   if (frame.reason !== "restore") return false;
-  const provisioned = previous?.provisioned;
-  return (
-    provisioned !== null &&
-    provisioned !== undefined &&
-    previous?.accepted?.registrationId === provisioned.registrationId
-  );
+  return previous !== undefined && acceptedProvisioning(previous) !== null;
 }
 
 function electronTabStateStatus(

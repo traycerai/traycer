@@ -5,19 +5,16 @@ import type {
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartResult,
 } from "../../../ipc-contracts/browser-annotation-types";
-import type { BrowserViewTileKey } from "../../../ipc-contracts/browser-view-types";
+import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
-import type { BrowserDebugSession } from "../debug/browser-debug-session";
+import type { BrowserViewDebugSessions } from "./debug-session-for";
 import {
   requireSurface,
   toTileKey,
   type BrowserViewEntry,
   type BrowserViewSend,
 } from "./browser-view-entry";
-import {
-  browserViewSurfaceKey as entryKeyId,
-  type BrowserViewEntryRegistry,
-} from "./browser-view-entry-registry";
+import type { BrowserViewEntryRegistry } from "./browser-view-entry-registry";
 
 const ANNOTATION_ATTACH_ACK_TIMEOUT_MS = 4000;
 
@@ -31,7 +28,7 @@ interface PendingAnnotationAttachResult {
 interface BrowserViewAnnotationHostOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly send: BrowserViewSend;
-  readonly ensureDebugSession: (entry: BrowserViewEntry) => BrowserDebugSession;
+  readonly debugSessions: BrowserViewDebugSessions;
 }
 
 /**
@@ -42,9 +39,7 @@ interface BrowserViewAnnotationHostOptions {
 export class BrowserViewAnnotationHost {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly send: BrowserViewSend;
-  private readonly ensureDebugSession: (
-    entry: BrowserViewEntry,
-  ) => BrowserDebugSession;
+  private readonly debugSessions: BrowserViewDebugSessions;
   private readonly pendingAttachResults = new Map<
     string,
     PendingAnnotationAttachResult
@@ -53,16 +48,14 @@ export class BrowserViewAnnotationHost {
   constructor(options: BrowserViewAnnotationHostOptions) {
     this.entries = options.entries;
     this.send = options.send;
-    this.ensureDebugSession = options.ensureDebugSession;
+    this.debugSessions = options.debugSessions;
   }
 
   setTargetChatLabel(
     windowId: string,
     input: BrowserAnnotationSetTargetChatLabelInput,
   ): void {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
+    const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) return;
     const session = entry.annotationSession;
     if (session === null || !session.isActive()) return;
@@ -73,9 +66,7 @@ export class BrowserViewAnnotationHost {
     windowId: string,
     input: BrowserViewTileKey,
   ): Promise<BrowserAnnotationStartResult> {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
+    const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) {
       return Promise.resolve({ ok: false, reason: "tile-not-found" });
     }
@@ -86,7 +77,7 @@ export class BrowserViewAnnotationHost {
     const surface = requireSurface(entry);
     const session = new BrowserAnnotationSession({
       webContents: entry.view.webContents,
-      debugSession: this.ensureDebugSession(entry),
+      debugSession: this.debugSessions.ensure(entry),
       identity: {
         tabId: entry.identity.key.tabId,
         sessionId: entry.identity.key.sessionId,
@@ -131,9 +122,7 @@ export class BrowserViewAnnotationHost {
   }
 
   cancel(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
+    const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) return;
     this.end(entry, "cancelled");
   }

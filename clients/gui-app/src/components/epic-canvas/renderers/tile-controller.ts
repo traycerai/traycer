@@ -38,6 +38,12 @@ export interface TileController {
     event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
   ) => void;
   readonly onAddressChange: (value: string) => void;
+  /**
+   * Caret entering or leaving the address field. The draft is focus-owned
+   * (`use-address-draft.ts`), so the toolbar reports it rather than each tile
+   * sniffing focus events off its own DOM subtree.
+   */
+  readonly onAddressFocusChange: (focused: boolean) => void;
   readonly onBack: () => void;
   readonly onForward: () => void;
   readonly onReload: () => void;

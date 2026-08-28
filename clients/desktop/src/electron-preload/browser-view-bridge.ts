@@ -19,8 +19,8 @@ import type {
   BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
-  BrowserCdpResult,
-} from "../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserCdpResult } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,

@@ -552,11 +552,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isBrowserLinkOpenMode(value: unknown): value is BrowserLinkOpenMode {
+export function isBrowserLinkOpenMode(
+  value: unknown,
+): value is BrowserLinkOpenMode {
   return value === "in-app" || value === "external";
 }
 
-function isBrowserLinkDefaultMode(
+export function isBrowserLinkDefaultMode(
   value: unknown,
 ): value is BrowserLinkDefaultMode {
   return isBrowserLinkOpenMode(value) || value === "per-kind";

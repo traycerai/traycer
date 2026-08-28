@@ -3,7 +3,7 @@ import type {
   BrowserCookieCryptoReason,
   BrowserCookieCryptoState,
   BrowserCookieStorageBackend,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
 
 export interface BrowserCookieCryptoDetectionInput {
@@ -68,12 +68,6 @@ export function getBrowserCookieCryptoState(): BrowserCookieCryptoState {
       encryptionAvailable: false,
     }
   );
-}
-
-export function setBrowserCookieCryptoStateForTests(
-  state: BrowserCookieCryptoState,
-): void {
-  resolvedState = state;
 }
 
 function buildState(

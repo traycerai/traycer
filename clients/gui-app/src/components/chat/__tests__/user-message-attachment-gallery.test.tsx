@@ -29,8 +29,7 @@ describe("UserMessageAttachmentGallery", () => {
     const { container } = render(
       <UserMessageAttachmentGallery
         align="end"
-        excludeHashes={new Set()}
-        excludeFileNames={new Set()}
+        browserAnnotations={undefined}
         attachments={[
           {
             kind: "image",

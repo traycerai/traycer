@@ -18,3 +18,15 @@ export function browserViewTileKeyId(key: BrowserViewTileKey): string {
     key.pageSessionId,
   );
 }
+
+/**
+ * Whether two tile keys name the same mounted surface. The one comparator, so
+ * a field added to `BrowserViewTileKey` cannot be forgotten by a subscriber
+ * that hand-rolled its own field-by-field equality.
+ */
+export function isSameBrowserViewTile(
+  a: BrowserViewTileKey,
+  b: BrowserViewTileKey,
+): boolean {
+  return browserViewTileKeyId(a) === browserViewTileKeyId(b);
+}

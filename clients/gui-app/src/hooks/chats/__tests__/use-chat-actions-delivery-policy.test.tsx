@@ -37,8 +37,10 @@ interface SendMessageStoreSlice {
     readonly settings: ChatRunSettings;
     readonly attachments: ReadonlyArray<Attachment>;
     readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-    readonly restoreContent: JsonContent;
-    readonly restoreBrowserAnnotations: ReadonlyArray<unknown>;
+    readonly restore: {
+      readonly content: JsonContent;
+      readonly browserAnnotations: ReadonlyArray<unknown>;
+    };
   }) => { readonly clientActionId: string; readonly messageId: string } | null;
 }
 
@@ -51,8 +53,10 @@ describe("useChatActions deliveryPolicy threading", () => {
         readonly settings: ChatRunSettings;
         readonly attachments: ReadonlyArray<Attachment>;
         readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-        readonly restoreContent: JsonContent;
-        readonly restoreBrowserAnnotations: ReadonlyArray<unknown>;
+        readonly restore: {
+          readonly content: JsonContent;
+          readonly browserAnnotations: ReadonlyArray<unknown>;
+        };
       }) => ({
         clientActionId: "action-1",
         messageId: "message-1",
@@ -68,8 +72,7 @@ describe("useChatActions deliveryPolicy threading", () => {
       settings: SETTINGS,
       attachments: [],
       deliveryPolicy: "after_safe_point",
-      restoreContent: CONTENT,
-      restoreBrowserAnnotations: [],
+      restore: { content: CONTENT, browserAnnotations: [] },
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
@@ -79,8 +82,7 @@ describe("useChatActions deliveryPolicy threading", () => {
       settings: SETTINGS,
       attachments: [],
       deliveryPolicy: "after_safe_point",
-      restoreContent: CONTENT,
-      restoreBrowserAnnotations: [],
+      restore: { content: CONTENT, browserAnnotations: [] },
     });
   });
 });

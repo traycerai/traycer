@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import type { BrowserViewNativeTabKey } from "@traycer-clients/shared/platform/browser-view";
@@ -191,7 +192,7 @@ function applyPipVisibilityChanged(): void {
     pipStore.getState().snapshotByEpicId,
   )) {
     const target = snapshot?.target ?? null;
-    if (target === null || !tileIsVisible(target)) continue;
+    if (target === null || !isBrowserTileVisible(target)) continue;
     dismissPip(epicId);
   }
 }
@@ -200,7 +201,22 @@ export function getPipSnapshot(epicId: string): PipSnapshot {
   return pipStore.getState().snapshotByEpicId[epicId] ?? HIDDEN_PIP_SNAPSHOT;
 }
 
+let visibilityBridgeRegistered = false;
+
+/**
+ * Wires the "tile became visible again -> dismiss its PiP" bridge. Idempotent
+ * and never unsubscribed (the registry outlives every PiP), but registered
+ * from the PiP surface's mount rather than at import, so merely importing the
+ * store leaves no global listener behind for a test to trip over.
+ */
+export function initPipStore(): void {
+  if (visibilityBridgeRegistered) return;
+  visibilityBridgeRegistered = true;
+  subscribeVisibleBrowserTiles(applyPipVisibilityChanged);
+}
+
 export function usePipSnapshot(epicId: string): PipSnapshot {
+  useEffect(initPipStore, []);
   return useStore(
     pipStore,
     (state) => state.snapshotByEpicId[epicId] ?? HIDDEN_PIP_SNAPSHOT,
@@ -238,10 +254,6 @@ function streamHealthForLifecycle(
   return "disconnected";
 }
 
-function tileIsVisible(target: PipTarget): boolean {
-  return isBrowserTileVisible(target);
-}
-
 function cancelPendingConversion(target: PipTarget | null): void {
   if (target === null) return;
   conversions.delete(target.selectionId);
@@ -252,5 +264,3 @@ function setPipSnapshot(epicId: string, snapshot: PipSnapshot): void {
     snapshotByEpicId: { ...state.snapshotByEpicId, [epicId]: snapshot },
   }));
 }
-
-subscribeVisibleBrowserTiles(applyPipVisibilityChanged);

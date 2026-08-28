@@ -248,26 +248,12 @@ function parsePersistedPipGeometry(value: unknown): EpicPipGeometry | null {
     value.previewWidth,
     value.previewHeight,
   ]);
-  if (anchored !== null) {
-    return {
-      anchorX: anchored[0],
-      anchorY: anchored[1],
-      previewWidth: anchored[2],
-      previewHeight: anchored[3],
-    };
-  }
-  const legacy = readFourFiniteNumbers([
-    value.x,
-    value.y,
-    value.width,
-    value.height,
-  ]);
-  if (legacy === null) return null;
+  if (anchored === null) return null;
   return {
-    anchorX: legacy[0] + legacy[2],
-    anchorY: legacy[1] + legacy[3],
-    previewWidth: legacy[2],
-    previewHeight: legacy[3],
+    anchorX: anchored[0],
+    anchorY: anchored[1],
+    previewWidth: anchored[2],
+    previewHeight: anchored[3],
   };
 }
 

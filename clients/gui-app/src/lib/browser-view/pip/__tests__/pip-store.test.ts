@@ -6,6 +6,7 @@ import {
   dismissPip,
   failPipConversion,
   getPipSnapshot,
+  initPipStore,
 } from "../pip-store";
 import {
   registerVisibleBrowserTile,
@@ -105,6 +106,7 @@ describe("manual PiP store", () => {
   });
 
   it("dismisses PiP when its full browser tile becomes visible", () => {
+    initPipStore();
     const selectionId = convert({});
     completePipConversion(EPIC_ID, selectionId);
     const unregister = registerVisibleBrowserTile({

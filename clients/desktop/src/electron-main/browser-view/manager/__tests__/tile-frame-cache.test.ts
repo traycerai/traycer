@@ -194,7 +194,7 @@ describe("TileFrameCache", () => {
     cache.attach("tile-a", guest.webContents);
     cache.detach("tile-a");
     expect(guest.endCount()).toBe(1);
-    expect(cache.has("tile-a")).toBe(false);
+    expect(cache.stats().attached).toBe(0);
     // Double detach is a no-op; unknown keys never throw.
     cache.detach("tile-a");
     cache.detach("never-attached");
@@ -251,9 +251,9 @@ describe("TileFrameCache", () => {
     // never-accepted tile-b first.
     cache.attach("tile-c", c.webContents);
 
-    expect(cache.has("tile-a")).toBe(true);
-    expect(cache.has("tile-b")).toBe(false);
-    expect(cache.has("tile-c")).toBe(true);
+    expect(cache.stats().attached).toBe(2);
+    expect(a.endCount()).toBe(0);
+    expect(c.endCount()).toBe(0);
     expect(b.endCount()).toBe(1);
     expect(evicted).toEqual(["tile-b"]);
   });
@@ -269,13 +269,13 @@ describe("TileFrameCache", () => {
     expect(evicted).toEqual([]);
 
     cache.attach("tile-b", b.webContents);
-    expect(cache.has("tile-b")).toBe(true);
+    expect(b.emitted).toHaveLength(1);
     expect(evicted).toEqual(["tile-a"]);
     expect(a.endCount()).toBe(1);
 
     // Re-attaching an evicted slot re-subscribes and evicts the incumbent.
     cache.attach("tile-a", a.webContents);
-    expect(cache.has("tile-a")).toBe(true);
+    expect(a.emitted).toHaveLength(2);
     expect(evicted).toEqual(["tile-a", "tile-b"]);
     expect(b.endCount()).toBe(1);
   });

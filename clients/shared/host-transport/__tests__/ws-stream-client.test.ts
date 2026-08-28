@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  buildStreamManifest,
-  buildStreamOpenAckManifest,
-} from "@traycer/protocol/framework/stream-compat";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import {
@@ -1350,10 +1347,12 @@ describe("WsStreamClient", () => {
     void browserSessionsRegistry;
     void browserScreencastRegistry;
 
-    const oldHostOpenAckManifest = buildStreamOpenAckManifest(
+    // What an old host acks: its own manifest intersected with the client's.
+    // This client names every method the old host does, so the intersection is
+    // the old host's manifest verbatim - browser methods simply absent.
+    const oldHostOpenAckManifest = buildStreamManifest(
       oldHostStreamRpcRegistry,
       SERVES_EVERY_INSTALLED_MAJOR,
-      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR),
     );
     const { factory, sockets } = makeFactory();
     const client = makeClient({

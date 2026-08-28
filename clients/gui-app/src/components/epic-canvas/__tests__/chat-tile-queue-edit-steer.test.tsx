@@ -453,8 +453,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "after_safe_point",
-        restoreContent: QUEUED_CONTENT,
-        restoreBrowserAnnotations: [],
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
       });
       expect(accepted).toBe(true);
     });
@@ -534,8 +533,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "auto",
-        restoreContent: QUEUED_CONTENT,
-        restoreBrowserAnnotations: [],
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
       });
       expect(accepted).toBe(true);
     });

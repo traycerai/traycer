@@ -4,7 +4,7 @@ import type {
   BrowserViewElectronTabControl,
   BrowserViewEnsureTab,
   BrowserViewNativeTabCapability,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 
 type DispatchElectronTabCdpCall = BrowserViewElectronTabCdpDispatch;
 

@@ -42,6 +42,9 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: {
     readonly children: React.ReactNode;
   }) => props.children,
+  BrowserSessionsHostBoundary: (props: {
+    readonly children: React.ReactNode;
+  }) => props.children,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,

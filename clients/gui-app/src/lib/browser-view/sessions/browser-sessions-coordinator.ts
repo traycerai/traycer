@@ -470,21 +470,22 @@ function createBrowserSessionsCoordinator(args: {
   return coordinator;
 }
 
-function handleCloseAck(args: {
-  readonly frame: BrowserSessionsServerFrame;
-  readonly pendingCloses: Map<string, PendingCloseRequest>;
-}): boolean {
-  if (args.frame.kind !== "actionAck") return false;
-  const pending = args.pendingCloses.get(args.frame.requestId);
-  if (pending === undefined) return true;
-  args.pendingCloses.delete(args.frame.requestId);
-  if (args.frame.ok) pending.resolve();
-  else {
-    pending.reject(new Error(args.frame.reason ?? "Browser action failed."));
-  }
-  return true;
+function handleCloseAck(
+  frame: Extract<BrowserSessionsServerFrame, { readonly kind: "actionAck" }>,
+  pendingCloses: Map<string, PendingCloseRequest>,
+): void {
+  const pending = pendingCloses.get(frame.requestId);
+  if (pending === undefined) return;
+  pendingCloses.delete(frame.requestId);
+  if (frame.ok) pending.resolve();
+  else pending.reject(new Error(frame.reason ?? "Browser action failed."));
 }
 
+/**
+ * The one router for `browser.sessions` server frames. Every frame kind names
+ * the subsystem that owns it, and the exhaustive default makes a protocol
+ * addition a compile error instead of a frame that silently falls through.
+ */
 function handleBrowserSessionsFrame(args: {
   readonly frame: BrowserSessionsServerFrame;
   readonly epicId: string;
@@ -497,60 +498,129 @@ function handleBrowserSessionsFrame(args: {
   readonly electronTabs: ElectronTabs;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
-  if (args.frame.kind === "openTabResult") {
-    const pending = args.pendingOpens.get(args.frame.requestId);
-    if (pending === undefined) return;
-    args.pendingOpens.delete(args.frame.requestId);
-    if (args.frame.result.ok) pending.resolve(args.frame.result);
-    else pending.reject(new Error(args.frame.result.reason));
-    return;
+  const frame = args.frame;
+  switch (frame.kind) {
+    case "snapshot":
+    case "sessionCreated":
+    case "sessionUpdated":
+    case "sessionClosed": {
+      const nextItems = browserSessionsReducer(args.currentItems(), frame);
+      if (nextItems !== null) args.setItems(nextItems);
+      return;
+    }
+    case "createElectronTab":
+    case "electronTabAccepted":
+    case "releaseElectronTab":
+    case "cdpRequest":
+      args.electronTabs.handleFrame(frame);
+      return;
+    case "actionAck":
+      // Handoff acks and close acks share one frame kind; the Electron layer
+      // claims only the request ids it registered.
+      if (args.electronTabs.handleFrame(frame)) return;
+      handleCloseAck(frame, args.pendingCloses);
+      return;
+    default:
+      handleBrowserSessionsSubsystemFrame({
+        frame,
+        epicId: args.epicId,
+        hostId: args.hostId,
+        pendingOpens: args.pendingOpens,
+        browserView: args.browserView,
+        sendClientFrame: args.sendClientFrame,
+      });
   }
-  if (args.frame.kind === "caption") {
-    applyPipCaption({
-      epicId: args.epicId,
-      hostId: args.hostId,
-      sessionId: args.frame.sessionId,
-      tabId: args.frame.tabId,
-      cellTitle: args.frame.cellTitle,
-    });
-    return;
+}
+
+/**
+ * Second half of the router: every frame kind the session-list and Electron
+ * tab layers above do not claim. Kept as its own function so each half stays
+ * under the lint complexity cap; the `never` binding below still turns a new
+ * protocol frame kind into a compile error.
+ */
+type BrowserSessionsSubsystemFrame = Exclude<
+  BrowserSessionsServerFrame,
+  {
+    readonly kind:
+      | "snapshot"
+      | "sessionCreated"
+      | "sessionUpdated"
+      | "sessionClosed"
+      | "createElectronTab"
+      | "electronTabAccepted"
+      | "releaseElectronTab"
+      | "cdpRequest"
+      | "actionAck";
   }
-  if (args.frame.kind === "burstStarted" || args.frame.kind === "burstEnded") {
-    return;
+>;
+
+function handleBrowserSessionsSubsystemFrame(args: {
+  readonly frame: BrowserSessionsSubsystemFrame;
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly pendingOpens: Map<string, PendingOpenRequest>;
+  readonly browserView: BrowserViewBridge | null;
+  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+}): void {
+  const frame = args.frame;
+  switch (frame.kind) {
+    case "openTabResult": {
+      const pending = args.pendingOpens.get(frame.requestId);
+      if (pending === undefined) return;
+      args.pendingOpens.delete(frame.requestId);
+      if (frame.result.ok) pending.resolve(frame.result);
+      else pending.reject(new Error(frame.result.reason));
+      return;
+    }
+    case "caption":
+      applyPipCaption({
+        epicId: args.epicId,
+        hostId: args.hostId,
+        sessionId: frame.sessionId,
+        tabId: frame.tabId,
+        cellTitle: frame.cellTitle,
+      });
+      return;
+    case "agentTabOpened":
+      surfaceAgentTab({
+        epicId: args.epicId,
+        hostId: args.hostId,
+        sessionId: frame.sessionId,
+        tabId: frame.tabId,
+      });
+      return;
+    case "capturePrimaryProfile":
+      handlePrimaryProfileCaptureFrame({
+        frame,
+        browserView: args.browserView,
+        sendClientFrame: args.sendClientFrame,
+      });
+      return;
+    case "burstStarted":
+    case "burstEnded":
+    case "pong":
+      return;
+    default: {
+      // Unreachable: the stream client validates every frame against
+      // `browserSessionsServerFrameSchema` before it gets here. The `never`
+      // binding is what turns a new protocol frame kind into a compile error.
+      const unhandled: never = frame;
+      void unhandled;
+      appLogger.warn("[browser] unhandled browser.sessions frame", {
+        frameKind: args.frame.kind,
+      });
+    }
   }
-  if (args.frame.kind === "agentTabOpened") {
-    surfaceAgentTab({
-      epicId: args.epicId,
-      hostId: args.hostId,
-      sessionId: args.frame.sessionId,
-      tabId: args.frame.tabId,
-    });
-    return;
-  }
-  if (args.electronTabs.handleFrame(args.frame)) return;
-  if (
-    handlePrimaryProfileCaptureFrame({
-      frame: args.frame,
-      browserView: args.browserView,
-      sendClientFrame: args.sendClientFrame,
-    })
-  ) {
-    return;
-  }
-  const nextItems = browserSessionsReducer(args.currentItems(), args.frame);
-  if (nextItems !== null) {
-    args.setItems(nextItems);
-    return;
-  }
-  if (handleCloseAck(args)) return;
 }
 
 function handlePrimaryProfileCaptureFrame(args: {
-  readonly frame: BrowserSessionsServerFrame;
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "capturePrimaryProfile" }
+  >;
   readonly browserView: BrowserViewBridge | null;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
-}): boolean {
-  if (args.frame.kind !== "capturePrimaryProfile") return false;
+}): void {
   const requestId = args.frame.requestId;
   if (args.browserView === null) {
     args.sendClientFrame({
@@ -561,7 +631,7 @@ function handlePrimaryProfileCaptureFrame(args: {
       status: "unavailable",
       reason: "Desktop browser bridge is unavailable.",
     });
-    return true;
+    return;
   }
   void args.browserView
     .capturePrimaryProfile()
@@ -596,7 +666,6 @@ function handlePrimaryProfileCaptureFrame(args: {
         reason: error instanceof Error ? error.message : String(error),
       });
     });
-  return true;
 }
 
 function browserSessionsError(

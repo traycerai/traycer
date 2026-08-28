@@ -402,7 +402,38 @@ describe("composer draft store browserAnnotations", () => {
     expect(draft.revision).toBe(4);
   });
 
-  it("Accepted send: clearDraft clears browserAnnotations and leaves browserContextAttachments", async () => {
+  it("Sidecar mutations never bump resetEpoch (the editor-document reset signal)", async () => {
+    useComposerDraftStore
+      .getState()
+      .setSnapshot("chat-epoch", EMPTY_DOC, { from: 1, to: 1 });
+    const before = draftOf("chat-epoch");
+
+    await attachNamed("chat-epoch", {
+      annotationId: "ann-epoch",
+      tabId: "tab-epoch",
+      sessionId: "session-epoch",
+      comment: "no document change",
+    });
+    useComposerDraftStore.getState().addBrowserContextAttachment(
+      "chat-epoch",
+      createBrowserConsoleAttachment({
+        tile: TILE,
+        pageUrl: "https://example.com/page",
+        entry: CONSOLE_ENTRY,
+      }),
+    );
+    expect(draftOf("chat-epoch").browserAnnotations).toHaveLength(1);
+    expect(draftOf("chat-epoch").resetEpoch).toBe(before.resetEpoch);
+
+    useComposerDraftStore
+      .getState()
+      .removeBrowserAnnotation("chat-epoch", "ann-epoch");
+    expect(draftOf("chat-epoch").browserAnnotations).toEqual([]);
+    expect(draftOf("chat-epoch").resetEpoch).toBe(before.resetEpoch);
+    expect(draftOf("chat-epoch").content).toEqual(before.content);
+  });
+
+  it("Accepted send: clearDraft clears browserAnnotations and browserContextAttachments", async () => {
     const attached = await attachNamed("chat-send", {
       annotationId: "ann-send",
       tabId: "tab-send",
@@ -428,7 +459,9 @@ describe("composer draft store browserAnnotations", () => {
 
     const after = draftOf("chat-send");
     expect(after.browserAnnotations).toEqual([]);
-    expect(after.browserContextAttachments).toEqual([context]);
+    // Submit folds these into the outgoing attachments, so a surviving entry
+    // re-attaches the same capture on every later message in the chat.
+    expect(after.browserContextAttachments).toEqual([]);
     expect(after.content).toEqual(EMPTY_DOC);
     expect(after.resetEpoch).toBe(before.resetEpoch + 1);
     expect(after.revision).toBe(before.revision + 1);
@@ -512,8 +545,7 @@ describe("composer draft store browserAnnotations", () => {
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           messageId: "msg-m2",
-          restoreContent: EMPTY_DOC,
-          restoreBrowserAnnotations: records,
+          restore: { content: EMPTY_DOC, browserAnnotations: records },
           sender: null,
           settings: null,
           restoreWorktreeIntent: null,

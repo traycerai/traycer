@@ -21,7 +21,7 @@ export interface DraftSelection {
 export interface DraftState {
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
-  readonly browserContextAttachments?: ReadonlyArray<BrowserContextAttachmentPayload>;
+  readonly browserContextAttachments: ReadonlyArray<BrowserContextAttachmentPayload>;
   /**
    * Attached annotation cards. Persisted and rehydrated (unlike the old
    * `browserContextAttachments` array, which the merge path still drops).
@@ -32,6 +32,12 @@ export interface DraftState {
    * (queue-edit restore, failed-send handoff, submit-clear). The composer
    * watches this counter to push the new content into Tiptap; routine
    * keystroke snapshots from the editor never bump it.
+   *
+   * The sidecar arrays (`browserAnnotations`, `browserContextAttachments`)
+   * deliberately do NOT bump it: they are not the DOCUMENT, so a bump there
+   * would replay a stale content+selection into a live editor for a change
+   * the document does not contain. The attachment strip subscribes to
+   * `browserAnnotations` directly.
    */
   readonly resetEpoch: number;
   /**
@@ -97,7 +103,9 @@ interface ComposerDraftStore {
    * reliably notify every mounted composer for this `taskId` (split panes,
    * keep-alive tabs): a sibling's `resetEpoch` selector falls back to the same
    * `?? 0` whether the entry never existed or was just removed. The old
-   * `browserContextAttachments` array is left untouched (debug dropdown).
+   * `browserContextAttachments` array is emptied too: submit folds it into the
+   * outgoing attachments, so leaving it re-attaches the same capture on every
+   * later message in the chat.
    */
   readonly clearDraft: (taskId: string) => void;
 }
@@ -200,14 +208,15 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       addBrowserContextAttachment: (taskId, attachment) => {
         set((state) => {
           const current = ensureDraft(state.drafts, taskId);
-          const attachments = current.browserContextAttachments ?? [];
           return {
             drafts: {
               ...state.drafts,
               [taskId]: {
                 ...current,
-                browserContextAttachments: [...attachments, attachment],
-                resetEpoch: current.resetEpoch + 1,
+                browserContextAttachments: [
+                  ...current.browserContextAttachments,
+                  attachment,
+                ],
               },
             },
           };
@@ -227,7 +236,6 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [taskId]: {
                 ...current,
                 browserAnnotations: next,
-                resetEpoch: current.resetEpoch + 1,
               },
             },
           };
@@ -246,7 +254,6 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [taskId]: {
                 ...current,
                 browserAnnotations: next,
-                resetEpoch: current.resetEpoch + 1,
               },
             },
           };
@@ -266,7 +273,6 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [taskId]: {
                 ...current,
                 browserAnnotations: next,
-                resetEpoch: current.resetEpoch + 1,
               },
             },
           };
@@ -282,6 +288,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
                 ...current,
                 content: EMPTY_COMPOSER_CONTENT,
                 selection: EMPTY_COMPOSER_SELECTION,
+                browserContextAttachments: [],
                 browserAnnotations: [],
                 resetEpoch: current.resetEpoch + 1,
                 revision: current.revision + 1,
@@ -311,6 +318,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           drafts[taskId] = {
             content: value.content,
             selection: value.selection,
+            // Deliberately dropped on rehydrate (see `DraftState`): the
+            // captures they point at do not survive a reload.
+            browserContextAttachments: [],
             browserAnnotations: parseBrowserAnnotationRecords(
               value.browserAnnotations,
             ),

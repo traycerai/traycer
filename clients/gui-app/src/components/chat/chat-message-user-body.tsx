@@ -51,7 +51,7 @@ import {
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
   containsImageAtoms,
-  omitImageAtomsByFileName,
+  omitImageAtomsByHash,
 } from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
@@ -103,7 +103,6 @@ import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fe
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
-const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
 
 function visibleUserSteerBadge(
   message: ChatMessageModel,
@@ -117,12 +116,12 @@ function userMessageDisplayContent(
   message: ChatMessageModel,
 ): JsonContent | null {
   if (message.structuredContent === null) return null;
-  const fileNames = new Set(
+  const hashes = new Set(
     (message.browserAnnotations ?? []).map(
-      (annotation) => annotation.imageFileName,
+      (annotation) => annotation.imageHash,
     ),
   );
-  return omitImageAtomsByFileName(message.structuredContent, fileNames);
+  return omitImageAtomsByHash(message.structuredContent, hashes);
 }
 
 // Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
@@ -156,8 +155,7 @@ export function UserMessageBody({
       <>
         <UserMessageAttachmentGallery
           attachments={message.attachments}
-          excludeHashes={EMPTY_STRING_SET}
-          excludeFileNames={EMPTY_STRING_SET}
+          browserAnnotations={message.browserAnnotations}
           align="end"
         />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
@@ -179,8 +177,7 @@ export function UserMessageBody({
       <>
         <UserMessageAttachmentGallery
           attachments={message.attachments}
-          excludeHashes={EMPTY_STRING_SET}
-          excludeFileNames={EMPTY_STRING_SET}
+          browserAnnotations={message.browserAnnotations}
           align="end"
         />
         <AgentMessageDisplayView
@@ -413,20 +410,7 @@ function UserMessageDisplayView({
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
           <UserMessageAttachmentGallery
             attachments={message.attachments}
-            excludeHashes={
-              new Set(
-                (message.browserAnnotations ?? []).map(
-                  (annotation) => annotation.imageHash,
-                ),
-              )
-            }
-            excludeFileNames={
-              new Set(
-                (message.browserAnnotations ?? []).map(
-                  (annotation) => annotation.imageFileName,
-                ),
-              )
-            }
+            browserAnnotations={message.browserAnnotations}
             align="start"
           />
           <BrowserReferenceChips

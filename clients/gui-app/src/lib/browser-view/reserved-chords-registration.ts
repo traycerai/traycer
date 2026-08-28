@@ -1,4 +1,5 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { ignoreError } from "./ignore-error";
 
 /**
  * BT-303: renderer-owned reserved chords. These are chord tokens in the
@@ -22,5 +23,7 @@ const RESERVED_APP_CHORD_TOKENS: readonly string[] = [
 export function registerReservedBrowserChords(runnerHost: IRunnerHost): void {
   const browserView = runnerHost.browserView;
   if (browserView === null) return;
-  void browserView.setReservedChords(RESERVED_APP_CHORD_TOKENS).catch(() => {});
+  void browserView
+    .setReservedChords(RESERVED_APP_CHORD_TOKENS)
+    .catch(ignoreError);
 }

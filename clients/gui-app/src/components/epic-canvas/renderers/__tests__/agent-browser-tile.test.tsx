@@ -102,6 +102,7 @@ const CHROME_CONTROLLER: TileController = {
   annotation: null,
   onNavigate: () => undefined,
   onAddressChange: () => undefined,
+  onAddressFocusChange: () => undefined,
   onBack: () => undefined,
   onForward: () => undefined,
   onReload: () => undefined,

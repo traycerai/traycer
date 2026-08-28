@@ -652,6 +652,167 @@ describe("ElectronTabs", () => {
     });
   });
 
+  it("keeps the old surface recorded when its detach fails and re-detaches on retry", async () => {
+    const statusHandler = {
+      emit: null as ((change: BrowserViewNativeTabStatusChange) => void) | null,
+    };
+    const native = nativeWith(
+      () => provisionedTab("registration-1"),
+      (handler) => {
+        statusHandler.emit = handler;
+        return { dispose: () => undefined };
+      },
+    );
+    const sent: BrowserSessionsClientFrame[] = [];
+    const tabs = trackElectronTabs(
+      createElectronTabs({
+        hostId: "host-1",
+        native,
+        sendFrame: (frame) => sent.push(frame),
+      }),
+    );
+    await receiveCreate(tabs, CREATE);
+    tabs.handleFrame({
+      kind: "electronTabAccepted",
+      hasBinaryPayload: false,
+      requestId: "request-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+    });
+    if (statusHandler.emit === null) throw new Error("status listener missing");
+    statusHandler.emit({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      url: "https://example.com/",
+      title: "Example",
+      status: "ready",
+      reason: null,
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100,
+    });
+
+    const binding = readElectronTabBinding("session-1", "tab-1", "host-1");
+    if (binding === null) throw new Error("accepted binding missing");
+    const surfaceOf = (bindingId: string, paneId: string) => ({
+      bindingId,
+      surface: {
+        viewTabId: "view-1",
+        paneId,
+        tileInstanceId: `tile-${paneId}`,
+        pageSessionId: `page-${paneId}`,
+      },
+    });
+    const first = surfaceOf("binding-a", "pane-a");
+    const second = surfaceOf("binding-b", "pane-b");
+    const detachOfA = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      bindingId: "binding-a",
+    };
+    await binding.bindSurface(first);
+    native.detachSurface.mockImplementationOnce(() =>
+      Promise.reject(new Error("detach failed")),
+    );
+
+    await expect(binding.bindSurface(second)).rejects.toThrow("detach failed");
+
+    // The failed detach left the native surface attached, so the renderer must
+    // still report the old surface as viewed and must not have attached a second.
+    expect(native.attachSurface).toHaveBeenCalledOnce();
+    expect(native.detachSurface).toHaveBeenCalledExactlyOnceWith(detachOfA);
+    expect(sent.at(-1)).toMatchObject({
+      kind: "electronTabState",
+      tabId: "tab-1",
+      viewed: true,
+    });
+
+    const leaseB = await binding.bindSurface(second);
+
+    expect(native.detachSurface).toHaveBeenNthCalledWith(2, detachOfA);
+    expect(native.attachSurface).toHaveBeenNthCalledWith(2, {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      ...second,
+    });
+
+    await leaseB.detach();
+    expect(native.detachSurface).toHaveBeenNthCalledWith(3, {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      bindingId: "binding-b",
+    });
+    expect(sent.at(-1)).toMatchObject({
+      kind: "electronTabState",
+      tabId: "tab-1",
+      viewed: false,
+    });
+  });
+
+  it("keeps a lease's surface recorded when its own detach fails", async () => {
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
+    const tabs = trackElectronTabs(
+      createElectronTabs({
+        hostId: "host-1",
+        native,
+        sendFrame: () => {},
+      }),
+    );
+    await receiveCreate(tabs, CREATE);
+    tabs.handleFrame({
+      kind: "electronTabAccepted",
+      hasBinaryPayload: false,
+      requestId: "request-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+    });
+
+    const binding = readElectronTabBinding("session-1", "tab-1", "host-1");
+    if (binding === null) throw new Error("accepted binding missing");
+    const lease = await binding.bindSurface({
+      bindingId: "binding-a",
+      surface: {
+        viewTabId: "view-1",
+        paneId: "pane-a",
+        tileInstanceId: "tile-a",
+        pageSessionId: "page-a",
+      },
+    });
+    native.detachSurface.mockImplementationOnce(() =>
+      Promise.reject(new Error("detach failed")),
+    );
+
+    await expect(lease.detach()).rejects.toThrow("detach failed");
+
+    await binding.bindSurface({
+      bindingId: "binding-b",
+      surface: {
+        viewTabId: "view-1",
+        paneId: "pane-b",
+        tileInstanceId: "tile-b",
+        pageSessionId: "page-b",
+      },
+    });
+
+    expect(native.detachSurface).toHaveBeenNthCalledWith(2, {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      bindingId: "binding-a",
+    });
+  });
+
   it("publishes only accepted bindings and removes them on exact release", async () => {
     const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(

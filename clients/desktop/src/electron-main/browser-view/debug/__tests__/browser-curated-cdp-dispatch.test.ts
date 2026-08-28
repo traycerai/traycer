@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { dispatchBrowserCdpCommand } from "../browser-cdp-command-dispatch";
+import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
+import type {
+  BrowserCdpCommand,
+  BrowserCdpResult,
+} from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewDebugger } from "../../browser-view-port";
 import type { RecordedCommand } from "./browser-debug-session-test-support";
 
@@ -29,7 +33,23 @@ class FakeDebugger implements BrowserViewDebugger {
   off(_event: string, _listener: (...args: unknown[]) => void): void {}
 }
 
-describe("dispatchBrowserCdpCommand", () => {
+/**
+ * The desktop's half of the curated table: `BrowserDebugSession.dispatch`
+ * binds the attached debugger and the addressed child session, and this
+ * exercises the encode/decode that binding drives.
+ */
+function dispatchBrowserCdpCommand(
+  browserDebugger: BrowserViewDebugger,
+  sessionId: string | undefined,
+  command: BrowserCdpCommand,
+): Promise<BrowserCdpResult> {
+  return dispatchCuratedCdp(
+    (method, params) => browserDebugger.sendCommand(method, params, sessionId),
+    command,
+  );
+}
+
+describe("curated CDP dispatch over the desktop debugger", () => {
   it("maps navigation and screenshot responses without leaking dead fields", async () => {
     const browserDebugger = new FakeDebugger();
     browserDebugger.responses.set("Page.navigate", {

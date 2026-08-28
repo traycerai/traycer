@@ -432,12 +432,39 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   // separate lifecycle and hands native browser sessions to the host first.
   const shellQuitState = new ShellQuitState();
   const closingWindowIds = new Set<string>();
-  let handleWindowClose = (
-    _windowId: string,
-    _event: ElectronEvent,
-  ): void => {};
   let zoomController: WindowZoomController | null = null;
   let windowRegistry: WindowRegistry | null = null;
+  /**
+   * Read `state.bridge` / `windowRegistry` at call time: a window can close
+   * before the bridge exists, and a `close` listener captured at window
+   * construction must not silently skip the browser handoff in that gap.
+   */
+  function onWindowClose(windowId: string, event: ElectronEvent): void {
+    const bridge = state.bridge;
+    const registry = windowRegistry;
+    if (bridge === null || registry === null) return;
+    if (
+      shellQuitState.isQuitting() ||
+      !bridge.canHandoffBrowserTabsForWindow(windowId)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (closingWindowIds.has(windowId)) return;
+    closingWindowIds.add(windowId);
+    void bridge
+      .prepareBrowserWindowClose(windowId)
+      .catch((error: unknown) => {
+        log.warn("[desktop] browser handoff failed during window close", {
+          windowId,
+          error,
+        });
+      })
+      .finally(() => {
+        closingWindowIds.delete(windowId);
+        void registry.forceCloseById(windowId);
+      });
+  }
   windowRegistry = new WindowRegistry({
     createWindow: (request) => {
       const zoomFactor =
@@ -473,7 +500,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
         );
       }
       createdWindow.on("close", (event) => {
-        handleWindowClose(request.windowId, event);
+        onWindowClose(request.windowId, event);
       });
       return createdWindow;
     },
@@ -599,30 +626,6 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     quitState: shellQuitState,
   });
   bridge.install();
-  const liveWindowRegistry = windowRegistry;
-  handleWindowClose = (windowId, event) => {
-    if (
-      shellQuitState.isQuitting() ||
-      !bridge.canHandoffBrowserTabsForWindow(windowId)
-    ) {
-      return;
-    }
-    event.preventDefault();
-    if (closingWindowIds.has(windowId)) return;
-    closingWindowIds.add(windowId);
-    void bridge
-      .prepareBrowserWindowClose(windowId)
-      .catch((error: unknown) => {
-        log.warn("[desktop] browser handoff failed during window close", {
-          windowId,
-          error,
-        });
-      })
-      .finally(() => {
-        closingWindowIds.delete(windowId);
-        void liveWindowRegistry.forceCloseById(windowId);
-      });
-  };
   state.bridge = bridge;
 
   installAccessibilityThemeForwarder((snapshot) => {

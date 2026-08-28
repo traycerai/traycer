@@ -4,8 +4,8 @@ import type {
   BrowserViewDebugSnapshotData,
   BrowserViewNetworkEntry,
   BrowserViewNetworkStatus,
-} from "../../../ipc-contracts/browser-view-types";
-import { isRecord } from "../guards";
+} from "@traycer-clients/shared/platform/browser-view";
+import { arrayValue, numberValue, recordValue, stringValue } from "../guards";
 
 const MAX_CONSOLE_ENTRIES = 200;
 const MAX_NETWORK_ENTRIES = 200;
@@ -329,10 +329,6 @@ function trimNetworkEntries(entries: Map<string, NetworkEntryRecord>): void {
   }
 }
 
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
 function truncateDebugText(value: string): string {
   return truncateString(value, MAX_DEBUG_TEXT_LENGTH);
 }
@@ -348,16 +344,4 @@ function truncateDebugUrl(value: string | null): string | null {
 function truncateString(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
-}
-
-function numberValue(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function arrayValue(value: unknown): readonly unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return isRecord(value) ? value : null;
 }

@@ -741,8 +741,7 @@ describe("canModifyChatMessages", () => {
     deliveryPolicy: null,
     attachments: [],
     timestamp: 0,
-    restoreContent: CONTENT,
-    restoreBrowserAnnotations: [],
+    restore: { content: CONTENT, browserAnnotations: [] },
     restoreWorktreeIntent: null,
   };
 

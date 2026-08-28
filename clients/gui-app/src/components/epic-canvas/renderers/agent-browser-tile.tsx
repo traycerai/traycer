@@ -19,6 +19,7 @@ import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/rend
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
 import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import type {
   BrowserViewStatus,
   BrowserViewTileKey,
@@ -175,7 +176,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   useEffect(() => {
     if (browserView === null) return;
     const subscription = browserView.onOpenTileRequest((change) => {
-      if (!isChangeForTile(change, tileKey)) return;
+      if (!isSameBrowserViewTile(change, tileKey)) return;
       if (
         browserSessions === null ||
         browserSessions.lifecycle !== "live" ||
@@ -508,16 +509,4 @@ function isStaleSettleBeforeEcho(
   status: BrowserViewStatus,
 ): boolean {
   return current !== null && status === "ready" && !current.echoSeen;
-}
-
-function isChangeForTile(
-  change: BrowserViewTileKey,
-  key: BrowserViewTileKey,
-): boolean {
-  return (
-    change.viewTabId === key.viewTabId &&
-    change.paneId === key.paneId &&
-    change.tileInstanceId === key.tileInstanceId &&
-    change.pageSessionId === key.pageSessionId
-  );
 }

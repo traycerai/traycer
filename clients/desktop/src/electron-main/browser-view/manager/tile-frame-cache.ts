@@ -36,15 +36,7 @@ export interface TileFrameImage {
   getSize(): { readonly width: number; readonly height: number };
   /** Matches Electron capture results, which return plain Uint8Array. */
   toJPEG(quality: number): Uint8Array;
-}
-
-/**
- * Downscale support is OPTIONAL so the minimal contract matches Electron's
- * `capturePage` result structurally; frame sources backed by `NativeImage`
- * (real frame subscriptions) provide `resize` and get long-edge capping,
- * while bare capture results fall through un-scaled.
- */
-export interface ScalableTileFrameImage extends TileFrameImage {
+  /** Long-edge downscale before encode; `NativeImage` provides this. */
   resize(options: {
     readonly width: number;
     readonly height: number;
@@ -109,10 +101,9 @@ export function defaultTileFrameEncoder(
     if (size.width <= 0 || size.height <= 0) return null;
     let encoded: TileFrameImage = image;
     const longEdge = Math.max(size.width, size.height);
-    const maybeResize = (image as Partial<ScalableTileFrameImage>).resize;
-    if (longEdge > maxDimension && typeof maybeResize === "function") {
+    if (longEdge > maxDimension) {
       const scale = maxDimension / longEdge;
-      encoded = maybeResize.call(image, {
+      encoded = image.resize({
         width: Math.max(1, Math.round(size.width * scale)),
         height: Math.max(1, Math.round(size.height * scale)),
       });
@@ -190,10 +181,6 @@ export class TileFrameCache {
   isFresh(key: string): boolean {
     const age = this.ageMs(key);
     return age !== null && age <= this.options.staleAfterMs;
-  }
-
-  has(key: string): boolean {
-    return this.slots.has(key);
   }
 
   stats(): TileFrameStats {

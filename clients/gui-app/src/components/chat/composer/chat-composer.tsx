@@ -45,7 +45,7 @@ import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -184,9 +184,11 @@ export interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-  /** Editor document without submit-only crop atoms. */
-  readonly restoreContent: JsonContent;
-  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  /**
+   * Editor document without submit-only crop atoms, plus the annotation cards
+   * that left with the send.
+   */
+  readonly restore: ChatSendRestore;
 }
 
 function composerUtilityNeedsClearance(args: {
@@ -198,6 +200,7 @@ function composerUtilityNeedsClearance(args: {
   return triggerVisible && args.connectedUpperSurface;
 }
 
+/** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
 function composerAttachmentPending(
   pastePending: boolean,
   annotationPreparationPending: boolean,

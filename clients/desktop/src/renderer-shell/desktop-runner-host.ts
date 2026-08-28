@@ -65,6 +65,7 @@ import type {
 import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
+  CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
@@ -84,6 +85,7 @@ import {
 export type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial as DesktopBackgroundMaterial,
+  CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
   PendingCertificateError,
@@ -442,7 +444,11 @@ export interface DesktopPlatformBridge {
   certTrust: {
     list(): Promise<ReadonlyArray<TrustedCertificateEntry>>;
     trust(hostname: string, certificate: unknown): Promise<unknown>;
-    untrust(fingerprint: string, hostname: string): Promise<void>;
+    untrust(
+      scope: CertificateTrustScope,
+      fingerprint: string,
+      hostname: string,
+    ): Promise<void>;
     listPending(): Promise<ReadonlyArray<PendingCertificateError>>;
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;

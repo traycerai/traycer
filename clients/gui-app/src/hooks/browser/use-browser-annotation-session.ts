@@ -165,6 +165,11 @@ async function ingestAttachedAnnotation(
     } else {
       toast.error("Couldn't store the annotation crop.");
     }
+  } catch {
+    // Same surface as a rejected store: the crop is gone either way, and an
+    // uncaught throw here escaped the `void`-ed promise as an unhandled
+    // rejection after the tile had already been told "failed".
+    toast.error("Couldn't store the annotation crop.");
   } finally {
     void reportResult({ annotationId, status }).catch(ignoreError);
   }

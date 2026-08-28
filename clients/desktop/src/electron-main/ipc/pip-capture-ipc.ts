@@ -21,7 +21,7 @@ export function registerPipCaptureIpc(
     async (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
       const input = browserViewIpcPayload.pipCaptureStart.parse(payload);
-      manager.stopPipCapture();
+      manager.pip.stop();
       const onFrame = (framePayload: PipCaptureIpcPayload): void => {
         bridge.safeSendToWindow(
           windowId,
@@ -39,7 +39,7 @@ export function registerPipCaptureIpc(
   );
 
   bridge.handleInvoke(RunnerHostInvoke.pipCaptureStop, () => {
-    manager.stopPipCapture();
+    manager.pip.stop();
   });
 }
 

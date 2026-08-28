@@ -1,4 +1,4 @@
-import type { Cookie } from "electron";
+import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import { z } from "zod";
 import {
   browserStorageCookieSchema as protocolStorageCookieSchema,
@@ -13,9 +13,7 @@ import {
 import type {
   BrowserCookieCryptoState,
   BrowserPrimaryProfileCaptureResult,
-} from "../../../ipc-contracts/browser-view-types";
-import { getBrowserCookieCryptoState } from "./browser-cookie-crypto";
-import { ensureBrowserViewSession } from "../browser-session";
+} from "@traycer-clients/shared/platform/browser-view";
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
@@ -49,11 +47,12 @@ interface BrowserCookieDomain {
   readonly canonicalDomain: string;
 }
 
-export interface BrowserCookieSetDetails {
+interface BrowserCookieSetDetails {
   readonly url: string;
   readonly name: string;
   readonly value: string;
-  readonly domain?: string;
+  /** Null is host-only scope; Electron wants the key absent, not null. */
+  readonly domain: string | null;
   readonly path: string;
   readonly expirationDate: number | undefined;
   readonly httpOnly: boolean;
@@ -62,8 +61,8 @@ export interface BrowserCookieSetDetails {
 }
 
 export interface BrowserCookieStore {
-  set(details: BrowserCookieSetDetails): Promise<void>;
-  get(filter: { readonly url?: string }): Promise<Cookie[]>;
+  set(details: CookiesSetDetails): Promise<void>;
+  get(filter: CookiesGetFilter): Promise<Cookie[]>;
   flushStore(): Promise<void>;
 }
 
@@ -97,15 +96,6 @@ export interface BrowserPrimaryProfileCaptureDependencies {
 }
 
 export async function captureBrowserPrimaryProfile(
-  origins: readonly BrowserPrimaryProfileOriginSnapshot[],
-): Promise<BrowserPrimaryProfileCaptureResult> {
-  return captureBrowserPrimaryProfileWithDependencies(origins, {
-    readCryptoState: getBrowserCookieCryptoState,
-    getSession: ensureBrowserViewSession,
-  });
-}
-
-export async function captureBrowserPrimaryProfileWithDependencies(
   origins: readonly BrowserPrimaryProfileOriginSnapshot[],
   dependencies: BrowserPrimaryProfileCaptureDependencies,
 ): Promise<BrowserPrimaryProfileCaptureResult> {
@@ -224,7 +214,7 @@ export async function seedBrowserViewCookies(
   const cookieDetails =
     parseStorageState(storageState).cookies.map(toCookieSetDetails);
   for (const details of cookieDetails) {
-    await webContents.session.cookies.set(details);
+    await webContents.session.cookies.set(toElectronCookieSetDetails(details));
   }
   await webContents.session.cookies.flushStore();
 }
@@ -269,19 +259,25 @@ function parseStorageState(value: ProtocolStorageState): DesktopStorageState {
 function toCookieSetDetails(
   cookie: DesktopStorageCookie,
 ): BrowserCookieSetDetails {
-  const details: BrowserCookieSetDetails = {
+  return {
     url: cookieUrl(cookie),
     name: cookie.name,
     value: cookie.value,
+    domain: cookie.domain.startsWith(".") ? cookie.domain : null,
     path: cookie.path,
     expirationDate: cookie.expires < 0 ? undefined : cookie.expires,
     httpOnly: cookie.httpOnly,
     secure: cookie.secure,
     sameSite: electronSameSite(cookie.sameSite),
   };
-  return cookie.domain.startsWith(".")
-    ? { ...details, domain: cookie.domain }
-    : details;
+}
+
+/** The one place null-as-absence meets Electron's optional `domain`. */
+function toElectronCookieSetDetails(
+  details: BrowserCookieSetDetails,
+): CookiesSetDetails {
+  const { domain, ...rest } = details;
+  return domain === null ? rest : { ...rest, domain };
 }
 
 function cookieUrl(cookie: DesktopStorageCookie): string {

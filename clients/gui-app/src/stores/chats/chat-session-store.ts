@@ -164,6 +164,16 @@ type SendActionInput = {
   readonly pendingUserMessage: PendingUserMessage | null;
 };
 
+/**
+ * What a send hands back to the composer if it never lands - the pre-submit
+ * document plus the annotation cards that left with it. One value so a new
+ * restorable composer artifact costs no call-site edits.
+ */
+export interface ChatSendRestore {
+  readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+}
+
 export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
@@ -173,12 +183,11 @@ export interface PendingUserMessage {
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
   /**
-   * Pre-submit composer document (no crop atoms). Used when a settled
-   * turn never recorded the send, so restore does not inline the wire
-   * image atoms.
+   * Pre-submit composer document (no crop atoms) plus its annotation cards.
+   * Used when a settled turn never recorded the send, so restore does not
+   * inline the wire image atoms or drop the records.
    */
-  readonly restoreContent: JsonContent;
-  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly restore: ChatSendRestore;
   /**
    * The billing context this send was stamped with at dispatch. Retained for
    * the same reason `settings` is: it dies with the action, so a resend picks
@@ -230,13 +239,7 @@ export interface PendingChatAction {
   /** Immutable retry identity; null for all non-delivery-retry actions. */
   readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
-  readonly restoreContent: JsonContent | null;
-  /**
-   * Annotation cards that left the composer with this send. Restored
-   * together with `restoreContent` so a rejection does not inline crop
-   * atoms or drop the records.
-   */
-  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly restore: ChatSendRestore | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
@@ -371,8 +374,7 @@ export interface AcceptedChatAction {
    * {@link reconcileSnapshotChange}. `null` for non-`send` actions and after
    * the content has been consumed once by `takeSetupFailedRestoration`.
    */
-  readonly restoreContent: JsonContent | null;
-  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly restore: ChatSendRestore | null;
   /**
    * The rest of the recovery tuple, for `send` records only.
    *
@@ -714,8 +716,7 @@ export interface ChatSessionState {
     readonly settings: ChatRunSettings;
     readonly attachments: ReadonlyArray<Attachment>;
     readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-    readonly restoreContent: JsonContent;
-    readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+    readonly restore: ChatSendRestore;
   }) => SentChatMessageAction | null;
   /**
    * Sends the initial handoff message reusing its pre-minted ids (shared with
@@ -839,7 +840,7 @@ export interface ChatSessionState {
    *
    * Subsequent calls for the same `messageId` return `null` (the
    * `pendingUserMessages` entry is removed; `pendingActions` /
-   * `acceptedActions` entries have their `restoreContent` field nulled
+   * `acceptedActions` entries have their `restore` field nulled
    * out) so a duplicate or replayed `setup.failed` event does not
    * double-restore. The matching action records stay in their slots so
    * downstream ack/accept reconciliation continues to work.
@@ -1180,11 +1181,11 @@ function rejectionNotice(input: {
     input.displaced &&
     pending !== null &&
     pending.action === "send" &&
-    pending.restoreContent !== null
+    pending.restore !== null
   ) {
     return unrecoverableSendNotice({
       clientActionId: input.frame.clientActionId,
-      content: pending.restoreContent,
+      content: pending.restore.content,
       circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
       account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
     });
@@ -1219,7 +1220,7 @@ function rejectionEvidence(
   currentSettings: ChatRunSettings | null,
 ): DeadSendAccount | null {
   if (pending === null || pending.action !== "send") return null;
-  if (pending.restoreContent === null) return null;
+  if (pending.restore === null) return null;
   return {
     worktree: { ...worktree, superseded },
     sentSettings: pending.settings,
@@ -1249,13 +1250,13 @@ function rejectionRestoration(input: {
 }): FailedSendRestorationState | null {
   const { state, pending, frame } = input;
   if (state.failedSendRestoration !== null) return null;
-  if (pending?.action !== "send" || pending.restoreContent === null) {
+  if (pending?.action !== "send" || pending.restore === null) {
     return null;
   }
   return {
     clientActionId: frame.clientActionId,
-    content: pending.restoreContent,
-    browserAnnotations: pending.restoreBrowserAnnotations,
+    content: pending.restore.content,
+    browserAnnotations: pending.restore.browserAnnotations,
     reason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
@@ -1432,10 +1433,12 @@ function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
   for (const sessionStore of liveChatSessionStores) {
     const state = sessionStore.getState();
     for (const pending of Object.values(state.pendingActions)) {
-      records.push(...pending.restoreBrowserAnnotations);
+      if (pending.restore !== null) {
+        records.push(...pending.restore.browserAnnotations);
+      }
     }
     for (const message of state.pendingUserMessages) {
-      records.push(...message.restoreBrowserAnnotations);
+      records.push(...message.restore.browserAnnotations);
     }
     if (state.failedSendRestoration !== null) {
       records.push(...state.failedSendRestoration.browserAnnotations);
@@ -3203,8 +3206,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: input.restoreContent,
-            restoreBrowserAnnotations: input.restoreBrowserAnnotations,
+            restore: input.restore,
             sender: input.sender,
             settings: input.settings,
             accountContext: frame.accountContext,
@@ -3231,8 +3233,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 sender: input.sender,
                 settings: input.settings,
                 timestamp: Date.now(),
-                restoreContent: input.restoreContent,
-                restoreBrowserAnnotations: input.restoreBrowserAnnotations,
+                restore: input.restore,
                 accountContext: frame.accountContext,
                 deliveryPolicy: frame.deliveryPolicy,
                 restoreWorktreeIntent: worktreeIntent,
@@ -3329,8 +3330,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
-            restoreContent: input.content,
-            restoreBrowserAnnotations: [],
+            restore: { content: input.content, browserAnnotations: [] },
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
@@ -3352,8 +3352,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             accountContext: frame.accountContext,
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
-            restoreContent: input.content,
-            restoreBrowserAnnotations: [],
+            restore: { content: input.content, browserAnnotations: [] },
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
             restoreWorktreeIntent: null,
@@ -3436,8 +3435,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: null,
-            restoreBrowserAnnotations: [],
+            restore: null,
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
@@ -3509,8 +3507,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
-            restoreContent: null,
-            restoreBrowserAnnotations: [],
+            restore: null,
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
@@ -4118,7 +4115,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (restored === null) return null;
         // Clear every restorable slot in lockstep so a duplicate
         // `setup.failed` event cannot double-restore. The action records
-        // themselves stay in place - only their `restoreContent` slot is
+        // themselves stay in place - only their `restore` slot is
         // nulled - so downstream ack/accept reconciliation continues to
         // work.
         set({
@@ -4135,7 +4132,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                   ...state.pendingActions,
                   [pendingActionMatch.entry.clientActionId]: {
                     ...pendingActionMatch.entry,
-                    restoreContent: null,
+                    restore: null,
                   },
                 },
           acceptedActions:
@@ -4145,7 +4142,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                   ...state.acceptedActions,
                   [acceptedActionMatch.entry.clientActionId]: {
                     ...acceptedActionMatch.entry,
-                    restoreContent: null,
+                    restore: null,
                   },
                 },
         });
@@ -4253,8 +4250,7 @@ function basicPending(
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,
-    restoreContent: null,
-    restoreBrowserAnnotations: [],
+    restore: null,
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
@@ -4579,7 +4575,7 @@ function findRestorableSendByMessageId<
     readonly clientActionId: string;
     readonly action: ChatOwnerActionFrame["kind"];
     readonly messageId: string | null;
-    readonly restoreContent: JsonContent | null;
+    readonly restore: ChatSendRestore | null;
   },
 >(
   entries: ReadonlyArray<T>,
@@ -4589,9 +4585,9 @@ function findRestorableSendByMessageId<
     if (
       entry.action === "send" &&
       entry.messageId === messageId &&
-      entry.restoreContent !== null
+      entry.restore !== null
     ) {
-      return { entry, content: entry.restoreContent };
+      return { entry, content: entry.restore.content };
     }
   }
   return null;

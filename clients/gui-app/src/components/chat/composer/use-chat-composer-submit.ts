@@ -23,6 +23,7 @@ import {
   sessionImageBytes,
 } from "@/lib/composer/landing-image-store";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import { v4 as uuidv4 } from "uuid";
 import {
   buildAttachmentsFromJSONContent,
@@ -104,8 +105,7 @@ interface PendingSteerConflict {
   readonly content: JsonContent;
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
-  readonly restoreContent: JsonContent;
-  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly restore: ChatSendRestore;
   readonly settings: ChatRunSettings;
   readonly changed: ReadonlyArray<string>;
   // The turnId this consent was DISPLAYED for. The composer persists across turn
@@ -231,14 +231,8 @@ export function useChatComposerSubmit(
       // editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
       if (annotationPrepFlight.current) return;
-      const draft = useComposerDraftStore.getState().drafts[taskId];
-      const annotationRecords = draft?.browserAnnotations ?? [];
-      const capturedRevision = draft?.revision ?? 0;
-      const browserContextAttachments =
-        draft?.browserContextAttachments?.map((payload) => ({
-          kind: "browser-context" as const,
-          payload,
-        })) ?? [];
+      const { annotationRecords, browserContextAttachments } =
+        readDraftSidecars(taskId);
       const editorContent = editor.getJSON();
       const contentText =
         extractPlainTextFromComposerJSONContent(editorContent);
@@ -257,8 +251,26 @@ export function useChatComposerSubmit(
         annotationImages: ReadonlyArray<AnnotationImageAtom>,
       ): void => {
         if (submitBlocked()) return;
-        const live = readComposerDraftSnapshot(taskId);
-        if (live.revision !== capturedRevision) return;
+        // Re-read the document rather than comparing the `revision` captured
+        // before the async annotation-image read. `revision` bumps on every
+        // keystroke, so a single character typed during that read dropped the
+        // send silently; and the pre-flight capture is not what the user is
+        // looking at by the time we clear the editor, so sending it would
+        // discard those keystrokes. The live document is both.
+        const liveContent = editor.getJSON();
+        const liveContentText =
+          extractPlainTextFromComposerJSONContent(liveContent);
+        // Re-read the sidecar arrays for the same reason the document is
+        // re-read: an annotation or a browser capture attached while the crop
+        // bytes resolved is what the user is looking at, and the `clearDraft`
+        // below wipes it - the pre-flight capture would drop it silently.
+        // `annotationImages` still covers only the records captured BEFORE
+        // that read, so a late annotation sends its record without an inlined
+        // crop atom rather than not being sent at all.
+        const {
+          annotationRecords: liveAnnotationRecords,
+          browserContextAttachments: liveBrowserContextAttachments,
+        } = readDraftSidecars(taskId);
         const settings = buildChatRunSettings({
           selection: toolbar.selection,
           permission: toolbar.permission,
@@ -267,15 +279,15 @@ export function useChatComposerSubmit(
         });
         const submittedContent = appendImageAttachmentAtoms(
           buildSubmittedChatJSONContent(
-            editorContent,
+            liveContent,
             pickerStore.getState().knownSlashCommands,
           ),
           annotationImages,
         );
         const attachments: ReadonlyArray<Attachment> = [
           ...buildAttachmentsFromJSONContent(submittedContent),
-          ...browserContextAttachments,
-          ...annotationRecords,
+          ...liveBrowserContextAttachments,
+          ...liveAnnotationRecords,
         ];
         const deliveryPolicy = resolveSubmitDeliveryPolicy({
           source,
@@ -285,12 +297,14 @@ export function useChatComposerSubmit(
         });
         const sendInput: ChatComposerSubmitInput = {
           content: submittedContent,
-          contentText,
+          contentText: liveContentText,
           attachments,
           settings,
           deliveryPolicy,
-          restoreContent: editorContent,
-          restoreBrowserAnnotations: annotationRecords,
+          restore: {
+            content: liveContent,
+            browserAnnotations: liveAnnotationRecords,
+          },
         };
         if (deliveryPolicy === "after_safe_point" && steerCapable) {
           const originTurn = getActiveTurnForSteer();
@@ -298,10 +312,12 @@ export function useChatComposerSubmit(
           if (decision.kind === "interrupt_restart") {
             setPendingConflict({
               content: submittedContent,
-              contentText,
+              contentText: liveContentText,
               attachments,
-              restoreContent: editorContent,
-              restoreBrowserAnnotations: annotationRecords,
+              restore: {
+                content: liveContent,
+                browserAnnotations: liveAnnotationRecords,
+              },
               settings: decision.newSettings,
               changed: decision.changed,
               originTurnId: originTurn?.turnId ?? null,
@@ -398,8 +414,7 @@ export function useChatComposerSubmit(
         attachments: pendingConflict.attachments,
         settings: pendingConflict.settings,
         deliveryPolicy,
-        restoreContent: pendingConflict.restoreContent,
-        restoreBrowserAnnotations: pendingConflict.restoreBrowserAnnotations,
+        restore: pendingConflict.restore,
       })
     ) {
       setPendingConflict(null);
@@ -431,6 +446,26 @@ export function useChatComposerSubmit(
   };
 }
 
+interface ComposerDraftSidecars {
+  readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
+  /** Already wrapped as attachments, ready to concatenate onto a send. */
+  readonly browserContextAttachments: ReadonlyArray<Attachment>;
+}
+
+/**
+ * The draft's two non-document arrays, read live. Both the pre-flight read and
+ * the post-async finalize go through here so they can never diverge.
+ */
+function readDraftSidecars(taskId: string): ComposerDraftSidecars {
+  const draft = readComposerDraftSnapshot(taskId);
+  return {
+    annotationRecords: draft.browserAnnotations,
+    browserContextAttachments: draft.browserContextAttachments.map(
+      (payload) => ({ kind: "browser-context" as const, payload }),
+    ),
+  };
+}
+
 function isEmptyComposerSubmit(input: {
   readonly contentText: string;
   readonly editorContent: JsonContent;
@@ -451,6 +486,7 @@ type AnnotationImageAtom = {
   readonly mimeType: string;
   readonly size: number | null;
   readonly b64content: string;
+  readonly hash: string;
 };
 
 async function resolveAnnotationImageAtoms(
@@ -468,6 +504,7 @@ async function resolveAnnotationImageAtoms(
       mimeType: "image/png",
       size: bytes.byteLength,
       b64content: bytesToBase64(bytes),
+      hash: record.imageHash,
     });
   }
   return atoms;

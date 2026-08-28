@@ -175,6 +175,8 @@ function BrowserTileToolbarAddress(props: {
           onChange={(event) => {
             controller.onAddressChange(event.target.value);
           }}
+          onFocus={() => controller.onAddressFocusChange(true)}
+          onBlur={() => controller.onAddressFocusChange(false)}
           className="h-7 min-w-0 flex-1 truncate font-mono text-ui-sm"
           spellCheck={false}
         />

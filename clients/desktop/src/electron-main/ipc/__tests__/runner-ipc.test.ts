@@ -3298,16 +3298,75 @@ describe("RunnerIpcBridge", () => {
     }
   });
 
+  it("resolves a browser handoff drain after the timeout when the renderer never acknowledges", async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import("../register-runner-ipc");
+      const { BROWSER_HANDOFF_DRAIN_TIMEOUT_MS } =
+        await import("../runner-ipc-bridge");
+      const { BrowserViewManager } =
+        await import("../../browser-view/browser-view-manager");
+      const hasNativeTabs = vi
+        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+        .mockReturnValue(true);
+      const registry = new FakeWindowRegistry();
+      const window = buildWindow();
+      registry.add("window-a", 101, window);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      bridge.appLifecycleReadyWindowIds.add("window-a");
+      window.sentMessages.length = 0;
+
+      const drain = bridge.drainBrowserHandoffs();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(
+        window.sentMessages.some(
+          (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+        ),
+      ).toBe(true);
+
+      const pending = Symbol("pending");
+      await expect(
+        Promise.race([drain, Promise.resolve(pending)]),
+      ).resolves.toBe(pending);
+
+      await vi.advanceTimersByTimeAsync(
+        BROWSER_HANDOFF_DRAIN_TIMEOUT_MS - 3_000,
+      );
+
+      await expect(drain).resolves.toBeUndefined();
+      hasNativeTabs.mockRestore();
+      bridge.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes a window's native sessions only after its handoff is acknowledged", async () => {
     const mod = await import("../register-runner-ipc");
     const { BrowserViewManager } =
       await import("../../browser-view/browser-view-manager");
+    const { BrowserViewHandoff } =
+      await import("../../browser-view/manager/browser-view-handoff");
     const calls: string[] = [];
     const hasNativeTabs = vi
       .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
       .mockReturnValue(true);
     const drainForWindow = vi
-      .spyOn(BrowserViewManager.prototype, "drainBrowserHandoffsForWindow")
+      .spyOn(BrowserViewHandoff.prototype, "drainForWindow")
       .mockImplementation(() => {
         calls.push("handoff");
         return Promise.resolve();

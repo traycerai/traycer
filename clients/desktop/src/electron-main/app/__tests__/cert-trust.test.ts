@@ -271,4 +271,40 @@ describe("certificate trust routing", () => {
     webContents.emit("destroyed");
     offBrowserPending();
   });
+
+  it("lists and revokes browser-scope trust without touching app-shell trust", async () => {
+    const certTrust = await import("../cert-trust");
+    const appShellCert = new FakeCertificate("app-cert", "shell.localhost");
+    const browserCert = new FakeCertificate("browser-cert", "site.localhost");
+
+    await certTrust.trustCertificate("shell.localhost", appShellCert);
+    await certTrust.trustBrowserCertificate("site.localhost", browserCert);
+
+    expect(await certTrust.listTrustedCertificates()).toMatchObject([
+      { scope: "app-shell", hostname: "shell.localhost" },
+      { scope: "browser", hostname: "site.localhost" },
+    ]);
+
+    const browserEntry = (await certTrust.listTrustedCertificates()).find(
+      (entry) => entry.scope === "browser",
+    );
+    if (browserEntry === undefined) throw new Error("browser entry missing");
+
+    // Same fingerprint+hostname under the wrong scope must not revoke it.
+    await certTrust.untrustCertificate(
+      "app-shell",
+      browserEntry.fingerprint,
+      browserEntry.hostname,
+    );
+    expect(await certTrust.listTrustedCertificates()).toHaveLength(2);
+
+    await certTrust.untrustCertificate(
+      "browser",
+      browserEntry.fingerprint,
+      browserEntry.hostname,
+    );
+    expect(await certTrust.listTrustedCertificates()).toMatchObject([
+      { scope: "app-shell", hostname: "shell.localhost" },
+    ]);
+  });
 });

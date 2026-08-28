@@ -226,7 +226,7 @@ describe("browser-tab-display", () => {
     });
   });
 
-  it("disambiguates colliding titles with host port or shortest path", () => {
+  it("labels every row with its hostname", () => {
     const labels = disambiguateSecondaryLabels([
       {
         key: "live",
@@ -235,17 +235,17 @@ describe("browser-tab-display", () => {
         url: "https://www.hotstar.com/live",
       },
       {
-        key: "sports",
-        tabId: "tab-sports",
-        title: "JioHotstar",
-        url: "https://www.hotstar.com/sports",
+        key: "docs",
+        tabId: "tab-docs",
+        title: "Docs",
+        url: "https://example.com/docs",
       },
     ]);
-    expect(labels.get("live")).toBe("www.hotstar.com/live");
-    expect(labels.get("sports")).toBe("www.hotstar.com/sports");
+    expect(labels.get("live")).toBe("www.hotstar.com");
+    expect(labels.get("docs")).toBe("example.com");
   });
 
-  it("uses a short unique tab-id suffix when title and URL still collide", () => {
+  it("appends the tab-id tail when title and hostname collide", () => {
     const labels = disambiguateSecondaryLabels([
       {
         key: "a",
@@ -257,11 +257,11 @@ describe("browser-tab-display", () => {
         key: "b",
         tabId: "bbbbbbbb-2222-4bbb-bbbb-bbbbddddffff",
         title: "JioHotstar",
-        url: "https://www.hotstar.com/live",
+        url: "https://www.hotstar.com/sports",
       },
     ]);
-    expect(labels.get("a")).toBe("www.hotstar.com/live (cccc)");
-    expect(labels.get("b")).toBe("www.hotstar.com/live (ffff)");
+    expect(labels.get("a")).toBe("www.hotstar.com (cccc)");
+    expect(labels.get("b")).toBe("www.hotstar.com (ffff)");
   });
 
   it("does not disambiguate matching hosts when titles already differ", () => {

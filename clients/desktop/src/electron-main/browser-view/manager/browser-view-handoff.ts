@@ -1,8 +1,11 @@
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
-import type { BrowserViewElectronTabHandoffChange } from "../../../ipc-contracts/browser-view-types";
+import type { BrowserViewElectronTabHandoffChange } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserViewEntry, BrowserViewSend } from "./browser-view-entry";
-import type { BrowserViewEntryRegistry } from "./browser-view-entry-registry";
+import {
+  nativeBrowserSessionKey,
+  type BrowserViewEntryRegistry,
+} from "./browser-view-entry-registry";
 import type { ManagedBrowserView } from "../browser-view-port";
 import type { BrowserStorageStateCaptureResult } from "../storage/browser-storage-state";
 
@@ -57,11 +60,11 @@ export class BrowserViewHandoff {
   async push(entry: BrowserViewEntry, reason: HandoffReason): Promise<void> {
     const identity = entry.identity;
     if (!identity.lifecycle.canHandoff) return;
+    const sessionKey = nativeBrowserSessionKey(identity.key);
     const siblings = Array.from(this.entries.guestValues()).filter(
       (candidate) =>
         candidate !== entry &&
-        candidate.identity.key.hostId === identity.key.hostId &&
-        candidate.identity.key.sessionId === identity.key.sessionId &&
+        nativeBrowserSessionKey(candidate.identity.key) === sessionKey &&
         candidate.identity.lifecycle.canHandoff,
     );
     const { promise: aggregationPromise, resolve: resolveAggregation } =

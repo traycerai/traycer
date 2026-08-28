@@ -101,8 +101,7 @@ function sendTestMessage(
     settings: delivery.settings,
     attachments: buildAttachmentsFromJSONContent(content),
     deliveryPolicy: delivery.deliveryPolicy,
-    restoreContent: content,
-    restoreBrowserAnnotations: [],
+    restore: { content, browserAnnotations: [] },
   });
 }
 
@@ -10272,7 +10271,7 @@ describe("createChatSessionStore", () => {
     // `startProviderTurn` awaits setup. `messageAccepted` clears
     // `pendingUserMessages`, so the later setup-gating `setup.failed` would
     // otherwise find nothing to restore. The accepted-action record retains the
-    // original `restoreContent` so the composer can still recover the
+    // original `restore` slot so the composer can still recover the
     // triggering prompt exactly once.
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10328,7 +10327,7 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "send",
       messageId: sent.messageId,
-      restoreContent: CONTENT,
+      restore: { content: CONTENT, browserAnnotations: [] },
     });
 
     expect(
@@ -10338,14 +10337,14 @@ describe("createChatSessionStore", () => {
     ).toEqual(CONTENT);
 
     // The accepted-action record stays in place (so other reconciliation
-    // continues to work) but the restoreContent slot is cleared so a
+    // continues to work) but the restore slot is cleared so a
     // duplicate setup.failed cannot double-restore.
     expect(
       harness.handle.store.getState().acceptedActions[sent.clientActionId],
     ).toMatchObject({
       action: "send",
       messageId: sent.messageId,
-      restoreContent: null,
+      restore: null,
     });
     expect(
       harness.handle.store
@@ -10358,7 +10357,7 @@ describe("createChatSessionStore", () => {
     // Race coverage: the host may publish `messageAccepted` ahead of
     // the `actionAck`. `messageAccepted` clears `pendingUserMessages`
     // but the still-pending action retains the original
-    // `restoreContent`, so a setup-gating `setup.failed` arriving in
+    // `restore` slot, so a setup-gating `setup.failed` arriving in
     // this in-between window must still recover the prompt.
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10401,7 +10400,7 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "send",
       messageId: sent.messageId,
-      restoreContent: CONTENT,
+      restore: { content: CONTENT, browserAnnotations: [] },
     });
 
     expect(
@@ -10411,7 +10410,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(CONTENT);
     expect(
       harness.handle.store.getState().pendingActions[sent.clientActionId]
-        .restoreContent,
+        .restore,
     ).toBeNull();
     expect(
       harness.handle.store

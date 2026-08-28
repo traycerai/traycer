@@ -9,6 +9,16 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  browserCdpCommandSchema,
+  browserCdpResultSchema,
+  browserCdpTargetSchema,
+} from "@traycer/protocol/host/browser/cdp-contracts";
+
+// The curated CDP vocabulary lives in its own module (it is addressed
+// independently of either stream contract) but stays part of this module's
+// public surface, so every consumer keeps one import path.
+export * from "@traycer/protocol/host/browser/cdp-contracts";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
@@ -162,96 +172,6 @@ export const browserStorageStateSchema = z
   .strict();
 export type BrowserStorageState = z.infer<typeof browserStorageStateSchema>;
 
-const browserSessionsCoreServerFrameSchemas = [
-  z.object({
-    kind: z.literal("snapshot"),
-    ...textFrameFields,
-    sessions: z.array(browserSessionInfoSchema),
-  }),
-  z.object({
-    kind: z.literal("sessionCreated"),
-    ...textFrameFields,
-    session: browserSessionInfoSchema,
-  }),
-  z.object({
-    kind: z.literal("sessionUpdated"),
-    ...textFrameFields,
-    session: browserSessionInfoSchema,
-  }),
-  z.object({
-    kind: z.literal("sessionClosed"),
-    ...textFrameFields,
-    ...browserSessionReferenceFields,
-    reason: browserSessionClosedReasonSchema,
-  }),
-  z.object({
-    kind: z.literal("agentTabOpened"),
-    ...textFrameFields,
-    ...browserSessionReferenceFields,
-    tabId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("actionAck"),
-    ...requestFrameFields,
-    ok: z.boolean(),
-    reason: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("openTabResult"),
-    ...requestFrameFields,
-    result: z.discriminatedUnion("ok", [
-      z
-        .object({
-          ok: z.literal(true),
-          ...browserTabIdentitySchema.shape,
-        })
-        .strict(),
-      z
-        .object({
-          ok: z.literal(false),
-          reason: z.string(),
-        })
-        .strict(),
-    ]),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    ...textFrameFields,
-  }),
-] as const;
-
-/** Curated CDP vocabulary carried by the Electron-tab transport. */
-const browserCdpErrorSchema = z
-  .object({
-    kind: z.enum(["not_attached", "tab_not_found", "cdp_error"]),
-    message: z.string(),
-    code: z.number().nullable(),
-  })
-  .strict();
-export type BrowserCdpError = z.infer<typeof browserCdpErrorSchema>;
-
-const browserCdpFrameInfoSchema = z
-  .object({
-    frameId: z.string(),
-    parentFrameId: z.string().nullable(),
-    url: z.string(),
-  })
-  .strict();
-export type BrowserCdpFrameInfo = z.infer<typeof browserCdpFrameInfoSchema>;
-
-/** Logical page target. Native CDP session ids never cross the host wire. */
-export const browserCdpTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("root") }).strict(),
-  z
-    .object({
-      kind: z.literal("frame"),
-      frameId: z.string(),
-      parentFrameId: z.string(),
-    })
-    .strict(),
-]);
-export type BrowserCdpTarget = z.infer<typeof browserCdpTargetSchema>;
-
 const cdpRequestFrameFields = {
   ...requestFrameFields,
   tabId: z.string(),
@@ -260,276 +180,6 @@ const cdpRequestFrameFields = {
   registrationId: z.string(),
   target: browserCdpTargetSchema,
 } as const;
-
-const cdpNavigateCommandSchema = z
-  .object({
-    kind: z.literal("cdpNavigate"),
-    url: z.string().min(1),
-  })
-  .strict();
-const cdpCaptureScreenshotCommandSchema = z
-  .object({
-    kind: z.literal("cdpCaptureScreenshot"),
-    format: z.enum(["png", "jpeg"]),
-    quality: z.number().int().min(0).max(100).nullable(),
-  })
-  .strict();
-const cdpGetFrameTreeCommandSchema = z
-  .object({
-    kind: z.literal("cdpGetFrameTree"),
-  })
-  .strict();
-const cdpCreateIsolatedWorldCommandSchema = z
-  .object({
-    kind: z.literal("cdpCreateIsolatedWorld"),
-    frameId: z.string(),
-    worldName: z.string(),
-    grantUniversalAccess: z.boolean(),
-  })
-  .strict();
-const cdpEvaluateCommandSchema = z
-  .object({
-    kind: z.literal("cdpEvaluate"),
-    expression: z.string(),
-    awaitPromise: z.boolean(),
-    returnByValue: z.boolean(),
-    // Targets the isolated world from `cdpCreateIsolatedWorld`; null evaluates
-    // in the page's main world (CDP's own default when omitted).
-    contextId: z.number().int().nullable(),
-  })
-  .strict();
-const cdpCallFunctionOnCommandSchema = z
-  .object({
-    kind: z.literal("cdpCallFunctionOn"),
-    target: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("object"), objectId: z.string() }).strict(),
-      z
-        .object({
-          kind: z.literal("context"),
-          executionContextId: z.number().int(),
-        })
-        .strict(),
-    ]),
-    functionDeclaration: z.string(),
-    arguments: z.array(z.object({ value: z.json() }).strict()).nullable(),
-    returnByValue: z.boolean(),
-  })
-  .strict();
-const cdpReleaseObjectCommandSchema = z
-  .object({
-    kind: z.literal("cdpReleaseObject"),
-    objectId: z.string(),
-  })
-  .strict();
-const cdpDispatchMouseEventCommandSchema = z
-  .object({
-    kind: z.literal("cdpDispatchMouseEvent"),
-    type: z.enum(["mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"]),
-    x: z.number(),
-    y: z.number(),
-    button: z.enum(["left", "right", "middle", "none"]).nullable(),
-    clickCount: z.number().int().nonnegative().nullable(),
-    deltaX: z.number().nullable(),
-    deltaY: z.number().nullable(),
-  })
-  .strict();
-const cdpInsertTextCommandSchema = z
-  .object({
-    kind: z.literal("cdpInsertText"),
-    text: z.string(),
-  })
-  .strict();
-const cdpDispatchKeyEventCommandSchema = z
-  .object({
-    kind: z.literal("cdpDispatchKeyEvent"),
-    type: z.enum(["keyDown", "keyUp", "rawKeyDown", "char"]),
-    key: z.string().nullable(),
-    code: z.string().nullable(),
-    text: z.string().nullable(),
-    // Defaulted rather than merely nullable: a caller that omits one of these
-    // means "let CDP decide", which dispatch encodes by omitting the param.
-    modifiers: z.number().int().nullable().default(null),
-    unmodifiedText: z.string().nullable().default(null),
-    windowsVirtualKeyCode: z.number().int().nullable().default(null),
-    location: z.number().int().nonnegative().nullable().default(null),
-    isKeypad: z.boolean().nullable().default(null),
-    autoRepeat: z.boolean().nullable().default(null),
-    commands: z.array(z.string()).nullable().default(null),
-  })
-  .strict();
-const cdpSetDeviceMetricsOverrideCommandSchema = z
-  .object({
-    kind: z.literal("cdpSetDeviceMetricsOverride"),
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
-    deviceScaleFactor: z.number().positive(),
-    mobile: z.boolean(),
-  })
-  .strict();
-const cdpDescribeNodeCommandSchema = z
-  .object({
-    kind: z.literal("cdpDescribeNode"),
-    objectId: z.string(),
-    depth: z.number().int().nullable(),
-    pierce: z.boolean(),
-  })
-  .strict();
-
-/** Address-free CDP vocabulary shared by every browser runtime. */
-export const browserCdpCommandSchema = z.discriminatedUnion("kind", [
-  cdpNavigateCommandSchema,
-  cdpCaptureScreenshotCommandSchema,
-  cdpGetFrameTreeCommandSchema,
-  cdpCreateIsolatedWorldCommandSchema,
-  cdpEvaluateCommandSchema,
-  cdpCallFunctionOnCommandSchema,
-  cdpReleaseObjectCommandSchema,
-  cdpDispatchMouseEventCommandSchema,
-  cdpInsertTextCommandSchema,
-  cdpDispatchKeyEventCommandSchema,
-  cdpSetDeviceMetricsOverrideCommandSchema,
-  cdpDescribeNodeCommandSchema,
-]);
-export type BrowserCdpCommand = z.infer<typeof browserCdpCommandSchema>;
-
-/**
- * The curated vocabulary's only per-command datum beyond its params schema.
- * Keyed by `BrowserCdpCommand["kind"]`, so a new command variant is a compile
- * error until its method lands here, and `dispatchCuratedCdp` reads the method
- * it sends from nowhere else.
- */
-export const CURATED_CDP_METHOD_BY_KIND = {
-  cdpNavigate: "Page.navigate",
-  cdpCaptureScreenshot: "Page.captureScreenshot",
-  cdpGetFrameTree: "Page.getFrameTree",
-  cdpCreateIsolatedWorld: "Page.createIsolatedWorld",
-  cdpEvaluate: "Runtime.evaluate",
-  cdpCallFunctionOn: "Runtime.callFunctionOn",
-  cdpReleaseObject: "Runtime.releaseObject",
-  cdpDispatchMouseEvent: "Input.dispatchMouseEvent",
-  cdpInsertText: "Input.insertText",
-  cdpDispatchKeyEvent: "Input.dispatchKeyEvent",
-  cdpSetDeviceMetricsOverride: "Emulation.setDeviceMetricsOverride",
-  cdpDescribeNode: "DOM.describeNode",
-} as const satisfies Record<BrowserCdpCommand["kind"], string>;
-
-export type CuratedCdpMethod =
-  (typeof CURATED_CDP_METHOD_BY_KIND)[keyof typeof CURATED_CDP_METHOD_BY_KIND];
-
-export const CURATED_CDP_METHODS: readonly CuratedCdpMethod[] = Object.values(
-  CURATED_CDP_METHOD_BY_KIND,
-);
-
-const CURATED_CDP_COMMAND_KINDS = [
-  "cdpNavigate",
-  "cdpCaptureScreenshot",
-  "cdpGetFrameTree",
-  "cdpCreateIsolatedWorld",
-  "cdpEvaluate",
-  "cdpCallFunctionOn",
-  "cdpReleaseObject",
-  "cdpDispatchMouseEvent",
-  "cdpInsertText",
-  "cdpDispatchKeyEvent",
-  "cdpSetDeviceMetricsOverride",
-  "cdpDescribeNode",
-] as const satisfies readonly BrowserCdpCommand["kind"][];
-
-const browserCdpCommandKindSchema = z.enum(CURATED_CDP_COMMAND_KINDS);
-
-/**
- * A returned JavaScript value. CDP distinguishes an absent `RemoteObject.value`
- * (JavaScript `undefined`) from a present JSON `null`; the wire must preserve
- * that distinction instead of using `null` as an absence sentinel.
- */
-export const browserCdpValueSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("json"), value: z.json() }).strict(),
-  z.object({ kind: z.literal("undefined") }).strict(),
-]);
-
-const browserCdpSuccessResultSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("cdpNavigate"),
-      ok: z.literal(true),
-      errorText: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpCaptureScreenshot"),
-      ok: z.literal(true),
-      dataBase64: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpGetFrameTree"),
-      ok: z.literal(true),
-      frames: z.array(browserCdpFrameInfoSchema),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpCreateIsolatedWorld"),
-      ok: z.literal(true),
-      executionContextId: z.number().int(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpEvaluate"),
-      ok: z.literal(true),
-      value: browserCdpValueSchema,
-      objectId: z.string().nullable(),
-      exceptionDescription: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpCallFunctionOn"),
-      ok: z.literal(true),
-      value: browserCdpValueSchema,
-      objectId: z.string().nullable(),
-      exceptionDescription: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({ kind: z.literal("cdpReleaseObject"), ok: z.literal(true) })
-    .strict(),
-  z
-    .object({ kind: z.literal("cdpDispatchMouseEvent"), ok: z.literal(true) })
-    .strict(),
-  z.object({ kind: z.literal("cdpInsertText"), ok: z.literal(true) }).strict(),
-  z
-    .object({ kind: z.literal("cdpDispatchKeyEvent"), ok: z.literal(true) })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpSetDeviceMetricsOverride"),
-      ok: z.literal(true),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpDescribeNode"),
-      ok: z.literal(true),
-      frameId: z.string().nullable(),
-    })
-    .strict(),
-]);
-
-export const browserCdpResultSchema = z.union([
-  browserCdpSuccessResultSchema,
-  z
-    .object({
-      kind: browserCdpCommandKindSchema,
-      ok: z.literal(false),
-      error: browserCdpErrorSchema,
-    })
-    .strict(),
-]);
-export type BrowserCdpResult = z.infer<typeof browserCdpResultSchema>;
 
 const browserCdpRequestFrameSchema = z
   .object({
@@ -566,26 +216,100 @@ export type ElectronTabCreateFailureCode = z.infer<
 >;
 
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
-  ...browserSessionsCoreServerFrameSchemas,
+  z
+    .object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      sessions: z.array(browserSessionInfoSchema),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sessionCreated"),
+      ...textFrameFields,
+      session: browserSessionInfoSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sessionUpdated"),
+      ...textFrameFields,
+      session: browserSessionInfoSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sessionClosed"),
+      ...textFrameFields,
+      ...browserSessionReferenceFields,
+      reason: browserSessionClosedReasonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("agentTabOpened"),
+      ...textFrameFields,
+      ...browserSessionReferenceFields,
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("actionAck"),
+      ...requestFrameFields,
+      ok: z.boolean(),
+      reason: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("openTabResult"),
+      ...requestFrameFields,
+      result: z.discriminatedUnion("ok", [
+        z
+          .object({
+            ok: z.literal(true),
+            ...browserTabIdentitySchema.shape,
+          })
+          .strict(),
+        z
+          .object({
+            ok: z.literal(false),
+            reason: z.string(),
+          })
+          .strict(),
+      ]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    })
+    .strict(),
   browserCdpRequestFrameSchema,
-  z.object({
-    kind: z.literal("createElectronTab"),
-    ...requestFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    // Navigation intent, not part of native provisioning readiness. Desktop
-    // starts it only after the host accepts the provisioned incarnation.
-    requestedUrl: z.string(),
-    reason: electronTabCreateReasonSchema,
-    seedStorageState: browserStorageStateSchema.nullable(),
-  }),
-  z.object({
-    kind: z.literal("electronTabAccepted"),
-    ...requestFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    registrationId: z.string(),
-  }),
+  z
+    .object({
+      kind: z.literal("createElectronTab"),
+      ...requestFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      // Navigation intent, not part of native provisioning readiness. Desktop
+      // starts it only after the host accepts the provisioned incarnation.
+      requestedUrl: z.string(),
+      reason: electronTabCreateReasonSchema,
+      seedStorageState: browserStorageStateSchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("electronTabAccepted"),
+      ...requestFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      registrationId: z.string(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("releaseElectronTab"),
@@ -595,105 +319,119 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       registrationId: z.string(),
     })
     .strict(),
-  z.object({
-    // Refreshes the host's durable primary-profile snapshot after a committed
-    // Electron navigation. Headless activation reads that snapshot; it never
-    // opens a second, opportunistic renderer request path during placement.
-    kind: z.literal("capturePrimaryProfile"),
-    ...requestFrameFields,
-  }),
-  z.object({
-    // Stream-only action burst; never persisted or replayed.
-    kind: z.literal("burstStarted"),
-    ...textFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    burstId: z.string(),
-    chatId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("burstEnded"),
-    ...textFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    burstId: z.string(),
-    outcome: browserBurstOutcomeSchema,
-  }),
-  z.object({
-    kind: z.literal("caption"),
-    ...textFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    burstId: z.string(),
-    cellTitle: z.string(),
-  }),
+  z
+    .object({
+      // Refreshes the host's durable primary-profile snapshot after a committed
+      // Electron navigation. Headless activation reads that snapshot; it never
+      // opens a second, opportunistic renderer request path during placement.
+      kind: z.literal("capturePrimaryProfile"),
+      ...requestFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // Stream-only action burst; never persisted or replayed.
+      kind: z.literal("burstStarted"),
+      ...textFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      burstId: z.string(),
+      chatId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("burstEnded"),
+      ...textFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      burstId: z.string(),
+      outcome: browserBurstOutcomeSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("caption"),
+      ...textFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      burstId: z.string(),
+      cellTitle: z.string(),
+    })
+    .strict(),
 ]);
 export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
 
-const browserSessionsCoreClientFrameSchemas = [
-  z.object({
-    kind: z.literal("openTab"),
-    ...requestFrameFields,
-    sessionId: z.string().nullable(),
-    url: z.string(),
-  }),
-  z.object({
-    // Tab-scoped close for the browser sidebar; closing the final tab also
-    // closes its session.
-    kind: z.literal("closeTab"),
-    ...requestFrameFields,
-    ...browserSessionReferenceFields,
-    tabId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("ping"),
-    ...textFrameFields,
-  }),
-] as const;
-
-const browserCdpClientFrameSchemas = [
-  z.object({
-    kind: z.literal("cdpResult"),
-    ...requestFrameFields,
-    result: browserCdpResultSchema,
-  }),
-] as const;
-
 /** One tab captured alongside the tab being handed off to headless. */
-export const browserElectronTabHandoffSiblingSchema = z.object({
-  tabId: z.string(),
-  registrationId: z.string(),
-  url: z.string(),
-  capturedStorageState: browserStorageStateSchema.nullable(),
-});
+export const browserElectronTabHandoffSiblingSchema = z
+  .object({
+    tabId: z.string(),
+    registrationId: z.string(),
+    url: z.string(),
+    capturedStorageState: browserStorageStateSchema.nullable(),
+  })
+  .strict();
 export type BrowserElectronTabHandoffSibling = z.infer<
   typeof browserElectronTabHandoffSiblingSchema
 >;
 
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
-  ...browserSessionsCoreClientFrameSchemas,
-  ...browserCdpClientFrameSchemas,
-  z.object({
-    // One settlement for one host-minted birth. Receipt means only that the
-    // native guest exists, its durable identity is installed, and CDP can be
-    // routed through this subscriber. Navigation and presentation begin only
-    // after `electronTabAccepted` commits ownership.
-    kind: z.literal("electronTabProvisioned"),
-    ...requestFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    registrationId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("electronTabCreateFailed"),
-    ...requestFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    code: electronTabCreateFailureCodeSchema,
-    message: z.string(),
-  }),
+  z
+    .object({
+      kind: z.literal("openTab"),
+      ...requestFrameFields,
+      sessionId: z.string().nullable(),
+      url: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // Tab-scoped close for the browser sidebar; closing the final tab also
+      // closes its session.
+      kind: z.literal("closeTab"),
+      ...requestFrameFields,
+      ...browserSessionReferenceFields,
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("ping"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cdpResult"),
+      ...requestFrameFields,
+      result: browserCdpResultSchema,
+    })
+    .strict(),
+  z
+    .object({
+      // One settlement for one host-minted birth. Receipt means only that the
+      // native guest exists, its durable identity is installed, and CDP can be
+      // routed through this subscriber. Navigation and presentation begin only
+      // after `electronTabAccepted` commits ownership.
+      kind: z.literal("electronTabProvisioned"),
+      ...requestFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      registrationId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("electronTabCreateFailed"),
+      ...requestFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      code: electronTabCreateFailureCodeSchema,
+      message: z.string(),
+    })
+    .strict(),
   z
     .object({
       // The subscriber has the complete native tab lifecycle, CDP, and profile
@@ -715,27 +453,31 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       viewed: z.boolean(),
     })
     .strict(),
-  z.object({
-    kind: z.literal("primaryProfileCaptured"),
-    ...requestFrameFields,
-    storageState: browserStorageStateSchema.nullable(),
-    status: z.enum(["captured", "unavailable", "failed"]),
-    reason: z.string().nullable(),
-  }),
-  z.object({
-    // Captures one exact native incarnation before teardown. Sibling state is
-    // grouped into the same frame so the host can hand off the session once.
-    // Null storage means desktop could not safely capture it.
-    kind: z.literal("electronTabHandoff"),
-    ...requestFrameFields,
-    sessionId: z.string(),
-    tabId: z.string(),
-    registrationId: z.string(),
-    capturedUrl: z.string(),
-    capturedStorageState: browserStorageStateSchema.nullable(),
-    siblingTabs: z.array(browserElectronTabHandoffSiblingSchema),
-    reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
-  }),
+  z
+    .object({
+      kind: z.literal("primaryProfileCaptured"),
+      ...requestFrameFields,
+      storageState: browserStorageStateSchema.nullable(),
+      status: z.enum(["captured", "unavailable", "failed"]),
+      reason: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      // Captures one exact native incarnation before teardown. Sibling state is
+      // grouped into the same frame so the host can hand off the session once.
+      // Null storage means desktop could not safely capture it.
+      kind: z.literal("electronTabHandoff"),
+      ...requestFrameFields,
+      sessionId: z.string(),
+      tabId: z.string(),
+      registrationId: z.string(),
+      capturedUrl: z.string(),
+      capturedStorageState: browserStorageStateSchema.nullable(),
+      siblingTabs: z.array(browserElectronTabHandoffSiblingSchema),
+      reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
+    })
+    .strict(),
 ]);
 export type BrowserSessionsClientFrame = z.infer<
   typeof browserSessionsClientFrameSchema
@@ -777,15 +519,17 @@ export type BrowserScreencastOpenRequest = z.infer<
   typeof browserScreencastOpenRequestSchema
 >;
 
-const browserScreencastMetadataSchema = z.object({
-  offsetTop: z.number(),
-  pageScaleFactor: z.number(),
-  deviceWidth: z.number(),
-  deviceHeight: z.number(),
-  scrollOffsetX: z.number(),
-  scrollOffsetY: z.number(),
-  timestamp: z.number(),
-});
+const browserScreencastMetadataSchema = z
+  .object({
+    offsetTop: z.number(),
+    pageScaleFactor: z.number(),
+    deviceWidth: z.number(),
+    deviceHeight: z.number(),
+    scrollOffsetX: z.number(),
+    scrollOffsetY: z.number(),
+    timestamp: z.number(),
+  })
+  .strict();
 export type BrowserScreencastMetadata = z.infer<
   typeof browserScreencastMetadataSchema
 >;
@@ -810,76 +554,102 @@ export const browserNavStateSchema = z
 export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
 
 export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("started"),
-    ...textFrameFields,
-    frameWidth: z.number().int().positive(),
-    frameHeight: z.number().int().positive(),
-    deviceScaleFactor: z.number().positive(),
-  }),
-  z.object({
-    kind: z.literal("frame"),
-    ...binaryFrameFields,
-    sequence: z.number().int().nonnegative(),
-    metadata: browserScreencastMetadataSchema,
-  }),
-  z.object({
-    kind: z.literal("stalled"),
-    ...textFrameFields,
-  }),
-  z.object({
-    kind: z.literal("resized"),
-    ...textFrameFields,
-    frameWidth: z.number().int().positive(),
-    frameHeight: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("failed"),
-    ...textFrameFields,
-    reason: z.string(),
-  }),
-  z.object({
-    kind: z.literal("complete"),
-    ...textFrameFields,
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    ...textFrameFields,
-  }),
-  z.object({
-    kind: z.literal("armed"),
-    ...textFrameFields,
-    armEpoch: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("revoked"),
-    ...textFrameFields,
-    armEpoch: z.number().int().nonnegative(),
-    cause: z.enum(["disarmed", "stolen"]),
-  }),
-  z.object({
-    kind: z.literal("dialogOpened"),
-    ...textFrameFields,
-    generation: z.number().int().nonnegative(),
-    type: z.enum(["alert", "beforeunload", "confirm", "prompt"]),
-    message: z.string(),
-    defaultValue: z.string(),
-  }),
-  z.object({
-    kind: z.literal("dialogSettled"),
-    ...textFrameFields,
-    generation: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("navState"),
-    ...textFrameFields,
-    ...browserNavStateSchema.shape,
-  }),
-  z.object({
-    kind: z.literal("unsupportedInteraction"),
-    ...textFrameFields,
-    feature: browserScreencastUnsupportedFeatureSchema,
-  }),
+  z
+    .object({
+      kind: z.literal("started"),
+      ...textFrameFields,
+      frameWidth: z.number().int().positive(),
+      frameHeight: z.number().int().positive(),
+      deviceScaleFactor: z.number().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("frame"),
+      ...binaryFrameFields,
+      sequence: z.number().int().nonnegative(),
+      metadata: browserScreencastMetadataSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("stalled"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("resized"),
+      ...textFrameFields,
+      frameWidth: z.number().int().positive(),
+      frameHeight: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("failed"),
+      ...textFrameFields,
+      reason: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("complete"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("armed"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("revoked"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+      cause: z.enum(["disarmed", "stolen"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("dialogOpened"),
+      ...textFrameFields,
+      generation: z.number().int().nonnegative(),
+      type: z.enum(["alert", "beforeunload", "confirm", "prompt"]),
+      message: z.string(),
+      defaultValue: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("dialogSettled"),
+      ...textFrameFields,
+      generation: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("navState"),
+      ...textFrameFields,
+      ...browserNavStateSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unsupportedInteraction"),
+      ...textFrameFields,
+      feature: browserScreencastUnsupportedFeatureSchema,
+    })
+    .strict(),
 ]);
 export type BrowserScreencastServerFrame = z.infer<
   typeof browserScreencastServerFrameSchema
@@ -919,94 +689,120 @@ const browserScreencastKeyboardTypeSchema = z.enum([
 ]);
 
 export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("ack"),
-    ...textFrameFields,
-    sequence: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("viewport"),
-    ...textFrameFields,
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
-    dpr: z.number().finite().positive(),
-  }),
-  z.object({
-    kind: z.literal("ping"),
-    ...textFrameFields,
-  }),
-  z.object({
-    kind: z.literal("arm"),
-    ...textFrameFields,
-    armEpoch: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("disarm"),
-    ...textFrameFields,
-    armEpoch: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("pointer"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-    type: browserScreencastPointerTypeSchema,
-    castSequence: z.number().int().nonnegative(),
-    normalizedX: z.number(),
-    normalizedY: z.number(),
-    button: browserScreencastPointerButtonSchema,
-    buttons: z.number().int().min(0).max(31),
-    modifiers: z.number().int().min(0).max(15),
-    // Local click tracker; 0 for move/wheel.
-    clickCount: z.number().int().min(0).max(8),
-    deltaX: z.number(),
-    deltaY: z.number(),
-  }),
-  z.object({
-    kind: z.literal("keyboard"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-    type: browserScreencastKeyboardTypeSchema,
-    code: z.string(),
-    key: z.string(),
-    modifiers: z.number().int().min(0).max(15),
-    // DOM event.repeat.
-    autoRepeat: z.boolean(),
-  }),
-  z.object({
-    kind: z.literal("insertText"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-    text: z.string(),
-  }),
-  z.object({
-    kind: z.literal("navigate"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-    url: z.string().max(2048),
-  }),
-  z.object({
-    kind: z.literal("goBack"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-  }),
-  z.object({
-    kind: z.literal("goForward"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-  }),
-  z.object({
-    kind: z.literal("reload"),
-    ...textFrameFields,
-    ...browserScreencastControlIdentitySchema,
-  }),
-  z.object({
-    kind: z.literal("dialogResponse"),
-    ...textFrameFields,
-    armEpoch: z.number().int().nonnegative(),
-    generation: z.number().int().nonnegative(),
-    accept: z.boolean(),
-    promptText: z.string().nullable(),
-  }),
+  z
+    .object({
+      kind: z.literal("ack"),
+      ...textFrameFields,
+      sequence: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("viewport"),
+      ...textFrameFields,
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+      dpr: z.number().finite().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("ping"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("arm"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("disarm"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pointer"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+      type: browserScreencastPointerTypeSchema,
+      castSequence: z.number().int().nonnegative(),
+      normalizedX: z.number(),
+      normalizedY: z.number(),
+      button: browserScreencastPointerButtonSchema,
+      buttons: z.number().int().min(0).max(31),
+      modifiers: z.number().int().min(0).max(15),
+      // Local click tracker; 0 for move/wheel.
+      clickCount: z.number().int().min(0).max(8),
+      deltaX: z.number(),
+      deltaY: z.number(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("keyboard"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+      type: browserScreencastKeyboardTypeSchema,
+      code: z.string(),
+      key: z.string(),
+      modifiers: z.number().int().min(0).max(15),
+      // DOM event.repeat.
+      autoRepeat: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("insertText"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+      text: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("navigate"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+      url: z.string().max(2048),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("goBack"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("goForward"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("reload"),
+      ...textFrameFields,
+      ...browserScreencastControlIdentitySchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("dialogResponse"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+      generation: z.number().int().nonnegative(),
+      accept: z.boolean(),
+      promptText: z.string().nullable(),
+    })
+    .strict(),
 ]);
 export type BrowserScreencastClientFrame = z.infer<
   typeof browserScreencastClientFrameSchema

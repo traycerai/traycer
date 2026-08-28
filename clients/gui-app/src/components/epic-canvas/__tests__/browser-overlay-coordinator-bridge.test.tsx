@@ -2,7 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator";
+import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator-bridge";
 import {
   clearBrowserViewSnapshot,
   getBrowserViewSnapshot,

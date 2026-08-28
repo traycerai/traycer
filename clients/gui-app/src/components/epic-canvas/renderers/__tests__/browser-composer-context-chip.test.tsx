@@ -216,7 +216,7 @@ describe("BrowserComposerContextChip", () => {
 
     const draft = readComposerDraftSnapshot("chat-1");
     expect(JSON.stringify(draft.content)).not.toContain("Observe grant:");
-    const attachments = draft.browserContextAttachments ?? [];
+    const attachments = draft.browserContextAttachments;
     expect(attachments).toHaveLength(1);
     const attachment = attachments[0];
     expect(attachment).toBeDefined();
@@ -260,14 +260,14 @@ describe("BrowserComposerContextChip", () => {
 
     await waitFor(() => {
       expect(
-        readComposerDraftSnapshot("chat-1").browserContextAttachments ?? [],
+        readComposerDraftSnapshot("chat-1").browserContextAttachments,
       ).toHaveLength(1);
     });
     const chatOneAttachments =
-      readComposerDraftSnapshot("chat-1").browserContextAttachments ?? [];
+      readComposerDraftSnapshot("chat-1").browserContextAttachments;
     expect(chatOneAttachments[0]?.observeGrant?.chatId).toBe("chat-1");
     expect(
-      readComposerDraftSnapshot("chat-2").browserContextAttachments ?? [],
+      readComposerDraftSnapshot("chat-2").browserContextAttachments,
     ).toHaveLength(0);
   });
 });

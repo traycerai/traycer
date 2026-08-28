@@ -44,8 +44,8 @@ export type BrowserPeekNode = Pick<
 interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekNode;
-  readonly viewTabId?: string;
-  readonly paneId?: string;
+  readonly viewTabId: string;
+  readonly paneId: string;
 }
 
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
@@ -55,8 +55,8 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const client = useHostStreamClientFor(hostEntry, auth);
   const visible = useTileBodyVisible();
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
-    props.viewTabId ?? "",
-    props.paneId ?? "",
+    props.viewTabId,
+    props.paneId,
     node.instanceId,
   );
   useRegisterVisibleBrowserTile({
@@ -112,9 +112,14 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     },
   });
 
-  const onAddressFocusChange = (focused: boolean): void => {
-    if (focused) session.releaseForwardedPageKeys();
-    chrome.onAddressFocusChange(focused);
+  // Focus in the address field must also drop any page keys still forwarded to
+  // the screencast, so typing a URL does not reach the remote page.
+  const controller: TileController = {
+    ...chrome.controller,
+    onAddressFocusChange: (focused: boolean) => {
+      if (focused) session.releaseForwardedPageKeys();
+      chrome.onAddressFocusChange(focused);
+    },
   };
 
   return (
@@ -125,7 +130,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       onBlurCapture={(event) => session.onFocusExit(event.relatedTarget)}
     >
       <ScreencastPeekChromeBar
-        controller={chrome.controller}
+        controller={controller}
         pictureInPicture={{
           disabled: client === null,
           convert: () => {
@@ -140,7 +145,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
             });
           },
         }}
-        onAddressFocusChange={onAddressFocusChange}
         loading={navState.loading}
         armed={armedEpoch !== null}
         status={status}
@@ -222,7 +226,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
 function ScreencastPeekChromeBar(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl;
-  readonly onAddressFocusChange: (focused: boolean) => void;
   readonly loading: boolean;
   readonly armed: boolean;
   readonly status: BrowserPeekStatus;
@@ -231,19 +234,7 @@ function ScreencastPeekChromeBar(props: {
   return (
     <div className="flex min-h-0 flex-col border-b border-border">
       <div className="flex min-h-0 items-center">
-        <div
-          className="min-w-0 flex-1 [&>div]:border-b-0"
-          onFocusCapture={(event) => {
-            if (isBrowserAddressInput(event.target)) {
-              props.onAddressFocusChange(true);
-            }
-          }}
-          onBlurCapture={(event) => {
-            if (isBrowserAddressInput(event.target)) {
-              props.onAddressFocusChange(false);
-            }
-          }}
-        >
+        <div className="min-w-0 flex-1 [&>div]:border-b-0">
           <BrowserTileToolbar
             controller={props.controller}
             pictureInPicture={props.pictureInPicture}
@@ -350,13 +341,6 @@ function BrowserDialogOverlay(props: {
         </div>
       </div>
     </dialog>
-  );
-}
-
-function isBrowserAddressInput(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement &&
-    target.getAttribute("aria-label") === "Browser address"
   );
 }
 

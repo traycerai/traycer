@@ -158,29 +158,54 @@ export async function requestBrowserContextAttachment(
   return { status: "unhandled", payload };
 }
 
+/**
+ * Every attachment carries the same provenance + observe-grant preamble; only
+ * the payload field and the composer text differ. Keeping it here keeps the
+ * `origin`/grant invariant in one place instead of once per factory.
+ */
+function browserAttachmentBase(input: {
+  readonly tile: BrowserViewTileKey;
+  readonly pageUrl: string;
+  readonly capturedAt: number;
+  readonly dataLevel: BrowserObserveDataLevel;
+  readonly sourceAction: BrowserObserveGrantRequest["sourceAction"];
+}): Omit<BrowserContextAttachmentBase, "kind" | "composerText"> {
+  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
+  return {
+    schemaVersion: 1,
+    source: {
+      tile: input.tile,
+      pageUrl: input.pageUrl,
+      origin,
+      capturedAt: input.capturedAt,
+    },
+    observeGrantRequest: {
+      kind: "visible-browser-observe-grant-request",
+      chatId: null,
+      tileInstanceId: input.tile.tileInstanceId,
+      origin,
+      dataLevel: input.dataLevel,
+      expiresAt: null,
+      sourceAction: input.sourceAction,
+    },
+    observeGrant: null,
+  };
+}
+
 export function createBrowserConsoleAttachment(input: {
   readonly tile: BrowserViewTileKey;
   readonly pageUrl: string;
   readonly entry: BrowserViewConsoleEntry;
 }): BrowserConsoleContextAttachment {
-  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
-  const capturedAt = Date.now();
   return {
-    schemaVersion: 1,
-    kind: "browser-console-entry",
-    source: {
+    ...browserAttachmentBase({
       tile: input.tile,
       pageUrl: input.pageUrl,
-      origin,
-      capturedAt,
-    },
-    observeGrantRequest: createGrantRequest({
-      tile: input.tile,
-      origin,
+      capturedAt: Date.now(),
       dataLevel: "console-entry",
       sourceAction: "browser-console-row-send",
     }),
-    observeGrant: null,
+    kind: "browser-console-entry",
     composerText: consoleComposerText(input.entry, input.pageUrl),
     consoleEntry: input.entry,
   };
@@ -191,24 +216,15 @@ export function createBrowserNetworkAttachment(input: {
   readonly pageUrl: string;
   readonly entry: BrowserViewNetworkEntry;
 }): BrowserNetworkContextAttachment {
-  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
-  const capturedAt = Date.now();
   return {
-    schemaVersion: 1,
-    kind: "browser-network-request",
-    source: {
+    ...browserAttachmentBase({
       tile: input.tile,
       pageUrl: input.pageUrl,
-      origin,
-      capturedAt,
-    },
-    observeGrantRequest: createGrantRequest({
-      tile: input.tile,
-      origin,
+      capturedAt: Date.now(),
       dataLevel: "network-request",
       sourceAction: "browser-network-row-send",
     }),
-    observeGrant: null,
+    kind: "browser-network-request",
     composerText: networkComposerText(input.entry, input.pageUrl),
     networkRequest: input.entry,
   };
@@ -219,25 +235,16 @@ export function createBrowserScreenshotAttachment(input: {
   readonly pageUrl: string;
   readonly capture: BrowserViewCapturePageResult;
 }): BrowserScreenshotContextAttachment {
-  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
-  const capturedAt = input.capture.capturedAt;
   const name = `browser-screenshot-${input.capture.sha256.slice(0, 12)}.png`;
   return {
-    schemaVersion: 1,
-    kind: "browser-screenshot",
-    source: {
+    ...browserAttachmentBase({
       tile: input.tile,
       pageUrl: input.pageUrl,
-      origin,
-      capturedAt,
-    },
-    observeGrantRequest: createGrantRequest({
-      tile: input.tile,
-      origin,
+      capturedAt: input.capture.capturedAt,
       dataLevel: "screenshot",
       sourceAction: "browser-screenshot-send",
     }),
-    observeGrant: null,
+    kind: "browser-screenshot",
     composerText: screenshotComposerText(input.capture),
     screenshot: {
       mediaType: input.capture.mediaType,
@@ -258,24 +265,15 @@ export function createBrowserDebugContextAttachment(input: {
   readonly consoleEntries: readonly BrowserViewConsoleEntry[];
   readonly networkEntries: readonly BrowserViewNetworkEntry[];
 }): BrowserDebugContextAttachment {
-  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
-  const capturedAt = input.capture.capturedAt;
   return {
-    schemaVersion: 1,
-    kind: "browser-debug-context",
-    source: {
+    ...browserAttachmentBase({
       tile: input.tile,
       pageUrl: input.pageUrl,
-      origin,
-      capturedAt,
-    },
-    observeGrantRequest: createGrantRequest({
-      tile: input.tile,
-      origin,
+      capturedAt: input.capture.capturedAt,
       dataLevel: input.dataLevel,
       sourceAction: "browser-composer-attach",
     }),
-    observeGrant: null,
+    kind: "browser-debug-context",
     composerText: debugContextComposerText({
       dataLevel: input.dataLevel,
       consoleEntries: input.consoleEntries,
@@ -314,23 +312,6 @@ export function mintBrowserObserveGrant(
     expiresAt: input.expiresAt,
   };
   return { ...requested, observeGrant: grant };
-}
-
-function createGrantRequest(input: {
-  readonly tile: BrowserViewTileKey;
-  readonly origin: string | null;
-  readonly dataLevel: BrowserObserveDataLevel;
-  readonly sourceAction: BrowserObserveGrantRequest["sourceAction"];
-}): BrowserObserveGrantRequest {
-  return {
-    kind: "visible-browser-observe-grant-request",
-    chatId: null,
-    tileInstanceId: input.tile.tileInstanceId,
-    origin: input.origin,
-    dataLevel: input.dataLevel,
-    expiresAt: null,
-    sourceAction: input.sourceAction,
-  };
 }
 
 function consoleComposerText(

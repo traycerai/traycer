@@ -2,13 +2,9 @@ import { describe, expect, it } from "vitest";
 import { ANNOTATION_BUNDLE_BYTE_BUDGET } from "../browser-annotation-overlay-logic";
 import {
   ANNOTATION_BINDING_NAME,
-  ANNOTATION_CANCEL_EXPRESSION,
-  ANNOTATION_CAPTURE_FAILED_EXPRESSION,
-  ANNOTATION_HIDE_CHROME_EXPRESSION,
   ANNOTATION_LIMITS,
-  ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION,
   ANNOTATION_WORLD_NAME,
-  buildAnnotationSetTargetChatLabelExpression,
+  callGuestHook,
   sanitizeAnnotationBindingPayload,
   sanitizeAttachRequest,
 } from "../browser-annotation-overlay-script";
@@ -36,50 +32,42 @@ const VALID_ATTACH = {
 };
 
 describe("annotation overlay command expressions", () => {
-  it("exposes named command expressions and the isolated world name", () => {
+  it("builds one confirmable call shape for every guest hook", () => {
     expect(ANNOTATION_WORLD_NAME).toBe("traycer-annotation");
     expect(ANNOTATION_BINDING_NAME).toBe("__traycerAnnotation");
-    expect(ANNOTATION_CANCEL_EXPRESSION).toContain("__traycerAnnotationCancel");
-    expect(ANNOTATION_HIDE_CHROME_EXPRESSION).toContain(
+    for (const name of [
+      "__traycerAnnotationCancel",
       "__traycerAnnotationHideChromeForCapture",
-    );
-    expect(ANNOTATION_HIDE_CHROME_EXPRESSION).toContain("return false");
-    expect(ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION).toContain(
       "__traycerAnnotationResetAfterAttach",
-    );
-    expect(ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION).toContain("return false");
-    expect(ANNOTATION_CAPTURE_FAILED_EXPRESSION).toContain(
       "__traycerAnnotationCaptureFailed",
-    );
-    expect(ANNOTATION_CAPTURE_FAILED_EXPRESSION).not.toContain("return false");
+    ]) {
+      const expression = callGuestHook(name, []);
+      expect(expression).toContain(name);
+      // Missing hook and a throwing hook both report false; only a clean call
+      // returns true, which is what the required-command path asserts on.
+      expect(expression).toContain("return false");
+      expect(expression).toContain("return true");
+    }
+    const roster = callGuestHook("__traycerAnnotationSetTargetChatLabel", [
+      TARGET_ROSTER,
+      TARGET_CHAT_ID,
+    ]);
+    expect(roster).toContain("__traycerAnnotationSetTargetChatLabel");
+    expect(roster).toContain("fix-billing");
+    expect(roster).toContain(TARGET_CHAT_ID);
     expect(
-      buildAnnotationSetTargetChatLabelExpression(
+      callGuestHook("__traycerAnnotationSetTargetChatLabel", [
         TARGET_ROSTER,
-        TARGET_CHAT_ID,
-      ),
-    ).toContain("__traycerAnnotationSetTargetChatLabel");
-    expect(
-      buildAnnotationSetTargetChatLabelExpression(
-        TARGET_ROSTER,
-        TARGET_CHAT_ID,
-      ),
-    ).toContain("fix-billing");
-    expect(
-      buildAnnotationSetTargetChatLabelExpression(
-        TARGET_ROSTER,
-        TARGET_CHAT_ID,
-      ),
-    ).toContain(TARGET_CHAT_ID);
-    expect(
-      buildAnnotationSetTargetChatLabelExpression(TARGET_ROSTER, null),
+        null,
+      ]),
     ).toContain(",null");
   });
 
   it("encodes the target-chat roster as JSON arguments", () => {
-    const expression = buildAnnotationSetTargetChatLabelExpression(
+    const expression = callGuestHook("__traycerAnnotationSetTargetChatLabel", [
       [{ chatId: "chat-1", label: 'say </script> "hi"' }],
       "chat-1",
-    );
+    ]);
     expect(expression).toContain("__traycerAnnotationSetTargetChatLabel");
     expect(expression).toContain("\\u003c");
     expect(expression).not.toContain("</script>");

@@ -14,17 +14,18 @@ import {
 } from "./browser-annotation-crop";
 import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "./browser-annotation-overlay-guest.generated";
 import { BrowserDebugSession } from "../debug/browser-debug-session";
+import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
+import type {
+  BrowserCdpCommand,
+  BrowserCdpResult,
+} from "@traycer/protocol/host/browser/contracts";
 import { isRecord } from "../guards";
 import {
   ANNOTATION_BINDING_NAME,
-  ANNOTATION_CANCEL_EXPRESSION,
-  ANNOTATION_CAPTURE_FAILED_EXPRESSION,
-  ANNOTATION_HIDE_CHROME_EXPRESSION,
-  ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION,
   ANNOTATION_VIEWPORT_SIZE_EXPRESSION,
   ANNOTATION_WAIT_FOR_PAINT_EXPRESSION,
   ANNOTATION_WORLD_NAME,
-  buildAnnotationSetTargetChatLabelExpression,
+  callGuestHook,
   sanitizeAnnotationBindingPayload,
 } from "./browser-annotation-overlay-script";
 import type { BrowserViewCapturedImage } from "../browser-view-port";
@@ -108,26 +109,12 @@ export class BrowserAnnotationSession {
         undefined,
       );
       if (this.ended) return this.abortStart("inject-failed");
-      const frameTree = await this.debugSession.sendCommand(
-        "Page.getFrameTree",
-        {},
-        undefined,
-      );
+      const frameId = await this.readMainFrameId();
       if (this.ended) return this.abortStart("inject-failed");
-      const frameId = readMainFrameId(frameTree);
       if (frameId === null) {
         return this.abortStart("no-main-frame");
       }
-      const world = await this.debugSession.sendCommand(
-        "Page.createIsolatedWorld",
-        {
-          frameId,
-          worldName: ANNOTATION_WORLD_NAME,
-          grantUniversalAccess: false,
-        },
-        undefined,
-      );
-      const contextId = readExecutionContextId(world);
+      const contextId = await this.readIsolatedWorldContextId(frameId);
       if (contextId === null) {
         return this.abortStart("no-isolated-world");
       }
@@ -175,23 +162,24 @@ export class BrowserAnnotationSession {
   }
 
   hideChromeForCapture(): Promise<void> {
-    return this.evaluateCommand(ANNOTATION_HIDE_CHROME_EXPRESSION, false, true);
+    return this.evaluateRequired(
+      callGuestHook("__traycerAnnotationHideChromeForCapture", []),
+      false,
+    );
   }
 
   resetAfterAttach(): Promise<void> {
-    return this.evaluateCommand(
-      ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION,
+    return this.evaluateRequired(
+      callGuestHook("__traycerAnnotationResetAfterAttach", []),
       false,
-      true,
     ).then(() => {
       this.markCount = 0;
     });
   }
 
   captureFailed(): Promise<void> {
-    return this.evaluateCommand(
-      ANNOTATION_CAPTURE_FAILED_EXPRESSION,
-      false,
+    return this.evaluateBestEffort(
+      callGuestHook("__traycerAnnotationCaptureFailed", []),
       false,
     );
   }
@@ -200,9 +188,11 @@ export class BrowserAnnotationSession {
     targets: readonly { readonly chatId: string; readonly label: string }[],
     defaultChatId: string | null,
   ): Promise<void> {
-    return this.evaluateCommand(
-      buildAnnotationSetTargetChatLabelExpression(targets, defaultChatId),
-      false,
+    return this.evaluateBestEffort(
+      callGuestHook("__traycerAnnotationSetTargetChatLabel", [
+        targets,
+        defaultChatId,
+      ]),
       false,
     );
   }
@@ -274,7 +264,10 @@ export class BrowserAnnotationSession {
   }
 
   private sendCancel(): void {
-    void this.evaluateCommand(ANNOTATION_CANCEL_EXPRESSION, false, false);
+    void this.evaluateBestEffort(
+      callGuestHook("__traycerAnnotationCancel", []),
+      false,
+    );
   }
 
   private removeBinding(): void {
@@ -295,11 +288,7 @@ export class BrowserAnnotationSession {
     this.capturing = true;
     try {
       await this.hideChromeForCapture();
-      await this.evaluateCommand(
-        ANNOTATION_WAIT_FOR_PAINT_EXPRESSION,
-        true,
-        true,
-      );
+      await this.evaluateRequired(ANNOTATION_WAIT_FOR_PAINT_EXPRESSION, true);
       const viewport = await this.readViewportCssSize();
       const image = await this.webContents.capturePage();
       if (!this.isActive()) return;
@@ -374,34 +363,76 @@ export class BrowserAnnotationSession {
     return { width, height };
   }
 
-  private async evaluateCommand(
+  /** Fire-and-forget: a gone world, a detached debugger or a throw is fine. */
+  private async evaluateBestEffort(
     expression: string,
     awaitPromise: boolean,
-    required: boolean,
   ): Promise<void> {
-    if (!required) {
-      if (this.contextId === null) return;
-      if (!this.debugSession.isAttached()) return;
-      try {
-        await this.debugSession.sendCommand(
-          "Runtime.evaluate",
-          {
-            expression,
-            contextId: this.contextId,
-            returnByValue: true,
-            awaitPromise,
-          },
-          undefined,
-        );
-      } catch {
-        return;
-      }
-      return;
-    }
+    if (this.contextId === null || !this.debugSession.isAttached()) return;
+    await this.evaluateRaw(expression, awaitPromise).catch(() => undefined);
+  }
+
+  /** Throws unless the overlay confirmed the command with `true`. */
+  private async evaluateRequired(
+    expression: string,
+    awaitPromise: boolean,
+  ): Promise<void> {
     const evaluation = await this.evaluateRaw(expression, awaitPromise);
     if (evaluateFailed(evaluation)) {
       throw new Error("annotation overlay command did not confirm");
     }
+  }
+
+  /**
+   * The two start-up reads go through the curated CDP table so the annotation
+   * session decodes `Page.getFrameTree` / `Page.createIsolatedWorld` exactly
+   * the way every other consumer does. A malformed reply while the debugger is
+   * still attached is reported as the absent-frame / absent-world outcome the
+   * caller already handles; losing the debugger keeps rejecting.
+   */
+  private async dispatchCurated(
+    command: BrowserCdpCommand,
+  ): Promise<BrowserCdpResult | null> {
+    try {
+      return await dispatchCuratedCdp(
+        (method, params) =>
+          this.debugSession.sendCommand(method, params, undefined),
+        command,
+      );
+    } catch (err) {
+      if (!this.debugSession.isAttached()) throw err;
+      return null;
+    }
+  }
+
+  private async readMainFrameId(): Promise<string | null> {
+    const result = await this.dispatchCurated({ kind: "cdpGetFrameTree" });
+    if (result === null || result.kind !== "cdpGetFrameTree" || !result.ok) {
+      return null;
+    }
+    return (
+      result.frames.find((frame) => frame.parentFrameId === null)?.frameId ??
+      null
+    );
+  }
+
+  private async readIsolatedWorldContextId(
+    frameId: string,
+  ): Promise<number | null> {
+    const result = await this.dispatchCurated({
+      kind: "cdpCreateIsolatedWorld",
+      frameId,
+      worldName: ANNOTATION_WORLD_NAME,
+      grantUniversalAccess: false,
+    });
+    if (
+      result === null ||
+      result.kind !== "cdpCreateIsolatedWorld" ||
+      !result.ok
+    ) {
+      return null;
+    }
+    return result.executionContextId;
   }
 
   private async evaluateRaw(
@@ -425,21 +456,6 @@ export class BrowserAnnotationSession {
       undefined,
     );
   }
-}
-
-function readMainFrameId(value: unknown): string | null {
-  if (!isRecord(value)) return null;
-  const frameTree = value.frameTree;
-  if (!isRecord(frameTree)) return null;
-  const frame = frameTree.frame;
-  if (!isRecord(frame)) return null;
-  return typeof frame.id === "string" ? frame.id : null;
-}
-
-function readExecutionContextId(value: unknown): number | null {
-  if (!isRecord(value)) return null;
-  const id = value.executionContextId;
-  return typeof id === "number" && Number.isFinite(id) ? id : null;
 }
 
 function evaluateFailed(value: unknown): boolean {

@@ -1,5 +1,5 @@
 import type { BrowserWindowConstructorOptions } from "electron";
-import type { BrowserViewBounds } from "../../ipc-contracts/browser-view-types";
+import type { BrowserViewBounds } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageSession } from "./storage/browser-storage-state";
 
 export interface BrowserViewDebugger {
@@ -66,6 +66,19 @@ export interface BrowserViewCapturedImage {
   toPNG(): Uint8Array;
 }
 
+/**
+ * Compositor frames additionally support downscaling: the BT-201 frame cache
+ * caps the long edge before encoding, and `NativeImage` - the only production
+ * source - provides `resize`. Kept separate from `BrowserViewCapturedImage`
+ * so the crop/annotation paths keep the smaller contract they actually use.
+ */
+export interface BrowserViewFrameImage extends BrowserViewCapturedImage {
+  resize(options: {
+    readonly width: number;
+    readonly height: number;
+  }): BrowserViewFrameImage;
+}
+
 interface BrowserViewDevToolsWebContents {
   readonly id: number;
 }
@@ -117,7 +130,7 @@ export interface BrowserViewWebContents {
     ) => BrowserViewWindowOpenResult,
   ): void;
   beginFrameSubscription(
-    callback: (image: BrowserViewCapturedImage) => void,
+    callback: (image: BrowserViewFrameImage) => void,
   ): void;
   endFrameSubscription(): void;
   on: NodeJS.EventEmitter["on"];

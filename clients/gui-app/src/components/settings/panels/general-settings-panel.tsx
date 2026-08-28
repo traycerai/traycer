@@ -8,18 +8,12 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { clearAllPersistedStores } from "@/lib/persist";
@@ -36,13 +30,7 @@ import {
   type MigrationRunState,
 } from "@/stores/migration/migration-run-store";
 import { startMigrationRun } from "@/components/migration/migration-run-handle";
-import {
-  isAgentTabSurfacingMode,
-  useSettingsStore,
-  type AgentTabSurfacingMode,
-  type BrowserLinkDefaultMode,
-  type BrowserLinkOpenMode,
-} from "@/stores/settings/settings-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import { modLabel } from "@/lib/keybindings/platform";
@@ -51,21 +39,6 @@ import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
-const BROWSER_LINK_DEFAULT_MODE_LABELS: Record<BrowserLinkDefaultMode, string> =
-  {
-    "in-app": "In app",
-    external: "External",
-    "per-kind": "Per kind",
-  };
-const BROWSER_LINK_OPEN_MODE_LABELS: Record<BrowserLinkOpenMode, string> = {
-  "in-app": "In app",
-  external: "External",
-};
-const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacingMode, string> = {
-  pip: "Float (PiP)",
-  tile: "Tile in canvas",
-  off: "Off (background only)",
-};
 const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 function formatMigrationProgress(state: MigrationRunState): string | null {
@@ -75,16 +48,6 @@ function formatMigrationProgress(state: MigrationRunState): string | null {
   const tasks = `${taskChainsSeen(state.counts)}/${totalTaskChains}`;
   const epics = `${epicsSeen(state.counts)}/${totalLocalEpics}`;
   return `${MIGRATION_PROGRESS_LABEL} - tasks ${tasks}, epics ${epics}`;
-}
-
-function isBrowserLinkDefaultMode(
-  value: string,
-): value is BrowserLinkDefaultMode {
-  return value === "in-app" || value === "external" || value === "per-kind";
-}
-
-function isBrowserLinkOpenMode(value: string): value is BrowserLinkOpenMode {
-  return value === "in-app" || value === "external";
 }
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
@@ -126,34 +89,6 @@ export function GeneralSettingsPanel() {
   );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
-  const browserLinkDefaultMode = useSettingsStore(
-    (s) => s.browserLinkDefaultMode,
-  );
-  const setBrowserLinkDefaultMode = useSettingsStore(
-    (s) => s.setBrowserLinkDefaultMode,
-  );
-  const terminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.terminalBrowserLinkOpenMode,
-  );
-  const setTerminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setTerminalBrowserLinkOpenMode,
-  );
-  const markdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.markdownBrowserLinkOpenMode,
-  );
-  const setMarkdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setMarkdownBrowserLinkOpenMode,
-  );
-  const agentTabSurfacingMode = useSettingsStore(
-    (s) => s.agentTabSurfacingMode,
-  );
-  const setAgentTabSurfacingMode = useSettingsStore(
-    (s) => s.setAgentTabSurfacingMode,
-  );
-  const browserDevOrigins = useSettingsStore((s) => s.browserDevOrigins);
-  const removeBrowserDevOrigin = useSettingsStore(
-    (s) => s.removeBrowserDevOrigin,
-  );
   const steerOnModEnterEnabled = useSettingsStore(
     (s) => s.steerOnModEnterEnabled,
   );
@@ -223,69 +158,7 @@ export function GeneralSettingsPanel() {
           />
         </SettingsGroup>
 
-        <SettingsGroup
-          title="Browser"
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            label="Web link default"
-            description="Choose where http and https links open."
-            control={
-              <BrowserLinkDefaultModeSelect
-                value={browserLinkDefaultMode}
-                onValueChange={setBrowserLinkDefaultMode}
-              />
-            }
-          />
-          {browserLinkDefaultMode === "per-kind" ? (
-            <>
-              <SettingsRow
-                label="Terminal links"
-                description="Applies to plain terminal URLs and OSC-8 hyperlinks."
-                control={
-                  <BrowserLinkOpenModeSelect
-                    value={terminalBrowserLinkOpenMode}
-                    onValueChange={setTerminalBrowserLinkOpenMode}
-                  />
-                }
-              />
-              <SettingsRow
-                label="Markdown links"
-                description="Applies to rendered markdown http and https anchors."
-                control={
-                  <BrowserLinkOpenModeSelect
-                    value={markdownBrowserLinkOpenMode}
-                    onValueChange={setMarkdownBrowserLinkOpenMode}
-                  />
-                }
-              />
-            </>
-          ) : null}
-          <SettingsRow
-            label="Agent tab surfacing"
-            description="Choose what happens on your canvas when the agent opens a browser tab: float it picture-in-picture, place a tile, or keep it in the background (sidebar only)."
-            control={
-              <AgentTabSurfacingModeSelect
-                value={agentTabSurfacingMode}
-                onValueChange={setAgentTabSurfacingMode}
-              />
-            }
-          />
-          {browserDevOrigins.length > 0 ? (
-            <SettingsRow
-              label="Detected dev origins"
-              description="Terminal URLs with local hosts or explicit ports are kept for browser-origin classification."
-              control={
-                <BrowserDevOriginsControl
-                  origins={browserDevOrigins}
-                  onRemove={removeBrowserDevOrigin}
-                />
-              }
-            />
-          ) : null}
-        </SettingsGroup>
+        <BrowserSettingsSection />
 
         <SettingsGroup
           title="Running agents"
@@ -424,135 +297,6 @@ export function GeneralSettingsPanel() {
         <DangerZoneSection />
       </div>
     </SettingsPanelShell>
-  );
-}
-
-interface BrowserLinkDefaultModeSelectProps {
-  readonly value: BrowserLinkDefaultMode;
-  readonly onValueChange: (value: BrowserLinkDefaultMode) => void;
-}
-
-function BrowserLinkDefaultModeSelect(
-  props: BrowserLinkDefaultModeSelectProps,
-) {
-  return (
-    <Select
-      value={props.value}
-      onValueChange={(value) => {
-        if (isBrowserLinkDefaultMode(value)) props.onValueChange(value);
-      }}
-    >
-      <SelectTrigger
-        aria-label="Web link default"
-        className="w-[min(42vw,11rem)]"
-        size="sm"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(BROWSER_LINK_DEFAULT_MODE_LABELS).map(
-          ([value, label]) => (
-            <SelectItem key={value} value={value}>
-              {label}
-            </SelectItem>
-          ),
-        )}
-      </SelectContent>
-    </Select>
-  );
-}
-
-interface BrowserLinkOpenModeSelectProps {
-  readonly value: BrowserLinkOpenMode;
-  readonly onValueChange: (value: BrowserLinkOpenMode) => void;
-}
-
-interface AgentTabSurfacingModeSelectProps {
-  readonly value: AgentTabSurfacingMode;
-  readonly onValueChange: (value: AgentTabSurfacingMode) => void;
-}
-
-function AgentTabSurfacingModeSelect(props: AgentTabSurfacingModeSelectProps) {
-  return (
-    <Select
-      value={props.value}
-      onValueChange={(value) => {
-        if (isAgentTabSurfacingMode(value)) props.onValueChange(value);
-      }}
-    >
-      <SelectTrigger
-        aria-label="Agent tab surfacing"
-        className="w-[min(42vw,11rem)]"
-        size="sm"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(AGENT_TAB_SURFACING_LABELS).map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function BrowserLinkOpenModeSelect(props: BrowserLinkOpenModeSelectProps) {
-  return (
-    <Select
-      value={props.value}
-      onValueChange={(value) => {
-        if (isBrowserLinkOpenMode(value)) props.onValueChange(value);
-      }}
-    >
-      <SelectTrigger
-        aria-label="Link open mode"
-        className="w-[min(42vw,10rem)]"
-        size="sm"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(BROWSER_LINK_OPEN_MODE_LABELS).map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-interface BrowserDevOriginsControlProps {
-  readonly origins: ReadonlyArray<string>;
-  readonly onRemove: (origin: string) => void;
-}
-
-function BrowserDevOriginsControl(props: BrowserDevOriginsControlProps) {
-  return (
-    <div className="flex max-w-[min(48vw,24rem)] flex-col gap-2">
-      {props.origins.map((origin) => (
-        <div
-          key={origin}
-          className="flex min-w-0 items-center justify-end gap-2 text-ui-sm"
-        >
-          <span className="min-w-0 truncate font-mono text-muted-foreground">
-            {origin}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={() => {
-              props.onRemove(origin);
-            }}
-          >
-            Remove
-          </Button>
-        </div>
-      ))}
-    </div>
   );
 }
 

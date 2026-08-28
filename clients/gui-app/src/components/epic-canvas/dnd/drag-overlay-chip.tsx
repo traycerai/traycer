@@ -112,7 +112,18 @@ export function EpicRootDragOverlayContent() {
     activeSource?.kind === WORKSPACE_FOLDER_DND_TYPE ? activeSource : null;
 
   return (
-    <>
+    // One native-view occlusion marker for every chip. The coordinator scans
+    // `[data-browser-overlay]` elements and takes each one's own bounding rect
+    // (`collectBrowserOverlaySurfaces`), so an ancestor is read exactly like a
+    // chip root as long as it hugs the chip - hence `w-max`. Marking here
+    // rather than per chip is what stops the next chip variant from being born
+    // invisible over a live browser tile, the way the published-chat one was.
+    // dnd-kit's `<DragOverlay>` takes no data attributes, so this is the
+    // outermost element we own; it exists only while a drag is active.
+    <div
+      className="pointer-events-none w-max"
+      data-browser-overlay="drag-overlay"
+    >
       <AnimatePresence initial={false}>
         {overlayTile === null || openableSource === null ? null : (
           <div
@@ -162,17 +173,13 @@ export function EpicRootDragOverlayContent() {
           />
         )}
       </AnimatePresence>
-    </>
+    </div>
   );
 }
 
 function WorkspaceFolderDragOverlay(props: { readonly name: string }) {
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <Folder className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.name}</span>
     </m.div>
@@ -223,11 +230,7 @@ function EpicCanvasNodeDragOverlay(props: {
   }
   if (isCommGraphTileRef(props.node)) {
     return (
-      <m.div
-        {...CHIP_MOTION}
-        className={cn(CHIP_CLASS)}
-        data-browser-overlay="drag-overlay"
-      >
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
         <CommGraphTileIcon className="size-3.5" />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
@@ -265,11 +268,7 @@ function ManagedCommandOutputTileDragOverlay(props: {
     commandId: props.node.id,
   });
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <ManagedCommandMonitorIcon
         monitoring={command !== null && command.monitoring}
         decorative
@@ -284,11 +283,7 @@ function ManagedCommandOutputTileDragOverlay(props: {
 
 function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -297,11 +292,7 @@ function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {
 
 function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -315,7 +306,6 @@ function BrowserSessionTileDragOverlay(props: {
     <m.div
       {...CHIP_MOTION}
       className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
       data-browser-tab-id={props.node.tabId}
     >
       <Globe className="size-3.5 shrink-0 text-muted-foreground" />
@@ -326,11 +316,7 @@ function BrowserSessionTileDragOverlay(props: {
 
 function PrDiffTileDragOverlay(props: { readonly node: PrDiffTileRef }) {
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -342,11 +328,7 @@ function ArtifactNodeDragOverlay(props: {
   readonly epicId: string;
 }) {
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <EpicNodeTabIcon
         node={props.node}
         epicId={props.epicId}
@@ -366,11 +348,7 @@ function DiffTileDragOverlay(props: {
     return <GitDiffTileDragOverlay node={props.node} />;
   }
   return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -394,7 +372,6 @@ function GitDiffTileDragOverlay(props: { readonly node: GitDiffTileRef }) {
       {...CHIP_MOTION}
       aria-label={`${scopeLabel}: ${subjectLabel}`}
       className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
       data-testid="git-diff-drag-overlay"
     >
       <FileDiff className="size-3.5 shrink-0 text-primary" />
@@ -429,7 +406,6 @@ function LeftPanelRailDragOverlay(props: {
   return (
     <m.div
       {...CHIP_MOTION}
-      data-browser-overlay="drag-overlay"
       className={cn(
         "pointer-events-none flex h-9 cursor-grabbing select-none items-center gap-2 rounded-md border border-canvas-border/80 bg-canvas px-3 text-ui-sm font-medium text-canvas-foreground shadow-lg",
       )}

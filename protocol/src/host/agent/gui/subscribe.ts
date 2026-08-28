@@ -17,7 +17,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   browserAnnotationRecordSchema,
-  browserContextAttachmentKindSchema,
+  browserContextAttachmentRecordSchema,
   chatEventSchema,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
@@ -1291,13 +1291,8 @@ const activeProfileUpdateClientFrameSchema = z.object({
  * (`persistence/epic/messages.ts`) and into the prompt - never a raw
  * Chromium target id, and never anything the host must keep secret.
  */
-export const browserContextAttachmentWireSchema = z.object({
-  kind: browserContextAttachmentKindSchema,
-  origin: z.string(),
-  pageUrl: z.string(),
-  composerText: z.string(),
-  tabId: z.string(),
-});
+export const browserContextAttachmentWireSchema =
+  browserContextAttachmentRecordSchema.omit({ sessionId: true });
 export type BrowserContextAttachmentWire = z.infer<
   typeof browserContextAttachmentWireSchema
 >;

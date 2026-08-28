@@ -4,14 +4,9 @@ import { join } from "node:path";
 import { z } from "zod";
 import { log } from "./logger";
 import { createJsonFileStore } from "./json-file-store";
-import {
-  handleBrowserViewCertificateError,
-  isBrowserViewWebContents,
-} from "../browser-view/browser-session";
+import type { CertificateTrustScope } from "../../ipc-contracts/platform-types";
 
 const STORE_FILE_NAME = "trusted-certificates.json";
-
-type CertificateTrustScope = "app-shell" | "browser";
 
 const trustEntrySchema = z.object({
   scope: z.enum(["app-shell", "browser"]).catch("app-shell"),
@@ -156,30 +151,70 @@ async function trustCertificateForScope(
 }
 
 export async function untrustCertificate(
+  scope: CertificateTrustScope,
   fingerprint: string,
   hostname: string,
 ): Promise<void> {
   const store = getStore();
   await store.load();
-  const idx = findTrustEntryIndex(
-    store.memory,
-    "app-shell",
-    fingerprint,
-    hostname,
-  );
+  const idx = findTrustEntryIndex(store.memory, scope, fingerprint, hostname);
   if (idx >= 0) {
     store.memory.splice(idx, 1);
     await store.flush();
-    log.info("[cert-trust] trust removed", { hostname, fingerprint });
+    log.info("[cert-trust] trust removed", { scope, hostname, fingerprint });
   }
 }
 
+/** Every grant, both scopes - each entry carries the scope it applies to. */
 export async function listTrustedCertificates(): Promise<
   ReadonlyArray<TrustEntry>
 > {
   const store = getStore();
   await store.load();
-  return store.memory.filter((entry) => entry.scope === "app-shell");
+  return [...store.memory];
+}
+
+/** One rejected certificate, as handed to whichever scope owns the surface. */
+export interface CertificateErrorReport {
+  readonly webContentsId: number;
+  readonly url: string;
+  readonly hostname: string;
+  readonly fingerprint: string;
+  readonly error: string;
+  readonly certificate: Certificate;
+}
+
+/**
+ * Registration seam for the browser feature, mirroring `pendingEmitter`
+ * below: `certificate-error` is an app-level event this module owns, but a
+ * native browser tile's untrusted cert belongs to the browser's own in-page
+ * UX, not the settings allowlist. `browser-view/browser-session` registers
+ * itself here at startup so this file never imports into browser-view.
+ */
+export interface BrowserCertificateErrorHandler {
+  /** True when the webContents is a native browser tile (scope `browser`). */
+  readonly owns: (webContentsId: number) => boolean;
+  readonly report: (input: CertificateErrorReport) => void;
+}
+
+let browserCertificateErrorHandler: BrowserCertificateErrorHandler | null =
+  null;
+
+export function setBrowserCertificateErrorHandler(
+  handler: BrowserCertificateErrorHandler,
+): void {
+  browserCertificateErrorHandler = handler;
+}
+
+function reportAppShellCertificateError(input: CertificateErrorReport): void {
+  enqueuePendingError({
+    fingerprint: input.fingerprint,
+    hostname: input.hostname,
+    subject: input.certificate.subject.commonName,
+    issuer: input.certificate.issuer.commonName,
+    error: input.error,
+    url: input.url,
+  });
 }
 
 /**
@@ -205,65 +240,43 @@ export function installCertificateErrorHandler(): void {
           callback(false);
           return;
         }
-        const scope: CertificateTrustScope = isBrowserViewWebContents(
-          webContents,
-        )
+        const browserHandler = browserCertificateErrorHandler;
+        const isBrowser =
+          browserHandler !== null && browserHandler.owns(webContents.id);
+        const scope: CertificateTrustScope = isBrowser
           ? "browser"
           : "app-shell";
-        const trusted = hasTrustedCertificate(
-          store.memory,
-          scope,
-          fingerprint,
-          hostname,
-        );
-        if (trusted) {
+        if (hasTrustedCertificate(store.memory, scope, fingerprint, hostname)) {
           event.preventDefault();
           callback(true);
-        } else {
-          callback(false);
-        }
-        if (scope === "browser") {
-          if (trusted) {
-            log.info("[cert-trust] browser allowed via allowlist", {
-              scope,
-              hostname,
-              fingerprint,
-              error,
-            });
-            return;
-          }
-          handleBrowserViewCertificateError({
-            webContentsId: webContents.id,
-            url,
-            hostname,
-            error,
-            fingerprint,
-            certificate,
-          });
-          return;
-        }
-        if (trusted) {
           log.info("[cert-trust] allowed via allowlist", {
+            scope,
             hostname,
             fingerprint,
             error,
           });
           return;
         }
+        callback(false);
         log.warn("[cert-trust] rejected (no matching trust)", {
+          scope,
           hostname,
           fingerprint,
           error,
           subject: certificate.subject.commonName,
           issuer: certificate.issuer.commonName,
         });
-        enqueuePendingError({
-          fingerprint,
-          hostname,
-          subject: certificate.subject.commonName,
-          issuer: certificate.issuer.commonName,
-          error,
+        const report =
+          browserHandler !== null && isBrowser
+            ? browserHandler.report
+            : reportAppShellCertificateError;
+        report({
+          webContentsId: webContents.id,
           url,
+          hostname,
+          fingerprint,
+          error,
+          certificate,
         });
       })();
     },

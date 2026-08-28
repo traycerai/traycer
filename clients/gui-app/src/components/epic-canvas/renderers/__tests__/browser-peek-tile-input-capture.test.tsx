@@ -246,7 +246,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("captures pointerId 1 on the overlay button at pointerdown", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -267,7 +274,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture on pointerup", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -298,7 +312,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture on pointercancel", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -321,7 +342,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("sends matching ups for every accepted button on pointercancel", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -388,7 +416,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("sends both releases for a multi-button chord", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -449,7 +484,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture when the server revokes the arm", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -482,7 +524,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture on blur-disarm", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -511,7 +560,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("releases pointer capture when the stream leaves open", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -536,7 +592,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("keeps the same screencast image mounted across sequence changes", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     const first = presentLiveFrame(stream, 7, JPEG_SEQ_7);
 
@@ -551,7 +614,14 @@ describe("BrowserPeekTile input capture", () => {
 
   it("sends clickCount 1 on armed down/up and 0 on move/wheel", async () => {
     const frames = installAnimationFrameQueue();
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -628,7 +698,14 @@ describe("BrowserPeekTile input capture", () => {
   it("increments nearby clicks and resets beyond the slop or time window", () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -650,7 +727,14 @@ describe("BrowserPeekTile input capture", () => {
   it("clamps the tracked click count at 8", () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -675,7 +759,14 @@ describe("BrowserPeekTile input capture", () => {
 
   it("emits at most one move per animation frame and keeps the latest sample", async () => {
     const frames = installAnimationFrameQueue();
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -731,7 +822,14 @@ describe("BrowserPeekTile input capture", () => {
 
   it("flushes a pending move before down, up, and wheel", async () => {
     const frames = installAnimationFrameQueue();
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -824,7 +922,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("normalizes armed wheel deltas and drops wheels outside the image", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -891,7 +996,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("does not listen for wheel while unarmed", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -912,7 +1024,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("forwards Escape as a repeating rawKeyDown without disarming", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
 
@@ -937,7 +1056,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("forwards autoRepeat on a held letter", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
 
@@ -966,7 +1092,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("closes the stream and releases capture when the tile is hidden", () => {
-    const view = render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    const view = render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);
@@ -984,7 +1117,14 @@ describe("BrowserPeekTile input capture", () => {
       }),
     );
     hookState.visible = false;
-    view.rerender(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    view.rerender(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
 
     expect(stream.closed).toBe(true);
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
@@ -992,7 +1132,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("delivers a buffered cold click after arm confirmation", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -1050,7 +1197,14 @@ describe("BrowserPeekTile input capture", () => {
   it("resets click counting when a buffered click is dropped", () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -1091,7 +1245,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("does not replay a cold down when arm confirms before the matching up", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -1123,7 +1284,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("turns a buffered drag into arm-only", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -1165,7 +1333,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("does not deliver a buffered gesture after a stream reset", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     const button = overlayButton();
@@ -1199,7 +1374,14 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("drops both pointer frames when an armed down starts in the letterbox", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     const image = presentLiveFrame(stream, 7, JPEG_SEQ_7);
     vi.spyOn(image, "getBoundingClientRect").mockReturnValue(
@@ -1234,7 +1416,14 @@ describe("BrowserPeekTile input capture", () => {
 
   it("drops an armed down outside the image and clamps a captured move/up to the edge", async () => {
     const frames = installAnimationFrameQueue();
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
     armPeekTile(stream);

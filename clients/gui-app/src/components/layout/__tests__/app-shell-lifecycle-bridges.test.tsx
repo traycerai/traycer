@@ -43,7 +43,7 @@ vi.mock("@/components/epic-canvas/tile-find/tile-find-owner-bridge", () => ({
   TileFindOwnerBridge: () => <div data-testid="tile-find-owner-bridge" />,
 }));
 
-vi.mock("@/components/epic-canvas/browser-overlay-coordinator", () => ({
+vi.mock("@/components/epic-canvas/browser-overlay-coordinator-bridge", () => ({
   BrowserOverlayCoordinatorBridge: () => (
     <div data-testid="browser-overlay-coordinator" />
   ),

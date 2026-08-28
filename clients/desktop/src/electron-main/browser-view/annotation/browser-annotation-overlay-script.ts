@@ -5,7 +5,7 @@ import type {
   BrowserAnnotationMarkSnapshot,
   BrowserAnnotationSessionEvent,
 } from "../../../ipc-contracts/browser-annotation-types";
-import type { BrowserViewElementCapture } from "../../../ipc-contracts/browser-view-types";
+import type { BrowserViewElementCapture } from "@traycer-clients/shared/platform/browser-view";
 import {
   ANNOTATION_BUNDLE_BYTE_BUDGET,
   ANNOTATION_BUNDLE_ELEMENT_CAP,
@@ -13,26 +13,35 @@ import {
   serializedCaptureBytes,
 } from "./browser-annotation-overlay-logic";
 import { sanitizeElementCapture } from "./browser-element-picker-script";
-import { clamp, isRecord } from "../guards";
+import {
+  boundedString,
+  boundedStringOrNull,
+  clamp,
+  finiteNumber,
+  isRecord,
+} from "../guards";
 
 export const ANNOTATION_WORLD_NAME = "traycer-annotation";
 export const ANNOTATION_BINDING_NAME = "__traycerAnnotation";
 
-export const ANNOTATION_CANCEL_EXPRESSION =
-  "(function(){var fn=globalThis.__traycerAnnotationCancel;" +
-  "if(typeof fn==='function'){try{fn();}catch(e){}}return true;})()";
-
-export const ANNOTATION_HIDE_CHROME_EXPRESSION =
-  "(function(){var fn=globalThis.__traycerAnnotationHideChromeForCapture;" +
-  "if(typeof fn!=='function')return false;try{fn();return true;}catch(e){return false;}})()";
-
-export const ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION =
-  "(function(){var fn=globalThis.__traycerAnnotationResetAfterAttach;" +
-  "if(typeof fn!=='function')return false;try{fn();return true;}catch(e){return false;}})()";
-
-export const ANNOTATION_CAPTURE_FAILED_EXPRESSION =
-  "(function(){var fn=globalThis.__traycerAnnotationCaptureFailed;" +
-  "if(typeof fn==='function'){try{fn();}catch(e){}}return true;})()";
+/**
+ * One expression shape for every guest hook: resolve `globalThis[name]`, call
+ * it with JSON-encoded arguments, and report whether it ran. Callers that need
+ * confirmation read the `true`; best-effort callers ignore the result.
+ */
+export function callGuestHook(name: string, args: readonly unknown[]): string {
+  const encodedArgs = args
+    .map((arg) => JSON.stringify(arg).replace(/</g, "\\u003c"))
+    .join(",");
+  return (
+    "(function(){var fn=globalThis." +
+    name +
+    ";if(typeof fn!=='function')return false;" +
+    "try{fn(" +
+    encodedArgs +
+    ");return true;}catch(e){return false;}})()"
+  );
+}
 
 export const ANNOTATION_VIEWPORT_SIZE_EXPRESSION =
   "(function(){return {width:window.innerWidth,height:window.innerHeight,traycerAnnotationViewport:1};})()";
@@ -52,22 +61,6 @@ export const ANNOTATION_LIMITS = {
   elementCount: ANNOTATION_BUNDLE_ELEMENT_CAP,
   payloadBytes: ANNOTATION_BUNDLE_BYTE_BUDGET,
 } as const;
-
-export function buildAnnotationSetTargetChatLabelExpression(
-  targets: readonly { readonly chatId: string; readonly label: string }[],
-  defaultChatId: string | null,
-): string {
-  const encodedTargets = JSON.stringify(targets).replace(/</g, "\\u003c");
-  const encodedDefault = JSON.stringify(defaultChatId).replace(/</g, "\\u003c");
-  return (
-    "(function(){var fn=globalThis.__traycerAnnotationSetTargetChatLabel;" +
-    "if(typeof fn==='function'){try{fn(" +
-    encodedTargets +
-    "," +
-    encodedDefault +
-    ");}catch(e){}}return true;})()"
-  );
-}
 
 const ATTACH_RECT_MAX = 1_000_000;
 
@@ -195,16 +188,12 @@ function trimToByteBudget(
       comment: request.comment,
       unionRect: request.unionRect,
     };
-    if (jsonBytes(candidate) <= ANNOTATION_LIMITS.payloadBytes) {
+    if (serializedCaptureBytes(candidate) <= ANNOTATION_LIMITS.payloadBytes) {
       return candidate;
     }
     elements.pop();
   }
   return { ...request, elements };
-}
-
-function jsonBytes(value: unknown): number {
-  return serializedCaptureBytes(value);
 }
 
 function sanitizeCssRect(value: unknown): BrowserAnnotationCssRect | null {
@@ -219,20 +208,6 @@ function sanitizeCssRect(value: unknown): BrowserAnnotationCssRect | null {
 
 function sanitizeMarkCount(value: unknown): number {
   return clamp(Math.floor(finiteNumber(value)), 0, ANNOTATION_LIMITS.markCount);
-}
-
-function boundedString(value: unknown, max: number, fallback: string): string {
-  if (typeof value !== "string") return fallback;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function boundedStringOrNull(value: unknown, max: number): string | null {
-  if (typeof value !== "string" || value.length === 0) return null;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function finiteNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function containsForbiddenGuestField(value: unknown): boolean {

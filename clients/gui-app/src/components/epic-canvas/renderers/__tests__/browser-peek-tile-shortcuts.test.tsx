@@ -171,7 +171,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("pastes clipboard text as one insertText and suppresses V key frames", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -195,7 +202,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("sends nothing on paste while unarmed", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     pastePlainText(imeInput(), PASTE_TEXT);
@@ -205,13 +219,27 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("sends nothing on paste while hidden", async () => {
-    const view = render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    const view = render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
 
     hookState.visible = false;
-    view.rerender(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    view.rerender(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     await flushMacrotask();
 
     pastePlainText(imeInput(), PASTE_TEXT);
@@ -221,7 +249,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("focuses the address bar on Cmd+L without forwarding L and without disarming", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -239,7 +274,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("reloads on Cmd+R without forwarding R", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -259,7 +301,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("still forwards Cmd+C as a rawKeyDown keyboard frame", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -278,7 +327,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("does not forward an orphan keyup the tile did not press", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -290,7 +346,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag when the server revokes the arm", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -313,21 +376,42 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag when the tile is hidden", async () => {
-    const view = render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    const view = render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
     expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     hookState.visible = false;
-    view.rerender(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    view.rerender(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     await flushMacrotask();
 
     expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
   it("clears the armed flag when Release control is clicked", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -340,7 +424,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag on Escape-free blur out of the tile", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -353,7 +444,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("does not preventDefault the V keydown of a paste chord", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -364,7 +462,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("suppresses the V keyup after the modifier is released first", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -376,7 +481,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("releases forwarded page keys when the address bar takes focus", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -407,7 +519,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("selects the address on Cmd+L even when it is already focused", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -425,7 +544,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag on a failed stream frame", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -448,7 +574,14 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   it("clears the armed flag on a complete stream frame", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
@@ -471,7 +604,12 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     };
     const view = render(
       <div>
-        <BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />
+        <BrowserPeekTile
+          viewTabId="view-tab-1"
+          paneId="pane-1"
+          epicId="epic-1"
+          node={PEEK_NODE}
+        />
       </div>,
     );
     const client = hookState.streamClient;
@@ -497,8 +635,18 @@ describe("BrowserPeekTile shortcuts and paste", () => {
 
     view.rerender(
       <div>
-        <BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />
-        <BrowserPeekTile epicId="epic-1" node={sibling} />
+        <BrowserPeekTile
+          viewTabId="view-tab-1"
+          paneId="pane-1"
+          epicId="epic-1"
+          node={PEEK_NODE}
+        />
+        <BrowserPeekTile
+          viewTabId="view-tab-1"
+          paneId="pane-1"
+          epicId="epic-1"
+          node={sibling}
+        />
       </div>,
     );
     await flushMacrotask();
@@ -506,7 +654,12 @@ describe("BrowserPeekTile shortcuts and paste", () => {
 
     view.rerender(
       <div>
-        <BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />
+        <BrowserPeekTile
+          viewTabId="view-tab-1"
+          paneId="pane-1"
+          epicId="epic-1"
+          node={PEEK_NODE}
+        />
       </div>,
     );
     await flushMacrotask();

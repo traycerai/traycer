@@ -161,7 +161,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("hides the controlling chip until armed and release disarms that epoch", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     expect(screen.queryByText("Controlling")).toBeNull();
@@ -193,7 +200,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("toasts once per unsupportedInteraction feature", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     emitUnsupported(stream, "fileUpload");
@@ -206,7 +220,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("keeps the focused address draft when the agent navigates", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     emitNavState(stream, URL_A);
@@ -231,7 +252,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("auto-arms from a cold toolbar back click and sends goBack only after confirmation", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     act(() => {
@@ -280,7 +308,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("flushes every pending cold toolbar nav after arm confirmation", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     act(() => {
@@ -331,7 +366,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("drops a pending arm and cold nav when revoked before confirmation", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     act(() => {
@@ -384,7 +426,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("replaces a submitted address with the next live url", () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
 
     emitNavState(stream, URL_A);
@@ -404,7 +453,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("disarms after leaving the tile from the address bar", async () => {
-    render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();

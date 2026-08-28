@@ -67,7 +67,6 @@ import {
 } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
-  EpicNodeRef,
   EpicTerminalRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
@@ -76,6 +75,7 @@ import {
   isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
 } from "@/stores/epics/canvas/types";
+import { isEpicNodeTileRef } from "@/stores/epics/canvas/tile-schema";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
@@ -1226,14 +1226,6 @@ function renderFixedTabIcon(
   }
 }
 
-function isEpicNodeRef(tab: EpicCanvasTileRef): tab is EpicNodeRef {
-  return (
-    tab.type === "terminal" ||
-    tab.type === "workspace-file" ||
-    isOpenableEpicNodeKind(tab.type)
-  );
-}
-
 /**
  * Live tile icon (chat progress spinner / harness brand / static kind glyph,
  * with diff + blank fallbacks). Exported so the mobile current-tile bar
@@ -1275,7 +1267,7 @@ export function TabIcon(props: {
     managedCommand?.monitoring === true,
   );
   if (fixedIcon !== null) return fixedIcon;
-  if (!isEpicNodeRef(props.tab)) return null;
+  if (!isEpicNodeTileRef(props.tab)) return null;
   // A live chat tab whose bound host is unreachable renders the published
   // copy (see tab-group-view's fallback), so its strip icon must say the same
   // thing the surface does: locked, not steerable, exactly like a copy tab.

@@ -82,119 +82,43 @@ export function nextSettledTabIdentity(
   };
 }
 
-export function disambiguateSecondaryLabels(
-  rows: ReadonlyArray<{
-    readonly key: string;
-    readonly tabId: string;
-    readonly title: string;
-    readonly url: string;
-  }>,
-): ReadonlyMap<string, string | null> {
-  const labels = baseSecondaryLabels(rows);
-  appendDuplicateSuffixes(rows, labels);
-  return labels;
+export interface BrowserTabLabelRow {
+  readonly key: string;
+  readonly tabId: string;
+  readonly title: string;
+  readonly url: string;
 }
 
-function baseSecondaryLabels(
-  rows: ReadonlyArray<{
-    readonly key: string;
-    readonly tabId: string;
-    readonly title: string;
-    readonly url: string;
-  }>,
-): Map<string, string | null> {
-  const byTitle = new Map<string, typeof rows>();
+const TAB_ID_SUFFIX_LENGTH = 4;
+
+/**
+ * Sidebar secondary text: the hostname, and - only when two rows would read
+ * identically (same title, same hostname) - the last few characters of the tab
+ * id to tell them apart.
+ */
+export function disambiguateSecondaryLabels(
+  rows: readonly BrowserTabLabelRow[],
+): ReadonlyMap<string, string | null> {
+  const counts = new Map<string, number>();
   for (const row of rows) {
-    const group = byTitle.get(row.title);
-    if (group === undefined) {
-      byTitle.set(row.title, [row]);
-      continue;
-    }
-    byTitle.set(row.title, [...group, row]);
+    const bucket = labelBucket(row);
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
   }
   const labels = new Map<string, string | null>();
-  for (const group of byTitle.values()) {
-    if (group.length === 1) {
-      const row = group[0];
-      labels.set(row.key, browserTabHostname(row.url));
+  for (const row of rows) {
+    const hostname = browserTabHostname(row.url);
+    if ((counts.get(labelBucket(row)) ?? 0) < 2) {
+      labels.set(row.key, hostname);
       continue;
     }
-    const parsed = group.map((row) => ({
-      row,
-      hostname: browserTabHostname(row.url),
-      host: browserTabHostLabel(row.url),
-      path: browserTabPathname(row.url),
-    }));
-    for (const item of parsed) {
-      const sameHostname = parsed.filter(
-        (other) => other.hostname === item.hostname,
-      );
-      if (sameHostname.length === 1) {
-        labels.set(item.row.key, item.hostname);
-        continue;
-      }
-      const sameHost = sameHostname.filter((other) => other.host === item.host);
-      if (sameHost.length === 1) {
-        labels.set(item.row.key, item.host);
-        continue;
-      }
-      const uniquePath = shortestUniquePath(
-        item.path,
-        sameHost.map((other) => other.path),
-      );
-      const base = item.host ?? item.hostname;
-      if (base === null) {
-        labels.set(item.row.key, uniquePath);
-        continue;
-      }
-      labels.set(
-        item.row.key,
-        uniquePath === null ? base : `${base}${uniquePath}`,
-      );
-    }
+    const suffix = row.tabId.slice(-TAB_ID_SUFFIX_LENGTH);
+    labels.set(row.key, hostname === null ? suffix : `${hostname} (${suffix})`);
   }
   return labels;
 }
 
-function appendDuplicateSuffixes(
-  rows: ReadonlyArray<{
-    readonly key: string;
-    readonly tabId: string;
-    readonly title: string;
-    readonly url: string;
-  }>,
-  labels: Map<string, string | null>,
-): void {
-  const rowByKey = new Map(rows.map((row) => [row.key, row]));
-  const byLabel = new Map<string, string[]>();
-  for (const [key, label] of labels) {
-    const bucket = `${rowByKey.get(key)?.title ?? ""}\0${label ?? ""}`;
-    const group = byLabel.get(bucket);
-    if (group === undefined) {
-      byLabel.set(bucket, [key]);
-      continue;
-    }
-    group.push(key);
-  }
-  for (const keys of byLabel.values()) {
-    if (keys.length < 2) continue;
-    const suffixes = shortestUniqueIdSuffixes(
-      keys.flatMap((key) => {
-        const row = rowByKey.get(key);
-        return row === undefined ? [] : [row.tabId];
-      }),
-    );
-    for (const key of keys) {
-      const row = rowByKey.get(key);
-      if (row === undefined) continue;
-      const suffix = suffixes.get(row.tabId) ?? row.tabId;
-      const label = labels.get(key);
-      labels.set(
-        key,
-        label === null || label === undefined ? suffix : `${label} (${suffix})`,
-      );
-    }
-  }
+function labelBucket(row: BrowserTabLabelRow): string {
+  return `${row.title}\0${browserTabHostname(row.url) ?? ""}`;
 }
 
 function documentTitle(title: string | null): string | null {
@@ -244,42 +168,9 @@ function stripWww(hostname: string): string {
   return hostname.toLowerCase().replace(/^www\./, "");
 }
 
-function shortestUniqueIdSuffixes(
-  ids: readonly string[],
-): ReadonlyMap<string, string> {
-  const suffixes = new Map<string, string>();
-  if (ids.length === 0) return suffixes;
-  const minLength = 4;
-  let length = minLength;
-  const maxLength = ids.reduce(
-    (longest, id) => Math.max(longest, id.length),
-    minLength,
-  );
-  while (length <= maxLength) {
-    const next = ids.map((id) =>
-      id.length <= length ? id : id.slice(-length),
-    );
-    if (new Set(next).size === ids.length) {
-      ids.forEach((id, index) => {
-        suffixes.set(id, next[index] ?? id);
-      });
-      return suffixes;
-    }
-    length += 1;
-  }
-  ids.forEach((id) => {
-    suffixes.set(id, id);
-  });
-  return suffixes;
-}
-
 function browserTabHostLabel(url: string): string | null {
   const host = parseHttpUrl(url)?.host ?? "";
   return host.length > 0 ? host : null;
-}
-
-function browserTabPathname(url: string): string | null {
-  return parseHttpUrl(url)?.pathname ?? null;
 }
 
 function parseBrowserUrl(url: string): URL | null {
@@ -300,25 +191,4 @@ export function parseHttpUrl(url: string): URL | null {
   return parsed?.protocol === "http:" || parsed?.protocol === "https:"
     ? parsed
     : null;
-}
-
-function shortestUniquePath(
-  path: string | null,
-  groupPaths: ReadonlyArray<string | null>,
-): string | null {
-  if (path === null || path === "" || path === "/") return null;
-  const segments = path.split("/").filter((segment) => segment.length > 0);
-  const others = groupPaths.filter((other) => other !== path);
-  for (let count = 1; count <= segments.length; count += 1) {
-    const candidate = `/${segments.slice(0, count).join("/")}`;
-    const unique = others.every((other) => {
-      if (other === null) return true;
-      const otherSegments = other
-        .split("/")
-        .filter((segment) => segment.length > 0);
-      return `/${otherSegments.slice(0, count).join("/")}` !== candidate;
-    });
-    if (unique) return candidate;
-  }
-  return path;
 }

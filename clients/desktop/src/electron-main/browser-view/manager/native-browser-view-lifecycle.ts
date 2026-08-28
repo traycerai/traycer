@@ -1,4 +1,4 @@
-import type { BrowserViewNativeTabCapability } from "../../../ipc-contracts/browser-view-types";
+import type { BrowserViewNativeTabCapability } from "@traycer-clients/shared/platform/browser-view";
 
 type ActivationState =
   | { readonly kind: "provisioning" }

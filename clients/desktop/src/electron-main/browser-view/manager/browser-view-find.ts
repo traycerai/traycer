@@ -4,7 +4,7 @@ import type {
   BrowserViewFindChange,
   BrowserViewFindRequest,
   BrowserViewFindStop,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import { describeLogError, log } from "../../app/logger";
 import {
   toTileKey,
@@ -12,10 +12,7 @@ import {
   type BrowserViewEntryFindSession,
   type BrowserViewSend,
 } from "./browser-view-entry";
-import {
-  browserViewSurfaceKey as entryKeyId,
-  type BrowserViewEntryRegistry,
-} from "./browser-view-entry-registry";
+import type { BrowserViewEntryRegistry } from "./browser-view-entry-registry";
 
 interface BrowserViewFindOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -37,9 +34,7 @@ export class BrowserViewFind {
   }
 
   find(windowId: string, input: BrowserViewFindRequest): void {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
+    const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) return;
     if (input.query.length === 0) {
       this.stop(windowId, input);
@@ -96,9 +91,7 @@ export class BrowserViewFind {
   }
 
   stop(windowId: string, input: BrowserViewFindStop): void {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
+    const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) return;
     entry.findState = {
       appRequestId: input.requestId,

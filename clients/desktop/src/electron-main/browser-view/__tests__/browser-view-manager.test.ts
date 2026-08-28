@@ -5,6 +5,7 @@ import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { BrowserViewManager } from "../browser-view-manager";
 import type {
   BrowserViewCapturedImage,
+  BrowserViewFrameImage,
   BrowserViewDebugger,
   BrowserViewPopupWebContents,
   BrowserViewWebContents,
@@ -21,7 +22,7 @@ import type {
   BrowserViewNativeTabStatusChange,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../../ipc-contracts/pip-capture-types";
 import type {
   BrowserAnnotationAttachedIpcEvent,
@@ -250,9 +251,8 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
           })
     | null = null;
   private url = "about:blank";
-  readonly frameSubscriptions: Array<
-    (image: BrowserViewCapturedImage) => void
-  > = [];
+  readonly frameSubscriptions: Array<(image: BrowserViewFrameImage) => void> =
+    [];
   frameSubscriptionEnds = 0;
 
   constructor(
@@ -268,7 +268,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   }
 
   beginFrameSubscription(
-    callback: (image: BrowserViewCapturedImage) => void,
+    callback: (image: BrowserViewFrameImage) => void,
   ): void {
     this.frameSubscriptions.push(callback);
   }
@@ -277,7 +277,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     this.frameSubscriptionEnds += 1;
   }
 
-  emitCompositorFrame(image: BrowserViewCapturedImage | undefined): void {
+  emitCompositorFrame(image: BrowserViewFrameImage | undefined): void {
     const frame = image ?? this.buildCaptureImage();
     this.frameSubscriptions.forEach((callback) => {
       callback(frame);
@@ -315,12 +315,13 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     }
     if (this.emptyCapture) {
       const emptyBytes = new Uint8Array();
-      const empty: BrowserViewCapturedImage = {
+      const empty: BrowserViewFrameImage = {
         getSize: () => ({ width: 0, height: 0 }),
         toJPEG: () => emptyBytes,
         toDataURL: () => "",
         isEmpty: () => true,
         crop: () => empty,
+        resize: () => empty,
         toPNG: () => emptyBytes,
       };
       return Promise.resolve(empty);
@@ -328,16 +329,17 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     return Promise.resolve(this.buildCaptureImage());
   }
 
-  private buildCaptureImage(): BrowserViewCapturedImage {
+  private buildCaptureImage(): BrowserViewFrameImage {
     // Real toJPEG results are Buffers; the frame-cache encoder relies on
     // Buffer#toString("base64"), so the fixture must be one too.
     const bytes: Buffer = Buffer.from([1, 2, 3]);
-    const image: BrowserViewCapturedImage = {
+    const image: BrowserViewFrameImage = {
       getSize: () => ({ width: 320, height: 180 }),
       toJPEG: () => bytes,
       toDataURL: () => `data:image/png;base64,${this.id}`,
       isEmpty: () => false,
       crop: () => image,
+      resize: () => image,
       toPNG: () => bytes,
     };
     return image;
@@ -1534,7 +1536,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstView = harness.views[0];
     if (firstView === undefined) throw new Error("expected native guest");
 
-    const handoff = harness.manager.drainBrowserHandoffsForWindow("window-1");
+    const handoff = harness.manager.handoff.drainForWindow("window-1");
     await flushCloseEntry();
     const firstRelease = harness.manager.releaseTab({
       hostId: input.hostId,
@@ -1588,14 +1590,14 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await harness.manager.acceptTab(provisioned);
 
     await expect(
-      harness.manager.drainBrowserHandoffsForWindow("window-1"),
+      harness.manager.handoff.drainForWindow("window-1"),
     ).rejects.toThrow("Electron tab handoff could not be delivered");
     expect(harness.electronTabHandoffNotifications).toEqual([]);
 
     rendererAvailable = true;
 
     await expect(
-      harness.manager.drainBrowserHandoffsForWindow("window-1"),
+      harness.manager.handoff.drainForWindow("window-1"),
     ).resolves.toBeUndefined();
     expect(harness.electronTabHandoffNotifications).toHaveLength(1);
     harness.manager.dispose();
@@ -1623,7 +1625,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
 
-    await harness.manager.drainBrowserHandoffsForWindow("window-1");
+    await harness.manager.handoff.drainForWindow("window-1");
     expect(harness.electronTabHandoffWindowIds).toEqual(["window-1"]);
     expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
       sessionId: "session-closing",
@@ -1792,11 +1794,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
       BASE_KEY,
       "https://example.com/",
     );
-    await harness.manager.occludeForOverlay("window-1", {
+    await harness.manager.overlay.occlude("window-1", {
       overlayId: "settings-dialog",
       tiles: [BASE_KEY],
     });
-    harness.manager.paintAckOverlay("settings-dialog");
+    harness.manager.overlay.paintAck("settings-dialog");
     const boundsBeforeCapture = view.bounds.length;
 
     await expect(
@@ -1858,7 +1860,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     );
     expect(view.visible).toBe(true);
 
-    harness.manager.stopPipCapture();
+    harness.manager.pip.stop();
 
     expect(harness.windows.get("window-1")?.contentView.children).not.toContain(
       view,
@@ -1900,7 +1902,7 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
   it("hides an entry when renderer reset races an overlay paint acknowledgement", async () => {
     const harness = createHarness();
     const { view } = await makeVisible(harness, BASE_KEY);
-    await harness.manager.occludeForOverlay("window-1", {
+    await harness.manager.overlay.occlude("window-1", {
       overlayId: "settings-dialog",
       tiles: [BASE_KEY],
     });
@@ -1919,7 +1921,7 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
     );
 
     expect(view.visible).toBe(false);
-    harness.manager.releaseOverlay({ overlayId: "settings-dialog" });
+    harness.manager.overlay.release({ overlayId: "settings-dialog" });
     expect(view.visible).toBe(false);
   });
 
@@ -2075,7 +2077,7 @@ describe("BrowserViewManager overlay occlusion broadcast routing (fix round 3)",
     const harness = createHarness();
     const infoSpy = vi.spyOn(log, "info");
 
-    await harness.manager.occludeForOverlay("window-1", {
+    await harness.manager.overlay.occlude("window-1", {
       overlayId: "settings-dialog",
       tiles: [BASE_KEY],
     });
@@ -2100,7 +2102,7 @@ describe("BrowserViewManager overlay occlusion broadcast routing (fix round 3)",
     );
     const infoSpy = vi.spyOn(log, "info");
 
-    await harness.manager.occludeForOverlay("window-1", {
+    await harness.manager.overlay.occlude("window-1", {
       overlayId: "settings-dialog",
       tiles: [BASE_KEY],
     });
@@ -2158,7 +2160,7 @@ describe("BrowserViewManager annotation session", () => {
     expect(view.webContents.debugger.attached).toBe(true);
 
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     expect(annotationBindingCommands(view)).toEqual(["Runtime.addBinding"]);
     expect(annotationEventTypes(harness)).toEqual([]);
@@ -2169,10 +2171,10 @@ describe("BrowserViewManager annotation session", () => {
     const { view } = await attachAnnotationTab(harness);
 
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
     expect(annotationBindingCommands(view)).toEqual([
@@ -2190,7 +2192,7 @@ describe("BrowserViewManager annotation session", () => {
     const reloadHarness = createHarness();
     const { capability: reloadCapability, view: reloadView } =
       await attachAnnotationTab(reloadHarness);
-    await reloadHarness.manager.startAnnotation("window-1", BASE_KEY);
+    await reloadHarness.manager.annotations.start("window-1", BASE_KEY);
     await reloadHarness.manager.controlElectronTab("window-1", {
       ...reloadCapability,
       action: { kind: "reload" },
@@ -2205,7 +2207,7 @@ describe("BrowserViewManager annotation session", () => {
 
     const navHarness = createHarness();
     const { view: navView } = await attachAnnotationTab(navHarness);
-    await navHarness.manager.startAnnotation("window-1", BASE_KEY);
+    await navHarness.manager.annotations.start("window-1", BASE_KEY);
     navView.webContents.emit(
       "did-navigate-in-page",
       {},
@@ -2224,7 +2226,7 @@ describe("BrowserViewManager annotation session", () => {
 
     const crashHarness = createHarness();
     const { view: crashView } = await attachAnnotationTab(crashHarness);
-    await crashHarness.manager.startAnnotation("window-1", BASE_KEY);
+    await crashHarness.manager.annotations.start("window-1", BASE_KEY);
     crashView.webContents.emit(
       "render-process-gone",
       {},
@@ -2241,7 +2243,7 @@ describe("BrowserViewManager annotation session", () => {
 
     const detachHarness = createHarness();
     const { view: detachView } = await attachAnnotationTab(detachHarness);
-    await detachHarness.manager.startAnnotation("window-1", BASE_KEY);
+    await detachHarness.manager.annotations.start("window-1", BASE_KEY);
     detachView.webContents.debugger.emitDetach("target closed");
     expect(annotationBindingCommands(detachView)).toEqual([
       "Runtime.addBinding",
@@ -2256,7 +2258,7 @@ describe("BrowserViewManager annotation session", () => {
       capability: releaseCapability,
       view: releaseView,
     } = await attachAnnotationTab(releaseHarness);
-    await releaseHarness.manager.startAnnotation("window-1", BASE_KEY);
+    await releaseHarness.manager.annotations.start("window-1", BASE_KEY);
     expect(
       releaseHarness.manager.detachSurface("window-1", {
         ...releaseCapability,
@@ -2273,8 +2275,8 @@ describe("BrowserViewManager annotation session", () => {
 
     const cancelHarness = createHarness();
     const { view: cancelView } = await attachAnnotationTab(cancelHarness);
-    await cancelHarness.manager.startAnnotation("window-1", BASE_KEY);
-    cancelHarness.manager.cancelAnnotation("window-1", BASE_KEY);
+    await cancelHarness.manager.annotations.start("window-1", BASE_KEY);
+    cancelHarness.manager.annotations.cancel("window-1", BASE_KEY);
     expect(annotationBindingCommands(cancelView)).toEqual([
       "Runtime.addBinding",
       "Runtime.removeBinding",
@@ -2352,7 +2354,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
     emitAnnotationBinding(
@@ -2375,7 +2377,7 @@ describe("BrowserViewManager annotation session", () => {
     const { view } = await attachAnnotationTab(harness);
     view.webContents.emptyCapture = true;
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
     emitAnnotationBinding(
@@ -2387,7 +2389,7 @@ describe("BrowserViewManager annotation session", () => {
 
     expect(harness.annotationAttached).toEqual([]);
 
-    harness.manager.cancelAnnotation("window-1", BASE_KEY);
+    harness.manager.annotations.cancel("window-1", BASE_KEY);
     expect(annotationEventTypes(harness)).toEqual([{ type: "cancelled" }]);
   });
 
@@ -2395,7 +2397,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
     view.webContents.emit(
@@ -2433,7 +2435,7 @@ describe("BrowserViewManager annotation session", () => {
     const { view } = await attachAnnotationTab(harness);
     view.webContents.deferCaptures = true;
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
     emitAnnotationBinding(
@@ -2468,7 +2470,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
 
     emitAnnotationBinding(
@@ -2519,7 +2521,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     emitAnnotationBinding(
       view,
@@ -2543,7 +2545,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     emitAnnotationBinding(
       view,
@@ -2569,7 +2571,7 @@ describe("BrowserViewManager annotation session", () => {
       const harness = createHarness();
       const { capability, view } = await attachAnnotationTab(harness);
       await expect(
-        harness.manager.startAnnotation("window-1", BASE_KEY),
+        harness.manager.annotations.start("window-1", BASE_KEY),
       ).resolves.toEqual({ ok: true });
       emitAnnotationBinding(
         view,
@@ -2601,7 +2603,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     emitAnnotationBinding(
       view,
@@ -2618,11 +2620,11 @@ describe("BrowserViewManager annotation session", () => {
     if (annotationId === undefined) {
       throw new Error("expected attached annotation id");
     }
-    harness.manager.reportAnnotationAttachResult("window-1", {
+    harness.manager.annotations.reportAttachResult("window-1", {
       annotationId: "ann-unknown",
       status: "attached",
     });
-    harness.manager.reportAnnotationAttachResult("window-2", {
+    harness.manager.annotations.reportAttachResult("window-2", {
       annotationId,
       status: "attached",
     });
@@ -2631,7 +2633,7 @@ describe("BrowserViewManager annotation session", () => {
     expect(view.webContents.zoomFactor).toBe(1);
     reportAttachResult(harness, "window-1", "failed");
     await flush();
-    harness.manager.reportAnnotationAttachResult("window-1", {
+    harness.manager.annotations.reportAttachResult("window-1", {
       annotationId,
       status: "attached",
     });
@@ -2644,7 +2646,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     emitAnnotationBinding(
       view,
@@ -2656,17 +2658,17 @@ describe("BrowserViewManager annotation session", () => {
     if (annotationId === undefined) {
       throw new Error("expected attached annotation id");
     }
-    harness.manager.cancelAnnotation("window-1", BASE_KEY);
+    harness.manager.annotations.cancel("window-1", BASE_KEY);
     await flush();
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     emitAnnotationBinding(
       view,
       { type: "stateChanged", mode: "select", markCount: 1 },
       77,
     );
-    harness.manager.reportAnnotationAttachResult("window-1", {
+    harness.manager.annotations.reportAttachResult("window-1", {
       annotationId,
       status: "attached",
     });
@@ -2679,7 +2681,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     const { bindingId, capability, view } = await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     emitAnnotationBinding(
       view,
@@ -2703,7 +2705,7 @@ describe("BrowserViewManager annotation session", () => {
       reason: "tile-close",
     });
     await expect(
-      harness.manager.startAnnotation("window-1", movedKey),
+      harness.manager.annotations.start("window-1", movedKey),
     ).resolves.toEqual({ ok: true });
   });
 
@@ -2711,7 +2713,7 @@ describe("BrowserViewManager annotation session", () => {
     const harness = createHarness();
     await attachAnnotationTab(harness);
     await expect(
-      harness.manager.startAnnotation("window-1", BASE_KEY),
+      harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
     const hostWebContents = harness.windows.get("window-1")?.webContents;
     if (hostWebContents === undefined) throw new Error("expected host window");
@@ -2742,7 +2744,7 @@ function reportAttachResult(
   if (annotationId === undefined) {
     throw new Error("expected attached annotation id");
   }
-  harness.manager.reportAnnotationAttachResult(windowId, {
+  harness.manager.annotations.reportAttachResult(windowId, {
     annotationId,
     status,
   });

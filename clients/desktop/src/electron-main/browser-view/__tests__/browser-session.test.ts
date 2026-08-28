@@ -319,7 +319,9 @@ describe("browser view session policy", () => {
 
   it("uses a dedicated persistent partition without mutating defaultSession", async () => {
     const crypto = await import("../storage/browser-cookie-crypto");
-    crypto.setBrowserCookieCryptoStateForTests(realCookieCryptoState());
+    vi.spyOn(crypto, "getBrowserCookieCryptoState").mockReturnValue(
+      realCookieCryptoState(),
+    );
     const mod = await import("../browser-session");
 
     const browserSession = mod.ensureBrowserViewSession();
@@ -348,7 +350,9 @@ describe("browser view session policy", () => {
 
   it("uses a session-only partition when cookie crypto is degraded", async () => {
     const crypto = await import("../storage/browser-cookie-crypto");
-    crypto.setBrowserCookieCryptoStateForTests(degradedCookieCryptoState());
+    vi.spyOn(crypto, "getBrowserCookieCryptoState").mockReturnValue(
+      degradedCookieCryptoState(),
+    );
     const mod = await import("../browser-session");
 
     mod.ensureBrowserViewSession();

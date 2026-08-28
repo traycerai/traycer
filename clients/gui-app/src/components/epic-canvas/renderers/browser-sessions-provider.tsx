@@ -12,6 +12,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import {
   authenticatedHostStreamKey,
@@ -77,6 +78,37 @@ export function BrowserSessionsHostProvider(props: {
     <BrowserSessionsContext.Provider value={sessions}>
       {props.children}
     </BrowserSessionsContext.Provider>
+  );
+}
+
+/**
+ * Puts a surface on `hostId`'s browser-sessions stream, wrapping only when it
+ * needs to: the canvas already provides the canvas host's stream, so re-wrapping
+ * for that host would open a second coordinator for the same one.
+ *
+ * The rule lives here rather than at each call site because three of them had
+ * spelled it out separately, and the odd one out resolved its client from a
+ * different hook. `useHostClientForHostId` is the one resolution for "which
+ * client addresses this host id" - inside a tile it is exactly what
+ * `useTabHostClient()` returns, since a tile's `TabHostProvider` is bound to
+ * that same ref host.
+ */
+export function BrowserSessionsHostBoundary(props: {
+  readonly hostId: string | null;
+  readonly epicId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const canvasHostId = useCanvasHostId();
+  const hostClient = useHostClientForHostId(props.hostId);
+  if (props.hostId === canvasHostId) return props.children;
+  return (
+    <BrowserSessionsHostProvider
+      hostId={props.hostId}
+      hostClient={hostClient}
+      epicId={props.epicId}
+    >
+      {props.children}
+    </BrowserSessionsHostProvider>
   );
 }
 

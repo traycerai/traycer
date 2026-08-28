@@ -6,7 +6,7 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewOverlaySnapshot,
   BrowserViewTileKey,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import { describeLogError, log } from "../../app/logger";
 import {
   requireSurface,
@@ -18,10 +18,7 @@ import {
   browserViewSurfaceKey as entryKeyId,
   type BrowserViewEntryRegistry,
 } from "./browser-view-entry-registry";
-import {
-  effectiveViewportBounds,
-  type BrowserViewGeometry,
-} from "./browser-view-geometry";
+import type { BrowserViewGeometry } from "./browser-view-geometry";
 
 interface BrowserViewOverlayOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -100,7 +97,7 @@ export class BrowserViewOverlay {
       if (!entry.overlayOwnerIds.includes(overlayId)) continue;
       if (!entry.overlayAwaitingPaintAck) continue;
       entry.overlayAwaitingPaintAck = false;
-      this.parkEntry(entry);
+      entry.overlayParked = this.geometry.parkOffscreen(entry);
     }
   }
 
@@ -208,7 +205,7 @@ export class BrowserViewOverlay {
     // screen until the renderer has DECODED and PAINTED the replacement
     // frame — otherwise there is a guaranteed multi-frame window where the
     // page pixels are gone but nothing covers the tile yet (the reported
-    // empty-state flash). The renderer acknowledges via `paintAckOverlay`
+    // empty-state flash). The renderer acknowledges via `paintAck`
     // once img.decode() settles; only then do we move the view offscreen.
     currentEntry.overlayAwaitingPaintAck = true;
     return {
@@ -216,37 +213,6 @@ export class BrowserViewOverlay {
       dataUrl,
       stale,
     };
-  }
-
-  private parkEntry(entry: BrowserViewEntry): void {
-    if (
-      entry.bounds === null ||
-      entry.bounds.width <= 0 ||
-      entry.bounds.height <= 0
-    ) {
-      entry.view.setVisible(false);
-      return;
-    }
-    const effective = effectiveViewportBounds(
-      entry.bounds,
-      entry.viewportPreset,
-    );
-    if (effective.width <= 0 || effective.height <= 0) {
-      entry.view.setVisible(false);
-      return;
-    }
-    entry.view.setBounds({
-      x: -effective.width,
-      y: -effective.height,
-      width: effective.width,
-      height: effective.height,
-    });
-    // The view now sits offscreen; forget the last onscreen rect so release
-    // re-applies real geometry instead of coalescing against a stale one.
-    entry.lastAppliedBounds = null;
-    entry.overlayParked = true;
-    entry.overlayAwaitingPaintAck = false;
-    entry.view.setVisible(true);
   }
 
   private releaseEntries(

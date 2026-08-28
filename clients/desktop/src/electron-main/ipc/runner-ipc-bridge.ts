@@ -134,6 +134,8 @@ export interface IpcWindowRecord {
 
 type IpcWindowRegistryChangeListener = () => void;
 
+export type IpcWindowRegistryEvent = "change" | "geometry";
+
 export interface IpcWindowRegistry {
   create(options: {
     readonly initialRoute: string | null;
@@ -149,8 +151,15 @@ export interface IpcWindowRegistry {
   getRecordByWebContentsId(webContentsId: number): IpcWindowRecord | null;
   getMruRecord(): IpcWindowRecord | null;
   mostRecentlyFocusedId(): string | null;
-  on(event: "change", listener: IpcWindowRegistryChangeListener): void;
-  off(event: "change", listener: IpcWindowRegistryChangeListener): void;
+  /** `geometry` fires on minimize/restore/(un)maximize only - see WindowRegistry. */
+  on(
+    event: IpcWindowRegistryEvent,
+    listener: IpcWindowRegistryChangeListener,
+  ): void;
+  off(
+    event: IpcWindowRegistryEvent,
+    listener: IpcWindowRegistryChangeListener,
+  ): void;
 }
 
 type IpcOwnershipChangeListener = (snapshot: readonly OwnershipEntry[]) => void;
@@ -280,6 +289,15 @@ type HostChangeListener = (
 ) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
+
+/**
+ * Upper bound on how long the quit/close path waits for a renderer to
+ * acknowledge a browser handoff drain. A wedged renderer that never replies
+ * must not make the app unquittable (`authorizeQuitAfterFlush` awaits this)
+ * or the window unclosable (`handleWindowClose` already preventDefault'ed),
+ * so the wait resolves as "drained as far as we can tell" instead of hanging.
+ */
+export const BROWSER_HANDOFF_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface QuitDecisionWaiter {
   readonly requestId: string;
@@ -468,6 +486,7 @@ interface BrowserHandoffDrainWaiter {
   readonly windowId: string;
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
+  readonly timer: NodeJS.Timeout;
 }
 
 /**
@@ -513,7 +532,7 @@ export class RunnerIpcBridge {
     string,
     BrowserHandoffDrainWaiter
   >();
-  private readonly browserViewManagers: BrowserViewManager[] = [];
+  private browserViewManager: BrowserViewManager | null = null;
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
@@ -563,7 +582,7 @@ export class RunnerIpcBridge {
     registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
     const primaryBrowserViewManager = registerBrowserViewIpc(this);
-    this.browserViewManagers.push(primaryBrowserViewManager);
+    this.browserViewManager = primaryBrowserViewManager;
     registerPipCaptureIpc(this, primaryBrowserViewManager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
@@ -811,44 +830,36 @@ export class RunnerIpcBridge {
       .map((record) => record.windowId)
       .filter((windowId) => this.canHandoffBrowserTabsForWindow(windowId));
     await Promise.all(
-      windowIds.flatMap((windowId) =>
-        this.browserViewManagers.map((manager) =>
-          manager.drainBrowserHandoffsForWindow(windowId),
-        ),
-      ),
+      windowIds.map((windowId) => this.handOffBrowserTabs(windowId)),
     );
-    await this.requestBrowserHandoffDrain(windowIds);
   }
 
   canHandoffBrowserTabsForWindow(windowId: string): boolean {
     return (
       this.appLifecycleReadyWindowIds.has(windowId) &&
-      this.browserViewManagers.some((manager) =>
-        manager.hasNativeTabsForWindow(windowId),
-      )
+      this.browserViewManager?.hasNativeTabsForWindow(windowId) === true
     );
   }
 
   async prepareBrowserWindowClose(windowId: string): Promise<void> {
-    if (!this.appLifecycleReadyWindowIds.has(windowId)) return;
-    const managers = this.browserViewManagers.filter((manager) =>
-      manager.hasNativeTabsForWindow(windowId),
-    );
-    if (managers.length === 0) return;
-    try {
-      await Promise.all(
-        managers.map((manager) =>
-          manager.drainBrowserHandoffsForWindow(windowId),
-        ),
-      );
-      await this.requestBrowserHandoffDrain([windowId]);
-    } finally {
-      await Promise.all(
-        managers.map((manager) =>
-          manager.closeNativeSessionsForWindow(windowId),
-        ),
-      );
+    const manager = this.browserViewManager;
+    if (manager === null || !this.canHandoffBrowserTabsForWindow(windowId)) {
+      return;
     }
+    try {
+      await this.handOffBrowserTabs(windowId);
+    } finally {
+      await manager.closeNativeSessionsForWindow(windowId);
+    }
+  }
+
+  /**
+   * Hand this window's native browser tabs back to the host: flush what main
+   * owns, then wait (bounded) for the renderer to acknowledge its own drain.
+   */
+  private async handOffBrowserTabs(windowId: string): Promise<void> {
+    await this.browserViewManager?.handoff.drainForWindow(windowId);
+    await this.requestBrowserHandoffDrain([windowId]);
   }
 
   private async requestBrowserHandoffDrain(
@@ -859,10 +870,19 @@ export class RunnerIpcBridge {
         (windowId) =>
           new Promise<void>((resolve, reject) => {
             const requestId = randomUUID();
+            const timer = setTimeout(() => {
+              if (!this.browserHandoffDrainWaiters.delete(requestId)) return;
+              log.warn("[runner-ipc] browser handoff drain timed out", {
+                windowId,
+                timeoutMs: BROWSER_HANDOFF_DRAIN_TIMEOUT_MS,
+              });
+              resolve();
+            }, BROWSER_HANDOFF_DRAIN_TIMEOUT_MS);
             this.browserHandoffDrainWaiters.set(requestId, {
               windowId,
               resolve,
               reject,
+              timer,
             });
             if (
               this.safeSendToWindow(
@@ -874,6 +894,7 @@ export class RunnerIpcBridge {
               return;
             }
             this.browserHandoffDrainWaiters.delete(requestId);
+            clearTimeout(timer);
             reject(
               new Error(
                 `Browser handoff drain request could not be delivered to window ${windowId}`,
@@ -888,6 +909,7 @@ export class RunnerIpcBridge {
     const waiter = this.browserHandoffDrainWaiters.get(requestId);
     if (waiter?.windowId !== windowId) return;
     this.browserHandoffDrainWaiters.delete(requestId);
+    clearTimeout(waiter.timer);
     waiter.resolve();
   }
 
@@ -1411,6 +1433,7 @@ export class RunnerIpcBridge {
     for (const [requestId, waiter] of this.browserHandoffDrainWaiters) {
       if (!predicate(waiter)) continue;
       this.browserHandoffDrainWaiters.delete(requestId);
+      clearTimeout(waiter.timer);
       waiter.reject(error);
     }
   }
@@ -1488,9 +1511,15 @@ class SingleWindowRegistry implements IpcWindowRegistry {
     return this.record.windowId;
   }
 
-  on(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+  on(
+    _event: IpcWindowRegistryEvent,
+    _listener: IpcWindowRegistryChangeListener,
+  ): void {}
 
-  off(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+  off(
+    _event: IpcWindowRegistryEvent,
+    _listener: IpcWindowRegistryChangeListener,
+  ): void {}
 }
 
 // Default quit-state for the single-window `window:` bridge variant (and any

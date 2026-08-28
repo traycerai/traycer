@@ -423,7 +423,7 @@ function PipWindow(props: {
           <div className="truncate text-ui-xs font-medium text-foreground">
             {meta.title}
           </div>
-          <div className="flex min-w-0 items-center gap-1.5 text-[0.625rem] leading-none text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-1.5 text-ui-xs leading-none text-muted-foreground">
             <span
               aria-hidden
               className={cn("size-1.5 shrink-0 rounded-full", statusTone)}
@@ -532,7 +532,7 @@ function PipCaptionBadge(props: {
     <span
       data-testid="agent-browser-pip-caption"
       className={cn(
-        "pointer-events-none absolute bottom-2 left-2 max-w-[min(85%,20rem)] truncate rounded-md bg-background/80 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-opacity duration-300",
+        "pointer-events-none absolute bottom-2 left-2 max-w-[min(85%,20rem)] truncate rounded-md bg-background/80 px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-opacity duration-300",
         freshness === "fading" ? "opacity-0" : "opacity-90",
       )}
     >

@@ -3,7 +3,7 @@ import type {
   BrowserAnnotationCssRect,
   BrowserAnnotationMarkSnapshot,
 } from "../../../ipc-contracts/browser-annotation-types";
-import type { BrowserViewElementCapture } from "../../../ipc-contracts/browser-view-types";
+import type { BrowserViewElementCapture } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewCapturedImage,
   BrowserViewCropRect,

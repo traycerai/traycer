@@ -1,7 +1,7 @@
 import type {
   BrowserViewNativeTabKey,
   BrowserViewTileKey,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 
 export interface BrowserViewEntryKey extends BrowserViewTileKey {
   readonly windowId: string;
@@ -38,8 +38,9 @@ export class BrowserViewEntryRegistry<
     return this.entriesByGuestKey.get(guestKey);
   }
 
-  getSurface(surface: BrowserViewEntryKey): Entry | undefined {
-    return this.getSurfaceByKey(browserViewSurfaceKey(surface));
+  /** The entry bound to one window's tile, or undefined when nothing is. */
+  getTile(windowId: string, tile: BrowserViewTileKey): Entry | undefined {
+    return this.getSurfaceByKey(browserViewSurfaceKey({ ...tile, windowId }));
   }
 
   getSurfaceByKey(surfaceKey: string): Entry | undefined {
@@ -88,10 +89,6 @@ export class BrowserViewEntryRegistry<
     return this.entriesBySurfaceKey.values();
   }
 
-  surfaceEntries(): IterableIterator<[string, Entry]> {
-    return this.entriesBySurfaceKey.entries();
-  }
-
   private assertRegistered(entry: Entry): void {
     if (!this.isCurrent(entry)) {
       throw new Error(`Browser guest is not registered: ${entry.guestKey}`);
@@ -110,14 +107,25 @@ export class BrowserViewEntryRegistry<
   }
 }
 
+/** Separator for every composed browser-view key; never legal inside an id. */
+const KEY_SEPARATOR = "\u001f";
+
 export function browserViewSurfaceKey(key: BrowserViewEntryKey): string {
   return [key.windowId, key.viewTabId, key.paneId, key.tileInstanceId].join(
-    "\u001f",
+    KEY_SEPARATOR,
   );
+}
+
+/** Identity of the host session a native guest belongs to - all of its tabs. */
+export function nativeBrowserSessionKey(key: {
+  readonly hostId: string;
+  readonly sessionId: string;
+}): string {
+  return ["native", key.hostId, key.sessionId].join(KEY_SEPARATOR);
 }
 
 export function nativeBrowserViewGuestKey(
   key: BrowserViewNativeTabKey,
 ): string {
-  return ["native", key.hostId, key.sessionId, key.tabId].join("\u001f");
+  return [nativeBrowserSessionKey(key), key.tabId].join(KEY_SEPARATOR);
 }

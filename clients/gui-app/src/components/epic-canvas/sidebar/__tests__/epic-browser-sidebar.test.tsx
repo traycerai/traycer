@@ -108,6 +108,13 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
     browserHostProviderState.hostIds.push(props.hostId);
     return props.children;
   },
+  BrowserSessionsHostBoundary: (props: {
+    readonly hostId: string | null;
+    readonly children: ReactNode;
+  }) => {
+    browserHostProviderState.hostIds.push(props.hostId);
+    return props.children;
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -471,7 +478,7 @@ describe("BrowsersPanelBody", () => {
     expect(screen.getByRole("button", { name: "Close Checkout" })).toBeTruthy();
   });
 
-  it("disambiguates duplicate host fallback titles with each tab's origin", () => {
+  it("disambiguates duplicate host fallback titles with each tab id suffix", () => {
     sessionsState.value = {
       ...sessionsState.value,
       items: [3000, 5173].map((port) =>
@@ -499,11 +506,11 @@ describe("BrowsersPanelBody", () => {
       button.getAttribute("aria-label"),
     );
     expect(closeLabels).toEqual([
-      "Close 127.0.0.1 (127.0.0.1:3000)",
-      "Close 127.0.0.1 (127.0.0.1:5173)",
+      "Close 127.0.0.1 (127.0.0.1 (3000))",
+      "Close 127.0.0.1 (127.0.0.1 (5173))",
     ]);
-    expect(screen.getByText("127.0.0.1:3000")).toBeTruthy();
-    expect(screen.getByText("127.0.0.1:5173")).toBeTruthy();
+    expect(screen.getByText("127.0.0.1 (3000)")).toBeTruthy();
+    expect(screen.getByText("127.0.0.1 (5173)")).toBeTruthy();
     expect(screen.getAllByText("127.0.0.1")).toHaveLength(2);
   });
 
@@ -536,8 +543,8 @@ describe("BrowsersPanelBody", () => {
       .getAllByRole("button", { name: /^Close JioHotstar \(/ })
       .map((button) => button.getAttribute("aria-label"));
     expect(closeLabels).toEqual([
-      "Close JioHotstar (www.hotstar.com/live (cccc))",
-      "Close JioHotstar (www.hotstar.com/live (ffff))",
+      "Close JioHotstar (www.hotstar.com (cccc))",
+      "Close JioHotstar (www.hotstar.com (ffff))",
     ]);
   });
 
@@ -574,8 +581,8 @@ describe("BrowsersPanelBody", () => {
         .getAllByRole("button", { name: /^Closing JioHotstar/ })
         .map((button) => button.getAttribute("aria-label")),
     ).toEqual([
-      "Closing JioHotstar (www.hotstar.com/live (aaaa))",
-      "Closing JioHotstar (www.hotstar.com/live (bbbb))",
+      "Closing JioHotstar (www.hotstar.com (aaaa))",
+      "Closing JioHotstar (www.hotstar.com (bbbb))",
     ]);
   });
 
@@ -1022,7 +1029,7 @@ describe("BrowsersPanelBody", () => {
     expect(row.querySelector(".lucide-earth")).not.toBeNull();
   });
 
-  it("keeps close in the 28px slot with a spinner, leaves canvas tiles open, and restores close after a failed ack", async () => {
+  it("keeps close in its own slot with a spinner, leaves canvas tiles open, and restores close after a failed ack", async () => {
     let rejectClose: ((error: Error) => void) | undefined;
     closeTab.mockImplementation(
       () =>
@@ -1051,11 +1058,14 @@ describe("BrowsersPanelBody", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
     vi.useRealTimers();
     const row = screen.getByTestId("epic-browser-sidebar-row-tab-live");
-    expect(row.className).toContain("grid-cols-[minmax(0,1fr)_24px_28px]");
     expect(row.querySelector(".lucide-bot")).toBeNull();
     const pendingClose = screen.getByTestId(
       "epic-browser-sidebar-close-tab-live",
     );
+    // The close control keeps its own grid slot (never collapses into the
+    // title) and its fixed control size while the close is in flight.
+    expect(pendingClose.className).toContain("size-6");
+    expect(pendingClose.className).toContain("justify-self-center");
     expect(pendingClose.getAttribute("aria-label")).toBe("Closing Live page");
     expect(pendingClose.querySelector(".font-mono")).not.toBeNull();
     expect(pendingClose.querySelector(".lucide-x")).toBeNull();

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import type {
   BrowserViewBridge,
   BrowserViewFindChange,
@@ -40,7 +41,7 @@ export function BrowserTileFindAdapterBridge(
     const browserView = props.browserView;
     if (browserView === null) return;
     const subscription = browserView.onFindChange((change) => {
-      if (!isFindChangeForTile(change, props.tileKey)) return;
+      if (!isSameBrowserViewTile(change, props.tileKey)) return;
       adapter.applyChange(change);
     });
     return () => {
@@ -233,16 +234,4 @@ function createBrowserFindSnapshot(args: {
     activeUnitId: args.total > 0 ? `browser-page:${args.requestId}` : null,
     exactHighlight: args.exactHighlight,
   };
-}
-
-function isFindChangeForTile(
-  change: BrowserViewFindChange,
-  key: BrowserViewTileKey,
-): boolean {
-  return (
-    change.viewTabId === key.viewTabId &&
-    change.paneId === key.paneId &&
-    change.tileInstanceId === key.tileInstanceId &&
-    change.pageSessionId === key.pageSessionId
-  );
 }

@@ -7,10 +7,13 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
+  chatSubscribeSnapshotServerFrameShallowSchema,
+  chatSubscribeServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   INTERVIEW_SETTLEMENT_METADATA_KEY,
+  normalizeV16BrowserPayloadsInFrame,
   normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   projectChatServerFrameForVersion,
@@ -647,6 +650,197 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
     expect(future.delivery).toBeNull();
     expect(future.settlement).toBeNull();
     expect(future.settlementExtensions).toEqual({});
+  });
+});
+
+/**
+ * The RECEIVE side of the `1.6` line, end to end, for the two surfaces the
+ * message normalizer does NOT walk: `snapshot.queue` and `messageAccepted`.
+ *
+ * These pin the pipeline `chat-stream-client` actually runs, because the
+ * hazard here is not visible from either schema alone. `chat.messages` needs
+ * `normalizeV16MessagesInShallowSnapshot` precisely because the shallow
+ * schemas leave it structural. The queue is the opposite: the frozen `1.6`
+ * schema DEEP-parses it (so a browser payload on a `1.6` queue item is
+ * stripped as an unknown key), and the live shallow re-parse then supplies
+ * `browserContextAttachments: []` / `browserAnnotations: []` from the live
+ * payload schema's `.default([])`. Same for `messageAccepted`, which is not a
+ * snapshot and so takes the live deep parse directly.
+ *
+ * Net effect on a `1.6` peer: these arrays read as `[]`, never as `undefined`.
+ * That is load-bearing for consumers typed as if both are present, and it rests
+ * entirely on those `.default([])`s - swapping either for `.optional()` breaks
+ * this line silently, which is what these tests exist to catch.
+ *
+ * SMUGGLED payloads on `messageAccepted` / `queueChanged` are a separate
+ * matter: those frames get no frozen parse, so `normalizeV16BrowserPayloadsInFrame`
+ * is what neutralizes them, pinned in `chat-stream-client.test.ts`.
+ */
+describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
+  function v16QueuePromptItem(
+    message: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "prompt",
+      queueItemId: "queue-1",
+      messageId: "user-1",
+      message,
+      sender: { type: "user", userId: "user-1" },
+      settings: {
+        harnessId: "codex",
+        model: "gpt-5.4",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        agentMode: "epic",
+      },
+      accountContext: { type: "PERSONAL" },
+      delivery: "next_turn",
+      status: "pending",
+      targetTurnId: null,
+      steerRequest: null,
+      fallbackReason: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+  }
+
+  function v16SnapshotWithQueueItem(
+    message: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const envelope = v16SnapshotEnvelope([userMessage()]);
+    const snapshot = asRecord(envelope.snapshot, "snapshot");
+    return {
+      ...envelope,
+      snapshot: {
+        ...snapshot,
+        queue: { status: "idle", items: [v16QueuePromptItem(message)] },
+      },
+    };
+  }
+
+  /** Exactly what `chat-stream-client` does with a `1.6` snapshot frame. */
+  function receiveV16Snapshot(payload: Record<string, unknown>): {
+    readonly queuePayload: Record<string, unknown>;
+  } {
+    const shallowV16 =
+      chatSubscribeSnapshotServerFrameShallowSchemaV16.parse(payload);
+    normalizeV16MessagesInShallowSnapshot(shallowV16.snapshot.chat.messages);
+    const upgraded =
+      chatSubscribeSnapshotServerFrameShallowSchema.parse(shallowV16);
+    const item = asRecord(upgraded.snapshot.queue.items[0], "queue item");
+    return { queuePayload: asRecord(item.message, "queue payload") };
+  }
+
+  function expectBrowserPayloadEmpty(payload: Record<string, unknown>): void {
+    expect(payload.browserContextAttachments).toEqual([]);
+    expect(payload.browserAnnotations).toEqual([]);
+  }
+
+  it("defaults both browser arrays on a queue prompt item that carries neither", () => {
+    // The frozen 1.6 shape: a user-authored payload with no browser keys.
+    const { queuePayload } = receiveV16Snapshot(
+      v16SnapshotWithQueueItem({
+        kind: "user",
+        content: { type: "doc", content: [] },
+      }),
+    );
+    expectBrowserPayloadEmpty(queuePayload);
+  });
+
+  it("neutralizes a browser payload smuggled onto a 1.6 queue prompt item", () => {
+    // A legal 1.6 frame cannot carry these, so a populated one did not come
+    // from a conforming 1.6 host. Same reading as the message normalizer's:
+    // on this line they are absent, whatever bytes arrived.
+    const { queuePayload } = receiveV16Snapshot(
+      v16SnapshotWithQueueItem({
+        kind: "user",
+        content: { type: "doc", content: [] },
+        browserContextAttachments: [{ unvalidated: true }],
+        browserAnnotations: [{ unvalidated: true }],
+      }),
+    );
+    expectBrowserPayloadEmpty(queuePayload);
+  });
+
+  it("defaults both browser arrays on a 1.6 messageAccepted user message", () => {
+    // Non-snapshot frames on the 1.6 line take the live deep parse, so the
+    // defaults - not a normalizer pass - are what keep this off `undefined`.
+    const frame = chatSubscribeServerFrameSchema.parse({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      message: {
+        role: "user",
+        messageId: "user-1",
+        sender: { type: "user", userId: "user-1" },
+        message: { kind: "user", content: { type: "doc", content: [] } },
+        timestamp: 5,
+        sessionAnchor: null,
+      },
+    });
+    if (frame.kind !== "messageAccepted") {
+      throw new Error("expected messageAccepted");
+    }
+    expectBrowserPayloadEmpty(asRecord(frame.message.message, "user payload"));
+  });
+
+  it("normalizes only user-authored payloads, and only on the two live-parsed kinds", () => {
+    const agentPayload: Record<string, unknown> = {
+      kind: "agent",
+      content: { type: "doc", content: [] },
+      fromAgentId: "agent-1",
+      senderTitle: null,
+      senderHarnessId: null,
+      reply: { expectsReply: false },
+    };
+    const agentFrame = {
+      kind: "messageAccepted",
+      message: { role: "user", message: agentPayload },
+    };
+    normalizeV16BrowserPayloadsInFrame(agentFrame);
+    // An agent payload has no such fields on ANY line; inventing them would
+    // make the payload fail its own schema.
+    expect(Object.hasOwn(agentPayload, "browserContextAttachments")).toBe(
+      false,
+    );
+    expect(Object.hasOwn(agentPayload, "browserAnnotations")).toBe(false);
+
+    const managedItem: Record<string, unknown> = { kind: "managed_command" };
+    normalizeV16BrowserPayloadsInFrame({
+      kind: "queueChanged",
+      queue: { status: "idle", items: [managedItem] },
+    });
+    expect(managedItem).toEqual({ kind: "managed_command" });
+
+    // Every other frame kind is left alone, so a caller can hand it each
+    // parsed frame unconditionally.
+    const carried = [{ tabId: "tab-1" }];
+    const other = {
+      kind: "blockDelta",
+      message: {
+        role: "user",
+        message: { kind: "user", browserContextAttachments: carried },
+      },
+    };
+    normalizeV16BrowserPayloadsInFrame(other);
+    expect(other.message.message.browserContextAttachments).toBe(carried);
+  });
+
+  it("deep-validates the same browser payload on the live line instead of defaulting it away", () => {
+    // The mirror of the neutralizing case above, and why the `1.6` result is
+    // not merely "zod happened to strip something": on the live line these
+    // arrays are validated content, so an unvalidatable record is a parse
+    // error rather than a silently emptied field.
+    expect(() =>
+      chatSubscribeSnapshotServerFrameShallowSchema.parse(
+        v16SnapshotWithQueueItem({
+          kind: "user",
+          content: { type: "doc", content: [] },
+          browserContextAttachments: [{ unvalidated: true }],
+        }),
+      ),
+    ).toThrow();
   });
 });
 

@@ -5,12 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ClipboardEvent as ReactClipboardEvent,
-  type CompositionEvent as ReactCompositionEvent,
-  type InputEvent as ReactInputEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type RefObject,
   type SetStateAction,
 } from "react";
@@ -27,35 +21,32 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  createScreencastArmBuffer,
-  type ScreencastArmBuffer,
-} from "@/components/epic-canvas/renderers/screencast-arm-buffer";
-import {
   EMPTY_SCREENCAST_NAV_STATE,
   toastScreencastUnsupportedInteraction,
 } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
-  buildScreencastPointerFrame,
-  inputModifiers,
-  isScreencastModChord,
-  nextPointerClickCount,
-  pointerButton,
-  type PointerClickCount,
-  type ScreencastFrameSize,
-  type ScreencastInputFrame,
-  type ScreencastKeyboardInput,
-  type ScreencastNavInput,
-  type ScreencastPointerInput,
-} from "@/lib/browser-view/sessions/screencast-input-encoding";
-import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
+  createScreencastController,
+  type ScreencastController,
+  type ScreencastDialog,
+  type ScreencastImeHandlers,
+  type ScreencastOverlayHandlers,
+  type ScreencastSessionRefs,
+} from "@/lib/browser-view/sessions/screencast-controller";
+import type { ScreencastFrameSize } from "@/lib/browser-view/sessions/screencast-input-encoding";
 
 const DEFAULT_MAX_WIDTH = 1280;
 const DEFAULT_MAX_HEIGHT = 720;
 const DEFAULT_QUALITY = 70;
 const STALE_WITHOUT_FRAME_MS = 8_000;
 const VIEWPORT_DEBOUNCE_MS = 200;
-const WHEEL_LINE_HEIGHT_PX = 16;
+
+export type {
+  ScreencastDialog,
+  ScreencastImeHandlers,
+  ScreencastOverlayHandlers,
+  ScreencastSessionRefs,
+};
 
 export type ScreencastLifecycle =
   | "connecting"
@@ -67,11 +58,6 @@ export type ScreencastLifecycle =
   | "failed"
   | "complete";
 
-export type ScreencastDialog = Extract<
-  BrowserScreencastServerFrame,
-  { readonly kind: "dialogOpened" }
-> & { readonly armEpoch: number };
-
 type ScreencastViewportInput = Omit<
   Extract<BrowserScreencastClientFrame, { readonly kind: "viewport" }>,
   "kind" | "hasBinaryPayload"
@@ -80,35 +66,6 @@ type ScreencastViewportInput = Omit<
 export interface ScreencastImage {
   readonly src: string;
   readonly sequence: number;
-}
-
-export interface ScreencastSessionRefs {
-  readonly tileRef: RefObject<HTMLDivElement | null>;
-  readonly viewportRef: RefObject<HTMLDivElement | null>;
-  readonly overlayButtonRef: RefObject<HTMLButtonElement | null>;
-  readonly imageRef: RefObject<HTMLImageElement | null>;
-  readonly imeInputRef: RefObject<HTMLInputElement | null>;
-}
-
-export interface ScreencastOverlayHandlers {
-  readonly onFocus: () => void;
-  readonly onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  readonly onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  readonly onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  readonly onPointerCancel: () => void;
-  readonly onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-}
-
-export interface ScreencastImeHandlers {
-  readonly onFocus: () => void;
-  readonly onKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
-  readonly onKeyUp: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
-  readonly onPaste: (event: ReactClipboardEvent<HTMLInputElement>) => void;
-  readonly onCompositionStart: () => void;
-  readonly onCompositionEnd: (
-    event: ReactCompositionEvent<HTMLInputElement>,
-  ) => void;
-  readonly onInput: (event: ReactInputEvent<HTMLInputElement>) => void;
 }
 
 export interface ScreencastSession {
@@ -123,13 +80,9 @@ export interface ScreencastSession {
   readonly dialog: ScreencastDialog | null;
   readonly composing: boolean;
   readonly disarm: () => void;
-  readonly requestNav: (input: ScreencastNavInput) => void;
+  readonly requestNav: ScreencastController["requestNav"];
   readonly releaseForwardedPageKeys: () => void;
-  readonly respondToDialog: (
-    generation: number,
-    accept: boolean,
-    promptText: string | null,
-  ) => void;
+  readonly respondToDialog: ScreencastController["respondToDialog"];
   /**
    * The tile acks a frame only once the browser has painted it - the host
    * gates the next capture on that ack, so acking on arrival would outrun the
@@ -139,11 +92,6 @@ export interface ScreencastSession {
   readonly onFocusExit: (relatedTarget: EventTarget | null) => void;
   readonly overlayHandlers: ScreencastOverlayHandlers;
   readonly imeHandlers: ScreencastImeHandlers;
-}
-
-interface CapturedPointer {
-  readonly element: HTMLElement;
-  readonly pointerId: number;
 }
 
 interface ScreencastRenderState {
@@ -164,10 +112,12 @@ export interface ScreencastSessionOptions {
 }
 
 /**
- * Headless `browser.screencast` viewer: transport, arm/disarm epoch protocol,
- * frame decode, JS dialog state, nav state, viewport bridge and the pointer /
- * keyboard input path. Owns the DOM refs its input handlers read so a caller
- * only has to attach them and render.
+ * Headless `browser.screencast` viewer. This hook owns only what a render
+ * reads - the frame image, the lifecycle, the armed epoch and the composing
+ * flag - plus the transport that feeds them. Everything with its own state
+ * machine (arm epochs, input queues, pointer bookkeeping) lives in
+ * `createScreencastController`, which is plain TypeScript and testable without
+ * React.
  */
 export function useScreencastSession(
   options: ScreencastSessionOptions,
@@ -179,41 +129,7 @@ export function useScreencastSession(
   const overlayButtonRef = useRef<HTMLButtonElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const imeInputRef = useRef<HTMLInputElement | null>(null);
-  const lastFrameAtRef = useRef<number | null>(null);
-  const armEpochCounterRef = useRef(0);
-  const desiredArmEpochRef = useRef<number | null>(null);
-  const activeArmEpochRef = useRef<number | null>(null);
-  const inputSequenceRef = useRef(0);
-  const presentedSequenceRef = useRef<number | null>(null);
-  const activeDialogRef = useRef<ScreencastDialog | null>(null);
-  const composingRef = useRef(false);
-  const frameSizeRef = useRef<ScreencastFrameSize | null>(null);
-  const capturedPointerRef = useRef<CapturedPointer | null>(null);
-  const suppressPointerIdRef = useRef<number | null>(null);
-  const pendingMoveRef = useRef<ScreencastPointerInput | null>(null);
-  const moveRafRef = useRef<number | null>(null);
-  const acceptedPointerDownsRef = useRef(
-    new Map<ScreencastPointerInput["button"], ScreencastPointerInput>(),
-  );
-  const pointerClickCountRef = useRef<PointerClickCount | null>(null);
-  const handleArmBufferDropped = useCallback(() => {
-    pointerClickCountRef.current = null;
-    const captured = capturedPointerRef.current;
-    if (captured === null) return;
-    suppressPointerIdRef.current = captured.pointerId;
-  }, []);
-  const [armBuffer] = useState<ScreencastArmBuffer<ScreencastPointerInput>>(
-    // eslint-disable-next-line react-hooks/refs -- the factory stores this handler; it never invokes it during render.
-    () => createScreencastArmBuffer(handleArmBufferDropped),
-  );
-  const deliverArmBufferRef = useRef<() => void>(() => {});
-  const flushPendingNavRef = useRef<() => void>(() => {});
-  const clearLocalArmRef = useRef<(notifyHost: boolean) => void>(() => {});
-  const pendingNavRef = useRef<ScreencastNavInput[]>([]);
-  const forwardedKeyDownsRef = useRef(
-    new Map<string, ScreencastKeyboardInput>(),
-  );
-  const claimedLocalCodesRef = useRef(new Set<string>());
+
   const [armedState, setArmedState] = useState<{
     readonly client: IHostStreamClient<HostStreamRpcRegistry>;
     readonly epoch: number;
@@ -231,6 +147,39 @@ export function useScreencastSession(
     frameSize: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   }));
+
+  const refs = useMemo<ScreencastSessionRefs>(
+    () => ({
+      tileRef,
+      viewportRef,
+      overlayButtonRef,
+      imageRef,
+      imeInputRef,
+    }),
+    [],
+  );
+  const resetLocalArmState = useCallback(() => {
+    setComposing(false);
+    setDialogState(null);
+    setArmedState(null);
+  }, []);
+  // eslint-disable-next-line react-hooks/refs -- the controller only stores the ref bag; it reads `.current` from handlers and effects, never during render.
+  const [controller] = useState<ScreencastController>(() =>
+    createScreencastController({
+      refs,
+      sendFrame: (frame) => {
+        streamRef.current?.sendClientFrame(frame);
+      },
+      listeners: {
+        onLocalArmCleared: resetLocalArmState,
+        onComposingChange: setComposing,
+        onDialogSettled: () => {
+          setDialogState(null);
+        },
+      },
+    }),
+  );
+
   const stateMatchesClient = streamState.client === client;
   const image = stateMatchesClient ? streamState.image : null;
   const lifecycle = stateMatchesClient ? streamState.lifecycle : "connecting";
@@ -288,11 +237,10 @@ export function useScreencastSession(
   );
 
   useEffect(() => {
-    activeDialogRef.current = null;
-    composingRef.current = false;
+    controller.resetInputContext();
     if (client === null || !visible) {
       streamRef.current = null;
-      clearLocalArmRef.current(false);
+      controller.clearLocalArm(false);
       return;
     }
 
@@ -313,16 +261,16 @@ export function useScreencastSession(
     ): void => {
       if (stream !== null && !isCurrent()) return;
       if (status !== "open") {
-        presentedSequenceRef.current = null;
-        clearLocalArmRef.current(false);
+        controller.notePresentedSequence(null);
+        controller.clearLocalArm(false);
       } else if (
         viewportRef.current?.contains(document.activeElement) === true
       ) {
-        armEpochCounterRef.current += 1;
-        const armEpoch = armEpochCounterRef.current;
-        desiredArmEpochRef.current = armEpoch;
-        inputSequenceRef.current = 0;
-        send({ kind: "arm", hasBinaryPayload: false, armEpoch });
+        send({
+          kind: "arm",
+          hasBinaryPayload: false,
+          armEpoch: controller.startArmEpoch(),
+        });
       }
       handleStreamStatus(status, reason, setLifecycle, setDetails);
     };
@@ -338,7 +286,7 @@ export function useScreencastSession(
         frame.kind === "failed" ||
         frame.kind === "complete"
       ) {
-        presentedSequenceRef.current = null;
+        controller.notePresentedSequence(null);
       }
       handleScreencastFrame({
         frame,
@@ -364,27 +312,25 @@ export function useScreencastSession(
       }
       const control = applyScreencastControlFrame({
         frame,
-        desiredEpoch: desiredArmEpochRef.current,
-        activeEpoch: activeArmEpochRef.current,
+        desiredEpoch: controller.desiredArmEpoch(),
+        activeEpoch: controller.activeArmEpoch(),
       });
       if (control === "teardown") {
-        clearLocalArmRef.current(false);
+        controller.clearLocalArm(false);
       } else if (control === "armed" && frame.kind === "armed") {
-        activeArmEpochRef.current = frame.armEpoch;
+        controller.noteArmed(frame.armEpoch);
         setArmedState({ client, epoch: frame.armEpoch });
-        deliverArmBufferRef.current();
-        flushPendingNavRef.current();
       } else {
         handleDialogServerFrame({
           frame,
-          armEpoch: activeArmEpochRef.current,
-          current: activeDialogRef.current,
+          armEpoch: controller.activeArmEpoch(),
+          current: controller.activeDialog(),
           opened: (nextDialog) => {
-            activeDialogRef.current = nextDialog;
+            controller.setActiveDialog(nextDialog);
             setDialogState({ client, dialog: nextDialog });
           },
           settled: () => {
-            activeDialogRef.current = null;
+            controller.setActiveDialog(null);
             setDialogState(null);
           },
         });
@@ -409,12 +355,13 @@ export function useScreencastSession(
 
     return () => {
       if (streamRef.current === opened) streamRef.current = null;
-      presentedSequenceRef.current = null;
-      clearLocalArmRef.current(false);
+      controller.notePresentedSequence(null);
+      controller.clearLocalArm(false);
       opened.close();
     };
   }, [
     client,
+    controller,
     epicId,
     sessionId,
     setDetails,
@@ -425,21 +372,18 @@ export function useScreencastSession(
     visible,
   ]);
 
-  const sendFrame = useCallback((frame: BrowserScreencastClientFrame) => {
-    streamRef.current?.sendClientFrame(frame);
+  const sendViewport = useCallback((viewport: ScreencastViewportInput) => {
+    streamRef.current?.sendClientFrame({
+      kind: "viewport",
+      hasBinaryPayload: false,
+      ...viewport,
+    });
   }, []);
-
-  const sendViewport = useCallback(
-    (viewport: ScreencastViewportInput) => {
-      sendFrame({ kind: "viewport", hasBinaryPayload: false, ...viewport });
-    },
-    [sendFrame],
-  );
   useScreencastViewportBridge(viewportRef, visible, sendViewport);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const lastFrameAt = lastFrameAtRef.current;
+      const lastFrameAt = controller.lastFrameAt();
       if (lastFrameAt === null) return;
       if (Date.now() - lastFrameAt < STALE_WITHOUT_FRAME_MS) return;
       setLifecycle((current) =>
@@ -449,172 +393,32 @@ export function useScreencastSession(
     return () => {
       window.clearInterval(timer);
     };
-  }, [setLifecycle]);
-
-  const arm = useCallback(() => {
-    if (
-      desiredArmEpochRef.current !== null ||
-      activeArmEpochRef.current !== null
-    ) {
-      return;
-    }
-    armEpochCounterRef.current += 1;
-    const armEpoch = armEpochCounterRef.current;
-    desiredArmEpochRef.current = armEpoch;
-    inputSequenceRef.current = 0;
-    sendFrame({ kind: "arm", hasBinaryPayload: false, armEpoch });
-  }, [sendFrame]);
-
-  const releaseCapturedPointer = useCallback(() => {
-    const captured = capturedPointerRef.current;
-    capturedPointerRef.current = null;
-    if (captured === null) return;
-    try {
-      captured.element.releasePointerCapture(captured.pointerId);
-    } catch {
-      // Already released or the node is gone.
-    }
-  }, []);
-
-  const cancelPendingMove = useCallback(() => {
-    pendingMoveRef.current = null;
-    if (moveRafRef.current === null) return;
-    window.cancelAnimationFrame(moveRafRef.current);
-    moveRafRef.current = null;
-  }, []);
-
-  const resetTransientInput = useCallback(() => {
-    armBuffer.drop();
-    pendingNavRef.current = [];
-    forwardedKeyDownsRef.current.clear();
-    claimedLocalCodesRef.current.clear();
-    suppressPointerIdRef.current = null;
-    acceptedPointerDownsRef.current.clear();
-    pointerClickCountRef.current = null;
-    cancelPendingMove();
-    releaseCapturedPointer();
-  }, [armBuffer, cancelPendingMove, releaseCapturedPointer]);
-
-  const resetLocalArmRefs = useCallback((): number | null => {
-    const armEpoch = activeArmEpochRef.current ?? desiredArmEpochRef.current;
-    desiredArmEpochRef.current = null;
-    activeArmEpochRef.current = null;
-    activeDialogRef.current = null;
-    composingRef.current = false;
-    resetTransientInput();
-    return armEpoch;
-  }, [resetTransientInput]);
-
-  const resetLocalArmState = useCallback(() => {
-    setComposing(false);
-    setDialogState(null);
-    setArmedState(null);
-  }, []);
-
-  const clearLocalArm = useCallback(
-    (notifyHost: boolean) => {
-      const armEpoch = resetLocalArmRefs();
-      resetLocalArmState();
-      if (!notifyHost || armEpoch === null) return;
-      sendFrame({ kind: "disarm", hasBinaryPayload: false, armEpoch });
-    },
-    [resetLocalArmRefs, resetLocalArmState, sendFrame],
-  );
-
-  const disarm = useCallback(() => {
-    clearLocalArm(true);
-  }, [clearLocalArm]);
+  }, [controller, setLifecycle]);
 
   useEffect(() => {
+    controller.setVisible(visible);
     if (visible) return;
-    const armEpoch = resetLocalArmRefs();
-    if (armEpoch !== null) {
-      sendFrame({ kind: "disarm", hasBinaryPayload: false, armEpoch });
-    }
+    controller.detachLocalArm();
     // Refs and host disarm must win immediately; React state follows after
     // this visibility effect commits so the hidden render cannot route input.
-    queueMicrotask(() => {
-      resetLocalArmState();
-    });
-  }, [resetLocalArmRefs, resetLocalArmState, sendFrame, visible]);
+    queueMicrotask(resetLocalArmState);
+  }, [controller, resetLocalArmState, visible]);
 
-  const sendInput = useCallback(
-    (frame: ScreencastInputFrame) => {
-      const armEpoch = activeArmEpochRef.current;
-      if (armEpoch === null) return;
-      if (frame.kind === "keyboard") {
-        if (frame.type === "rawKeyDown") {
-          forwardedKeyDownsRef.current.set(frame.code, frame);
-        } else if (frame.type === "keyUp") {
-          forwardedKeyDownsRef.current.delete(frame.code);
-        }
-      }
-      sendFrame({
-        ...frame,
-        hasBinaryPayload: false,
-        armEpoch,
-        seq: inputSequenceRef.current,
-      });
-      inputSequenceRef.current += 1;
-    },
-    [sendFrame],
-  );
-
-  const releaseForwardedPageKeys = useCallback(() => {
-    const held = Array.from(forwardedKeyDownsRef.current.values());
-    for (const frame of held) {
-      sendInput({ ...frame, type: "keyUp", autoRepeat: false });
-    }
-  }, [sendInput]);
-
-  const flushPendingNav = useCallback(() => {
-    const pending = pendingNavRef.current;
-    pendingNavRef.current = [];
-    for (const frame of pending) {
-      sendInput(frame);
-    }
-  }, [sendInput]);
-
-  const requestNav = useCallback(
-    (frame: ScreencastNavInput) => {
-      if (activeArmEpochRef.current !== null) {
-        sendInput(frame);
-        return;
-      }
-      pendingNavRef.current = [...pendingNavRef.current, frame];
-      arm();
-    },
-    [arm, sendInput],
-  );
+  useLayoutEffect(() => {
+    controller.setFrameSize(frameSize);
+  }, [controller, frameSize]);
 
   useEffect(() => {
     const tile = tileRef.current;
     if (tile === null || armedEpoch === null) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (isScreencastModChord(event, "l")) {
-        event.preventDefault();
-        event.stopPropagation();
-        claimedLocalCodesRef.current.add(event.code);
-        if (document.activeElement === imeInputRef.current) {
-          releaseForwardedPageKeys();
-        }
-        focusScreencastAddressBar(tile);
-        return;
-      }
-      if (isScreencastModChord(event, "r")) {
-        event.preventDefault();
-        event.stopPropagation();
-        claimedLocalCodesRef.current.add(event.code);
-        requestNav({ kind: "reload" });
-      }
+      controller.handleTileKeyDown(event);
     };
     const onKeyUp = (event: KeyboardEvent): void => {
-      if (!claimedLocalCodesRef.current.delete(event.code)) return;
-      event.preventDefault();
-      event.stopPropagation();
+      controller.handleTileKeyUp(event);
     };
     const onWindowBlur = (): void => {
-      claimedLocalCodesRef.current.clear();
+      controller.clearClaimedLocalCodes();
     };
     tile.addEventListener("keydown", onKeyDown, true);
     tile.addEventListener("keyup", onKeyUp, true);
@@ -624,456 +428,27 @@ export function useScreencastSession(
       tile.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onWindowBlur);
     };
-  }, [armedEpoch, releaseForwardedPageKeys, requestNav]);
-
-  const respondToDialog = useCallback(
-    (generation: number, accept: boolean, promptText: string | null) => {
-      const current = activeDialogRef.current;
-      const armEpoch = activeArmEpochRef.current;
-      if (
-        current === null ||
-        current.generation !== generation ||
-        armEpoch === null ||
-        current.armEpoch !== armEpoch
-      ) {
-        return;
-      }
-      activeDialogRef.current = null;
-      setDialogState(null);
-      sendFrame({
-        kind: "dialogResponse",
-        hasBinaryPayload: false,
-        armEpoch,
-        generation,
-        accept,
-        promptText,
-      });
-      imeInputRef.current?.focus();
-    },
-    [sendFrame],
-  );
-
-  const buildPointerFrame = useCallback(
-    (request: {
-      readonly event: ReactPointerEvent<HTMLButtonElement> | WheelEvent;
-      readonly type: ScreencastPointerInput["type"];
-      readonly clampToEdge: boolean;
-      readonly deltaX: number;
-      readonly deltaY: number;
-    }): ScreencastPointerInput | null => {
-      let clickCount = 0;
-      if (request.type === "down") {
-        const counted = nextPointerClickCount(
-          pointerClickCountRef.current,
-          request.event,
-          performance.now(),
-        );
-        pointerClickCountRef.current = counted;
-        clickCount = counted.count;
-      } else if (request.type === "up") {
-        const accepted = acceptedPointerDownsRef.current.get(
-          pointerButton(request.event.button),
-        );
-        const down = pointerClickCountRef.current;
-        clickCount =
-          accepted?.clickCount ??
-          (down?.button === request.event.button ? down.count : 1);
-      }
-      return buildScreencastPointerFrame({
-        event: request.event,
-        type: request.type,
-        clampToEdge: request.clampToEdge,
-        deltaX: request.deltaX,
-        deltaY: request.deltaY,
-        clickCount,
-        castSequence: presentedSequenceRef.current,
-        image: imageRef.current,
-        frameSize: frameSizeRef.current,
-      });
-    },
-    [],
-  );
-
-  const flushPendingMove = useCallback(() => {
-    const pending = pendingMoveRef.current;
-    pendingMoveRef.current = null;
-    if (moveRafRef.current !== null) {
-      window.cancelAnimationFrame(moveRafRef.current);
-      moveRafRef.current = null;
-    }
-    if (pending === null) return;
-    sendInput(pending);
-  }, [sendInput]);
-
-  const scheduleMove = useCallback(
-    (frame: ScreencastPointerInput) => {
-      pendingMoveRef.current = frame;
-      if (moveRafRef.current !== null) return;
-      moveRafRef.current = window.requestAnimationFrame(() => {
-        moveRafRef.current = null;
-        const pending = pendingMoveRef.current;
-        pendingMoveRef.current = null;
-        if (pending === null) return;
-        sendInput(pending);
-      });
-    },
-    [sendInput],
-  );
-
-  const sendDiscretePointer = useCallback(
-    (frame: ScreencastPointerInput) => {
-      flushPendingMove();
-      sendInput(frame);
-      if (frame.type === "down") {
-        acceptedPointerDownsRef.current.set(frame.button, frame);
-        return;
-      }
-      if (frame.type === "up") {
-        acceptedPointerDownsRef.current.delete(frame.button);
-      }
-    },
-    [flushPendingMove, sendInput],
-  );
-
-  const deliverArmBuffer = useCallback(() => {
-    const hadPending = armBuffer.hasPending();
-    const gesture = armBuffer.takeIfCurrent(presentedSequenceRef.current);
-    if (gesture === null) {
-      const captured = capturedPointerRef.current;
-      if (hadPending && captured !== null) {
-        suppressPointerIdRef.current = captured.pointerId;
-      }
-      return;
-    }
-    sendDiscretePointer(gesture.down);
-    sendDiscretePointer(gesture.up);
-  }, [armBuffer, sendDiscretePointer]);
-
-  const capturePointer = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // Pointer capture is best-effort; local teardown still needs the id.
-      }
-      capturedPointerRef.current = {
-        element: event.currentTarget,
-        pointerId: event.pointerId,
-      };
-    },
-    [],
-  );
-
-  const onPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      capturePointer(event);
-      const armed = activeArmEpochRef.current !== null;
-      const arming = desiredArmEpochRef.current !== null;
-      if (armed) {
-        const frame = buildPointerFrame({
-          event,
-          type: "down",
-          clampToEdge: false,
-          deltaX: 0,
-          deltaY: 0,
-        });
-        if (frame !== null) sendDiscretePointer(frame);
-      } else if (!arming) {
-        arm();
-        if (event.button !== 0) {
-          suppressPointerIdRef.current = event.pointerId;
-        } else {
-          const frame = buildPointerFrame({
-            event,
-            type: "down",
-            clampToEdge: false,
-            deltaX: 0,
-            deltaY: 0,
-          });
-          if (frame !== null) {
-            armBuffer.storeDown({
-              payload: frame,
-              castSequence: frame.castSequence,
-              clientX: event.clientX,
-              clientY: event.clientY,
-              isPrimary: true,
-            });
-          }
-        }
-      }
-      imeInputRef.current?.focus();
-    },
-    [arm, armBuffer, buildPointerFrame, capturePointer, sendDiscretePointer],
-  );
-
-  const onPointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (armBuffer.hasPending()) {
-        armBuffer.noteMove(event.clientX, event.clientY);
-        if (!armBuffer.hasPending()) {
-          suppressPointerIdRef.current = event.pointerId;
-        }
-        return;
-      }
-      if (suppressPointerIdRef.current === event.pointerId) return;
-      if (activeArmEpochRef.current === null) return;
-      const frame = buildPointerFrame({
-        event,
-        type: "move",
-        clampToEdge: event.buttons !== 0,
-        deltaX: 0,
-        deltaY: 0,
-      });
-      if (frame === null) return;
-      scheduleMove(frame);
-    },
-    [armBuffer, buildPointerFrame, scheduleMove],
-  );
-
-  const onPointerUp = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (armBuffer.hasPending()) {
-        const frame = buildPointerFrame({
-          event,
-          type: "up",
-          clampToEdge: true,
-          deltaX: 0,
-          deltaY: 0,
-        });
-        if (frame !== null) {
-          armBuffer.storeMatchingUp({
-            payload: frame,
-            isPrimary: event.button === 0,
-            clientX: event.clientX,
-            clientY: event.clientY,
-          });
-        }
-        releaseCapturedPointer();
-        return;
-      }
-      if (suppressPointerIdRef.current === event.pointerId) {
-        suppressPointerIdRef.current = null;
-        releaseCapturedPointer();
-        return;
-      }
-      if (
-        activeArmEpochRef.current !== null &&
-        acceptedPointerDownsRef.current.has(pointerButton(event.button))
-      ) {
-        const frame = buildPointerFrame({
-          event,
-          type: "up",
-          clampToEdge: true,
-          deltaX: 0,
-          deltaY: 0,
-        });
-        if (frame !== null) sendDiscretePointer(frame);
-      }
-      releaseCapturedPointer();
-    },
-    [armBuffer, buildPointerFrame, releaseCapturedPointer, sendDiscretePointer],
-  );
-
-  const onPointerCancel = useCallback(() => {
-    if (activeArmEpochRef.current !== null) {
-      for (const accepted of acceptedPointerDownsRef.current.values()) {
-        sendDiscretePointer({ ...accepted, type: "up", buttons: 0 });
-      }
-    }
-    armBuffer.drop();
-    suppressPointerIdRef.current = null;
-    acceptedPointerDownsRef.current.clear();
-    cancelPendingMove();
-    releaseCapturedPointer();
-  }, [
-    armBuffer,
-    cancelPendingMove,
-    releaseCapturedPointer,
-    sendDiscretePointer,
-  ]);
-
-  const onContextMenu = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
-      if (activeArmEpochRef.current === null) return;
-      event.preventDefault();
-    },
-    [],
-  );
+  }, [armedEpoch, controller]);
 
   useEffect(() => {
     const button = overlayButtonRef.current;
     if (button === null || armedEpoch === null) return;
     const onWheel = (event: WheelEvent): void => {
-      if (activeArmEpochRef.current === null) return;
-      event.preventDefault();
-      const frame = buildPointerFrame({
-        event,
-        type: "wheel",
-        clampToEdge: false,
-        deltaX: wheelDeltaToPixels(
-          event.deltaX,
-          event.deltaMode,
-          button.clientWidth,
-          WHEEL_LINE_HEIGHT_PX,
-        ),
-        deltaY: wheelDeltaToPixels(
-          event.deltaY,
-          event.deltaMode,
-          button.clientHeight,
-          WHEEL_LINE_HEIGHT_PX,
-        ),
-      });
-      if (frame === null) return;
-      sendDiscretePointer(frame);
+      controller.handleWheel(event, button);
     };
     button.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       button.removeEventListener("wheel", onWheel);
     };
-  }, [armedEpoch, buildPointerFrame, sendDiscretePointer]);
-
-  const onFocusExit = useCallback(
-    (relatedTarget: EventTarget | null) => {
-      if (
-        relatedTarget instanceof Node &&
-        tileRef.current?.contains(relatedTarget) === true
-      ) {
-        return;
-      }
-      disarm();
-    },
-    [disarm],
-  );
+  }, [armedEpoch, controller]);
 
   const notePainted = useCallback(
     (sequence: number) => {
-      presentedSequenceRef.current = sequence;
-      lastFrameAtRef.current = Date.now();
+      controller.notePainted(sequence);
       setLifecycle("live");
       setDetails(null);
-      sendFrame({ kind: "ack", hasBinaryPayload: false, sequence });
     },
-    [sendFrame, setDetails, setLifecycle],
-  );
-
-  const focusImeInput = useCallback(() => {
-    imeInputRef.current?.focus();
-  }, []);
-
-  const onImeKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (activeDialogRef.current !== null) return;
-      if (event.nativeEvent.isComposing || composingRef.current) return;
-      if (activeArmEpochRef.current === null) return;
-      if (isScreencastModChord(event.nativeEvent, "v")) {
-        claimedLocalCodesRef.current.add(event.code);
-        return;
-      }
-      event.preventDefault();
-      sendInput({
-        kind: "keyboard",
-        type: "rawKeyDown",
-        code: event.code,
-        key: event.key,
-        modifiers: inputModifiers(event),
-        autoRepeat: event.repeat,
-      });
-      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
-        sendInput({
-          kind: "keyboard",
-          type: "char",
-          code: event.code,
-          key: event.key,
-          modifiers: inputModifiers(event),
-          autoRepeat: event.repeat,
-        });
-      }
-    },
-    [sendInput],
-  );
-
-  const onImeKeyUp = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (activeDialogRef.current !== null) return;
-      if (event.nativeEvent.isComposing || composingRef.current) return;
-      if (claimedLocalCodesRef.current.delete(event.code)) {
-        event.preventDefault();
-        return;
-      }
-      if (activeArmEpochRef.current === null) return;
-      if (!forwardedKeyDownsRef.current.has(event.code)) return;
-      event.preventDefault();
-      sendInput({
-        kind: "keyboard",
-        type: "keyUp",
-        code: event.code,
-        key: event.key,
-        modifiers: inputModifiers(event),
-        autoRepeat: event.repeat,
-      });
-    },
-    [sendInput],
-  );
-
-  const onImePaste = useCallback(
-    (event: ReactClipboardEvent<HTMLInputElement>) => {
-      if (activeArmEpochRef.current === null) return;
-      if (!visible) return;
-      const text = event.clipboardData.getData("text/plain");
-      event.preventDefault();
-      if (text === "") return;
-      sendInput({ kind: "insertText", text });
-    },
-    [sendInput, visible],
-  );
-
-  const onCompositionStart = useCallback(() => {
-    composingRef.current = true;
-    setComposing(true);
-  }, []);
-
-  const onCompositionEnd = useCallback(
-    (event: ReactCompositionEvent<HTMLInputElement>) => {
-      composingRef.current = false;
-      setComposing(false);
-      event.currentTarget.value = "";
-      if (event.data !== "") {
-        sendInput({ kind: "insertText", text: event.data });
-      }
-    },
-    [sendInput],
-  );
-
-  const onImeInput = useCallback((event: ReactInputEvent<HTMLInputElement>) => {
-    if (!composingRef.current) event.currentTarget.value = "";
-  }, []);
-
-  useLayoutEffect(() => {
-    frameSizeRef.current = frameSize;
-  }, [frameSize]);
-
-  useLayoutEffect(() => {
-    deliverArmBufferRef.current = deliverArmBuffer;
-  }, [deliverArmBuffer]);
-
-  useLayoutEffect(() => {
-    flushPendingNavRef.current = flushPendingNav;
-  }, [flushPendingNav]);
-
-  useLayoutEffect(() => {
-    clearLocalArmRef.current = clearLocalArm;
-  }, [clearLocalArm]);
-
-  const refs = useMemo<ScreencastSessionRefs>(
-    () => ({
-      tileRef,
-      viewportRef,
-      overlayButtonRef,
-      imageRef,
-      imeInputRef,
-    }),
-    [],
+    [controller, setDetails, setLifecycle],
   );
 
   return {
@@ -1086,29 +461,14 @@ export function useScreencastSession(
     armedEpoch,
     dialog,
     composing,
-    disarm,
-    requestNav,
-    releaseForwardedPageKeys,
-    respondToDialog,
+    disarm: controller.disarm,
+    requestNav: controller.requestNav,
+    releaseForwardedPageKeys: controller.releaseForwardedPageKeys,
+    respondToDialog: controller.respondToDialog,
     notePainted,
-    onFocusExit,
-    overlayHandlers: {
-      onFocus: focusImeInput,
-      onPointerDown,
-      onPointerMove,
-      onPointerUp,
-      onPointerCancel,
-      onContextMenu,
-    },
-    imeHandlers: {
-      onFocus: arm,
-      onKeyDown: onImeKeyDown,
-      onKeyUp: onImeKeyUp,
-      onPaste: onImePaste,
-      onCompositionStart,
-      onCompositionEnd,
-      onInput: onImeInput,
-    },
+    onFocusExit: controller.onFocusExit,
+    overlayHandlers: controller.overlayHandlers,
+    imeHandlers: controller.imeHandlers,
   };
 }
 
@@ -1295,11 +655,4 @@ function applyScreencastControlFrame(input: {
     return "ignore";
   }
   return "teardown";
-}
-
-function focusScreencastAddressBar(tile: HTMLElement): void {
-  const input = tile.querySelector('input[aria-label="Browser address"]');
-  if (!(input instanceof HTMLInputElement)) return;
-  input.focus();
-  input.select();
 }

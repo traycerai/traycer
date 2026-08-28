@@ -2,6 +2,7 @@ import {
   ELEMENT_PICKER_LIMITS,
   ELEMENT_PICKER_STYLE_PROPS,
 } from "./browser-element-picker-script";
+import { boundedString } from "../guards";
 
 /**
  * Guest-side per-element capture. Limits and curated style names come
@@ -12,13 +13,18 @@ export function captureOverlayElement(el: Element): Record<string, unknown> {
   const html = String(el instanceof HTMLElement ? el.outerHTML || "" : "");
   const truncated = html.length > ELEMENT_PICKER_LIMITS.outerHtml;
   return {
-    selector: bounded(selectorPath(el), ELEMENT_PICKER_LIMITS.selector),
-    tagName: bounded(
+    selector: boundedString(
+      selectorPath(el),
+      ELEMENT_PICKER_LIMITS.selector,
+      "",
+    ),
+    tagName: boundedString(
       String(el.tagName || "").toLowerCase(),
       ELEMENT_PICKER_LIMITS.tagName,
+      "",
     ),
     elementId: el.id
-      ? bounded(el.id, ELEMENT_PICKER_LIMITS.attributeValue)
+      ? boundedString(el.id, ELEMENT_PICKER_LIMITS.attributeValue, "")
       : null,
     classNames: classNamesOf(el),
     attributes: attributesOf(el),
@@ -43,10 +49,6 @@ export function captureOverlayElement(el: Element): Record<string, unknown> {
   };
 }
 
-export function overlayElementSelector(el: Element): string {
-  return selectorPath(el);
-}
-
 export function overlayElementCssRect(el: Element): {
   readonly x: number;
   readonly y: number;
@@ -55,11 +57,6 @@ export function overlayElementCssRect(el: Element): {
 } {
   const rect = el.getBoundingClientRect().toJSON();
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-}
-
-function bounded(value: unknown, max: number): string {
-  const s = value == null ? "" : String(value);
-  return s.length > max ? s.slice(0, max) : s;
 }
 
 function round(n: number): number {
@@ -75,7 +72,9 @@ function classNamesOf(el: Element): string[] {
     i += 1
   ) {
     const name = String(list[i]);
-    if (name) out.push(bounded(name, ELEMENT_PICKER_LIMITS.className));
+    if (name) {
+      out.push(boundedString(name, ELEMENT_PICKER_LIMITS.className, ""));
+    }
   }
   return out;
 }
@@ -91,8 +90,12 @@ function attributesOf(el: Element): { name: string; value: string }[] {
     const attr = attrs[i];
     if (attr === undefined) continue;
     out.push({
-      name: bounded(attr.name, 120),
-      value: bounded(attr.value, ELEMENT_PICKER_LIMITS.attributeValue),
+      name: boundedString(attr.name, 120, ""),
+      value: boundedString(
+        attr.value,
+        ELEMENT_PICKER_LIMITS.attributeValue,
+        "",
+      ),
     });
   }
   return out;
@@ -124,14 +127,18 @@ function stylesOf(el: Element): { property: string; value: string }[] {
     if (value) {
       out.push({
         property: prop,
-        value: bounded(value.trim(), ELEMENT_PICKER_LIMITS.styleValue),
+        value: boundedString(
+          value.trim(),
+          ELEMENT_PICKER_LIMITS.styleValue,
+          "",
+        ),
       });
     }
   }
   return out;
 }
 
-function selectorPath(el: Element): string {
+export function selectorPath(el: Element): string {
   const parts: string[] = [];
   let node: Element | null = el;
   let depth = 0;
@@ -220,10 +227,12 @@ function roleOf(el: Element): string | null {
   const explicit = el.getAttribute ? el.getAttribute("role") : null;
   if (explicit) {
     const first = explicit.trim().split(/\s+/)[0];
-    if (first) return bounded(first, ELEMENT_PICKER_LIMITS.ariaRole);
+    if (first) return boundedString(first, ELEMENT_PICKER_LIMITS.ariaRole, "");
   }
   const implicit = implicitRole(el);
-  return implicit ? bounded(implicit, ELEMENT_PICKER_LIMITS.ariaRole) : null;
+  return implicit
+    ? boundedString(implicit, ELEMENT_PICKER_LIMITS.ariaRole, "")
+    : null;
 }
 
 function textOf(el: Element): string | null {
@@ -233,13 +242,19 @@ function textOf(el: Element): string | null {
       ? htmlEl.innerText
       : el.textContent || "";
   const text = raw.replace(/\s+/g, " ").trim();
-  return text ? bounded(text, ELEMENT_PICKER_LIMITS.textPreview) : null;
+  return text
+    ? boundedString(text, ELEMENT_PICKER_LIMITS.textPreview, "")
+    : null;
 }
 
 function accessibleNameOf(el: Element): string | null {
   const label = el.getAttribute ? el.getAttribute("aria-label") : null;
   if (label && label.trim()) {
-    return bounded(label.trim(), ELEMENT_PICKER_LIMITS.accessibleName);
+    return boundedString(
+      label.trim(),
+      ELEMENT_PICKER_LIMITS.accessibleName,
+      "",
+    );
   }
   const labelledby = el.getAttribute
     ? el.getAttribute("aria-labelledby")
@@ -254,15 +269,21 @@ function accessibleNameOf(el: Element): string | null {
       }
     }
     const joined = names.join(" ").trim();
-    if (joined) return bounded(joined, ELEMENT_PICKER_LIMITS.accessibleName);
+    if (joined) {
+      return boundedString(joined, ELEMENT_PICKER_LIMITS.accessibleName, "");
+    }
   }
   const alt = el.getAttribute ? el.getAttribute("alt") : null;
   if (alt && alt.trim()) {
-    return bounded(alt.trim(), ELEMENT_PICKER_LIMITS.accessibleName);
+    return boundedString(alt.trim(), ELEMENT_PICKER_LIMITS.accessibleName, "");
   }
   const title = el.getAttribute ? el.getAttribute("title") : null;
   if (title && title.trim()) {
-    return bounded(title.trim(), ELEMENT_PICKER_LIMITS.accessibleName);
+    return boundedString(
+      title.trim(),
+      ELEMENT_PICKER_LIMITS.accessibleName,
+      "",
+    );
   }
   return null;
 }

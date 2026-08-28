@@ -136,6 +136,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Neutralize the `1.7`-only browser arrays on ONE user-authored payload.
+ *
+ * The single implementation behind every receive-side `1.6` surface: history
+ * messages, queue prompt items, and `messageAccepted`. Agent payloads
+ * (`kind: "agent"`) never carry these fields and are left alone.
+ */
+function normalizeUserAuthoredPayload(payload: unknown): void {
+  if (!isRecord(payload) || payload.kind !== "user") return;
+  payload.browserContextAttachments = [];
+  payload.browserAnnotations = [];
+}
+
 function neutralizeAnswerSelection(answers: unknown): void {
   if (!Array.isArray(answers)) return;
   for (const answer of answers) {
@@ -174,6 +187,14 @@ function neutralizeAnswerSelection(answers: unknown): void {
  * The pass stays narrow - user-authored payloads and interview blocks only -
  * and mutates in place rather than rebuilding, because copying the history is
  * the cost the shallow path exists to avoid.
+ *
+ * SCOPE - `chat.messages` ONLY. The snapshot's queue needs nothing here: the
+ * frozen `1.6` schema DEEP-parses it, so a browser payload on a `1.6` queue
+ * item is stripped as an unknown key and the caller's live re-parse then
+ * supplies `[]` from the live payload schema's `.default([])`. That second,
+ * live parse is therefore part of the contract rather than a cosmetic
+ * re-validation. The frames that arrive OUTSIDE a snapshot get no frozen parse
+ * at all - see `normalizeV16BrowserPayloadsInFrame`.
  */
 export function normalizeV16MessagesInShallowSnapshot(
   messages: ReadonlyArray<unknown>,
@@ -181,10 +202,7 @@ export function normalizeV16MessagesInShallowSnapshot(
   for (const message of messages) {
     if (!isRecord(message)) continue;
     if (message.role === "user") {
-      const payload = message.message;
-      if (!isRecord(payload) || payload.kind !== "user") continue;
-      payload.browserContextAttachments = [];
-      payload.browserAnnotations = [];
+      normalizeUserAuthoredPayload(message.message);
       continue;
     }
     if (message.role !== "assistant") continue;
@@ -201,6 +219,43 @@ export function normalizeV16MessagesInShallowSnapshot(
       block.settlementExtensions = {};
       neutralizeAnswerSelection(block.answers);
     }
+  }
+}
+
+/**
+ * Neutralize the `1.7`-only browser arrays on a NON-snapshot server frame that
+ * arrived on the `1.6` line.
+ *
+ * Snapshots get their neutralization for free: they are parsed against the
+ * frozen `1.6` schemas first, which strip the browser keys as unknown before a
+ * live re-parse defaults them to `[]`. `messageAccepted` and `queueChanged` are
+ * not: a client parses them with the LIVE union whatever line it negotiated, so
+ * a mislabeled, stale or hostile "`1.6`" peer's browser payload would arrive
+ * VALIDATED and be written into history as canonical - the same smuggling the
+ * snapshot pass exists to prevent, through the door beside it.
+ *
+ * Same OVERWRITE reading as `normalizeV16MessagesInShallowSnapshot`: a legal
+ * `1.6` frame cannot carry these fields, so on this line they are absent
+ * whatever bytes arrived. Empty, never `undefined` - consumers are typed as if
+ * both arrays are present.
+ *
+ * Mutates in place and ignores every other frame kind, so a caller can hand it
+ * each parsed frame unconditionally.
+ */
+export function normalizeV16BrowserPayloadsInFrame(frame: unknown): void {
+  if (!isRecord(frame)) return;
+  if (frame.kind === "messageAccepted") {
+    const message = frame.message;
+    if (!isRecord(message) || message.role !== "user") return;
+    normalizeUserAuthoredPayload(message.message);
+    return;
+  }
+  if (frame.kind !== "queueChanged") return;
+  const queue = frame.queue;
+  if (!isRecord(queue) || !Array.isArray(queue.items)) return;
+  for (const item of queue.items) {
+    if (!isRecord(item) || item.kind !== "prompt") continue;
+    normalizeUserAuthoredPayload(item.message);
   }
 }
 

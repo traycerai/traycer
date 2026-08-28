@@ -7,14 +7,28 @@ import type {
 import type { RecordedCommand } from "../../debug/__tests__/browser-debug-session-test-support";
 import {
   ANNOTATION_BINDING_NAME,
-  ANNOTATION_CANCEL_EXPRESSION,
-  ANNOTATION_CAPTURE_FAILED_EXPRESSION,
-  ANNOTATION_HIDE_CHROME_EXPRESSION,
-  ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION,
   ANNOTATION_VIEWPORT_SIZE_EXPRESSION,
   ANNOTATION_WAIT_FOR_PAINT_EXPRESSION,
   ANNOTATION_WORLD_NAME,
+  callGuestHook,
 } from "../browser-annotation-overlay-script";
+
+const ANNOTATION_CANCEL_EXPRESSION = callGuestHook(
+  "__traycerAnnotationCancel",
+  [],
+);
+const ANNOTATION_CAPTURE_FAILED_EXPRESSION = callGuestHook(
+  "__traycerAnnotationCaptureFailed",
+  [],
+);
+const ANNOTATION_HIDE_CHROME_EXPRESSION = callGuestHook(
+  "__traycerAnnotationHideChromeForCapture",
+  [],
+);
+const ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION = callGuestHook(
+  "__traycerAnnotationResetAfterAttach",
+  [],
+);
 import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "../browser-annotation-overlay-guest.generated";
 import { BrowserAnnotationSession } from "../browser-annotation-session";
 import { BrowserDebugSession } from "../../debug/browser-debug-session";
@@ -86,7 +100,9 @@ class FakeDebugger implements BrowserViewDebugger {
       if (this.missingFrame) {
         return Promise.resolve({ frameTree: { frame: {} } });
       }
-      return Promise.resolve({ frameTree: { frame: { id: "FRAME-1" } } });
+      return Promise.resolve({
+        frameTree: { frame: { id: "FRAME-1", url: "https://example.test/" } },
+      });
     }
     if (method === "Runtime.addBinding") {
       if (this.holdAddBinding) {
@@ -145,7 +161,9 @@ class FakeDebugger implements BrowserViewDebugger {
   }
 
   resolveFrameTree(): void {
-    this.frameTreeResolve?.({ frameTree: { frame: { id: "FRAME-1" } } });
+    this.frameTreeResolve?.({
+      frameTree: { frame: { id: "FRAME-1", url: "https://example.test/" } },
+    });
   }
 
   resolveAddBinding(): void {

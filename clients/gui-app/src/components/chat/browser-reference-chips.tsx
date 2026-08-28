@@ -1,4 +1,3 @@
-import { Globe2 } from "lucide-react";
 import { useMemo } from "react";
 import type {
   BrowserAnnotationRecord,
@@ -7,6 +6,7 @@ import type {
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
 import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 import {
@@ -91,18 +91,11 @@ function BrowserReferenceChipsLive(props: {
             align={undefined}
           >
             <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-background/70 px-2 py-1 text-ui-xs text-muted-foreground">
-              {favicon === null ? (
-                <Globe2 className="size-3.5 shrink-0" aria-hidden />
-              ) : (
-                <img
-                  src={favicon}
-                  alt=""
-                  className="size-3.5 shrink-0 rounded-sm"
-                  onError={(event) => {
-                    event.currentTarget.style.visibility = "hidden";
-                  }}
-                />
-              )}
+              <BrowserFavicon
+                faviconUrl={favicon}
+                isolated={false}
+                className="size-3.5"
+              />
               <span className="truncate">{title}</span>
             </span>
           </TooltipWrapper>

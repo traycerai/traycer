@@ -1,12 +1,11 @@
-import type { Cookie } from "electron";
+import type { Cookie, CookiesSetDetails } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserCookieCryptoState } from "../../../../ipc-contracts/browser-view-types";
+import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
-  captureBrowserPrimaryProfileWithDependencies,
+  captureBrowserPrimaryProfile,
   captureBrowserViewStorageState,
   seedBrowserViewCookies,
-  type BrowserCookieSetDetails,
   type BrowserPrimaryProfileCaptureDependencies,
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageSession,
@@ -37,7 +36,7 @@ const degradedState: BrowserCookieCryptoState = {
 
 describe("seedBrowserViewCookies", () => {
   it("seeds supplied cookies without replacing unrelated cookies", async () => {
-    const unrelated: BrowserCookieSetDetails = {
+    const unrelated: CookiesSetDetails = {
       url: "https://unrelated.test/",
       name: "unrelated",
       value: "keep-me",
@@ -48,7 +47,7 @@ describe("seedBrowserViewCookies", () => {
       sameSite: "lax",
     };
     const storedCookies = new Map([[unrelated.name, unrelated]]);
-    const seededCookies: BrowserCookieSetDetails[] = [];
+    const seededCookies: CookiesSetDetails[] = [];
     const flushStore = vi.fn(async () => {});
 
     await seedBrowserViewCookies(
@@ -69,7 +68,7 @@ describe("seedBrowserViewCookies", () => {
         session: {
           cookies: {
             get: async (): Promise<Cookie[]> => [],
-            set: async (details: BrowserCookieSetDetails): Promise<void> => {
+            set: async (details: CookiesSetDetails): Promise<void> => {
               seededCookies.push(details);
               storedCookies.set(details.name, details);
             },
@@ -156,7 +155,7 @@ describe("seedBrowserViewCookies", () => {
               get: async () => [],
               flushStore: async () => {},
               set: async (details) => {
-                written.push(details.name);
+                written.push(details.name ?? "");
                 if (details.name === "second") {
                   throw new Error("set failed for second");
                 }
@@ -252,7 +251,7 @@ describe("captureBrowserViewStorageState", () => {
   });
 });
 
-describe("captureBrowserPrimaryProfileWithDependencies", () => {
+describe("captureBrowserPrimaryProfile", () => {
   it("preserves host-only and domain cookie scope", async () => {
     const cookieGetFilters: Array<{ readonly url?: string }> = [];
     const origins = [
@@ -266,7 +265,7 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
       },
     ];
 
-    const result = await captureBrowserPrimaryProfileWithDependencies(
+    const result = await captureBrowserPrimaryProfile(
       origins,
       primaryCaptureDependencies(realState, cookieGetFilters, [
         {
@@ -328,7 +327,7 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
 
   it("short-circuits when cookie persistence is unavailable", async () => {
     const getSession = vi.fn();
-    const result = await captureBrowserPrimaryProfileWithDependencies(
+    const result = await captureBrowserPrimaryProfile(
       [
         {
           origin: "https://a.example",

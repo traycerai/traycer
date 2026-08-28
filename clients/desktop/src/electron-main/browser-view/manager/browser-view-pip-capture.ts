@@ -1,37 +1,33 @@
-import type { PipCaptureStartInput } from "../../../ipc-contracts/browser-view-types";
+import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../../ipc-contracts/pip-capture-types";
 import { log } from "../../app/logger";
-import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntry } from "./browser-view-entry";
 import { browserViewSurfaceKey as entryKeyId } from "./browser-view-entry-registry";
-import {
-  effectiveViewportBounds,
-  type BrowserViewGeometry,
-} from "./browser-view-geometry";
+import type { BrowserViewGeometry } from "./browser-view-geometry";
+import type { BrowserViewWindowAttachment } from "./browser-view-window-attachment";
+import type { BrowserViewDebugSessions } from "./debug-session-for";
 import type { BrowserViewWindow } from "../browser-view-port";
 
 interface BrowserViewPipCaptureOptions {
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly geometry: BrowserViewGeometry;
-  readonly ensureDebugSession: (entry: BrowserViewEntry) => BrowserDebugSession;
-  readonly attachToCurrentWindow: (entry: BrowserViewEntry) => void;
+  readonly windows: BrowserViewWindowAttachment;
+  readonly debugSessions: BrowserViewDebugSessions;
 }
 
 /** At most one tab streams PiP frames at a time; starting a second stops the first. */
 export class BrowserViewPipCapture {
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   private readonly geometry: BrowserViewGeometry;
-  private readonly ensureDebugSession: (
-    entry: BrowserViewEntry,
-  ) => BrowserDebugSession;
-  private readonly attachToCurrentWindow: (entry: BrowserViewEntry) => void;
+  private readonly windows: BrowserViewWindowAttachment;
+  private readonly debugSessions: BrowserViewDebugSessions;
   private capturingEntry: BrowserViewEntry | null = null;
 
   constructor(options: BrowserViewPipCaptureOptions) {
     this.getWindow = options.getWindow;
     this.geometry = options.geometry;
-    this.ensureDebugSession = options.ensureDebugSession;
-    this.attachToCurrentWindow = options.attachToCurrentWindow;
+    this.windows = options.windows;
+    this.debugSessions = options.debugSessions;
   }
 
   isCapturing(entry: BrowserViewEntry): boolean {
@@ -57,7 +53,7 @@ export class BrowserViewPipCapture {
     ) {
       return false;
     }
-    const session = this.ensureDebugSession(entry);
+    const session = this.debugSessions.ensure(entry);
     this.capturingEntry = entry;
     try {
       await session.startPipCapture({
@@ -88,19 +84,23 @@ export class BrowserViewPipCapture {
 
   /**
    * A capturing tab with no surface holds a compositor lease on whatever
-   * window it was parked into. While that window lives the lease is kept and
-   * the caller must leave the entry alone; once it dies the lease is dropped
-   * and the entry falls back to normal reconciliation.
+   * window it was parked into. While that window lives the caller must leave
+   * the entry alone; once it dies the caller drops the lease
+   * (`dropDeadLease`) and the entry falls back to normal reconciliation.
+   * Kept a pure query so a reconcile pass does not mutate mid-iteration.
    */
-  retainsUnboundLease(entry: BrowserViewEntry): boolean {
+  hasUnboundLease(entry: BrowserViewEntry): boolean {
     if (this.capturingEntry !== entry) return false;
     const captureWindow =
       entry.parentWindowId === null
         ? null
         : this.getWindow(entry.parentWindowId);
-    if (captureWindow !== null && !captureWindow.isDestroyed()) return true;
-    this.stop();
-    return false;
+    return captureWindow !== null && !captureWindow.isDestroyed();
+  }
+
+  /** Tears down a lease whose window is gone. Call when the query says false. */
+  dropDeadLease(entry: BrowserViewEntry): void {
+    if (this.capturingEntry === entry) this.stop();
   }
 
   private restoreEntry(entry: BrowserViewEntry): void {
@@ -109,17 +109,10 @@ export class BrowserViewPipCapture {
       this.geometry.applyVisibility(entry);
       return;
     }
-    const window =
-      entry.parentWindowId === null
-        ? null
-        : this.getWindow(entry.parentWindowId);
-    if (window !== null && !window.isDestroyed()) {
-      window.contentView.removeChildView(entry.view);
-    }
-    entry.parentWindowId = null;
+    this.windows.detachFromParentWindow(entry);
     entry.bounds = null;
     entry.lastAppliedBounds = null;
-    entry.view.setVisible(false);
+    this.geometry.hide(entry);
   }
 
   /**
@@ -134,12 +127,9 @@ export class BrowserViewPipCapture {
     size: { readonly width: number; readonly height: number },
   ): boolean {
     if (entry.surface === null) {
-      const window = this.getWindow(windowId);
-      if (window === null || window.isDestroyed()) return false;
-      window.contentView.addChildView(entry.view);
-      entry.parentWindowId = windowId;
+      if (!this.windows.attachUnbound(entry, windowId)) return false;
     } else {
-      this.attachToCurrentWindow(entry);
+      this.windows.attachToCurrentWindow(entry);
     }
     if (entry.parentWindowId === null) return false;
     const hasUsableBounds =
@@ -158,23 +148,7 @@ export class BrowserViewPipCapture {
     entry.view.webContents.setBackgroundThrottling(false);
     this.geometry.applyVisibility(entry);
     const captureOffscreen = entry.visible !== true;
-    if (captureOffscreen) {
-      const bounds = effectiveViewportBounds(
-        entry.bounds ?? { x: 0, y: 0, width: size.width, height: size.height },
-        entry.viewportPreset,
-      );
-      entry.view.setBounds({
-        x: -bounds.width,
-        y: -bounds.height,
-        width: bounds.width,
-        height: bounds.height,
-      });
-      // The view now sits offscreen; forget the last onscreen rect so the
-      // next `applyBounds` re-applies real geometry instead of coalescing
-      // against a rect that no longer describes the view.
-      entry.lastAppliedBounds = null;
-      entry.view.setVisible(true);
-    }
+    if (captureOffscreen) this.geometry.parkOffscreen(entry);
     log.info("[browser-view] pip capture prepared", {
       keyId: entry.surface === null ? null : entryKeyId(entry.surface),
       attached: entry.parentWindowId !== null,

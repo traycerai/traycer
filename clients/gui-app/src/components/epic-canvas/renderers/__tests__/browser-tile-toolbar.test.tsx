@@ -64,6 +64,7 @@ function makeController(
     annotation,
     onNavigate: preventNavigate,
     onAddressChange: () => undefined,
+    onAddressFocusChange: () => undefined,
     onBack: () => undefined,
     onForward: () => undefined,
     onReload: () => undefined,

@@ -59,8 +59,7 @@ function createPendingAction(
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId,
-    restoreContent: isSendOrEdit ? CONTENT : null,
-    restoreBrowserAnnotations: [],
+    restore: isSendOrEdit ? { content: CONTENT, browserAnnotations: [] } : null,
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
     restoreWorktreeIntent: null,
@@ -83,8 +82,7 @@ function createAcceptedAction(
     interviewDeliveryRetry: null,
     messageId: null,
     acceptedAt,
-    restoreContent: null,
-    restoreBrowserAnnotations: [],
+    restore: null,
     sender: null,
     settings: null,
     accountContext: null,
@@ -109,8 +107,7 @@ function createPendingUserMessage(
     accountContext: { type: "PERSONAL" },
     deliveryPolicy: null,
     timestamp: 1000,
-    restoreContent: CONTENT,
-    restoreBrowserAnnotations: [],
+    restore: { content: CONTENT, browserAnnotations: [] },
     restoreWorktreeIntent: null,
   };
 }
@@ -210,8 +207,7 @@ describe("chat-queue-reconciler", () => {
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
-        restoreContent: CONTENT_2,
-        restoreBrowserAnnotations: [],
+        restore: { content: CONTENT_2, browserAnnotations: [] },
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
@@ -231,8 +227,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: { type: "PERSONAL" },
         deliveryPolicy: null,
         timestamp: 1000,
-        restoreContent: CONTENT_2,
-        restoreBrowserAnnotations: [],
+        restore: { content: CONTENT_2, browserAnnotations: [] },
         restoreWorktreeIntent: null,
       };
       const input: ReconcileQueueInput = {
@@ -279,8 +274,7 @@ describe("chat-queue-reconciler", () => {
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
-        restoreContent: CONTENT_2,
-        restoreBrowserAnnotations: [],
+        restore: { content: CONTENT_2, browserAnnotations: [] },
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
@@ -309,8 +303,7 @@ describe("chat-queue-reconciler", () => {
             accountContext: { type: "PERSONAL" },
             deliveryPolicy: null,
             timestamp: 1000,
-            restoreContent: CONTENT_2,
-            restoreBrowserAnnotations: [],
+            restore: { content: CONTENT_2, browserAnnotations: [] },
             restoreWorktreeIntent: null,
           },
         ],
@@ -633,8 +626,7 @@ describe("chat-queue-reconciler", () => {
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
-        restoreContent: CONTENT_2,
-        restoreBrowserAnnotations: [],
+        restore: { content: CONTENT_2, browserAnnotations: [] },
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
@@ -670,8 +662,7 @@ describe("chat-queue-reconciler", () => {
             accountContext: { type: "PERSONAL" },
             deliveryPolicy: null,
             timestamp: 1000,
-            restoreContent: CONTENT_2,
-            restoreBrowserAnnotations: [],
+            restore: { content: CONTENT_2, browserAnnotations: [] },
             restoreWorktreeIntent: null,
           },
         ],
@@ -734,15 +725,14 @@ describe("chat-queue-reconciler", () => {
       expect(result.acceptedActions).toHaveProperty("action-1");
     });
 
-    it("does not restore send with null restoreContent, keeps as pending", () => {
+    it("does not restore send with a null restore slot, keeps as pending", () => {
       const pendingAction: PendingChatAction = {
         clientActionId: "action-1",
         action: "send",
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-1",
-        restoreContent: null, // null restore content
-        restoreBrowserAnnotations: [],
+        restore: null,
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
@@ -995,7 +985,7 @@ describe("chat-queue-reconciler", () => {
         ...createPendingAction("action-send", "msg-1", "send"),
         connectionEpoch: 0,
       };
-      // A stale EDIT has no restoration path (restoreContent is null and its
+      // A stale EDIT has no restoration path (restore is null and its
       // fresh messageId never appears in the snapshot when the frame died
       // with the connection), so it IS swept - otherwise it wedges the edit
       // affordances forever.
@@ -1125,8 +1115,10 @@ describe("chat-queue-reconciler", () => {
               accountContext: { type: "PERSONAL" },
               deliveryPolicy: null,
               timestamp: 1000,
-              restoreContent: editorContent,
-              restoreBrowserAnnotations: annotations,
+              restore: {
+                content: editorContent,
+                browserAnnotations: annotations,
+              },
               restoreWorktreeIntent: null,
             },
           ],
@@ -1214,8 +1206,7 @@ describe("chat-queue-reconciler", () => {
         accountContext: { type: "PERSONAL" },
         deliveryPolicy: null,
         timestamp: 1000,
-        restoreContent: CONTENT_2,
-        restoreBrowserAnnotations: [],
+        restore: { content: CONTENT_2, browserAnnotations: [] },
         restoreWorktreeIntent: null,
       };
       const result = reconcileTurnSettled(

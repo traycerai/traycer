@@ -1,7 +1,7 @@
 import type {
   BrowserViewBounds,
   BrowserViewViewportPresetId,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
 import { createBoundsStreamStats } from "./bounds-stream-stats";
 import type { BrowserViewEntry } from "./browser-view-entry";
@@ -125,6 +125,49 @@ export class BrowserViewGeometry {
     this.armBoundsStreamLogFlush();
   }
 
+  /**
+   * Moves a view fully offscreen while keeping it composited, so its
+   * compositor keeps producing frames (BT-202 overlay park, and PiP capture of
+   * a hidden tab). Returns false - having hidden the view instead - when the
+   * entry has no usable rect to mirror offscreen.
+   */
+  parkOffscreen(entry: BrowserViewEntry): boolean {
+    const bounds = entry.bounds;
+    if (bounds === null || bounds.width <= 0 || bounds.height <= 0) {
+      entry.view.setVisible(false);
+      return false;
+    }
+    const effective = effectiveViewportBounds(bounds, entry.viewportPreset);
+    if (effective.width <= 0 || effective.height <= 0) {
+      entry.view.setVisible(false);
+      return false;
+    }
+    entry.view.setBounds({
+      x: -effective.width,
+      y: -effective.height,
+      width: effective.width,
+      height: effective.height,
+    });
+    // The view now sits offscreen; forget the last onscreen rect so the next
+    // `applyBounds` re-applies real geometry instead of coalescing against a
+    // rect that no longer describes the view.
+    entry.lastAppliedBounds = null;
+    entry.view.setVisible(true);
+    return true;
+  }
+
+  /**
+   * Takes a view off screen without recomputing the visibility predicate: the
+   * teardown paths (surface detach, window loss, guest destroy, PiP restore of
+   * an unbound tab) that are dropping the tile outright. Together with
+   * `applyBounds`, `applyVisibility` and `parkOffscreen` this is the whole
+   * sanctioned surface - `view.setBounds` / `view.setVisible` are geometry's
+   * alone, so the compositor posture of a tile has exactly one owner.
+   */
+  hide(entry: BrowserViewEntry): void {
+    entry.view.setVisible(false);
+  }
+
   applyVisibility(entry: BrowserViewEntry): void {
     const surface = entry.surface;
     if (surface === null) {
@@ -134,20 +177,15 @@ export class BrowserViewGeometry {
       return;
     }
     const window = this.getWindow(surface.windowId);
-    const hasUsableBounds =
-      entry.bounds !== null &&
-      entry.bounds.width > 0 &&
-      entry.bounds.height > 0;
+    const liveness = entryLiveness(entry, window);
+    const hasUsableBounds = liveness.hasUsableBounds;
     const visible =
-      entry.desiredVisible &&
-      entry.overlayOwnerIds.length === 0 &&
-      !entry.rendererResetPending &&
-      hasUsableBounds &&
-      entry.status !== "dead" &&
-      window !== null &&
-      !window.isDestroyed() &&
-      window.isVisible() &&
-      !window.isMinimized();
+      liveness.wanted &&
+      liveness.unoccluded &&
+      liveness.rendererReady &&
+      liveness.hasUsableBounds &&
+      liveness.notDead &&
+      liveness.windowOnScreen;
     entry.visible = visible;
     // A tile parked under an active overlay (BT-202) keeps its
     // offscreen-visible posture so its compositor keeps feeding the frame
@@ -171,7 +209,7 @@ export class BrowserViewGeometry {
       entry.lastLoggedVisible = visible;
     }
     entry.view.setVisible(visible);
-    this.syncTileFrameFeed(entry, window);
+    this.syncTileFrameFeed(entry, liveness);
   }
 
   /**
@@ -182,21 +220,18 @@ export class BrowserViewGeometry {
    */
   private syncTileFrameFeed(
     entry: BrowserViewEntry,
-    window: BrowserViewWindow | null,
+    liveness: BrowserViewEntryLiveness,
   ): void {
     const surface = entry.surface;
     if (surface === null) return;
     const keyId = entryKeyId(surface);
     const feedLive =
-      entry.desiredVisible &&
-      !entry.rendererResetPending &&
-      entry.bounds !== null &&
-      entry.bounds.width > 0 &&
-      entry.bounds.height > 0 &&
-      entry.status !== "dead" &&
-      !entry.view.webContents.isDestroyed() &&
-      window !== null &&
-      !window.isDestroyed();
+      liveness.wanted &&
+      liveness.rendererReady &&
+      liveness.hasUsableBounds &&
+      liveness.notDead &&
+      liveness.guestAlive &&
+      liveness.windowAlive;
     if (!feedLive) {
       this.tileFrames.detach(keyId);
       return;
@@ -253,6 +288,78 @@ export class BrowserViewGeometry {
       kind: "frame_cache_stats",
       ...stats,
     });
+  }
+}
+
+/**
+ * The one place "is this guest live and showable" is spelled out. Visibility,
+ * the BT-202 frame feed and screenshot capture all read the same record, so a
+ * new liveness condition cannot be added to one and forgotten in the others.
+ */
+export interface BrowserViewEntryLiveness {
+  /** The renderer asked for this tile to be on screen. */
+  readonly wanted: boolean;
+  /** No overlay currently owns the tile. */
+  readonly unoccluded: boolean;
+  /** The host renderer has not reloaded/crashed out from under the tile. */
+  readonly rendererReady: boolean;
+  readonly hasUsableBounds: boolean;
+  readonly loaded: boolean;
+  readonly notDead: boolean;
+  readonly guestAlive: boolean;
+  readonly windowAlive: boolean;
+  /** Window exists, is not destroyed, and is neither hidden nor minimized. */
+  readonly windowOnScreen: boolean;
+}
+
+export function entryLiveness(
+  entry: BrowserViewEntry,
+  window: BrowserViewWindow | null,
+): BrowserViewEntryLiveness {
+  const windowAlive = window !== null && !window.isDestroyed();
+  return {
+    wanted: entry.desiredVisible,
+    unoccluded: entry.overlayOwnerIds.length === 0,
+    rendererReady: !entry.rendererResetPending,
+    hasUsableBounds:
+      entry.bounds !== null &&
+      entry.bounds.width > 0 &&
+      entry.bounds.height > 0,
+    loaded: entry.status !== "loading",
+    notDead: entry.status !== "dead",
+    guestAlive: !entry.view.webContents.isDestroyed(),
+    windowAlive,
+    windowOnScreen:
+      window !== null &&
+      !window.isDestroyed() &&
+      window.isVisible() &&
+      !window.isMinimized(),
+  };
+}
+
+/** Checked in reported order; the first unmet field names the failure. */
+const CAPTURABLE_REQUIREMENTS: readonly (readonly [
+  keyof BrowserViewEntryLiveness,
+  string,
+])[] = [
+  ["loaded", "tile is still loading"],
+  ["notDead", "tile is not live"],
+  ["unoccluded", "tile is occluded"],
+  ["wanted", "tile is not visible"],
+  ["hasUsableBounds", "tile has no visible bounds"],
+  ["windowOnScreen", "window is not visible"],
+];
+
+export function assertEntryCapturable(
+  entry: BrowserViewEntry,
+  window: BrowserViewWindow | null,
+): void {
+  const liveness = entryLiveness(entry, window);
+  for (const [field, reason] of CAPTURABLE_REQUIREMENTS) {
+    if (liveness[field]) continue;
+    throw new Error(
+      `Browser screenshot unavailable: ${reason} (${field} is false)`,
+    );
   }
 }
 

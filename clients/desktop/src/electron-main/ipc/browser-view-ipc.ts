@@ -18,7 +18,7 @@ import type {
   BrowserViewWindow,
   ManagedBrowserView,
 } from "../browser-view/browser-view-port";
-import { hostPlatformFromProcessPlatform } from "../../ipc-contracts/reserved-chords";
+import { hostPlatformFromProcessPlatform } from "../browser-view/manager/browser-view-chords";
 import {
   createBrowserViewWebPreferences,
   cancelBrowserViewDownload,
@@ -44,7 +44,11 @@ export function registerBrowserViewIpc(
   bridge: RunnerIpcBridge,
 ): BrowserViewManager {
   const primaryProfileSnapshots = new BrowserPrimaryProfileSnapshotCoordinator(
-    captureBrowserPrimaryProfile,
+    (origins) =>
+      captureBrowserPrimaryProfile(origins, {
+        readCryptoState: getBrowserCookieCryptoState,
+        getSession: ensureBrowserViewSession,
+      }),
     captureBrowserOriginLocalStorage,
   );
   const manager = new BrowserViewManager({
@@ -63,9 +67,14 @@ export function registerBrowserViewIpc(
     onDownloadChange: onBrowserViewDownloadChange,
     onCertificateError: onBrowserViewCertificateError,
     onWindowChange: (listener) => {
+      // Native views follow both the windows list and pure geometry
+      // transitions (minimize/restore/maximize), which the list does not
+      // carry - see WindowRegistry's `geometry` signal.
       bridge.windowRegistry.on("change", listener);
+      bridge.windowRegistry.on("geometry", listener);
       return () => {
         bridge.windowRegistry.off("change", listener);
+        bridge.windowRegistry.off("geometry", listener);
       };
     },
     notifyHostWindowRendererReset: (windowId) => {
@@ -163,7 +172,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewOverlayPaintAck,
     (_event, payload) => {
       const parsed = browserViewIpcPayload.overlayPaintAck.safeParse(payload);
-      if (parsed.success) manager.paintAckOverlay(parsed.data.overlayId);
+      if (parsed.success) manager.overlay.paintAck(parsed.data.overlayId);
     },
   );
 
@@ -172,7 +181,7 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSetReservedChords,
     (_event, payload) => {
-      manager.setReservedChords(parseReservedChordTokens(payload));
+      manager.chords.setTokens(parseReservedChordTokens(payload));
     },
   );
 
@@ -180,7 +189,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewFindInPage,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.findInPage(
+      manager.find.find(
         windowId,
         browserViewIpcPayload.findRequest.parse(payload),
       );
@@ -191,7 +200,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewStopFindInPage,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.stopFindInPage(
+      manager.find.stop(
         windowId,
         browserViewIpcPayload.findStop.parse(payload),
       );
@@ -233,7 +242,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewOccludeForOverlay,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.occludeForOverlay(
+      return manager.overlay.occlude(
         windowId,
         browserViewIpcPayload.overlayOcclusion.parse(payload),
       );
@@ -243,7 +252,7 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewReleaseOverlay,
     (_event, payload) =>
-      manager.releaseOverlay(
+      manager.overlay.release(
         browserViewIpcPayload.overlayRelease.parse(payload),
       ),
   );
@@ -278,7 +287,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewStartAnnotation,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.startAnnotation(
+      return manager.annotations.start(
         windowId,
         browserViewIpcPayload.tileKey.parse(payload),
       );
@@ -289,7 +298,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewCancelAnnotation,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.cancelAnnotation(
+      manager.annotations.cancel(
         windowId,
         browserViewIpcPayload.tileKey.parse(payload),
       );
@@ -300,7 +309,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.setAnnotationTargetChatLabel(
+      manager.annotations.setTargetChatLabel(
         windowId,
         browserViewIpcPayload.annotationTargetChatLabel.parse(payload),
       );
@@ -311,7 +320,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewAnnotationAttachResult,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.reportAnnotationAttachResult(
+      manager.annotations.reportAttachResult(
         windowId,
         browserViewIpcPayload.annotationAttachResult.parse(payload),
       );

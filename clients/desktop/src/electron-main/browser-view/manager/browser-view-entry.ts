@@ -5,7 +5,7 @@ import type {
   BrowserViewStatus,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
-} from "../../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";

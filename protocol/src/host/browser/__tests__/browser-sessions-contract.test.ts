@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   browserSessionsClientFrameSchema,
   browserSessionsOpenRequestSchema,
@@ -36,6 +37,74 @@ function parsesSession(session: unknown): boolean {
     sessions: [session],
   }).success;
 }
+
+/**
+ * Structural view of one union variant. `.strict()` records itself as a
+ * `ZodNever` catchall; a lenient variant leaves the catchall unset and would
+ * silently drop fields a newer peer added.
+ */
+interface FrameVariantIntrospection {
+  readonly def: {
+    readonly catchall?: object | undefined;
+    readonly shape: Record<string, unknown>;
+  };
+}
+
+function expectEveryVariantStrict(
+  label: string,
+  options: readonly FrameVariantIntrospection[],
+): void {
+  expect(options.length, `${label} has no variants`).toBeGreaterThan(0);
+  for (const [index, option] of options.entries()) {
+    expect(
+      option.def.catchall instanceof z.ZodNever,
+      `${label}[${index}] {${Object.keys(option.def.shape).join(", ")}} must be .strict()`,
+    ).toBe(true);
+  }
+}
+
+describe("browser frame unions reject unknown fields", () => {
+  it("keeps every frame variant strict so a newer peer's field is never dropped", () => {
+    expectEveryVariantStrict(
+      "browserSessionsServerFrameSchema",
+      browserSessionsServerFrameSchema.def.options,
+    );
+    expectEveryVariantStrict(
+      "browserSessionsClientFrameSchema",
+      browserSessionsClientFrameSchema.def.options,
+    );
+    expectEveryVariantStrict(
+      "browserScreencastServerFrameSchema",
+      browserScreencastServerFrameSchema.def.options,
+    );
+    expectEveryVariantStrict(
+      "browserScreencastClientFrameSchema",
+      browserScreencastClientFrameSchema.def.options,
+    );
+  });
+
+  it("rejects an unknown field on a previously lenient variant", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "burstStarted",
+        hasBinaryPayload: false,
+        sessionId: "session-1",
+        tabId: "tab-1",
+        burstId: "burst-1",
+        chatId: "chat-1",
+        futureField: "from a newer peer",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserScreencastClientFrameSchema.safeParse({
+        kind: "ack",
+        hasBinaryPayload: false,
+        sequence: 3,
+        futureField: "from a newer peer",
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("browser.screencast@1.0 control frames", () => {
   it("carries arming and subscription-bound input on the unreleased baseline", () => {

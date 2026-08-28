@@ -9,8 +9,12 @@ import { randomUUID } from "node:crypto";
 import type {
   BrowserCookieCryptoState,
   BrowserViewDownloadState,
-} from "../../ipc-contracts/browser-view-types";
+} from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../app/logger";
+import {
+  setBrowserCertificateErrorHandler,
+  type CertificateErrorReport,
+} from "../app/cert-trust";
 import { getBrowserCookieCryptoState } from "./storage/browser-cookie-crypto";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
@@ -95,15 +99,6 @@ interface BrowserDownloadItem {
 interface BrowserDownloadWebContents {
   readonly id: number;
   getURL(): string;
-}
-
-interface BrowserViewCertificateError {
-  readonly webContentsId: number;
-  readonly url: string;
-  readonly hostname: string;
-  readonly error: string;
-  readonly fingerprint: string;
-  readonly certificate: Certificate;
 }
 
 export interface BrowserSessionDownloadChange {
@@ -281,7 +276,7 @@ export function clearBrowserViewPendingCertificateError(
 }
 
 export function handleBrowserViewCertificateError(
-  input: BrowserViewCertificateError,
+  input: CertificateErrorReport,
 ): boolean {
   const existing = findPendingCertificateError(input);
   if (existing !== null) {
@@ -310,6 +305,18 @@ export function handleBrowserViewCertificateError(
   });
   return false;
 }
+
+/**
+ * The app-shell owns Electron's `certificate-error` event; this tells it
+ * which webContents are native browser tiles and where their rejected certs
+ * go, so `app/cert-trust` never has to reach into browser-view.
+ */
+setBrowserCertificateErrorHandler({
+  owns: (webContentsId) => isBrowserViewWebContents({ id: webContentsId }),
+  report: (input) => {
+    handleBrowserViewCertificateError(input);
+  },
+});
 
 function handleBrowserViewDownload(
   item: BrowserDownloadItem,
@@ -480,7 +487,7 @@ function dangerousDownloadType(filename: string): string | null {
 }
 
 function findPendingCertificateError(
-  input: BrowserViewCertificateError,
+  input: CertificateErrorReport,
 ): BrowserSessionPendingCertificateError | null {
   for (const pending of pendingCertificateErrorsById.values()) {
     if (

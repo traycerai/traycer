@@ -152,8 +152,7 @@ function sendTestMessage(harness: Harness, content: JsonContent): void {
     },
     attachments: buildAttachmentsFromJSONContent(content),
     deliveryPolicy: "auto",
-    restoreContent: content,
-    restoreBrowserAnnotations: [],
+    restore: { content, browserAnnotations: [] },
   });
 }
 
@@ -422,7 +421,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
 
     // Replaying the same setup.failed event must be idempotent: the
     // dedupe set short-circuits the driver and the accepted-action
-    // record's restoreContent slot is now `null`, so a second pass
+    // record's restore slot is now `null`, so a second pass
     // also has nothing to hand back.
     act(() => {
       appendEvent(
