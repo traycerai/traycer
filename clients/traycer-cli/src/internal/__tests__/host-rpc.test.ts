@@ -494,13 +494,15 @@ describe("parseCanonicalHostResponse", () => {
 });
 
 describe("parseHostResponse creep guard", () => {
-  // `worktree-create.ts` and `workspace-list.ts` are owned by open PR #1505;
-  // this allowlist is the enforcement mechanism and is expected to shrink to
-  // empty once that PR lands. Do not add to it without justification - use
-  // `parseCanonicalHostResponse` instead.
-  const ALLOWLIST = new Set(["workspace-list.ts", "worktree-create.ts"]);
+  // Empty, as intended: #1508 carved out `workspace-list.ts` and
+  // `worktree-create.ts` while PR #1505 held them, and #1505 converted both to
+  // `parseCanonicalHostResponse` on landing. Do not add to it without
+  // justification - use `parseCanonicalHostResponse` instead. A call site that
+  // genuinely means a specific historical version (monitor.ts's frame decode)
+  // lives outside this directory.
+  const ALLOWLIST = new Set<string>([]);
 
-  it("only PR #1505's carved-out files still call the un-canonical parseHostResponse", () => {
+  it("no command calls the un-canonical parseHostResponse", () => {
     const offenders: string[] = [];
     for (const file of readdirSync(COMMANDS_DIR)) {
       if (!file.endsWith(".ts") || ALLOWLIST.has(file)) continue;
