@@ -6,6 +6,14 @@ import {
   setAnalyticsAppSurface,
 } from "@traycer-clients/gui-app";
 import "./index.css";
+import {
+  createSessionScratchpad,
+  createWindowMintLocation,
+  exchangeAppCode,
+  probeAppIdentity,
+  runAppSessionMint,
+  webCryptoPkce,
+} from "./app-session-mint";
 import { WebRunnerHost } from "./web-runner-host";
 import {
   createLocalStorageCredentialStorage,
@@ -14,7 +22,7 @@ import {
 
 const config = __TRAYCER_WEBAPP_CONFIG__;
 
-function bootstrap(): void {
+async function bootstrap(): Promise<void> {
   // NOT `setMobileApp(true)`. That flag is the PRODUCT signal for the
   // installed phone app, and a browser tab is a desktop product: it keeps
   // multi-draft composing, shortcut hints, the keybindings settings section
@@ -34,6 +42,33 @@ function bootstrap(): void {
     credentialStorage: createLocalStorageCredentialStorage(),
     locks: createWebLockManager(),
   });
+  // Before the first render, not inside it. A signed-in visitor of the
+  // dashboard is entitled to this app with no clicks, and the way they get it
+  // is a same-origin bounce through `/login/app` - so the boot either commits
+  // a credential first, or leaves the document entirely. Mounting the app
+  // ahead of that decision would flash a sign-in screen at someone who is
+  // already signed in, and would tear a mounting React tree down mid-paint.
+  //
+  // Every other outcome renders normally: a stored credential rehydrates, and
+  // a mint that could not complete leaves the store empty, which is the shell's
+  // signed-out state - the device flow, reachable with no dashboard session at
+  // all.
+  const mint = await runAppSessionMint({
+    location: createWindowMintLocation(),
+    scratchpad: createSessionScratchpad(),
+    tokenStore: host.tokenStore,
+    authnBaseUrl: config.authnBaseUrl,
+    exchange: exchangeAppCode(config.authnBaseUrl),
+    probeIdentity: probeAppIdentity(config.authnBaseUrl),
+    pkce: webCryptoPkce,
+  });
+  if (mint.kind === "navigating") {
+    return;
+  }
+  if (mint.kind === "device-flow-fallback") {
+    console.warn("[web] silent sign-in unavailable", { reason: mint.reason });
+  }
+
   const container = document.getElementById("root");
   if (container === null) {
     throw new Error("#root element not found in index.html");
@@ -53,4 +88,4 @@ function bootstrap(): void {
   );
 }
 
-bootstrap();
+void bootstrap();
