@@ -422,7 +422,21 @@ async function superviseRootMaintenanceExecutor(
     }
   };
   child.stdout.setEncoding("utf8");
+  // LATCHED, not just cleared: SIGTERM does not synchronously stop `data`
+  // events, and stdout already queued in the pipe keeps arriving after the
+  // overflow. Without the latch, a later newline-delimited frame would still
+  // reach `drainFrames()` — a damaged executor could dispatch an `execute`
+  // AFTER violating the protocol, and one that handles SIGTERM and emits
+  // `complete` could even resolve the supervision successfully. Once
+  // violated, no subsequent frame is trusted: dispatch is off for good, so a
+  // post-overflow `complete` never sets `completed` and the `close`
+  // classification takes the supervised failure arm. (A `complete` that
+  // dispatched BEFORE the overflow keeps its meaning — the work finished,
+  // and failing it retroactively would be a confident false negative over a
+  // completed root mutation.)
+  let protocolViolated = false;
   child.stdout.on("data", (chunk: string) => {
+    if (protocolViolated) return;
     buffer += chunk;
     // Protocol frames are single JSON lines of at most a few KiB; an
     // executor streaming an unterminated or runaway line is damaged, and
@@ -433,6 +447,7 @@ async function superviseRootMaintenanceExecutor(
     // terminate the executor and let the ordinary `close` classification
     // take the supervised failure arm.
     if (buffer.length > EXECUTOR_PROTOCOL_BUFFER_LIMIT_BYTES) {
+      protocolViolated = true;
       buffer = "";
       child.kill("SIGTERM");
       return;
