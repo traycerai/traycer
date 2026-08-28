@@ -129,8 +129,17 @@ const windowsBridgeMock = vi.hoisted(
   (): { current: TestWindowsBridge | null } => ({ current: null }),
 );
 
+/**
+ * Desktop-shaped, because this suite asserts the DESKTOP General panel's
+ * section layout - and two of its rows are keyed on shell capabilities. The
+ * voice row wants a local host (dictation is host-executed) and the
+ * prevent-sleep row wants the duck-typed `power` bridge its controller drives;
+ * a remote-only shell legitimately renders neither.
+ */
 interface TestRunnerHost {
   hostManagement: { uninstallTraycer: Mock } | null;
+  readonly hasLocalHost: boolean;
+  readonly power: { setSleepBlocked: () => Promise<void> };
 }
 
 interface TestFeatureSettingsBridge {
@@ -141,7 +150,11 @@ interface TestFeatureSettingsBridge {
 }
 
 const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
-  current: { hostManagement: null },
+  current: {
+    hostManagement: null,
+    hasLocalHost: true,
+    power: { setSleepBlocked: () => Promise.resolve() },
+  },
 }));
 
 const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
@@ -301,7 +314,11 @@ describe("GeneralSettingsPanel", () => {
     ];
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
-    runnerHostMock.current = { hostManagement: null };
+    runnerHostMock.current = {
+      hostManagement: null,
+      hasLocalHost: true,
+      power: { setSleepBlocked: () => Promise.resolve() },
+    };
     clearAllPersistedStoresMock.mockClear();
     clearAllPersistedStoresMock.mockResolvedValue(undefined);
     useAuthStore.setState({
