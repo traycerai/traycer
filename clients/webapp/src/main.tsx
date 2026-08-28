@@ -14,6 +14,7 @@ import {
   runAppSessionMint,
   webCryptoPkce,
 } from "./app-session-mint";
+import { RetireBootSurface } from "./boot-surface";
 import { WebRunnerHost } from "./web-runner-host";
 import {
   createLocalStorageCredentialStorage,
@@ -75,13 +76,12 @@ async function bootstrap(): Promise<void> {
   if (container === null) {
     throw new Error("#root element not found in index.html");
   }
-  // Retired here rather than left for `createRoot` to clear, because it is not
-  // inside the root: it covers the viewport from the first byte of HTML, which
-  // is the whole point of it, and only the render below can know the app is
-  // ready to take the screen.
-  document.getElementById("boot-surface")?.remove();
   createRoot(container).render(
     <StrictMode>
+      {/* Retires the boot surface, and does it from INSIDE the tree: this
+          call only schedules a render, so anything that clears the screen
+          beside it clears it before the app is on screen. */}
+      <RetireBootSurface />
       <TraycerApp
         runnerHost={host}
         registry={hostRpcRegistry}
