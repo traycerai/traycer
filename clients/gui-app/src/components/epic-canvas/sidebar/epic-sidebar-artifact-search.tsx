@@ -33,27 +33,15 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { FileText, Search, SearchX, X } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
+import { FileText, Search, SearchX } from "lucide-react";
 import type {
   SearchArtifactHit,
   SearchArtifactsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
-import { useEpicStore } from "@/hooks/use-epic-store";
-import {
-  isArtifactUnread,
-  useArtifactReadStateStore,
-} from "@/stores/epics/artifact-read-state-store";
-import {
-  ARTIFACT_READ,
-  useArtifactFilter,
-} from "@/stores/epics/left-panel-store";
-import { useEpicSearchArtifacts } from "@/hooks/epic/use-epic-search-artifacts-query";
 import {
   highlightSegmentsFromByteRanges,
   type SnippetByteRange,
@@ -74,6 +62,11 @@ import {
   isTypeToFilterKey,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
+import {
+  deriveArtifactSearchStatusMessage,
+  useArtifactSearchResults,
+} from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import {
   usePanelHeaderSearchOpen,
@@ -84,15 +77,7 @@ import {
 import { SidebarContent } from "@/components/ui/sidebar";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
-
-const EMPTY_HITS: ReadonlyArray<SearchArtifactHit> = Object.freeze([]);
 
 /** The panel whose header this search takes over while it is active. */
 const ARTIFACTS_PANEL_ID = "artifacts";
@@ -239,9 +224,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   // - when the sidebar stays interactive while only the canvas goes inert -
   // this searched one machine and opened the results as tiles bound to
   // another. One source makes them incapable of disagreeing.
-  const client = useEpicSessionHostClient();
   const activeHostId = useEpicSessionHostId();
-  const filter = useArtifactFilter(epicId);
   const inputRef = useRef<HTMLInputElement>(null);
   const headerSlot = usePanelHeaderSearchSlot(tabId, ARTIFACTS_PANEL_ID);
   const setSearchQuery = usePanelHeaderSearchStore((s) => s.setSearchQuery);
@@ -251,89 +234,15 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
     [setSearchQuery, tabId],
   );
 
-  const searchActive = debouncedQuery.trim().length > 0;
-
-  // Compose the sidebar's kind/status filters into the host request; `read` is
-  // renderer-only state applied to the response below. Empty axes stay `null`.
-  const kinds = filter.kinds.length > 0 ? filter.kinds : null;
-  const statuses = filter.statuses.length > 0 ? filter.statuses : null;
-
-  const query = useEpicSearchArtifacts({
-    client,
-    epicId,
-    query: debouncedQuery,
-    kinds,
-    statuses,
-    subtreePath: null,
-    enabled: searchActive,
-  });
-
-  // A response must never render for a scope it wasn't fetched in. The query key
-  // already isolates late async responses per scope; this signature additionally
-  // gates the same-scope retention below so a prior Epic / host / filter result
-  // can't linger on-screen after the scope changes (only the query string
-  // changing keeps the retained results).
-  const scopeSignature = [
-    epicId,
-    activeHostId ?? "",
-    kinds === null ? "" : kinds.join(","),
-    statuses === null ? "" : statuses.join(","),
-  ].join(" ");
-
-  // `useEpicSearchArtifacts` intentionally omits `keepPreviousData`, so
-  // `query.data` is only ever the current key's result. Retain the last
-  // *same-scope* success so the list doesn't blank between keystrokes, but drop
-  // it the instant the scope changes. The setState-during-render idiom keeps
-  // the retained value in sync without an effect and never leaks a prior scope.
-  const [retained, setRetained] = useState<{
-    readonly signature: string;
-    readonly response: SearchArtifactsResponse;
-  } | null>(null);
-  if (
-    query.isSuccess &&
-    (retained === null ||
-      retained.response !== query.data ||
-      retained.signature !== scopeSignature)
-  ) {
-    setRetained({ signature: scopeSignature, response: query.data });
-  }
-  const sameScopeRetained =
-    retained !== null && retained.signature === scopeSignature
-      ? retained.response
-      : null;
-  const response: SearchArtifactsResponse | null = query.isSuccess
-    ? query.data
-    : sameScopeRetained;
-
-  const isUnsupported = query.error?.code === "E_HOST_UNSUPPORTED";
-  const isError = query.isError && !isUnsupported;
-
-  // Read filter (renderer-only). Resolve each hit's authoritative `updatedAt`
-  // from the open-Epic projection; a hit missing from the projection is stale
-  // and cannot be classified, so it drops out whenever a read filter is active.
-  const readFilter = filter.read;
-  const artifactsById = useEpicStore((s) => s.artifacts.byId);
-  const readState = useArtifactReadStateStore(
-    useShallow((s) => ({
-      seedAtByEpic: s.seedAtByEpic,
-      lastSeenByArtifact: s.lastSeenByArtifact,
-    })),
-  );
-  const results = useMemo<ReadonlyArray<SearchArtifactHit>>(() => {
-    if (response === null) return EMPTY_HITS;
-    if (readFilter === ARTIFACT_READ.All) return response.results;
-    return response.results.filter((hit) => {
-      if (!Object.hasOwn(artifactsById, hit.artifactId)) return false;
-      const unread = isArtifactUnread({
-        epicId,
-        artifactId: hit.artifactId,
-        updatedAt: artifactsById[hit.artifactId].updatedAt,
-        seedAtByEpic: readState.seedAtByEpic,
-        lastSeenByArtifact: readState.lastSeenByArtifact,
-      });
-      return readFilter === ARTIFACT_READ.Unread ? unread : !unread;
-    });
-  }, [response, readFilter, artifactsById, readState, epicId]);
+  const {
+    searchActive,
+    results,
+    response,
+    isUnsupported,
+    isError,
+    isFetching,
+    refetch,
+  } = useArtifactSearchResults({ epicId, debouncedQuery });
 
   // ── Opening a hit (authoritative selection route) ─────────────────────────
   const handle = useOpenEpicHandle();
@@ -451,7 +360,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
     response.outcome === "ready" &&
     results.length > 0;
 
-  const statusMessage = deriveStatusMessage({
+  const statusMessage = deriveArtifactSearchStatusMessage({
     searchActive,
     isUnsupported,
     isError,
@@ -461,53 +370,21 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   });
 
   const inputRow = (
-    <InputGroup className="h-7 w-full">
-      <InputGroupAddon align="inline-start">
-        <Search className="size-3.5" aria-hidden />
-      </InputGroupAddon>
-      <InputGroupInput
-        ref={inputRef}
-        type="text"
-        role="combobox"
-        value={searchQuery}
-        onChange={(event) => onSearchQueryChange(event.target.value)}
-        onKeyDown={handleInputKeyDown}
-        placeholder="Search artifacts…"
-        aria-label="Search artifacts"
-        aria-autocomplete="list"
-        aria-expanded={listboxRendered}
-        aria-controls={listboxRendered ? listboxId : undefined}
-        aria-activedescendant={listboxRendered ? activeOptionId : undefined}
-        autoComplete="off"
-        spellCheck={false}
-        className="text-ui-sm"
-        data-testid="epic-artifact-search-input"
-      />
-      <InputGroupAddon align="inline-end">
-        {searchQuery.length > 0 ? (
-          <InputGroupButton
-            type="button"
-            size="icon-xs"
-            aria-label="Clear artifact search"
-            onClick={clearSearch}
-            data-testid="epic-artifact-search-clear"
-          >
-            <X className="size-3.5" aria-hidden />
-          </InputGroupButton>
-        ) : null}
-        <InputGroupButton
-          type="button"
-          size="icon-xs"
-          aria-label="Close artifact search"
-          onClick={exitSearch}
-          data-testid="epic-artifact-search-close"
-        >
-          <span aria-hidden className="text-overline uppercase">
-            esc
-          </span>
-        </InputGroupButton>
-      </InputGroupAddon>
-    </InputGroup>
+    <PanelSearchField
+      value={searchQuery}
+      onValueChange={onSearchQueryChange}
+      onClear={clearSearch}
+      onClose={exitSearch}
+      onKeyDown={handleInputKeyDown}
+      ref={inputRef}
+      combobox={{ listboxRendered, listboxId, activeOptionId }}
+      placeholder="Search artifacts…"
+      label="Search artifacts"
+      clearLabel="Clear artifact search"
+      closeLabel="Close artifact search"
+      testIdPrefix="epic-artifact-search"
+      className="h-7"
+    />
   );
 
   return (
@@ -533,8 +410,8 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
           isUnsupported={isUnsupported}
           isError={isError}
           isPending={response === null}
-          isFetching={query.isFetching}
-          onRetry={() => void query.refetch()}
+          isFetching={isFetching}
+          onRetry={refetch}
           response={response}
           results={results}
           activeIndex={clampedActiveIndex}
@@ -545,36 +422,6 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
       ) : null}
     </div>
   );
-}
-
-function deriveStatusMessage(args: {
-  readonly searchActive: boolean;
-  readonly isUnsupported: boolean;
-  readonly isError: boolean;
-  readonly response: SearchArtifactsResponse | null;
-  readonly resultCount: number;
-  readonly staleActive: boolean;
-}): string {
-  if (!args.searchActive) return "";
-  if (args.isUnsupported)
-    return "Artifact search isn't available on this host.";
-  if (args.isError) return "Artifact search failed.";
-  if (args.staleActive) return "That artifact no longer exists.";
-  if (args.response === null) return "Searching artifacts…";
-  if (args.response.outcome === "mirror-unavailable") {
-    return "Artifact search isn't ready yet.";
-  }
-  if (args.resultCount === 0) {
-    return args.response.truncated
-      ? "No matches shown; more results exist beyond the search limit."
-      : "No artifacts match your search.";
-  }
-  const base = `${args.resultCount} artifact ${
-    args.resultCount === 1 ? "result" : "results"
-  }.`;
-  return args.response.truncated
-    ? `${base} More are available; refine your search.`
-    : base;
 }
 
 interface ArtifactSearchResultsRegionProps {

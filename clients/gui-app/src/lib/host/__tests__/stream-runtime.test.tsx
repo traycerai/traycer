@@ -48,14 +48,19 @@ const authServiceRef = vi.hoisted(() => ({
 }));
 
 const runnerHostRef = vi.hoisted(() => {
-  const handlers = new Set<() => void>();
+  const handlers = new Set<
+    (event: { backgroundedForMs: number | null }) => void
+  >();
   return {
     handlers,
     host: {
-      onSystemResumed: (handler: () => void) => {
+      onSystemResumed: (
+        handler: (event: { backgroundedForMs: number | null }) => void,
+      ) => {
         handlers.add(handler);
         return { dispose: () => handlers.delete(handler) };
       },
+      onNetworkPathChanged: () => ({ dispose: () => undefined }),
     },
   };
 });
@@ -396,6 +401,7 @@ function fakeRemoteSession(): FakeRemoteSession {
     }),
     notifyBearerRotated: vi.fn(),
     wake: vi.fn(),
+    forceReconnect: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
@@ -462,6 +468,7 @@ function installRemoteTransport(sessionsByKey: {
           authRecovery: "revalidate",
           authEpoch: FIXTURE_AUTH_EPOCH,
         },
+        { proactiveWakeEligible: true },
         () => sessionsByKey[options.hostPublicKey] ?? fakeRemoteSession(),
       );
       return {
@@ -544,7 +551,7 @@ describe("HostStreamProvider", () => {
 
     act(() => {
       for (const handler of runnerHostRef.handlers) {
-        handler();
+        handler({ backgroundedForMs: null });
       }
     });
 
@@ -553,6 +560,7 @@ describe("HostStreamProvider", () => {
     // stream's open against a machine whose Wi-Fi is still re-associating.
     expect(reconnectSpy).toHaveBeenCalledWith("wake-resume", {
       probeFirst: true,
+      wakeProbe: null,
     });
   });
 
@@ -587,6 +595,7 @@ describe("HostStreamProvider", () => {
     // answers. Probing here would keep a socket to nowhere alive.
     expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
       probeFirst: false,
+      wakeProbe: null,
     });
   });
 
@@ -836,6 +845,7 @@ describe("HostStreamProvider", () => {
     expect(reconnectSpy).toHaveBeenCalledTimes(1);
     expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
       probeFirst: false,
+      wakeProbe: null,
     });
   });
 

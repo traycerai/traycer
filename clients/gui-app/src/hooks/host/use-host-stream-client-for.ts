@@ -34,7 +34,7 @@ import {
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
-import { GUI_CLIENT_IDENTITY } from "@/lib/host/client-identity";
+import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -222,6 +222,15 @@ export function buildHostStreamClient(params: {
    * consulted on the `target.kind === "remote"` branch.
    */
   readonly userId: string;
+  /**
+   * Whether the process-wide wake sweep may proactively poke or force-drop
+   * the shared session behind this client (remote branch only). The caller's
+   * statement that a reconnect's subscribe replay is safe for the streams it
+   * will open: durable/warm transports pass `true`; the one-shot
+   * side-effecting transport passes `false`, because a forced replay would
+   * re-run its operation. See `RemoteSessionAcquirePolicy`.
+   */
+  readonly proactiveWakeEligible: boolean;
   // Whether to eagerly `start()` the remote session (warm-connect). Owned-
   // lifetime callers (`openDurableStreamTransport`, one-shot) pass `true`.
   // Render-path callers (`useHostStreamClientBindingFor`, `HostStreamProvider`)
@@ -266,7 +275,8 @@ export function buildHostStreamClient(params: {
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: uuidv4,
       evidence: transportEvidenceRelay,
-      clientIdentity: GUI_CLIENT_IDENTITY,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: params.proactiveWakeEligible,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -307,7 +317,7 @@ export function buildHostStreamClient(params: {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
-    clientIdentity: GUI_CLIENT_IDENTITY,
+    clientIdentity: getGuiClientIdentity(),
   });
 }
 
@@ -490,6 +500,10 @@ export function useHostStreamClientBindingFor(
           authnBaseUrl,
           auth,
           userId,
+          // A render-path durable client (chat/terminal/epic tiles): its
+          // streams are snapshot-shaped, so a swept reconnect only
+          // re-snapshots.
+          proactiveWakeEligible: true,
           // Never eager-start: this acquire is guaranteed exactly one matching
           // release (unlike the old memo-based build), but the connect-on-first-
           // subscribe laziness is an independent, unchanged behavior. `start()`

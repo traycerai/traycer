@@ -1119,7 +1119,7 @@ describe("AuthService", () => {
     });
 
     // Electron powerMonitor resume bridged through the runner host.
-    host.emitSystemResumed();
+    host.emitSystemResumed({ backgroundedForMs: null });
 
     await vi.waitFor(() => {
       expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
@@ -1151,7 +1151,7 @@ describe("AuthService", () => {
       return okWithProfile();
     });
 
-    host.emitSystemResumed();
+    host.emitSystemResumed({ backgroundedForMs: null });
     for (let i = 0; i < 8; i++) {
       await Promise.resolve();
     }
@@ -2775,7 +2775,7 @@ describe("AuthService", () => {
         return okWithProfile();
       });
 
-      host.emitSystemResumed();
+      host.emitSystemResumed({ backgroundedForMs: null });
 
       await vi.waitFor(() => {
         expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
@@ -3014,7 +3014,7 @@ describe("AuthService", () => {
       // inside `tokenStore.rotate`. `delete` is serialized behind that rotate
       // (AuthTokenStore op chain), so signOut must be started while the rotate
       // is in flight and the hang must be released before signOut can finish.
-      host.emitSystemResumed();
+      host.emitSystemResumed({ backgroundedForMs: null });
       await refreshStarted;
 
       const signOutPromise = service.signOut();

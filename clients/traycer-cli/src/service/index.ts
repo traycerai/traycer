@@ -144,6 +144,15 @@ export interface ServiceController {
   stop(label: ServiceLabel, options: StopServiceOptions): Promise<void>;
   start(label: ServiceLabel): Promise<void>;
   restart(label: ServiceLabel): Promise<void>;
+  /**
+   * The identity that the OS service manager will actually launch for this
+   * start edge.  It is deliberately distinct from `ServiceLabel.id`: on a
+   * Desktop-managed Mac the CLI owns `ai.traycer.host`, while launchd starts
+   * the bundle-owned `ai.traycer.host.agent` job.  An adoption grant is a
+   * one-shot capability for the latter process, so publishing it for the
+   * logical CLI label would make the real supervisor refuse it.
+   */
+  hostStartAdoptionLabel(label: ServiceLabel): Promise<string>;
   // The two halves of a restart, for the one caller that needs to do work
   // between them: `host restart` finalises a pending CLI upgrade while the
   // supervisor's lock on the binary is released, which only happens after

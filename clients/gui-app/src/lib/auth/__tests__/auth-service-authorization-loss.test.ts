@@ -12,6 +12,7 @@ import {
   remoteSessionRefCountForTest,
   resetRemoteSessionReadinessListenersForTest,
   retireAllRemoteSessions,
+  type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
 } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 import {
@@ -251,6 +252,12 @@ interface FakeSession extends IRemoteSession<
   ): void;
 }
 
+// Authorization loss sweeps the cache wholesale, so sweep eligibility is not a
+// variable here: one eligible policy serves every acquire in this file.
+const AUTH_LOSS_TEST_POLICY: RemoteSessionAcquirePolicy = {
+  proactiveWakeEligible: true,
+};
+
 function fakeSession(): FakeSession {
   let closeCalls = 0;
   let methodSupport: StreamMethodSupport = "unknown";
@@ -266,6 +273,7 @@ function fakeSession(): FakeSession {
     sendUnary: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
+    forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
@@ -354,7 +362,11 @@ describe("AuthService authorization-loss remote-session sweep", () => {
     // account's authorization.
     const identity = freshIdentity();
     const underlying = fakeSession();
-    const view = acquireRemoteSession(identity, () => underlying);
+    const view = acquireRemoteSession(
+      identity,
+      AUTH_LOSS_TEST_POLICY,
+      () => underlying,
+    );
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
     expect(underlying.closeCalls).toBe(0);
 
@@ -406,7 +418,11 @@ describe("AuthService authorization-loss remote-session sweep", () => {
     // transition runs.
     const identity = freshIdentity();
     const underlying = fakeSession();
-    const view = acquireRemoteSession(identity, () => underlying);
+    const view = acquireRemoteSession(
+      identity,
+      AUTH_LOSS_TEST_POLICY,
+      () => underlying,
+    );
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
     expect(underlying.closeCalls).toBe(0);
 

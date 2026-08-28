@@ -145,6 +145,7 @@ describe("local-plane admission for the removal-sentinel read", () => {
           reachable: true,
           removedByUser: false,
           checkedAt: "2026-05-15T00:00:00Z",
+          localAttempt: null,
         }),
       convergeReady: notImplemented("convergeReady"),
       getRemovalState: () => {

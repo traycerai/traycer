@@ -484,6 +484,7 @@ describe("inject-host-launch-agent afterPack", () => {
             relocatedCliPath,
             `#!/bin/sh
 printf '%s\\n' "$*" >> ${JSON.stringify(invocationsPath)}
+if [ "$2" = "adoption-nonce" ]; then exit 1; fi
 printf '%s\\n' "$@"
 `,
             "utf8",
@@ -494,9 +495,19 @@ printf '%s\\n' "$@"
               encoding: "utf8",
             }),
           ).toBe("host\nstart\n--service-label\nai.traycer.host.agent\n");
-          // Exactly one invocation: the host start. No probe round trip.
+          // Two invocations, in order: the adoption-nonce probe, then the
+          // host start. This stub DECLINES the probe (exit 1), which is the
+          // documented no-proof path a launcher must treat as normal under
+          // `set -eu` - so the start leg carries no `--adoption-nonce` and the
+          // argv assertions above are the plain form.
+          //
+          // This assertion is what pins the probe as a real round trip rather
+          // than an assumption: the launcher is resolving its sibling CLI by a
+          // relative `$0`, and a probe that silently never ran would leave the
+          // path resolution this test exists for only half exercised.
           expect(readFileSync(invocationsPath, "utf8")).toBe(
-            "host start --service-label ai.traycer.host.agent\n",
+            "host adoption-nonce --service-label ai.traycer.host.agent\n" +
+              "host start --service-label ai.traycer.host.agent\n",
           );
 
           // Relative-`$0` hazard, exercised for real. An `argv0` override
@@ -517,6 +528,58 @@ printf '%s\\n' "$@"
         } finally {
           rmSync(relocatedRoot, { recursive: true, force: true });
         }
+      });
+
+      it("runs the real packaged launcher through label-only fallback when nonce discovery exits 1", async () => {
+        const { modulePath, appOutDir, appPath } = createFixture("production");
+        const injected = loadModule(modulePath);
+        await injected.afterPack({
+          electronPlatformName: "darwin",
+          appOutDir,
+          arch: Arch.arm64,
+        });
+
+        const agentLabel = smAppServiceAgentLabelId(
+          labelForEnvironment("production").id,
+        );
+        const agentPlist = readFileSync(
+          path.join(
+            appPath,
+            "Contents",
+            "Library",
+            "LaunchAgents",
+            `${agentLabel}.plist`,
+          ),
+          "utf8",
+        );
+        const bundleProgram = agentPlist.match(
+          /<key>BundleProgram<\/key>\s*<string>([^<]+)<\/string>/,
+        )?.[1];
+        if (bundleProgram === undefined)
+          throw new Error("BundleProgram not found");
+        const launcherPath = path.join(appPath, bundleProgram);
+        const cliPath = path.join(path.dirname(launcherPath), "traycer");
+        const invocationsPath = path.join(
+          appOutDir,
+          "nonce-fallback-invocations.txt",
+        );
+        writeFileSync(
+          cliPath,
+          `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(invocationsPath)}
+if [ "$2" = "adoption-nonce" ]; then exit 1; fi
+printf '%s\\n' "$@"
+`,
+          "utf8",
+        );
+        chmodSync(cliPath, 0o755);
+
+        expect(
+          execFileSync(launcherPath, [agentLabel], { encoding: "utf8" }),
+        ).toBe(`host\nstart\n--service-label\n${agentLabel}\n`);
+        expect(readFileSync(invocationsPath, "utf8")).toBe(
+          `host adoption-nonce --service-label ${agentLabel}\nhost start --service-label ${agentLabel}\n`,
+        );
       });
     },
   );

@@ -1,5 +1,6 @@
 import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
 import type {
+  BrowserSessionTileRef,
   DropPosition,
   EpicTerminalRef,
   GitDiffTileRef,
@@ -7,6 +8,7 @@ import type {
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import {
+  isBrowserSessionTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
   isWorkspaceFileRef,
@@ -17,6 +19,7 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import { resolveSplitDropPosition } from "@/components/epic-canvas/dnd/pane-drop-geometry";
+import { resolvePaneCorridorPosition } from "@/components/epic-canvas/dnd/pane-corridor-geometry";
 import {
   LEFT_PANEL_IDS,
   ROOT_CREATE_PANEL_IDS,
@@ -41,6 +44,7 @@ export const PANEL_NODE_FAMILY: Readonly<
 export const ARTIFACT_TAB_DND_TYPE = "artifact-tab";
 export const SIDEBAR_NODE_DND_TYPE = "sidebar-node";
 export const TERMINAL_TILE_DND_TYPE = "terminal-tile";
+export const BROWSER_TILE_DND_TYPE = "browser-tile";
 export const GIT_DIFF_TILE_DND_TYPE = "git-diff-tile";
 export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
 export const WORKSPACE_FOLDER_DND_TYPE = "workspace-folder";
@@ -54,6 +58,7 @@ export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
+  BROWSER_TILE_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
@@ -112,6 +117,13 @@ export interface EpicCanvasTerminalTileDragData {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tile: EpicTerminalRef;
+}
+
+export interface EpicCanvasBrowserTileDragData {
+  readonly kind: typeof BROWSER_TILE_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly tile: BrowserSessionTileRef;
 }
 
 export interface EpicCanvasGitDiffTileDragData {
@@ -207,6 +219,7 @@ export type EpicCanvasDragSourceData =
   | EpicCanvasArtifactTabDragData
   | EpicCanvasSidebarNodeDragData
   | EpicCanvasTerminalTileDragData
+  | EpicCanvasBrowserTileDragData
   | EpicCanvasGitDiffTileDragData
   | EpicCanvasWorkspaceFileDragData
   | EpicCanvasWorkspaceFolderDragData
@@ -384,6 +397,10 @@ export function getTerminalTileDragId(
   return `terminal-tile:${plainTerminalFleetIdentityKey({ hostId, terminalId: sessionId })}`;
 }
 
+export function getBrowserTileDragId(sessionId: string, tabId: string): string {
+  return `browser-tile:${sessionId}:${tabId}`;
+}
+
 export function getGitDiffTileDragId(tileId: string): string {
   return `git-diff-tile:${tileId}`;
 }
@@ -550,6 +567,17 @@ function readTerminalTileSource(
   return { kind: TERMINAL_TILE_DND_TYPE, ...scope, tile: ref };
 }
 
+function readBrowserTileSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  const ref = parseTileRef(value.tile);
+  if (scope === null || ref === null || !isBrowserSessionTileRef(ref)) {
+    return null;
+  }
+  return { kind: BROWSER_TILE_DND_TYPE, ...scope, tile: ref };
+}
+
 function readManagedCommandOutputSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
@@ -686,6 +714,7 @@ export function readEpicCanvasDragSourceData(
   if (value.kind === SIDEBAR_NODE_DND_TYPE) return readSidebarNodeSource(value);
   if (value.kind === TERMINAL_TILE_DND_TYPE)
     return readTerminalTileSource(value);
+  if (value.kind === BROWSER_TILE_DND_TYPE) return readBrowserTileSource(value);
   if (value.kind === GIT_DIFF_TILE_DND_TYPE)
     return readGitDiffTileSource(value);
   if (value.kind === WORKSPACE_FILE_DND_TYPE)
@@ -859,6 +888,27 @@ export type { EdgeDropPosition } from "@/stores/epics/canvas/types";
  * returns `null` - every point inside the group's body resolves to one of
  * the five zones.
  */
+/**
+ * Optional corridor-aware pane-body resolution.
+ *
+ * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the
+ * neutral corridor is inert. The in-task tile interaction does not opt into
+ * this geometry: its split feedback and commit remain immediate across the
+ * full pane.
+ */
+export function getPaneCorridorPositionFromPoint(
+  point: PointLike,
+  rect: RectLike,
+): DropPosition | null {
+  const resolved = resolvePaneCorridorPosition({
+    width: rect.width,
+    height: rect.height,
+    x: point.x - rect.left,
+    y: point.y - rect.top,
+  });
+  return resolved === "corridor" ? null : resolved;
+}
+
 export function getEdgeDropPositionFromPoint(
   point: PointLike,
   rect: RectLike,
@@ -969,6 +1019,16 @@ export function getEpicCanvasDropPreview(
   target: EpicCanvasDropTargetData,
   rect: RectLike | null,
   point: PointLike,
+  /**
+   * Opt-in corridor geometry can answer "no target". The production in-task
+   * tile interaction passes `false` to retain the immediate five-position
+   * pane split affordance.
+   *
+   * Required rather than defaulted: repo convention bans default parameters
+   * (`fn(x = 1)`), and a silent `false` here is the difference between the
+   * corridor being inert and ~84% of a pane committing a split.
+   */
+  useNeutralCorridor: boolean,
 ): EpicCanvasDropPreview {
   if (target.kind === "empty-shell") {
     return {
@@ -977,11 +1037,28 @@ export function getEpicCanvasDropPreview(
     };
   }
   if (target.kind === "artifact-tab-group-body") {
+    if (rect === null) {
+      return {
+        kind: "artifact-tab-group-body",
+        groupId: target.groupId,
+        position: "center",
+      };
+    }
+    if (useNeutralCorridor) {
+      const position = getPaneCorridorPositionFromPoint(point, rect);
+      // Inert corridor: no preview at all, so nothing can be committed that
+      // was never shown.
+      if (position === null) return null;
+      return {
+        kind: "artifact-tab-group-body",
+        groupId: target.groupId,
+        position,
+      };
+    }
     return {
       kind: "artifact-tab-group-body",
       groupId: target.groupId,
-      position:
-        rect === null ? "center" : getEdgeDropPositionFromPoint(point, rect),
+      position: getEdgeDropPositionFromPoint(point, rect),
     };
   }
   if (target.kind === "left-panel-rail-item") {

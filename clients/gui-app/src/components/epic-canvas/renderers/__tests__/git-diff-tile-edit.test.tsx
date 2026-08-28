@@ -29,6 +29,10 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { DRIFT_RETRY_BASE_DELAY_MS } from "@/components/epic-canvas/git-diff/git-diff-editing";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
 
 interface EditTestState {
   readonly refetchContents: Mock;
@@ -73,6 +77,8 @@ const diffSurfaceState = vi.hoisted((): DiffSurfaceTestState => ({
 const preloadState = vi.hoisted(() => ({
   preload: vi.fn(() => Promise.resolve()),
 }));
+
+const editorOpenState = vi.hoisted(() => ({ mutate: vi.fn() }));
 
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
 // to, so `git.subscribeStatus` cannot ride the window's effective host while
@@ -174,7 +180,7 @@ vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
 // the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpenForClient: () => ({
-    mutate: vi.fn(),
+    mutate: editorOpenState.mutate,
     isPending: false,
   }),
 }));
@@ -316,12 +322,44 @@ const NODE = makeGitFileDiffTile({
   repositoryContext: null,
 });
 
+function RemountingPane(props: {
+  readonly render: (active: boolean) => ReactNode;
+}): ReactNode {
+  const [active, setActive] = useState(true);
+  const [generation, setGeneration] = useState(0);
+  const activation = usePaneActivationOwnership({
+    active,
+    activate: () => {
+      setActive(true);
+      setGeneration((current) => current + 1);
+    },
+  });
+  return (
+    <>
+      <button type="button" onClick={() => setActive(false)}>
+        Deactivate pane
+      </button>
+      <PaneActivationFocusIntentContext.Provider value={activation.focusIntent}>
+        <div
+          onFocusCapture={activation.onFocusCapture}
+          onPointerCancelCapture={activation.onPointerCancelCapture}
+          onPointerDownCapture={activation.onPointerDownCapture}
+        >
+          <div key={generation}>{props.render(active)}</div>
+        </div>
+      </PaneActivationFocusIntentContext.Provider>
+    </>
+  );
+}
+
 describe("<GitDiffTile /> editing", () => {
   beforeEach(() => {
     fileEditRuntimeRegistry.resetForTesting();
     useSettingsStore.setState({
+      defaultEditor: null,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     });
+    editorOpenState.mutate.mockReset();
     state.refetchContents.mockReset();
     preloadState.preload.mockReset();
     preloadState.preload.mockImplementation(() => Promise.resolve());
@@ -404,6 +442,23 @@ describe("<GitDiffTile /> editing", () => {
           "8de5c07db8deb3b75dedd9b5bc999669936cea181ae0033c27c4e2071a6e434d",
         content: "const value = 2;\n",
       });
+    });
+  });
+
+  it("finishes Open in editor before an inactive pane remounts", () => {
+    renderTileInRemountingPane(NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Diff settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deactivate pane" }));
+    const openInEditor = screen.getByRole("button", {
+      name: "Open in editor",
+    });
+    fireEvent.pointerDown(openInEditor);
+    fireEvent.click(openInEditor);
+
+    expect(editorOpenState.mutate).toHaveBeenCalledWith({
+      editorId: "vscode",
+      paths: ["/work/repo/src/app.ts"],
     });
   });
 
@@ -906,6 +961,15 @@ function renderTile(node: GitDiffTileRef, isActive: boolean): RenderResult {
     defaultOptions: { queries: { retry: false } },
   });
   return render(tileElement(node, isActive));
+}
+
+function renderTileInRemountingPane(node: GitDiffTileRef): RenderResult {
+  activeQueryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <RemountingPane render={(active) => tileElement(node, active)} />,
+  );
 }
 
 // Reuses the QueryClient created by `renderTile` so `rendered.rerender(...)`

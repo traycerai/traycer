@@ -1,8 +1,8 @@
-import { listTerminalsResponseSchemaV22 } from "@traycer/protocol/host/terminal/unary-schemas";
-import type { CanonicalTerminalSessionInfoWithCurrentCwd } from "@traycer/protocol/host/terminal/unary-schemas";
+import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfoWithLifecycleOwner } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
 import { resolveEpicId } from "../internal/agent-context";
@@ -27,8 +27,9 @@ export function buildTerminalListCommand(opts: {
         scope: { kind: "epic", epicId },
       }),
     );
-    const { sessions } = parseHostResponse(
-      listTerminalsResponseSchemaV22,
+    const { sessions } = parseCanonicalHostResponse(
+      "terminal.list",
+      listTerminalsResponseSchemaV23,
       result,
     );
     const terminals = sessions
@@ -54,7 +55,7 @@ export type TerminalListRow = {
 };
 
 function summarizeTerminal(
-  session: CanonicalTerminalSessionInfoWithCurrentCwd,
+  session: CanonicalTerminalSessionInfoWithLifecycleOwner,
 ): TerminalListRow {
   return {
     terminalId: session.sessionId,
@@ -75,7 +76,7 @@ function summarizeTerminal(
  * TITLE names the same directory the row's DIRECTORY column shows.
  */
 function terminalTitle(
-  session: CanonicalTerminalSessionInfoWithCurrentCwd,
+  session: CanonicalTerminalSessionInfoWithLifecycleOwner,
 ): string {
   if (session.title !== null && session.title.length > 0) return session.title;
   const directory =

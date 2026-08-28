@@ -1,5 +1,11 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,18 +47,25 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../installer", () => ({
   stageHostInstallSource: async () => {
     mocks.stageCalls.push("stage");
+    const stagingDir = join(workHome, "staging-dir");
+    const executablePath = join(stagingDir, "traycer-host");
+    const archivePath = join(stagingDir, "archive.tar.gz");
+    const executableBytes = "fixture host executable";
+    mkdirSync(stagingDir, { recursive: true });
+    writeFileSync(executablePath, executableBytes);
+    writeFileSync(archivePath, "fixture archive");
     return {
-      stagingDir: "/tmp/staging-dir",
-      archivePath: "/tmp/staging-dir/archive.tar.gz",
+      stagingDir,
+      archivePath,
       archiveIsTemporary: true,
-      executablePath: "/tmp/staging-dir/traycer-host",
+      executablePath,
       version: "2.0.0",
       runtimeVersion: null,
       source: { kind: "registry", value: "2.0.0" },
       archiveSha256: "b".repeat(64),
       signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
       signatureKeyId: "test-key",
-      sizeBytes: 1,
+      sizeBytes: Buffer.byteLength(executableBytes),
     };
   },
   commitHostInstallSource: async () => {
@@ -80,6 +93,39 @@ vi.mock("../../installer", () => ({
     mocks.discardCalls.push("discard");
   },
 }));
+
+// The contender-aware facade imports the commit edge from the concrete
+// installer module. Keep this lock-wiring suite on the same fake boundary as
+// the package-barrel mock above so valid staged bytes cannot reach the real
+// host install.
+vi.mock("../../installer/install", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../installer/install")>();
+  return {
+    ...actual,
+    commitHostInstallSource: async () => {
+      mocks.commitCalls.push("commit");
+      return {
+        record: {
+          installId: "install-2.0.0",
+          version: "2.0.0",
+          runtimeVersion: null,
+          platform: "darwin" as const,
+          arch: "arm64" as const,
+          installedAt: "2026-01-01T00:00:00.000Z",
+          source: { kind: "registry" as const, value: "2.0.0" },
+          archiveSha256: "b".repeat(64),
+          signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+          signatureKeyId: "test-key",
+          sizeBytes: Buffer.byteLength("fixture host executable"),
+          executablePath: "/tmp/traycer-host",
+        },
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      };
+    },
+  };
+});
 
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: () => ({
@@ -231,6 +277,7 @@ describe.skipIf(process.platform === "win32")(
           noServiceRegister: false,
           ifIdle: false,
           force: false,
+          attemptAdoption: null,
         });
         const pending = command(fakeCtx());
 
@@ -284,6 +331,7 @@ describe.skipIf(process.platform === "win32")(
           noServiceRegister: false,
           ifIdle: true,
           force: false,
+          attemptAdoption: null,
         });
         const pending = command(fakeCtx());
 

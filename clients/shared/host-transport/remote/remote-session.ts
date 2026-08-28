@@ -11,7 +11,9 @@ import {
   mergeConnectionManifests,
   selectConnectionManifestForPeer,
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   buildStreamManifest,
@@ -50,6 +52,7 @@ import {
   type ParamsOf,
   type StreamMethodSupport,
 } from "../ws-stream-client";
+import type { WakeProbeTuning } from "../host-stream-client";
 import { jitteredBackoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
@@ -65,6 +68,9 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
+  RELAY_WAKE_PROBE_TIMEOUT_MS,
+  RESTORE_STALL_LOG_AFTER_MS,
+  REASSEMBLY_PROGRESS_TIMEOUT_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -393,8 +399,29 @@ export interface IRemoteSession<
    * flight, and never forgives the escalation (that needs a connection to
    * SURVIVE; see the class contract). So repeated wakes cannot become a dial
    * loop, and a fleet woken by one shared event does not redial in a herd.
+   *
+   * `probe` sizes the probe that verdict rides on; `null` is the default
+   * desktop-calibrated deadline. A caller that measured a brief mobile
+   * background passes a shorter one, and may additionally ask for the redial
+   * after a FAILED probe to skip its backoff rung (see
+   * {@link WakeProbeTuning}) - the user is watching that recovery happen.
    */
-  wake(reason: string): void;
+  wake(reason: string, probe: WakeProbeTuning | null): void;
+  /**
+   * Drops the current socket - alive or not - and redials with no backoff
+   * delay. The forced flavour of {@link wake}, for a caller whose evidence
+   * says the socket is not worth probing: a user tapping Retry, a network
+   * path change under a socket that cannot have survived it, a mobile resume
+   * after a background long enough that iOS has torn the socket down.
+   *
+   * Same skip-not-pardon stance as `wake`: the redial is pulled to now, but
+   * the escalation counter is untouched, so a host that is genuinely gone
+   * keeps climbing the ladder between forced attempts instead of being pinned
+   * at the fastest tier. An attach already in flight is left alone - its own
+   * phase timers bound it, and a timer frozen through an OS suspend fires
+   * immediately on unfreeze, so a stale dial already fails fast on resume.
+   */
+  forceReconnect(reason: string): void;
   /**
    * Subscribes to the session's terminal close - a caller `close()` (on the
    * shared session, once every consumer released) or a terminal session
@@ -417,7 +444,8 @@ export interface IRemoteSession<
   terminalFatal(): FatalErrorDetails | null;
   /**
    * Subscribes to positive evidence that the session just reached its ready
-   * boundary (full attach + every live stream restored) - EVERY boundary,
+   * boundary (full attach + accepted restore evidence for every live
+   * stream; completed delivery stays each stream's own status) - EVERY boundary,
    * including the clean first open. The remote analog of the recovery
    * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
    * consumed to un-strand errored host-scoped queries.
@@ -559,6 +587,53 @@ export class RemoteSession<
    * connection loss so a flapping host never collects partial credit.
    */
   private stableResetTimer: TimerHandle | null = null;
+  /**
+   * Armed when an attach completes with the ready boundary still unreached,
+   * cleared by the boundary or by connection loss. If it fires, some stream's
+   * restore has produced no evidence at all for the whole window - no
+   * delivered frame and no in-flight chunk - and the session is sitting
+   * not-ready on a live mux. That state is otherwise invisible: the surfaces
+   * above can only say "still can't connect", which misattributes it. One
+   * line naming the unrestored methods is what lets a field report of a stuck
+   * banner be attributed to the stream that caused it.
+   */
+  private restoreStallTimer: TimerHandle | null = null;
+  /**
+   * Per-stream progress deadlines for in-flight chunk reassembly on the
+   * current connection - the replacement for the stall bound that message
+   * COMPLETION used to provide implicitly, before the ready boundary started
+   * accepting the first chunk as restore evidence. Armed/reset by every
+   * accepted chunk of a subscription stream's message, retired when that
+   * message completes (or the stream/connection ends). Expiry is the verdict
+   * "this transfer stopped": the stream is reopened on a fresh id through the
+   * per-stream reopen backoff. See {@link REASSEMBLY_PROGRESS_TIMEOUT_MS} for
+   * why no other deadline can observe this state. The token makes a retired
+   * arm's callback provably inert - a cleared or superseded watchdog must
+   * never reopen a stream that completed or re-armed after it.
+   */
+  private readonly reassemblyWatchdogs = new Map<
+    number,
+    { readonly timer: TimerHandle; readonly token: number }
+  >();
+  /** Monotonic identity for reassembly-watchdog arms (see the map doc). */
+  private reassemblyWatchdogToken = 0;
+  /**
+   * Streams whose CURRENT id exists because a reassembly-stall verdict
+   * re-keyed them. Membership is the license for the FIRST-evidence deadline
+   * on a subscribe send: a stall verdict only ever follows accepted chunks,
+   * so these resolvers PROVABLY emit, and a replacement subscribe answered
+   * with nothing is the same stall one hop later. An event-only stream (one
+   * with no initial server frame) can never enter this set - it reaches the
+   * reopen regime only through a retryable FATAL - so it is never churned
+   * through zero-evidence CLOSE/resubscribe cycles; the restore-stall
+   * diagnostic remains its observer. Membership moves with each stall
+   * re-key and ends on any delivered frame, a host verdict on the id, or a
+   * caller close - a host that ANSWERS, even negatively, has disproven the
+   * silent-stall premise. Deliberately kept across connection drops: a
+   * session reconnect mid-loop replays the member through the same send
+   * path, and the loop must not reset with it.
+   */
+  private readonly stallReopenedStreamIds = new Set<number>();
   /**
    * Whether this session has EVER reached its ready boundary.
    *
@@ -703,6 +778,20 @@ export class RemoteSession<
    * arrive during it.
    */
   private backoffCollapsed = false;
+  /**
+   * The connect generation a {@link forceReconnect} arrived DURING, when that
+   * generation's dial was already in flight and could be neither dropped
+   * (nothing attached yet) nor hurried (its own phase timers bound it). The
+   * intent is scoped to exactly that generation: if generation G fails into
+   * the loss funnel, the funnel arms its normal backoff (accounting and
+   * evidence preserved) and then spends this intent by pulling that one wait
+   * to zero; if G reaches ready, the force is satisfied and the intent is
+   * consumed unspent. A newer generation never inherits it - `beginConnect`
+   * clears any stale value when it allocates - and terminal close clears it,
+   * so callback ordering around an iOS unfreeze (resume task vs overdue
+   * phase timer) cannot strand the session on its old rung either way.
+   */
+  private pendingForceGeneration: number | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /**
@@ -739,11 +828,18 @@ export class RemoteSession<
     const rpcSplit = splitConnectionManifest(
       options.rpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      // Unary methods have no client-side implementation to be missing: the
+      // client sends a request and reads a response, so every installed major
+      // is serveable. Only the STREAM half needs narrowing.
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     this.clientManifests = {
       rpc: rpcSplit.manifest,
       optionalRpc: rpcSplit.optionalManifest,
-      stream: buildStreamManifest(options.streamRegistry),
+      stream: buildStreamManifest(
+        options.streamRegistry,
+        CLIENT_SERVED_STREAM_MAJORS,
+      ),
     };
     this.clientRpcMerged = mergeConnectionManifests(
       rpcSplit.manifest,
@@ -795,6 +891,14 @@ export class RemoteSession<
    * paused and every stream is reconnecting. Answering "ready" there is the
    * standing lie R4-B5 exists to kill (Settings would render Online, off this
    * session, for a host that is OFF — for up to the 15-min standing bound).
+   *
+   * "Restored" means ACCEPTED restore evidence — a delivered frame, or the
+   * first accepted chunk of one still reassembling — not completed delivery.
+   * This verdict is connection/host liveness for session-level surfaces; a
+   * consumer that needs a specific stream's DATA reads that stream's own
+   * status, which stays `reconnecting` until its completed frame lands. The
+   * gap between the two (an in-flight transfer that stops) is bounded by the
+   * per-stream reassembly watchdog, not by this read.
    */
   isReady(): boolean {
     return (
@@ -927,7 +1031,7 @@ export class RemoteSession<
           // Aborts, terminal closures, post-send ambiguity and host-originated
           // failures never reach this branch: they are not
           // `RetryableTransportError`.
-          this.wake("pre-send-failure");
+          this.wake("pre-send-failure", null);
         }
         throw cause;
       }
@@ -1264,7 +1368,7 @@ export class RemoteSession<
   }
 
   /** See {@link IRemoteSession.wake}. */
-  wake(reason: string): void {
+  wake(reason: string, probe: WakeProbeTuning | null): void {
     if (this.phase === "closed" || this.phase === "idle") {
       // Closed is terminal, and idle has never dialed - `start()` owns that,
       // and every caller that wants a session calls it first.
@@ -1283,9 +1387,56 @@ export class RemoteSession<
       // collapse below has to run afterwards to pull that redial forward too.
       // A socket that merely looks alive is left connected and answers the
       // poke's probe on its own deadline.
-      this.connection.relaySocket.pokeKeepalive();
+      //
+      // Deadline and failure policy travel INTO the socket together: the arm
+      // merges concurrent pokes monotonically (earlier deadline wins, the
+      // immediate-redial policy can be raised but never lowered), so mixed
+      // wake bursts - a measured mobile resume beside a generic online edge,
+      // in either order - always keep the stronger evidence.
+      this.connection.relaySocket.pokeKeepalive(
+        probe === null ? RELAY_WAKE_PROBE_TIMEOUT_MS : probe.timeoutMs,
+        probe !== null && probe.immediateRedialOnFailure,
+      );
     }
     this.collapseBackoff(reason);
+  }
+
+  /** See {@link IRemoteSession.forceReconnect}. */
+  forceReconnect(reason: string): void {
+    if (this.phase === "closed" || this.phase === "idle") {
+      return;
+    }
+    const connection = this.connection;
+    if (this.phase === "ready" && connection !== null) {
+      // A client-initiated teardown says nothing about the host - the durable
+      // rule is that `confirmed-refusal` requires evidence from the HOST's
+      // transport plane, and this loss is our own decision (see the provenance
+      // note on `handleConnectionLost`).
+      this.handleConnectionLost(
+        connection.generation,
+        `forced-reconnect:${reason}`,
+        "not-host-evidence",
+      );
+      this.pullRedialToNow(reason);
+      return;
+    }
+    if (this.backoffTimer !== null) {
+      // An armed backoff timer is the truth REGARDLESS of phase: the
+      // pre-dial landers (a failed grant mint, a thrown connect path) arm it
+      // while the phase still reads `connecting`, and a force landing just
+      // after one of them has no future failure lander left to spend a
+      // recorded intent - the pending wait itself is what must move.
+      this.pullRedialToNow(reason);
+      return;
+    }
+    // A dial/handshake/revalidation is genuinely in flight with no timer
+    // armed: it is not interrupted (one dial owner at a time), but the
+    // demand is NOT dropped either - record it against this exact
+    // generation, so if this attempt fails its loss redials immediately
+    // instead of arming the rung the caller was trying to skip. Success
+    // consumes the intent - a fresh attach is everything a force could have
+    // bought.
+    this.pendingForceGeneration = this.connectGeneration;
   }
 
   /** See {@link IRemoteSession.onClosed}. */
@@ -1328,7 +1479,9 @@ export class RemoteSession<
     }
     this.dialFailures.recordAbandoned();
     this.phase = "closed";
+    this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
+    this.stallReopenedStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
@@ -1440,6 +1593,8 @@ export class RemoteSession<
     // A caller close outranks a pending retryable re-open: without this the
     // timer would re-subscribe a stream the consumer has already abandoned.
     this.clearStreamReopen(streamId);
+    this.clearReassemblyWatchdog(streamId);
+    this.stallReopenedStreamIds.delete(streamId);
     // Locally-closed is terminal: clear any partial inbound accumulator and
     // tombstone the id so an in-flight/delayed server frame can't reseed one.
     connection?.reassembler.forget(streamId);
@@ -1467,6 +1622,11 @@ export class RemoteSession<
       return;
     }
     const generation = ++this.connectGeneration;
+    // Any intent recorded against an earlier generation is stale by
+    // construction: that dial ended (its failure spent the intent, or a path
+    // that never consults it retired the attempt), and this fresh dial must
+    // not inherit a demand nobody made of it.
+    this.pendingForceGeneration = null;
     this.phase = "connecting";
     this.clearPhaseTimer();
     this.reattachMarks = {
@@ -1519,7 +1679,7 @@ export class RemoteSession<
         this.dialAttemptId(generation),
         "indeterminate",
       );
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `could not mint an attach grant: ${provision.detail}`,
         // The per-attempt text goes in the CONTEXT, never the cause: a server
@@ -1563,12 +1723,27 @@ export class RemoteSession<
         onReauthAck: () => undefined,
         onPeerGone: (reason) => this.onPeerGone(generation, reason),
         onError: () => undefined,
-        onClose: (info) =>
+        onClose: (info) => {
+          // The socket's own verdict on the current wake-probe arm, read at
+          // the one moment it matters: this close IS the arm's negative
+          // ending, whatever delivered it - the arm's own deadline, an
+          // OS-delivered error close, missed pongs. An answered arm reads
+          // false here forever, so a loss after proven liveness stays an
+          // ordinary loss. Each connection owns its socket object, so this
+          // cannot leak across dials.
+          const immediateRedialEarned =
+            relaySocket.hasUnansweredImmediateRedialProbe();
           this.handleConnectionLost(
             generation,
             describeSocketClose(this.phase, info),
             "host-transport-plane",
-          ),
+          );
+          if (immediateRedialEarned) {
+            // A user is watching this recovery happen; sleeping out the
+            // backoff rung the funnel armed would be pure added outage.
+            this.pullRedialToNow("wake-probe-failed");
+          }
+        },
       },
     });
 
@@ -1690,13 +1865,37 @@ export class RemoteSession<
         message = connection.reassembler.accept(frame);
       } catch (error) {
         if (this.failStreamOnInboundError(generation, frame, error)) {
+          // The reassembly this watchdog was pacing just ended in a verdict.
+          this.clearReassemblyWatchdog(frame.streamId);
           return;
         }
         throw error;
       }
       if (message === null) {
+        // A chunk was accepted for a message still in flight. For a stream
+        // subscription that is all the proof "restored" asks for: the host
+        // accepted the subscribe and its data is arriving on the mux, so the
+        // SESSION-level ready boundary must not stay hostage to the transfer
+        // finishing. A large snapshot (tens of MB through the relay) can take
+        // minutes on a slow link, during which every connection-plane surface
+        // - the connectivity banner, availability recovery, the backoff
+        // stable-reset - would otherwise report an outage on a link that is
+        // demonstrably carrying frames, inviting the exact retry/redial that
+        // restarts the transfer from zero. The stream's own consumer still
+        // waits for the completed message; only the session verdict moves
+        // early. Per-stream reopen escalation is deliberately NOT reset here
+        // - a delivered frame remains its only proof (see the dispatch path).
+        if (frame.type === MuxFrameType.STREAM_FRAME) {
+          this.markStreamRestored(frame.streamId);
+          // Early evidence needs its own progress bound: completion used to
+          // be the implicit one. Reset on every accepted chunk.
+          this.armReassemblyWatchdog(generation, frame.streamId);
+        }
         return;
       }
+      // A completed message closes its stream's in-flight sequence; the
+      // watchdog pacing it is retired (no-op for streams with none armed).
+      this.clearReassemblyWatchdog(message.streamId);
       this.dispatchInbound(generation, connection, message);
     })().catch(() =>
       this.handleConnectionLost(
@@ -1805,6 +2004,7 @@ export class RemoteSession<
       this.subscriptions.delete(frame.streamId);
       this.restoredStreamIds.delete(frame.streamId);
       this.outboundSeq.delete(frame.streamId);
+      this.stallReopenedStreamIds.delete(frame.streamId);
       this.maybeReachReadyBoundary();
     }
     return true;
@@ -1983,6 +2183,17 @@ export class RemoteSession<
         const reopenAttempts = this.streamReopenAttempts.get(message.streamId);
         this.streamReopenAttempts.delete(message.streamId);
         const freshStreamId = this.allocateStreamId();
+        // The verdict answers THIS attempt; it says nothing about the next
+        // one. A stall license the stream already held is the stronger prior
+        // fact - its resolver provably emitted and then stopped - and a
+        // retryable refusal of one re-subscribe does not disprove it, so the
+        // license MOVES with the re-key exactly as the attempt count does. A
+        // stream that entered the reopen regime through this verdict alone
+        // never held one, so an event-only method still re-subscribes
+        // unarmed.
+        if (this.stallReopenedStreamIds.delete(message.streamId)) {
+          this.stallReopenedStreamIds.add(freshStreamId);
+        }
         stream.adoptStreamIdForReopen(freshStreamId);
         this.subscriptions.set(freshStreamId, stream);
         if (reopenAttempts !== undefined) {
@@ -1997,6 +2208,7 @@ export class RemoteSession<
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
       this.clearStreamReopen(message.streamId);
+      this.stallReopenedStreamIds.delete(message.streamId);
       this.maybeReachReadyBoundary();
       return;
     }
@@ -2019,6 +2231,7 @@ export class RemoteSession<
       // host closes BEFORE its first frame - a normal end for a short-lived
       // stream - leaked its entry in this long-lived session forever.
       this.clearStreamReopen(message.streamId);
+      this.stallReopenedStreamIds.delete(message.streamId);
       this.maybeReachReadyBoundary();
       return;
     }
@@ -2034,8 +2247,11 @@ export class RemoteSession<
           this.markStreamRestored(message.streamId);
           // A frame is the only proof the re-open actually worked, so the
           // escalation resets here rather than at subscribe time - a stream
-          // that fails init repeatedly must keep climbing the backoff.
+          // that fails init repeatedly must keep climbing the backoff. The
+          // stall provenance ends with it: the resolver answered, so a later
+          // silence is a fresh episode that must earn its own verdict.
           this.streamReopenAttempts.delete(message.streamId);
+          this.stallReopenedStreamIds.delete(message.streamId);
         }
       }
     }
@@ -2173,9 +2389,170 @@ export class RemoteSession<
     this.startReauthLoop();
     this.armStandingTimer();
     this.maybeReachReadyBoundary();
+    this.armRestoreStallTimer(generation);
     // The session can carry frames from here: release every `sendUnary`
     // caller parked through this attach.
     this.settleReadyWaiters(true);
+  }
+
+  /**
+   * Arms the restore-stall diagnostic for this attach: a no-op when the
+   * boundary was already reached above, one line if any stream is still
+   * producing zero restore evidence a full window after the attach completed.
+   * See the field doc for why that state must be named rather than inferred.
+   */
+  private armRestoreStallTimer(generation: number): void {
+    this.clearRestoreStallTimer();
+    if (this.readyBoundaryGeneration === this.connectGeneration) {
+      return;
+    }
+    this.restoreStallTimer = setTimeout(() => {
+      this.restoreStallTimer = null;
+      if (
+        !this.isCurrent(generation) ||
+        this.phase !== "ready" ||
+        this.readyBoundaryGeneration === this.connectGeneration
+      ) {
+        return;
+      }
+      const unrestored: string[] = [];
+      for (const [streamId, stream] of this.subscriptions) {
+        if (
+          !this.restoredStreamIds.has(streamId) &&
+          !this.streamReopenAttempts.has(streamId)
+        ) {
+          unrestored.push(`${stream.method}#${streamId}`);
+        }
+      }
+      if (unrestored.length === 0) {
+        return;
+      }
+      console.warn(
+        `[remote-session] remote session (host ${this.options.hostId}) not ready ${RESTORE_STALL_LOG_AFTER_MS}ms after attach: ` +
+          `unrestored streams with no inbound evidence [${unrestored.join(", ")}], ` +
+          `reassembling=${this.pendingReassemblyCount}`,
+      );
+    }, RESTORE_STALL_LOG_AFTER_MS);
+  }
+
+  private clearRestoreStallTimer(): void {
+    if (this.restoreStallTimer !== null) {
+      clearTimeout(this.restoreStallTimer);
+      this.restoreStallTimer = null;
+    }
+  }
+
+  /**
+   * (Re-)arms the progress deadline for one subscription stream's in-flight
+   * reassembly. Non-subscription streams are excluded: a chunked unary
+   * response is already bounded by its own response timeout.
+   *
+   * The fired verdict defers while the host leg is detached at the relay -
+   * silence there is the HOST's, not this stream's (the same attribution rule
+   * the restore-stall diagnostic follows), and the detach recovery path owns
+   * that episode. The watchdog re-arms so the verdict resumes if the leg
+   * returns without a reconnect.
+   */
+  private armReassemblyWatchdog(generation: number, streamId: number): void {
+    if (!this.subscriptions.has(streamId)) {
+      return;
+    }
+    const existing = this.reassemblyWatchdogs.get(streamId);
+    if (existing !== undefined) {
+      clearTimeout(existing.timer);
+    }
+    this.reassemblyWatchdogToken += 1;
+    const token = this.reassemblyWatchdogToken;
+    const timer = setTimeout(() => {
+      const armed = this.reassemblyWatchdogs.get(streamId);
+      if (armed === undefined || armed.token !== token) {
+        // Retired or superseded arm: the message completed, a newer chunk
+        // re-armed, or the connection dropped. Nothing to judge.
+        return;
+      }
+      this.reassemblyWatchdogs.delete(streamId);
+      if (!this.isCurrent(generation) || this.phase !== "ready") {
+        return;
+      }
+      const stream = this.subscriptions.get(streamId);
+      if (stream === undefined) {
+        return;
+      }
+      const connection = this.connection;
+      if (connection === null || !connection.hostAttached) {
+        this.armReassemblyWatchdog(generation, streamId);
+        return;
+      }
+      console.warn(
+        `[remote-session] remote session (host ${this.options.hostId}) stream ${stream.method}#${streamId} ` +
+          `made no reassembly progress for ${REASSEMBLY_PROGRESS_TIMEOUT_MS}ms - reopening on a fresh stream id`,
+      );
+      this.reopenStalledStream(streamId, stream, connection);
+    }, REASSEMBLY_PROGRESS_TIMEOUT_MS);
+    this.reassemblyWatchdogs.set(streamId, { timer, token });
+  }
+
+  /**
+   * The watchdog's expiry verdict: the transfer stopped, so the stream's
+   * restore failed. Routed through the same fresh-id reopen shape as a
+   * retryable per-stream FATAL - abandon the partial body, tombstone the old
+   * id on this side (a relay-delayed late chunk must not reseed an
+   * accumulator), tell the host to stop paying for the dead transfer, and
+   * re-subscribe under a fresh id on the per-stream reopen backoff. The
+   * verdict is stream-local on purpose: the rest of the mux is provably
+   * carrying traffic, so the session-level boundary and every surface reading
+   * it stay put, exactly as they do for a resolver stuck in its reopen loop.
+   */
+  private reopenStalledStream(
+    streamId: number,
+    stream: LogicalStream,
+    connection: ActiveConnection,
+  ): void {
+    connection.reassembler.forget(streamId);
+    this.markStreamTerminal(streamId);
+    this.restoredStreamIds.delete(streamId);
+    this.outboundSeq.delete(streamId);
+    this.subscriptions.delete(streamId);
+    // Drop queued outbound first so per-stream FIFO cannot park the CLOSE
+    // behind a transfer nobody wants anymore (mirrors `closeStream`).
+    connection.scheduler.dropStreamOutbound(streamId);
+    this.enqueueMessage(connection, {
+      type: MuxFrameType.CLOSE,
+      streamId,
+      qos: QosClass.INTERACTIVE,
+      json: { reason: "reassembly-stalled" },
+      binary: null,
+    });
+    const reopenAttempts = this.streamReopenAttempts.get(streamId);
+    this.streamReopenAttempts.delete(streamId);
+    const freshStreamId = this.allocateStreamId();
+    stream.adoptStreamIdForReopen(freshStreamId);
+    this.subscriptions.set(freshStreamId, stream);
+    if (reopenAttempts !== undefined) {
+      this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
+    }
+    // The stall provenance moves with the re-key: this is the ONE transition
+    // that grants (and carries) the first-evidence deadline license.
+    this.stallReopenedStreamIds.delete(streamId);
+    this.stallReopenedStreamIds.add(freshStreamId);
+    this.scheduleStreamReopen(stream);
+    this.maybeReachReadyBoundary();
+  }
+
+  private clearReassemblyWatchdog(streamId: number): void {
+    const armed = this.reassemblyWatchdogs.get(streamId);
+    if (armed !== undefined) {
+      clearTimeout(armed.timer);
+      this.reassemblyWatchdogs.delete(streamId);
+    }
+  }
+
+  /** Connection teardown: every in-flight reassembly died with its socket. */
+  private clearAllReassemblyWatchdogs(): void {
+    for (const armed of this.reassemblyWatchdogs.values()) {
+      clearTimeout(armed.timer);
+    }
+    this.reassemblyWatchdogs.clear();
   }
 
   private openSubscription(
@@ -2210,6 +2587,7 @@ export class RemoteSession<
         : compat.details;
       stream.goFatal(details);
       this.subscriptions.delete(stream.streamId);
+      this.stallReopenedStreamIds.delete(stream.streamId);
       return;
     }
     // No tombstone to lift here - deliberately. A tombstoned id is dead on
@@ -2239,6 +2617,24 @@ export class RemoteSession<
       },
       binary: null,
     });
+    if (this.stallReopenedStreamIds.has(stream.streamId)) {
+      // A stall-reopened stream's resolver provably emits (the stall verdict
+      // only ever follows accepted chunks), so its replacement subscribe
+      // cannot be trusted to produce evidence on its own: its FIRST evidence
+      // is bounded exactly as inter-chunk progress is, from the moment the
+      // subscribe is sent. This is what makes the stall recovery a
+      // self-sustaining loop - an expiry with zero frames re-keys and
+      // re-subscribes again on the climbing per-stream backoff - and it
+      // covers the reconnect-mid-loop case too, since the openAck replay of
+      // a loop member passes through here as well. Every OTHER subscribe
+      // stays unarmed - including a retryable-FATAL reopen, whose method may
+      // legitimately emit nothing on subscribe (an event-only stream) and
+      // must not be churned through zero-evidence CLOSE/resubscribe cycles;
+      // the attach fan-out's silent streams have the stall diagnostic naming
+      // them. The arm retires through the same evidence/verdict/close/drop
+      // set as any other.
+      this.armReassemblyWatchdog(this.connectGeneration, stream.streamId);
+    }
   }
 
   /**
@@ -2391,6 +2787,10 @@ export class RemoteSession<
     // immediately every time, which is the exact behaviour the window exists
     // to prevent.
     this.clearStableResetTimer();
+    // The stall diagnostic reads "no restore evidence" as a fact about the
+    // stream; with the host absent that silence is the HOST's, so the line
+    // would misattribute. The reattach path arms a fresh window.
+    this.clearRestoreStallTimer();
     this.noteConnectionLost();
     // `isReady()` includes `hostAttached`, so it is already false here - this
     // is what tells anyone.
@@ -2476,7 +2876,7 @@ export class RemoteSession<
     }
     this.dropConnection(cause);
     this.syncReadinessLatch();
-    const retryInMs = this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
     // rejection, `peer_gone`, and phase timeout arrives here. This is the one
@@ -2530,6 +2930,11 @@ export class RemoteSession<
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
+    // The stall diagnostic speaks for ONE attach's restores; the drop ends
+    // that attach, and the next one arms its own. Same for the reassembly
+    // watchdogs: every partial they were pacing died with the connection.
+    this.clearRestoreStallTimer();
+    this.clearAllReassemblyWatchdogs();
     // Guarded internally to once per outage, so a failed redial arriving here
     // again does not restart the clock.
     this.noteConnectionLost();
@@ -2660,7 +3065,12 @@ export class RemoteSession<
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
     this.dropConnection("session-fatal-unauthorized");
-    void this.revalidateThenReconnect(auth, details, rejectedBearer);
+    void this.revalidateThenReconnect(
+      generation,
+      auth,
+      details,
+      rejectedBearer,
+    );
   }
 
   /**
@@ -2688,11 +3098,19 @@ export class RemoteSession<
    * the host keeps rejecting) is bounded and goes terminal to stop looping.
    */
   private async revalidateThenReconnect(
+    generation: number,
     auth: StreamAuthRevalidator,
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
     const outcome = await this.revalidateWithinBudget(auth);
+    if (generation !== this.connectGeneration) {
+      // A stale completion: the generation this revalidation was recovering
+      // has been superseded while it was in flight. It owns nothing now - it
+      // must neither schedule a redial for the new owner nor spend an intent
+      // recorded against a different generation.
+      return;
+    }
     if (this.phase !== "reconnecting" || this.connection !== null) {
       // Closed - or a competing path already owns reconnection - while the
       // revalidation was in flight.
@@ -2704,7 +3122,7 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause:
           "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
@@ -2734,7 +3152,7 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    const retryInMs = this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({
       cause:
         "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
@@ -2793,6 +3211,10 @@ export class RemoteSession<
     );
     this.terminalFatalDetails = details;
     this.phase = "closed";
+    // Terminal means every recorded demand dies with the loop - the field's
+    // contract says terminal close clears it, and BOTH terminal transitions
+    // (caller `close()` and this fatal) must honor that, not just one.
+    this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("session-fatal");
@@ -3072,6 +3494,75 @@ export class RemoteSession<
   }
 
   /**
+   * Spends a force recorded against `generation`, pulling the backoff that
+   * generation's failure just armed to zero. Called after EVERY path that
+   * arms a reconnect for a failed attempt - the connection-loss funnel and
+   * the direct schedulers (grant-provision failure, a thrown connect path,
+   * UNAUTHORIZED revalidation) alike - so whether the demand is honored does
+   * not depend on which lander a failure happens to take. The rung is always
+   * armed first: attempt accounting and the failure log see the ordinary
+   * schedule, and only then is the one wait pulled to zero.
+   * Generation-scoped on both sides: a newer dial's loss can never spend an
+   * older intent.
+   */
+  private consumePendingForce(generation: number): void {
+    if (this.pendingForceGeneration !== generation) {
+      return;
+    }
+    this.pendingForceGeneration = null;
+    this.pullRedialToNow("pending-forced-redial");
+  }
+
+  /**
+   * THE reconnect scheduler for a failed attempt: arms the ordinary rung
+   * (attempt accounting, jitter, and the failure log all see the ordinary
+   * delay, which is returned for that log) and then spends a force recorded
+   * against exactly `generation` by pulling that newly armed wait to zero.
+   * Every retryable failure lander must come through here - the loss funnel,
+   * the grant-provision failure, the thrown connect path, and both
+   * UNAUTHORIZED revalidation arms - so whether a recorded demand is honored
+   * cannot depend on which lander a failure happens to take.
+   */
+  private scheduleReconnectForFailedGeneration(generation: number): number {
+    const retryInMs = this.scheduleReconnect();
+    this.consumePendingForce(generation);
+    return retryInMs;
+  }
+
+  /**
+   * Clears a pending backoff wait and dials NOW. Distinct from
+   * {@link collapseBackoff} on both axes that make collapse safe to wire to
+   * free-firing signals: no jitter (the callers are single-device,
+   * user-scoped edges - a Retry tap, a forced resume, a probe this session
+   * just watched fail - not fleet-synchronized events), and not
+   * once-per-timer (a forced caller's evidence does not expire because an
+   * earlier wake already spent the collapse). `reconnectAttempt` stays
+   * untouched: this skips ONE wait, it does not forgive the escalation, so a
+   * host that is genuinely gone keeps climbing the ladder between forced
+   * redials.
+   */
+  private pullRedialToNow(reason: string): void {
+    // Keyed on the ARMED TIMER, not on a phase: the pre-dial landers (a
+    // failed grant mint, a thrown connect path) arm their backoff while the
+    // phase still reads `connecting`, and a pull that insisted on
+    // `reconnecting` silently no-opped for exactly the failures the pending
+    // force exists to hurry. A pending wait is a pending wait; `closed` is
+    // the only state whose timer must never be revived.
+    if (this.phase === "closed" || this.backoffTimer === null) {
+      return;
+    }
+    clearTimeout(this.backoffTimer);
+    this.backoffTimer = null;
+    // Spend the timer's wake-collapse as well: the wait it guarded no longer
+    // exists, so a wake racing in behind this must find nothing to shorten.
+    this.backoffCollapsed = true;
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) redialing now (${reason})`,
+    );
+    this.armBackoffTimer(Date.now(), 0);
+  }
+
+  /**
    * `beginConnect` with its pre-connection failure modes routed back into the
    * state machine.
    *
@@ -3116,7 +3607,7 @@ export class RemoteSession<
         return;
       }
       this.dropConnection("connect-path-threw");
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `the connect path threw before dialing: ${
           cause instanceof Error ? cause.message : String(cause)
@@ -3385,6 +3876,11 @@ export class RemoteSession<
       }
     }
     this.readyBoundaryGeneration = this.connectGeneration;
+    this.clearRestoreStallTimer();
+    // A force recorded against this generation is satisfied by reaching
+    // ready: a fresh attach is everything it could have bought. Consumed
+    // unspent, so it cannot leak onto a later, unrelated loss.
+    this.pendingForceGeneration = null;
     this.armStableResetTimer();
     // Order matters: the breakdown reads `hasReachedReadyOnce` to decide
     // whether this was a REATTACH at all, so the flag is raised after it.
@@ -3758,6 +4254,8 @@ export class RemoteSession<
     this.clearReauthTimer();
     this.clearStandingTimer();
     this.clearStableResetTimer();
+    this.clearRestoreStallTimer();
+    this.clearAllReassemblyWatchdogs();
     this.clearAllStreamReopens();
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);

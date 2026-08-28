@@ -11,6 +11,27 @@ const HOST_UPDATE_BANNER_PERSIST_KEY = persistKey(STORE_KEYS.hostUpdateBanner);
  */
 export const HOST_UPDATE_BANNER_SNOOZE_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How long a completed update stays on the landing banner before collapsing.
+ *
+ * "Completion may auto-collapse after a short acknowledgement" (experience doc).
+ * Long enough to read one sentence, short enough that a success nobody needs to
+ * act on does not keep occupying the banner — which, for a durable attempt
+ * record retained for days, is otherwise exactly what happens.
+ */
+export const HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS = 8_000;
+
+/**
+ * Most dismissed attempts remembered.
+ *
+ * Bounded because attempt ids are unbounded and this list is PERSISTED: an
+ * unbounded set would grow once per update forever, in local storage, to answer
+ * a question only the newest few attempts can ever ask. Dropping the oldest is
+ * safe — an attempt old enough to fall off has long since been superseded on
+ * the host, so it can no longer be the view the banner is rendering.
+ */
+const MAX_REMEMBERED_DISMISSALS = 32;
+
 interface HostUpdateBannerState {
   /**
    * Map of latestVersion (the one shown when the user snoozed) → epoch
@@ -21,11 +42,28 @@ interface HostUpdateBannerState {
   readonly snoozeUntilByVersion: Readonly<Record<string, number>>;
   snooze: (latestVersion: string, snoozeUntilMs: number) => void;
   clearSnooze: (latestVersion: string) => void;
+  /**
+   * Terminal attempts the LANDING banner has finished with — a failure the user
+   * dismissed, or a completion that acknowledged itself and collapsed.
+   *
+   * Keyed by `attemptId`, and that is what makes supersession free: a newer
+   * attempt has an id nobody has dismissed, so it presents normally without any
+   * expiry rule or version comparison. Keying by host, or by a boolean, would
+   * mean the next failure on that machine arrived pre-dismissed.
+   *
+   * LANDING ONLY. The selected-host Overview reads none of this: "failure
+   * dismissal is client-local presentation state; the failure remains
+   * discoverable in the selected-host Overview until host-side expiry or a
+   * newer attempt supersedes it" (experience doc). Dismissing is "stop telling
+   * me on the home screen", never "delete the evidence".
+   */
+  readonly landingDismissedAttemptIds: ReadonlyArray<string>;
+  dismissLandingAttempt: (attemptId: string) => void;
 }
 
 type PersistedHostUpdateBannerState = Pick<
   HostUpdateBannerState,
-  "snoozeUntilByVersion"
+  "snoozeUntilByVersion" | "landingDismissedAttemptIds"
 >;
 
 export const useHostUpdateBannerStore = create<HostUpdateBannerState>()(
@@ -58,11 +96,26 @@ export const useHostUpdateBannerStore = create<HostUpdateBannerState>()(
           return { snoozeUntilByVersion: next };
         });
       },
+      landingDismissedAttemptIds: [],
+      dismissLandingAttempt: (attemptId) => {
+        set((state) => {
+          if (state.landingDismissedAttemptIds.includes(attemptId)) {
+            return state;
+          }
+          return {
+            landingDismissedAttemptIds: [
+              ...state.landingDismissedAttemptIds,
+              attemptId,
+            ].slice(-MAX_REMEMBERED_DISMISSALS),
+          };
+        });
+      },
     }),
     {
       ...basePersistOptions(HOST_UPDATE_BANNER_PERSIST_KEY),
       partialize: (state): PersistedHostUpdateBannerState => ({
         snoozeUntilByVersion: state.snoozeUntilByVersion,
+        landingDismissedAttemptIds: state.landingDismissedAttemptIds,
       }),
     },
   ),

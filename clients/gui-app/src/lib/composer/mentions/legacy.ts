@@ -10,11 +10,7 @@ const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set<EpicArtifactKind>([
   "story",
   "review",
 ]);
-import type {
-  EntityMentionAttachment,
-  MentionAttachment,
-  PathKind,
-} from "@/lib/composer/types";
+import type { MentionAttachment, PathKind } from "@/lib/composer/types";
 
 export function inferPathKind(path: string): PathKind {
   return path.endsWith("/") ? "folder" : "file";
@@ -37,9 +33,7 @@ export function createLegacyMentionAttachment(path: string): MentionAttachment {
   };
 }
 
-function legacyEntityMentionAttachment(
-  path: string,
-): EntityMentionAttachment | null {
+function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
   const epicMatch = path.match(/^epic:([^/\s]+)$/u);
   if (epicMatch !== null) {
     const epicId = epicMatch[1];
@@ -140,6 +134,33 @@ function legacyEntityMentionAttachment(
       terminalAgentId: null,
       terminalId,
       status: null,
+    };
+  }
+
+  // `@browser-tab:<title> [tabId=...]` (see `formatMentionForLLMQuery`'s
+  // `ContextType.BrowserTab` arm) - only the title survives into `path`
+  // (`MENTION_TOKEN_REGEX` stops at the first space, so a multi-word title
+  // loses its tail here same as it already does for `@agent:`/`@terminal:`).
+  // `tabId` is genuinely unrecoverable from text alone when the attachments
+  // array is missing, so this degrades to a reference-only chip that carries
+  // no live identity - the composer/sent-message favicon branches already
+  // treat an empty `tabId` as "not resolvable" and fall back to the globe icon.
+  const browserTabMatch = path.match(/^browser-tab:([^/\s]+)$/u);
+  if (browserTabMatch !== null) {
+    const title = browserTabMatch[1];
+    return {
+      kind: "mention",
+      contextType: "browser-tab",
+      path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: title,
+      description: "",
+      tabId: "",
+      sessionId: "",
+      url: "",
     };
   }
 

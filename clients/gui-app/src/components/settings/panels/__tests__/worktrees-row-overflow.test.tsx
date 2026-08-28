@@ -139,7 +139,7 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
     screen.getByTestId("worktree-script-review-dialog");
   });
 
-  it("disables the delete item for an in-use row without hiding it", () => {
+  it("keeps the delete item enabled for an in-use row", () => {
     renderSingleRow({
       worktreePath: "/wt/busy",
       branch: "feat-busy",
@@ -151,12 +151,11 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
       { button: 0 },
     );
 
-    // Copy path and manage scripts stay usable while the row is in use.
     screen.getByRole("menuitem", { name: "Copy path" });
     screen.getByRole("menuitem", { name: "Manage script" });
     const deleteItem = screen.getByRole("menuitem", {
-      name: "Delete worktree (in use by an active agent)",
+      name: "Delete worktree feat-busy",
     });
-    expect(deleteItem.getAttribute("aria-disabled")).toBe("true");
+    expect(deleteItem.getAttribute("aria-disabled")).not.toBe("true");
   });
 });

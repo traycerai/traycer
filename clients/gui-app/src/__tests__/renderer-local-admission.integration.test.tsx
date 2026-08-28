@@ -349,6 +349,8 @@ function buildMessengerFactory(
             busySessionCount: 0,
             updateProgress: null,
             busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
           }),
       },
     });

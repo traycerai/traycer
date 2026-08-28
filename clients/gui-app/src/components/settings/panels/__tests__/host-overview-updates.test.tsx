@@ -384,7 +384,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.install": async (req) => {
           installedVersions.push(req.version);
           await gate;
-          return { outcome: "accepted" as const };
+          return { outcome: "accepted" as const, attemptId: null };
         },
       },
     });
@@ -457,7 +457,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
           }),
         "host.update.install": (req) => {
           attempted.push(req.version);
-          return Promise.resolve({ outcome: "accepted" as const });
+          return Promise.resolve({
+            outcome: "accepted" as const,
+            attemptId: null,
+          });
         },
       },
     });
@@ -691,7 +694,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
             manifest: multiVersionManifest(["1.6.0"]),
           }),
         "host.update.install": () =>
-          Promise.resolve({ outcome: "already-updating" as const }),
+          Promise.resolve({
+            outcome: "already-updating" as const,
+            attemptId: null,
+          }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -778,6 +784,78 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         .getByTestId("host-overview-run-doctor")
         .getAttribute("aria-disabled"),
     ).toBe("true");
+  });
+
+  it("G9.4 — a 'dispatch-indeterminate' host.update.install answer RELEASES the accepted latch and still invalidates host.status", async () => {
+    // The `dispatch-indeterminate` arm (protocol @1.1) means the host spawned
+    // a detached CLI but cannot attribute a durable attempt to this dispatch —
+    // not a success, not a refusal. `useHostUpdateInstall`'s `onSuccess` must
+    // NOT arm/must release `armUpdateInstallAccepted` for it (that 60s lockout
+    // belongs to `accepted` alone), while still re-arming the `host.status`
+    // read so `updateOperation` — the negotiated route to live progress for
+    // this call — gets a chance to reveal what is actually happening.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.6.0"]),
+          }),
+        "host.update.install": () =>
+          Promise.resolve({
+            outcome: "dispatch-indeterminate" as const,
+            reason: "ack-timeout",
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    const statusCallsBeforeInstall = fixture.hostStatusCalls();
+
+    await openHostOverviewAdvanced();
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+    fireEvent.click(
+      within(rowFor(rows, "1.6.0")).getByRole("button", {
+        name: "Install 1.6.0",
+      }),
+    );
+
+    // Wait for the informative settle toast — the dispatch-uncertain wording,
+    // not the accepted or already-updating one.
+    await waitFor(() => {
+      expect(vi.mocked(toast.info)).toHaveBeenCalledWith(
+        "Couldn't confirm the update started on host-a: ack-timeout. Watching for progress.",
+      );
+    });
+
+    // THE LATCH IS NOT ARMED: unlike the `accepted` case (which locks the
+    // rename pencil), the rename control stays usable straight through the
+    // settle — there is no window where this outcome froze the page.
+    expect(
+      screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+    ).toBe(false);
+
+    // `host.status` WAS re-armed — the invalidation this outcome still
+    // performs, distinguishing it from a pure refusal that no re-read follows.
+    await waitFor(() => {
+      expect(fixture.hostStatusCalls()).toBeGreaterThan(
+        statusCallsBeforeInstall,
+      );
+    });
   });
 
   it(`more than VERSION_LIST_PREVIEW (${VERSION_LIST_PREVIEW}) versions shows only the preview slice plus a toggle; clicking it reveals the rest and relabels to "Show recent"`, async () => {

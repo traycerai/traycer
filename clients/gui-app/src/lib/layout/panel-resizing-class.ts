@@ -10,7 +10,7 @@
  */
 import { appLogger } from "@/lib/logger";
 
-const PANEL_RESIZING_CLASS_NAME = "traycer-panel-resizing";
+export const PANEL_RESIZING_CLASS_NAME = "traycer-panel-resizing";
 
 let stopPanelResizeInteraction: (() => void) | null = null;
 

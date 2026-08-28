@@ -6,6 +6,8 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
@@ -22,6 +24,7 @@ import {
   prPresenceScopeKey,
   usePrPresenceStore,
 } from "@/stores/epics/pr-presence-store";
+import { SidebarProvider } from "@/components/ui/sidebar";
 
 interface CapturedDroppableInput {
   readonly id: string;
@@ -42,6 +45,21 @@ const testState = vi.hoisted<TestState>(() => ({
   activeArtifact: null,
 }));
 
+const browserPanelState = vi.hoisted(() => ({
+  value: {
+    lifecycle: "live" as const,
+    items: [],
+    errorMessage: null,
+    retry: vi.fn(),
+    closeTab: vi.fn(() => Promise.resolve()),
+  },
+}));
+
+const browserCanvasState = vi.hoisted(() => ({
+  prepareOpenTileInTabFocusTarget: vi.fn(),
+  prepareSetActiveTileTabFocusTarget: vi.fn(),
+}));
+
 const tileNavigationMocks = vi.hoisted(() => ({
   openTileInEpic: vi.fn(),
   openTileInTab: vi.fn(),
@@ -52,31 +70,66 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
 }));
 
-vi.mock("@dnd-kit/core", () => ({
-  useDroppable: (input: CapturedDroppableInput) => {
-    testState.droppableInputs.push(input);
-    return {
-      setNodeRef: () => undefined,
-      isOver: false,
-    };
-  },
-  useDraggable: (input: CapturedDroppableInput) => {
-    testState.draggableInputs.push(input);
-    return {
-      setNodeRef: () => undefined,
-      listeners: undefined,
-      attributes: {},
-      isDragging: false,
-    };
-  },
-}));
+vi.mock("@dnd-kit/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    useDroppable: (input: CapturedDroppableInput) => {
+      testState.droppableInputs.push(input);
+      return {
+        setNodeRef: () => undefined,
+        isOver: false,
+      };
+    },
+    useDraggable: (input: CapturedDroppableInput) => {
+      testState.draggableInputs.push(input);
+      return {
+        setNodeRef: () => undefined,
+        listeners: undefined,
+        attributes: {},
+        isDragging: false,
+      };
+    },
+  };
+});
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useActiveEpicArtifactId: () => testState.activeArtifactId,
+  useEpicCanvasStore: (
+    selector: (state: typeof browserCanvasState) => unknown,
+  ) => selector(browserCanvasState),
+  findOpenArtifactInTab: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
+  useBrowserSessionsContext: () => browserPanelState.value,
+}));
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
+  BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+  BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation:
+    () => (_epicId: string, _tabId: string, prepare: () => unknown) =>
+      prepare(),
+}));
+
+vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
+  TerminalsPanelActions: () => null,
+  TerminalsPanelBody: () => <div data-testid="epic-test-terminals-body" />,
+}));
+
+vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree", () => ({
+  ArtifactReadLifecycleBridge: () => null,
+  ArtifactTreePanelBody: () => null,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => testState.activeArtifact,
+  useEpicChatRecords: () => [],
 }));
 
 // The rail and panel hosts read PR presence under the CANVAS host - the Epic
@@ -87,6 +140,10 @@ vi.mock("@/lib/epic-selectors", () => ({
 // which is exactly the producer/consumer split the re-point fixed.
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostDirectoryEntryForHostId: () => ({ label: "Test host" }),
+  useHostClientForHostId: () => null,
 }));
 
 const EPIC_ID = "epic-sidebar-test";
@@ -357,6 +414,7 @@ describe("<EpicLeftPanelRail />", () => {
       "epic-rail-chats",
       "epic-rail-terminals",
       "epic-rail-panel-drop-line",
+      "epic-rail-browsers",
       "epic-rail-git-diff",
       "epic-rail-pull-requests",
       "epic-rail-file-tree",
@@ -528,6 +586,7 @@ describe("<EpicLeftPanelRail />", () => {
       ).toEqual([
         "Agents",
         "Terminals",
+        "Browsers",
         "Artifacts",
         "Git Diff",
         "Pull Requests",
@@ -645,6 +704,7 @@ describe("<EpicLeftPanelRail />", () => {
     it("refuses to hide the last visible panel", () => {
       for (const panelId of [
         "terminals",
+        "browsers",
         "artifacts",
         "git-diff",
         "pull-requests",
@@ -679,5 +739,130 @@ describe("<EpicLeftPanelRail />", () => {
         screen.getByTestId("epic-rail-chats").getAttribute("aria-current"),
       ).toBe("true");
     });
+  });
+});
+
+describe("Browsers panel registration", () => {
+  beforeEach(() => {
+    resetLeftPanelStore();
+    resetDndStore();
+    resetTestState();
+    setPullRequestPresence(false);
+    browserPanelState.value = {
+      lifecycle: "live",
+      items: [],
+      errorMessage: null,
+      retry: vi.fn(),
+      closeTab: vi.fn(() => Promise.resolve()),
+    };
+    browserCanvasState.prepareOpenTileInTabFocusTarget.mockReset();
+    browserCanvasState.prepareSetActiveTileTabFocusTarget.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetLeftPanelStore();
+    resetDndStore();
+    resetTestState();
+    setPullRequestPresence(false);
+  });
+
+  it("activates the registered browser body and keeps sibling panel mechanics", () => {
+    useLeftPanelStore.getState().setActivePanelId(TAB_ID, "terminals");
+
+    render(
+      <>
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId={TAB_ID}
+          orientation="vertical"
+        />
+        <SidebarProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </SidebarProvider>
+      </>,
+    );
+
+    const rail = screen.getByTestId("epic-sidebar-rail");
+    const railIds = Array.from(rail.children).map((child) =>
+      child.getAttribute("data-testid"),
+    );
+    expect(railIds).toEqual([
+      "epic-rail-chats",
+      "epic-rail-terminals",
+      "epic-rail-browsers",
+      "epic-rail-git-diff",
+      "epic-rail-file-tree",
+      "epic-rail-sharing",
+    ]);
+    expect(
+      screen.getByTestId("epic-sidebar").getAttribute("data-left-panel-id"),
+    ).toBe("terminals");
+    expect(screen.getByTestId("epic-test-terminals-body")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("epic-rail-browsers"));
+
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "browsers",
+    );
+    expect(
+      screen.getByTestId("epic-sidebar").getAttribute("data-left-panel-id"),
+    ).toBe("browsers");
+    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Collapse Browsers" })[0],
+    );
+    expect(
+      useLeftPanelStore.getState().panelSectionCollapsedByPanelId.browsers,
+    ).toBe(true);
+    expect(screen.queryByTestId("epic-browsers-panel-empty")).toBeNull();
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Expand Browsers" })[0],
+    );
+    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .applyPanelGroups(
+          moveLeftPanelGroup(
+            useLeftPanelStore.getState().getPanelGroups(),
+            "terminals",
+            "browsers",
+            "combine",
+          ),
+        );
+    });
+    expect(
+      screen
+        .getByTestId("epic-sidebar")
+        .getAttribute("data-left-panel-group-size"),
+    ).toBe("2");
+    expect(
+      screen
+        .getByTestId("split-resize-handle")
+        .getAttribute("data-resize-group-id"),
+    ).toBe("epic-left-panel-sections");
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .applyPanelGroups(
+          moveLeftPanelGroup(
+            DEFAULT_LEFT_PANEL_GROUPS,
+            "browsers",
+            "terminals",
+            "before",
+          ),
+        );
+    });
+    const reorderedRailIds = Array.from(
+      screen.getByTestId("epic-sidebar-rail").children,
+    ).map((child) => child.getAttribute("data-testid"));
+    expect(reorderedRailIds.indexOf("epic-rail-browsers")).toBeLessThan(
+      reorderedRailIds.indexOf("epic-rail-terminals"),
+    );
   });
 });

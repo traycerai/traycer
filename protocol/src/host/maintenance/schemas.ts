@@ -1,6 +1,8 @@
 import {
   hostInstallRecordSchema,
+  hostInstallRecordWireV10Schema,
   hostStagedRecordSchema,
+  hostStagedRecordWireV10Schema,
   storedCliInstallManifestSchema,
   // The browser-safe half deliberately: this module is on the RPC registry the
   // renderer imports, and `./installation` also carries the Node-only readers.
@@ -310,12 +312,152 @@ export type HostUpdateInstallResponse = z.infer<
   typeof hostUpdateInstallResponseSchema
 >;
 
+/**
+ * `@1.1` adds `attemptId` to the two arms for which a durable schema-v2 update
+ * attempt can be a fact. The per-arm semantics are NOT symmetric, and the
+ * asymmetry is the contract - read this before wiring either side.
+ *
+ * **`already-updating` → the attempt id, when one exists.** This arm means the
+ * host refused because an update is ALREADY running, so there is a real,
+ * already-durable attempt to name, and naming it is what lets a second UI
+ * action ATTACH to the in-flight attempt instead of racing it (experience doc,
+ * Flow C: "a second action for the same target attaches to the active
+ * attempt"). The id is read from the host's canonical attempt observation, so
+ * it is what the record says rather than what this call did.
+ *
+ * **`accepted` → always `null` before the cutover, and that is deliberate.**
+ * The host answers `accepted` at SPAWN of a detached CLI, and under the
+ * pre-cutover cohort gate (`decideUpdateExecutorCohort` is `shadow`) no
+ * schema-v2 attempt is created at all. There is therefore no adoption
+ * acknowledgement for this resolver to await, and returning an id read off the
+ * record here would attribute an unrelated pre-existing attempt to THIS
+ * dispatch - the exact fabrication the plan's "new UI never fabricates an
+ * identity when absent" rule forbids. Ticket 07 flips the authority and wires
+ * the executor's positive adoption acknowledgement through to this arm; until
+ * then a caller that needs live progress reads `host.status.updateOperation`,
+ * which is the negotiated route for that fact.
+ *
+ * Both arms are required-key/nullable-value, following the `busySessionCount` /
+ * `busyBreakdown` precedent: `null` means "this peer did not say", never "there
+ * is no attempt".
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * `dispatch-indeterminate` — A THIRD ARM, ADDED HERE AND NOT IN A LATER MINOR
+ *
+ * Nothing produces this arm yet. It lands in `@1.1` anyway, and the reason is
+ * the shape of the type it lives in: a `z.discriminatedUnion` rejects an
+ * unknown discriminator OUTRIGHT — no partial parse, no ignorable-unknown — so
+ * an arm introduced in `@1.2` is a hard decode failure on every `@1.1` peer.
+ * That would mint a permanent unservable generation:
+ *
+ *   `@1.0`  knows no `attemptId`, knows no arm  → fine, plain `accepted` claims
+ *                                                 no identity anyway
+ *   `@1.1`  knows `attemptId`, knows no arm     → BROKEN: it expects an id and
+ *                                                 cannot decode "there is none"
+ *   `@1.2+` knows both                          → fine
+ *
+ * Shipping the arm inside `@1.1` deletes the middle row before it exists. The
+ * emitter, the resolver change and the executor ACK wiring are all Ticket 07's;
+ * this is only the decoder learning to tolerate it from birth.
+ *
+ * **`attemptId` IS ABSENT, NOT NULL — and that is the whole point.** The two
+ * identity-bearing arms above use required-key/nullable-value. This arm has no
+ * `attemptId` key at all, so reading an identity off it is structurally
+ * impossible rather than merely discouraged. An `attemptId: null` here would
+ * reproduce the exact ambiguity the arm exists to remove: a caller could not
+ * distinguish "dispatch happened, id unknown" from "no dispatch identity
+ * exists". Do NOT add the key for symmetry with its neighbours.
+ *
+ * **`reason` is a free-form nullable string, deliberately NOT a `z.enum`.**
+ * Three distinct causes reach this outcome — ACK timeout, child exit, and an
+ * invalid or missing ACK — and collapsing them into one opaque result is the
+ * diagnostic-substitution class this epic has already hit three times. An enum
+ * would carry the cause and then recreate the unknown-value decode failure one
+ * level down, so the next cause added would break old `@1.1` peers exactly as a
+ * new arm would. `null` means "this peer did not say", never "there was no
+ * reason".
+ *
+ * **What it means:** the host dispatched a detached CLI and cannot attribute
+ * any durable attempt to this dispatch. Not a success, not a refusal, not a CLI
+ * failure — an unresolved dispatch, distinct from `cli-failed` ("ran and
+ * failed") and `cli-unavailable` ("nothing to run"). A client renders the
+ * dispatch-uncertain state, falls back to `host.status.updateOperation` for
+ * live progress, and **must not arm the accepted latch**: that 60s lockout
+ * belongs to `accepted` alone, and arming it on an uncertain dispatch would
+ * freeze the controls a user needs over an outcome that is not an acceptance.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export const hostUpdateInstallResponseV11Schema = z.discriminatedUnion(
+  "outcome",
+  [
+    z.object({
+      outcome: z.literal("accepted"),
+      attemptId: z.string().min(1).nullable(),
+    }),
+    z.object({ outcome: z.literal("externally-managed") }),
+    z.object({ outcome: z.literal("cli-unavailable") }),
+    z.object({ outcome: z.literal("cli-failed") }),
+    z.object({
+      outcome: z.literal("already-updating"),
+      attemptId: z.string().min(1).nullable(),
+    }),
+    // No `attemptId` key. See the asymmetry note above before adding one.
+    z.object({
+      outcome: z.literal("dispatch-indeterminate"),
+      reason: z.string().min(1).nullable(),
+    }),
+  ],
+);
+export type HostUpdateInstallResponseV11 = z.infer<
+  typeof hostUpdateInstallResponseV11Schema
+>;
+
 export const hostGetInstallationInfoRequestSchema = emptyRequestSchema;
 export type HostGetInstallationInfoRequest = z.infer<
   typeof hostGetInstallationInfoRequestSchema
 >;
 
+/**
+ * `@1.0` — the FROZEN released line, and it must stay byte-shaped as shipped.
+ *
+ * v1.2.0 released this method before `executableSha256` existed on either
+ * record, so a released peer's payload never carries that key. T3 then added it
+ * to the on-disk records, which is additive and harmless on disk but is a
+ * host→client divergence at a negotiated `1.0` — the exact finding
+ * `released-baseline-compat` raises.
+ *
+ * The `@1.0` slot is therefore served from the frozen WIRE projections. It is
+ * not a filter applied after building a richer response: the dispatcher parses
+ * against the CALLER's schema, so declaring the field absent here is what makes
+ * it structurally unreachable for that peer.
+ */
 export const hostGetInstallationInfoResponseSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("unmanaged") }),
+    z.object({
+      status: z.literal("managed"),
+      installRecord: hostInstallRecordWireV10Schema,
+      stagedRecord: hostStagedRecordWireV10Schema.nullable(),
+      cliManifest: storedCliInstallManifestSchema.nullable(),
+    }),
+  ],
+);
+export type HostGetInstallationInfoResponse = z.infer<
+  typeof hostGetInstallationInfoResponseSchema
+>;
+
+/**
+ * `@1.1` — the same call, additionally carrying `executableSha256` on both
+ * records.
+ *
+ * A MINOR, not a major: the growth is additive, host→client, and every consumer
+ * already tolerates absence because old hosts never sent it (the record schemas
+ * normalize a missing value to `null` by construction). A major would force
+ * downgrade bridges for a field whose absent case is already the shipped
+ * reality.
+ */
+export const hostGetInstallationInfoResponseV11Schema = z.discriminatedUnion(
   "status",
   [
     z.object({ status: z.literal("unmanaged") }),
@@ -327,8 +469,8 @@ export const hostGetInstallationInfoResponseSchema = z.discriminatedUnion(
     }),
   ],
 );
-export type HostGetInstallationInfoResponse = z.infer<
-  typeof hostGetInstallationInfoResponseSchema
+export type HostGetInstallationInfoResponseV11 = z.infer<
+  typeof hostGetInstallationInfoResponseV11Schema
 >;
 
 /**

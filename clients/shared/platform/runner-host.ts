@@ -29,8 +29,33 @@ import type {
   HostGetInstallationInfoResponse,
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
+import type { BrowserViewBridge } from "./browser-view";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
+
+/**
+ * What a shell can say about the wake it is reporting through
+ * `IRunnerHost.onSystemResumed`.
+ */
+export type SystemResumeEvent = {
+  /**
+   * How long the runtime was demonstrably suspended before this resume, in
+   * milliseconds - or `null` when the shell cannot measure it (desktop
+   * `powerMonitor` reports no sleep duration; a mobile shell that never saw
+   * the background edge has no stamp to measure from).
+   *
+   * The number changes what a wake consumer should DO with the sockets the
+   * freeze left behind: a brief measured suspend deserves a short probe of a
+   * socket that may have survived, a long one means the OS has torn the
+   * socket down and probing it only delays the redial. `null` keeps the
+   * conservative desktop-calibrated behavior.
+   */
+  readonly backgroundedForMs: number | null;
+};
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -65,6 +90,9 @@ export type { StoredCredentials } from "@traycer/protocol/config/credentials";
  * register it through module-level globals.
  */
 export interface IRunnerHost {
+  /** Complete native browser capability, or null on shells without one. */
+  readonly browserView: BrowserViewBridge | null;
+
   /**
    * Browser-safe sign-in URL the shell wants `gui-app` to open when the
    * user initiates auth. Shells embed their own callback scheme (custom
@@ -421,14 +449,28 @@ export interface IRunnerHost {
    * offline within seconds instead of waiting out the stream heartbeat.
    *
    * Desktop bridges Electron `powerMonitor` `resume`/`unlock-screen` through
-   * the preload IPC bridge. Mobile raises it on the hidden -> visible edge,
-   * where "the machine woke" means the app returned to the foreground and the
-   * OS un-suspended its WebView. Shells with no wake signal at all (web, tests)
+   * the preload IPC bridge. Mobile raises it when the app returns to the
+   * foreground (the DOM visibility edge and the native app-state edge,
+   * deduplicated) - "the machine woke" means the OS un-suspended its WebView.
+   * Shells with no wake signal at all (web, tests)
    * install a no-op whose handler never fires; consumers still pair this with
    * the cross-platform `window` `online` event, so wake recovery degrades
    * gracefully where no native signal exists.
    */
-  onSystemResumed(handler: () => void): Disposable;
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
+
+  /**
+   * Subscribes to network-path changes the shell can observe natively:
+   * connectivity coming back, or the interface type changing under live
+   * connectivity (Wi-Fi -> cellular). Both are moments an existing socket is
+   * dead or about to behave like it, without any DOM `online` event firing -
+   * the network never went "offline", it moved. Mobile raises this from the
+   * OS reachability API and suppresses it while the app is backgrounded (the
+   * resume edge owns recovery there). Desktop and web install a no-op whose
+   * handler never fires: their consumers already cover the equivalent cases
+   * with `window 'online'` and the OS-wake signal.
+   */
+  onNetworkPathChanged(handler: () => void): Disposable;
 
   /**
    * Asks the shell to re-spawn its detached local host. Desktop delegates
@@ -1456,11 +1498,21 @@ export interface HostRemovalState {
 
 // Result of the in-app "Remove Traycer" action. The desktop stops + removes
 // the host service, the host install, and (on macOS) the SMAppService login
-// item, while preserving all `~/.traycer` user data. Each flag reports what
-// the teardown actually accomplished so the renderer can confirm.
+// item, while preserving all `~/.traycer` user data.
 export interface TraycerUninstallResult {
   readonly removedHost: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. See `HostUninstallResult` for why no
+   * platform can verify absence.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed: `true` = definitely still
+   * registered, `null` = nothing could confirm either way. Read this rather
+   * than `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 
@@ -1613,7 +1665,50 @@ export type HostActivationState =
   | "activationUnknown"
   | "unavailable";
 
+/**
+ * The durable attempt record's facts, read from disk by desktop main.
+ *
+ * ## Why FACTS and not a projected view (Ticket 07 §5.2.7 / T6 Q1(b))
+ *
+ * The gap this closes is the host-DOWN window: with no host to answer
+ * `host.status`, the renderer had no observation at all, so an attempt sitting
+ * on disk rendered as a blank "state unknown" and the user could not tell
+ * "an update is mid-flight and the host is unreachable" from "nothing is
+ * happening".
+ *
+ * Desktop main can read that record without a host. What it must NOT do is
+ * decide what it MEANS: the qualified-stale vocabulary (`kind` / `qualified` /
+ * `lastKnownKind`) lives with the renderer's projector, and a second copy of it
+ * here would be the duplicated-policy class this epic has paid for repeatedly.
+ * So this carries the record's facts and nothing else; the renderer feeds them
+ * through the SAME projector it already uses for live reads.
+ *
+ * `updatedAt` is presentation only. Attempt ordering is
+ * `attemptId + generation + sequence` — never a timestamp, so two clocks can
+ * never disagree about which attempt is newer.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
+  readonly updatedAt: string;
+}
+
 export interface HostControllerStatus {
+  /**
+   * The durable attempt on THIS machine, or `null` when there is none or the
+   * record could not be read.
+   *
+   * `null` is deliberately not "no attempt": an unreadable record is also
+   * `null`, and the renderer must treat absence as "we cannot say" rather than
+   * as "nothing is running". Fabricating idleness from a failed read is how a
+   * mid-flight update becomes invisible.
+   */
+  readonly localAttempt: LocalAttemptFacts | null;
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
@@ -1691,7 +1786,23 @@ export type ApplyStagedTrigger = "launch" | "manual";
 
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. No platform can verify absence:
+   * Windows maps every `schtasks /Query` failure to `not-installed`, Linux
+   * re-reads the manifest the uninstall just deleted, and macOS's
+   * `launchctl print` probe tolerates non-zero while an unloaded SMAppService
+   * record is invisible to it. It IS false when the readback positively found
+   * the registration still present.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed. `true` = definitely still
+   * registered, `null` = nothing could confirm either way, `false` = verified
+   * absent (no platform produces this today). Read this rather than
+   * `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 export interface HostLogsTailResult {

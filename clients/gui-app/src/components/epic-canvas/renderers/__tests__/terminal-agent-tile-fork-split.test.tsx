@@ -89,7 +89,7 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
             id: "agent-1",
             title: "Claude agent",
             surface: "tui",
-            active: true,
+            activity: "turn",
             hostId: "host-test",
           },
           descendants: [
@@ -97,7 +97,7 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
               id: "agent-child",
               title: "Child agent",
               surface: "gui",
-              active: true,
+              activity: "turn",
               hostId: "host-test",
             },
           ],
@@ -109,6 +109,9 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-test",
   useEpicTerminalAgent: (): TuiAgentProjection => ({
     id: "agent-1",
+    // An ordinary registry-backed agent - this suite exercises the tile's
+    // fork-split affordance, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Claude agent",
     parentId: null,

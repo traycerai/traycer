@@ -199,7 +199,7 @@ describe("AuthService session recovery - wake mid-probe", () => {
     // alongside the `online` DOM event; `MockRunnerHost.emitSystemResumed()`
     // fires it synchronously, with none of the `online` path's 250ms
     // debounce to drive through fake timers.
-    host.emitSystemResumed();
+    host.emitSystemResumed({ backgroundedForMs: null });
 
     // Resolve the in-flight probe as a failure - the recovery tick's failure
     // tail runs `scheduleSessionRecovery("recovery:validate-network")` on its

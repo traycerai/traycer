@@ -218,6 +218,12 @@ function applyInitialChatHandoffStep(
       // the user is actually looking at.
       if (composerDraftIsEmpty(input.nodeId)) {
         input.replaceDraftContent(input.nodeId, input.step.content, null);
+        useComposerDraftStore
+          .getState()
+          .restoreBrowserAnnotations(
+            input.nodeId,
+            input.step.browserAnnotations,
+          );
         input.state.ackFailedSendRestoration(input.step.clientActionId);
         return;
       }

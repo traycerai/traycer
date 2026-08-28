@@ -46,7 +46,7 @@ function setupEvent(
 }
 
 function onlyRow(events: ReadonlyArray<ChatEvent>) {
-  const rows = buildSetupCardRows(events, BINDING);
+  const rows = buildSetupCardRows(events, BINDING, []);
   expect(rows).toHaveLength(1);
   return rows[0];
 }
@@ -57,7 +57,7 @@ describe("buildSetupCardRows", () => {
       setupEvent("turn.started", {}, null),
       setupEvent("turn.completed", {}, null),
     ];
-    expect(buildSetupCardRows(events, BINDING)).toEqual([]);
+    expect(buildSetupCardRows(events, BINDING, [])).toEqual([]);
   });
 
   it("ignores non-setup events while deriving", () => {
@@ -145,6 +145,7 @@ describe("buildSetupCardRows", () => {
         ),
       ],
       BINDING,
+      [],
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].model.workspaces[0].state).toBe("ready");
@@ -500,6 +501,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.succeeded", { workspacePath: "/repo" }, 5_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -523,6 +525,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.succeeded", { workspacePath: "/new" }, 5_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -543,6 +546,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/repo" }, 3_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -565,6 +569,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/web" }, 5_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -632,6 +637,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/repo" }, 4_000),
       ],
       BINDING,
+      [],
     );
     // Historical (closed) window inactive; the live re-bind window active.
     expect(rows.map((row) => row.isActive)).toEqual([false, true]);
@@ -656,6 +662,7 @@ describe("buildSetupCardRows", () => {
     const rows = buildSetupCardRows(
       [setupEvent("setup.failed", { code: "SETUP_AWAIT_FAILED" }, null)],
       BINDING,
+      [],
     );
     expect(rows).toEqual([]);
   });
@@ -702,5 +709,405 @@ describe("buildSetupCardRows", () => {
       setupEvent("setup.cancelled", { workspacePath: "/web" }, null),
     ]);
     expect(row.model.aggregate.state).toBe("failed");
+  });
+});
+
+/**
+ * # The host's partition decides how many cards exist
+ *
+ * On the windowed line `events` is a SLICE. `worktree.missing` is the lifecycle
+ * boundary and is NOT a setup event, so it belongs to no card's record set - a
+ * slice that dropped it partitions two lifecycles into one. The host reserved
+ * two ordinals; drawing one card leaves the second reading to the row merge as
+ * a row renderer policy withheld, so it renders as nothing at all - not even a
+ * placeholder.
+ */
+describe("buildSetupCardRows against the host's whole-log partition", () => {
+  it("splits a merged local window back across the host's own anchors", () => {
+    const rows = buildSetupCardRows(
+      [
+        setupEvent(
+          "setup.running",
+          { workspacePath: "/repo", terminalSessionId: "term-1" },
+          1_000,
+        ),
+        // FAILED, not succeeded: a `failed` -> `running` retry supersedes in
+        // place, so the defensive ready->running split does not fire and the
+        // local partition really does merge these two lifecycles.
+        setupEvent(
+          "setup.failed",
+          { workspacePath: "/repo", setupExitCode: 1 },
+          2_000,
+        ),
+        // The `worktree.missing` at 3_000 is NOT in this slice - it forms no
+        // row, so no range response ever carries it.
+        setupEvent(
+          "setup.running",
+          { workspacePath: "/repo", terminalSessionId: "term-2" },
+          4_000,
+        ),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+        {
+          createdAt: 4_000,
+          windowIndex: 1,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    // Two ordinals reserved, two cards drawn - and each numbered as the HOST
+    // numbered it, because `windowIndex` is part of the card's row id.
+    expect(rows.map((row) => row.windowIndex)).toEqual([0, 1]);
+    expect(rows[0].createdAt).toBe(1_000);
+    expect(rows[0].model.workspaces[0].terminalSessionId).toBe("term-1");
+    expect(rows[0].isActive).toBe(false);
+    expect(rows[1].createdAt).toBe(4_000);
+    expect(rows[1].model.workspaces[0].terminalSessionId).toBe("term-2");
+    expect(rows[1].isActive).toBe(true);
+  });
+
+  it("draws no card for a host window whose events the slice does not hold", () => {
+    // The ordinary cold card: its row is unhydrated, so the transcript wants
+    // the skeleton placeholder there. A card built from no events would replace
+    // a loading row with a permanently blank one.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 4_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+        {
+          createdAt: 4_000,
+          windowIndex: 1,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].windowIndex).toBe(1);
+  });
+
+  it("still draws the anchor's card when the next host window shares its millisecond", () => {
+    // Two lifecycles a millisecond apart have no timestamp boundary to be split
+    // on. Letting the later one take events "stamped at or after" its own
+    // createdAt would take the ANCHOR's earliest event too - the one whose
+    // timestamp IS the anchor - leaving that bucket empty and drawing no card
+    // for it at all. Staying merged is a degradation; losing the card is not.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
+        setupEvent(
+          "setup.failed",
+          { workspacePath: "/repo", setupExitCode: 1 },
+          1_000,
+        ),
+        setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+        {
+          createdAt: 1_000,
+          windowIndex: 1,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].windowIndex).toBe(0);
+  });
+
+  it("numbers a lifecycle the host has not published yet past the end of its list", () => {
+    // Live deltas after the last snapshot: the host's next partition appends
+    // this window at exactly that index.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
+        setupEvent("setup.succeeded", { workspacePath: "/repo" }, 2_000),
+        setupEvent("worktree.missing", { workspacePath: "/repo" }, 3_000),
+        setupEvent("setup.running", { workspacePath: "/repo" }, 4_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows.map((row) => row.windowIndex)).toEqual([0, 1]);
+    expect(rows[1].createdAt).toBe(4_000);
+  });
+
+  it("anchors a live event to its own host window when the opening is cold", () => {
+    // `onEventAppended` seats a live setup event and `hydratedRecords`
+    // publishes it at once, so a lifecycle whose opening events are still
+    // unhydrated is partitioned from its LATER events alone - and stamped at
+    // their timestamp, which is past the host's `createdAt`.
+    //
+    // Matching on equality alone reads that as a lifecycle the host has never
+    // published and numbers it past the end of the list, so the card computes a
+    // row id the skeleton never published, its ordinal is suppressed, and it
+    // draws unplaced at the tail - while the ordinal reserved for it stays
+    // empty.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 5_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    // The HOST's number and the HOST's createdAt - both are row-id material.
+    expect(rows[0].windowIndex).toBe(0);
+    expect(rows[0].createdAt).toBe(1_000);
+  });
+
+  it("opens a NEW lifecycle for a live event past the last window's closedAt", () => {
+    // The case the empty-bucket inference gets wrong, and cannot not get wrong:
+    // when every event of the last host window is cold, a genuinely new
+    // lifecycle leaves exactly the same empty bucket as that window's tail.
+    // `closedAt` is the boundary the slice never carries - `worktree.missing`
+    // forms no row - so the host publishes it.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: 3_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    // Numbered PAST the host's list: a lifecycle it has not published yet.
+    expect(rows[0].windowIndex).toBe(1);
+    expect(rows[0].createdAt).toBe(9_000);
+  });
+
+  it("still anchors a cold-opening tail that precedes closedAt", () => {
+    // The other direction on the same field - round six's finding must stay
+    // fixed. This event falls INSIDE the closed window's span.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 2_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: 3_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].windowIndex).toBe(0);
+    expect(rows[0].createdAt).toBe(1_000);
+  });
+
+  it("treats an event stamped exactly AT closedAt as past the boundary", () => {
+    // The tie, pinned. `closedAt` is the closing event's own stamp and the
+    // window's events all strictly precede it, so equality is the boundary's
+    // contemporary - not the closed window's. Undefined edges are how this kind
+    // of comparison gets reopened.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 3_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: 3_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows[0].windowIndex).toBe(1);
+  });
+
+  it("opens a NEW lifecycle past an OPEN window when the slice HOLDS the boundary", () => {
+    // `closedAt: null` is "open AS OF THE SNAPSHOT", not "open, therefore
+    // everything later joins it". The live events below arrived after that
+    // snapshot, and they carry the very boundary the host had not seen yet -
+    // so the client's own partition is the FRESHER evidence here, and reading
+    // the published `null` as an unconditional answer overrides it with a
+    // staler one.
+    //
+    // The empty-bucket inference gets this right on its own: window 0 already
+    // received an event, so a later local window is not its cold-opening tail.
+    // The `null` short-circuit is what stepped in front of that and merged two
+    // lifecycles into one card - the count defect this file's header calls the
+    // one no per-window correction can reach.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
+        setupEvent("setup.succeeded", { workspacePath: "/repo" }, 2_000),
+        // The re-bind boundary, live. It forms no window of its own.
+        setupEvent("worktree.missing", { workspacePath: "/repo" }, 4_000),
+        setupEvent("setup.running", { workspacePath: "/other" }, 5_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: null,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.windowIndex)).toEqual([0, 1]);
+    expect(rows[1].createdAt).toBe(5_000);
+    // The second card is its own lifecycle, not a re-run of the first: the
+    // reattachment reused window 0's row id and lifecycle flags, so the new
+    // binding rendered as the OLD one flipping back to `setting-up`.
+    expect(rows[0].model.workspaces[0].workspacePath).toBe("/repo");
+    expect(rows[1].model.workspaces[0].workspacePath).toBe("/other");
+  });
+
+  it("opens a NEW lifecycle past an OPEN window whose own rows are all COLD", () => {
+    // The half the empty-bucket inference cannot reach. Here the prior
+    // lifecycle contributed NOTHING to the slice, so its bucket is empty for
+    // the same reason a cold-opening tail's is - and the only thing telling the
+    // two apart is the boundary the slice happens to hold.
+    //
+    // `worktree.missing` forms no window, so the local partition consumes it
+    // and keeps nothing; carrying the stamps alongside is what lets an
+    // unbounded identity take one as the `closedAt` the host had not published.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent("worktree.missing", { workspacePath: "/repo" }, 4_000),
+        setupEvent("setup.running", { workspacePath: "/other" }, 5_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: null,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    // Window 0 draws no card - the slice holds none of its events, so the
+    // transcript wants its skeleton placeholder rather than a blank card. What
+    // matters is that the LIVE lifecycle is numbered past it instead of
+    // wearing its identity.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].windowIndex).toBe(1);
+    expect(rows[0].createdAt).toBe(5_000);
+    expect(rows[0].model.workspaces[0].workspacePath).toBe("/other");
+  });
+
+  it("anchors to an OPEN window whose bucket is still empty", () => {
+    // The cold-opening tail, one field over from the test above: same open
+    // window, but the slice supplied it NOTHING, so this live event is that
+    // lifecycle's own later activity rather than a new one. `closedAt: null`
+    // is not what decides it - the empty bucket is - which is exactly the
+    // difference the test above turns on.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: null,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows[0].windowIndex).toBe(0);
+    expect(rows[0].createdAt).toBe(1_000);
+  });
+
+  it("does not leak the merged window's triggering message onto the second half", () => {
+    // The anchor a card pins to. Carried over from the merged local window it
+    // would pin the SECOND card above the FIRST card's message - above a
+    // message that predates the lifecycle it describes.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent(
+          "setup.creating",
+          { workspacePath: "/repo", triggeringMessageId: "msg-first" },
+          1_000,
+        ),
+        setupEvent("setup.running", { workspacePath: "/repo" }, 2_000),
+        setupEvent(
+          "setup.failed",
+          { workspacePath: "/repo", setupExitCode: 1 },
+          3_000,
+        ),
+        // The boundary at 4_000 is outside the slice.
+        setupEvent("setup.running", { workspacePath: "/repo" }, 5_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: true,
+        },
+        {
+          createdAt: 5_000,
+          windowIndex: 1,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows.map((row) => row.triggeringMessageId)).toEqual([
+      "msg-first",
+      null,
+    ]);
+    expect(rows.map((row) => row.hasCreatingEvent)).toEqual([true, false]);
   });
 });

@@ -61,8 +61,11 @@ export type {
   WorktreeBusyHolders,
   WorktreeBusyOwnerKind,
   WorktreeBusyOwnerRef,
+  WorktreeHoldersChangedErrorDetails,
 } from "./worktree-busy-holders";
 export {
+  HOLDERS_REVISION_DIGEST_PATTERN,
+  holdersRevisionWireFieldSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
@@ -71,6 +74,7 @@ export {
   worktreeBusyHoldersWireFieldSchema,
   worktreeBusyOwnerKindSchema,
   worktreeBusyOwnerRefSchema,
+  worktreeHoldersChangedErrorDetailsSchema,
 } from "./worktree-busy-holders";
 
 export type {
@@ -162,6 +166,7 @@ export type {
   ClientRequestFrame,
   ClientFatalErrorFrame,
   ConnectionManifest,
+  ManifestMethodEntry,
   HostFrame,
   HostOpenAckFrame,
   HostResponseFrame,
@@ -188,6 +193,7 @@ export {
   hostFatalErrorFrameSchema,
   incompatibilityUpgradeGuidanceSchema,
   incompatibleMethodDetailsSchema,
+  manifestMethodEntrySchema,
   schemaVersionSchema,
   fatalErrorDetailsSchema,
   hostRestartIntentSchema,
@@ -227,8 +233,11 @@ export {
   buildConnectionManifest,
   mergeConnectionManifests,
   selectConnectionManifestForPeer,
+  SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "./capability-manifest";
+
+export type { ServedMajorsByMethod } from "./capability-manifest";
 
 export type {
   CompatibilityCheckResult,

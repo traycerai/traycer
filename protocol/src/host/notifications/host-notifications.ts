@@ -235,7 +235,8 @@ export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
 export type HostNotificationsSurface =
   | { readonly method: "host.notifications.list" }
   | { readonly method: "host.notifications.feed.subscribe" }
-  | { readonly method: "host.notifications.subscribe" };
+  | { readonly method: "host.notifications.subscribe" }
+  | { readonly method: "host.notifications.cloudFeed.subscribe" };
 
 /**
  * Enumerated per SUPPORTED major, never `major > N`.
@@ -272,6 +273,17 @@ export function visibleHostNotificationKinds(
     // The frozen host-v1.1.7 stream has no successor minor and never will.
     case "host.notifications.subscribe":
       return RELEASED_HOST_NOTIFICATION_KINDS;
+    // The cloud relay serves every subscriber from one shared replica, so this
+    // projection is what keeps a `@1.0` subscriber's rows AND summary closed
+    // over the arms its parser can represent - the relay derives its
+    // compatibility buckets from here rather than re-deciding `minor >= 1`.
+    case "host.notifications.cloudFeed.subscribe":
+      if (schemaVersion.major === 1) {
+        return schemaVersion.minor >= 1
+          ? ALL_HOST_NOTIFICATION_KINDS
+          : RELEASED_HOST_NOTIFICATION_KINDS;
+      }
+      return RELEASED_HOST_NOTIFICATION_KINDS;
   }
 }
 
@@ -298,6 +310,10 @@ export function streamCarriesChannelEmissionFrame(
       return schemaVersion.major === 1 && schemaVersion.minor === 0;
     // Unary: no frames at all.
     case "host.notifications.list":
+      return false;
+    // Snapshot/partitionSnapshot/connectionState/pong only, on every installed
+    // minor (`@1.0`, `@1.1`, `@1.2`).
+    case "host.notifications.cloudFeed.subscribe":
       return false;
   }
 }
@@ -1327,32 +1343,93 @@ export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
 });
 
 /**
- * `@1.1` stamps an exact cloud-home partition. The inherited `rows` and
- * `summary` fields now describe that one partition; `nextCursor: null` makes
- * the complete-snapshot cursor contract explicit. This is a new selected
- * snapshot variant; the frozen V10 frame union remains an arm of V11.
+ * Additive minor of the cloud feed row: identical envelope, entry slot widened
+ * to the `@2.1` union so a `host.operation.finished` occurrence is
+ * representable. V10 stays frozen - its closed union is a released parser's
+ * contract, and one new arm reaching it is treated as connection corruption
+ * (see `hostNotificationEntrySchema`'s doc), never a cosmetic failure.
+ *
+ * A V11 frame is a strict superset of a V10 frame, so one client-side parser
+ * (the V11 one) reads both minors; which ROWS it receives is decided
+ * host-side by `visibleHostNotificationKinds` for the negotiated version.
  */
-const hostNotificationsCloudFeedPartitionSnapshotSchemaV11 =
-  hostNotificationsCloudFeedSnapshotSchemaV10.extend({
-    kind: z.literal("partitionSnapshot"),
-    partition: hostNotificationsCloudPartitionSchema,
-  });
+export const hostNotificationsCloudFeedRowSchemaV11 = z.object({
+  ...hostNotificationsCloudFeedRowSchema.shape,
+  entry: hostNotificationEntrySchemaV21,
+});
+export type HostNotificationsCloudFeedRowV11 = z.infer<
+  typeof hostNotificationsCloudFeedRowSchemaV11
+>;
+
+const hostNotificationsCloudFeedSnapshotSchemaV11 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  connectionState: z.literal("connected"),
+  version: z.number().int().nonnegative(),
+  rows: z.array(hostNotificationsCloudFeedRowSchemaV11),
+  summary: hostNotificationsCloudFeedSummarySchema,
+});
 export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV11 =
   z.discriminatedUnion("kind", [
-    hostNotificationsCloudFeedPartitionSnapshotSchemaV11,
-    hostNotificationsCloudFeedSnapshotSchemaV10,
-    hostNotificationsCloudFeedConnectionStateSchemaV10,
-    hostNotificationsCloudFeedPongSchemaV10,
+    hostNotificationsCloudFeedSnapshotSchemaV11,
+    z.object({
+      kind: z.literal("connectionState"),
+      ...textFrameFields,
+      connectionState: z.literal("reconnecting"),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
   ]);
 export type HostNotificationsCloudFeedSubscribeServerFrameV11 = z.infer<
   typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV11
 >;
 
+/** Additive minor: same open request and client frames, widened entry union. */
 export const hostNotificationsCloudFeedSubscribeV11 = defineStreamRpcContract({
   method: "host.notifications.cloudFeed.subscribe",
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * `@1.2` stamps an exact cloud-home partition. The inherited `rows` and
+ * `summary` fields now describe that one partition; `nextCursor: null` makes
+ * the complete-snapshot cursor contract explicit. This is a new selected
+ * snapshot variant; the `@1.1` frame union remains a subset of `@1.2`.
+ *
+ * This partition work was authored as `@1.1` on its branch and re-minted here:
+ * mainline independently shipped its own `@1.1` (the widened entry union
+ * above), and a released minor is frozen, so the two could not share a number.
+ * The partition snapshot therefore extends the `@1.1` SNAPSHOT rather than the
+ * `@1.0` one - a later minor that dropped the widened `entry` union would be a
+ * server frame regressing against an earlier minor, which the registry
+ * validator rejects outright.
+ */
+const hostNotificationsCloudFeedPartitionSnapshotSchemaV12 =
+  hostNotificationsCloudFeedSnapshotSchemaV11.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsCloudPartitionSchema,
+  });
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV12 =
+  z.discriminatedUnion("kind", [
+    hostNotificationsCloudFeedPartitionSnapshotSchemaV12,
+    hostNotificationsCloudFeedSnapshotSchemaV11,
+    hostNotificationsCloudFeedConnectionStateSchemaV10,
+    hostNotificationsCloudFeedPongSchemaV10,
+  ]);
+export type HostNotificationsCloudFeedSubscribeServerFrameV12 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV12
+>;
+
+export const hostNotificationsCloudFeedSubscribeV12 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV12,
   clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
 });
 

@@ -76,7 +76,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRow,
+  type HostNotificationsCloudFeedRowV11,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
@@ -272,7 +272,7 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       localRows.sort(compareFeedCandidates);
       const remoteRows = Object.values(cloudRows)
         .filter(
-          (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+          (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
         )
         .filter((row) => !isAutomaticAgentRecovery(row.entry))
         .map(rowFromCloudFeedRow);
@@ -505,7 +505,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRow | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV11 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1201,7 +1201,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRow =>
+              (row): row is HostNotificationsCloudFeedRowV11 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -1524,11 +1524,13 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRow,
+  row: HostNotificationsCloudFeedRowV11,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
-    row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+    nonEmptyCloudPresentationTitle(row.presentation.epicTitle) ??
+    nonEmptyCloudPresentationTitle(row.presentation.chatTitle) ??
+    fallback.title;
   const providerPackAttribution = parseProviderPackNotificationAttribution(
     row.entry.payload,
   );
@@ -1554,6 +1556,10 @@ export function rowFromCloudFeedRow(
     providerPackAttribution,
     category: categoryForNotificationSource("cloud"),
   };
+}
+
+function nonEmptyCloudPresentationTitle(title: string | null): string | null {
+  return title !== null && title.length > 0 ? title : null;
 }
 
 function parseFeedId(feedId: string): ParsedFeedId | null {

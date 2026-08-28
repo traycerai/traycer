@@ -25,13 +25,16 @@ import type {
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
+  BrowserSessionTileRef,
   GitDiffTileRef,
   GitDiffTileViewState,
   PrDiffTileViewState,
+  SnapshotDiffTilePayload,
   TilesByInstanceId,
 } from "./types";
 import {
   isBlankTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
@@ -836,6 +839,36 @@ export function promotePreview(
 }
 
 /**
+ * Restore a pane's preview slot to `previewTabId`, the inverse of
+ * `promotePreview`.
+ *
+ * Dragging a preview tile promotes it on drag start, so a CANCELLED drag would
+ * otherwise leave the promotion behind - a state residual, which is exactly
+ * what `Esc restores order and geometry exactly` forbids. Only restores when
+ * that tile is still in the pane, so a cancel cannot resurrect a preview for a
+ * tab that has since gone.
+ *
+ * It also refuses when the pane's preview slot has been claimed by a DIFFERENT
+ * tile since the drag began - agent activity can open a new preview mid-drag,
+ * and restoring over it would evict a preview this gesture never touched.
+ * Cancel must undo its own promotion, not the pane's current state.
+ */
+export function restorePreview(
+  state: EpicCanvasState,
+  paneId: string,
+  previewTabId: string,
+): EpicCanvasState {
+  if (state.root === null) return state;
+  const root = replacePane(state.root, paneId, (pane) =>
+    pane.tabInstanceIds.includes(previewTabId) && pane.previewTabId === null
+      ? { ...pane, previewTabId }
+      : pane,
+  );
+  if (root === state.root) return state;
+  return { ...state, root };
+}
+
+/**
  * Set the active tab within a pane; also focus that pane globally.
  * `tabId` is a tab `instanceId`.
  */
@@ -1464,6 +1497,25 @@ export function renameArtifact(
   );
 }
 
+export function updateBrowserTileViewportPreset(
+  state: EpicCanvasState,
+  tileInstanceId: string,
+  viewportPreset: BrowserSessionTileRef["viewportPreset"],
+): EpicCanvasState {
+  const current = state.tilesByInstanceId[tileInstanceId];
+  if (current === undefined || !isBrowserSessionTileRef(current)) {
+    return state;
+  }
+  if (current.viewportPreset === viewportPreset) return state;
+  return {
+    ...state,
+    tilesByInstanceId: {
+      ...state.tilesByInstanceId,
+      [tileInstanceId]: { ...current, viewportPreset },
+    },
+  };
+}
+
 /**
  * Refresh the persisted `name` snapshot of every terminal tile bound to
  * (hostId, sessionId) after a successful host rename. The snapshot is the
@@ -1621,6 +1673,41 @@ export function updateSnapshotDiffTileView(
     state,
     (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
     (ref) => (isSnapshotDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * Rewrite a snapshot-diff tile's PAYLOAD, not its view state.
+ *
+ * The one payload on these nodes that is not a fact about the request is the
+ * segment capture: it records what the source blocks said at open time and is
+ * the fallback once those blocks leave the window. Captured mid-stream it
+ * freezes a half-written edit into the tile permanently, so it is refreshed
+ * once the edit settles - see `settledSnapshotSegmentCapture`, which owns both
+ * the settled-enough decision and the "nothing changed" answer.
+ *
+ * Deliberately narrow. It replaces the whole `diff` payload rather than
+ * patching hashes, because the payload is a discriminated union and a partial
+ * write would have to re-narrow it at every call site; and it takes an
+ * already-decided value rather than a resolver, so the policy stays in one
+ * place and this stays a store mutation.
+ *
+ * Identity-stable when the payload already matches: `updateTilesWhere` reports
+ * no change for a returned-as-is ref, so a re-render that recomputes the same
+ * capture does not churn the persisted canvas.
+ */
+export function updateSnapshotDiffTilePayload(
+  state: EpicCanvasState,
+  tileId: string,
+  diff: SnapshotDiffTilePayload,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
+    (ref) => {
+      if (!isSnapshotDiffTileRef(ref)) return ref;
+      return ref.diff === diff ? ref : { ...ref, diff };
+    },
   );
 }
 

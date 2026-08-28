@@ -17,6 +17,7 @@ import {
   openTileInBackgroundTab,
   openTileInPane,
   promotePreview,
+  restorePreview,
   renameArtifact,
   resizeSplit,
   setActivePane,
@@ -25,12 +26,14 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  updateBrowserTileViewportPreset,
   updateGitDiffTileView,
 } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type {
+  BrowserSessionTileRef,
   EpicCanvasState,
   EpicCanvasTileRef,
   EpicNodeRef,
@@ -280,6 +283,29 @@ describe("openTile (preview open)", () => {
     const paneId = rootPane(a).id;
     const promoted = promotePreview(a, paneId);
     expect(rootPane(promoted).previewTabId).toBeNull();
+  });
+
+  it("restorePreview puts back a promotion a cancelled drag should undo", () => {
+    const a = openPreview(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(a).id;
+    const previewTabId = rootPane(a).previewTabId;
+    expect(previewTabId).not.toBeNull();
+    const promoted = promotePreview(a, paneId);
+    expect(rootPane(promoted).previewTabId).toBeNull();
+    const restored = restorePreview(promoted, paneId, previewTabId ?? "");
+    expect(rootPane(restored).previewTabId).toBe(previewTabId);
+    expectCanvasInvariants(restored);
+  });
+
+  it("restorePreview refuses to resurrect a preview for a departed tab", () => {
+    // A cancel must not conjure a preview slot pointing at a tile that is no
+    // longer in the pane - that would be a residual of its own.
+    const a = openPreview(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(a).id;
+    const promoted = promotePreview(a, paneId);
+    const restored = restorePreview(promoted, paneId, "not-in-this-pane");
+    expect(rootPane(restored).previewTabId).toBeNull();
+    expect(restored).toBe(promoted);
   });
 });
 
@@ -1058,6 +1084,35 @@ describe("cloneEpicCanvasState", () => {
     expect(cloned.activePaneId).not.toBeNull();
     expect(findPaneById(cloned.root, cloned.activePaneId ?? "")).not.toBeNull();
     expectCanvasInvariants(cloned);
+  });
+});
+
+describe("updateBrowserTileViewportPreset", () => {
+  it("writes viewportPreset on a browser-session pointer", () => {
+    const pointer: BrowserSessionTileRef = {
+      id: "browser-session:s:t",
+      instanceId: "inst-session-1",
+      type: "browser-session",
+      name: "Browser",
+      hostId: TEST_HOST_ID,
+      sessionId: "s",
+      tabId: "t",
+      viewportPreset: "responsive",
+    };
+    const state = openPinned(createEmptyCanvas(), pointer);
+    const next = updateBrowserTileViewportPreset(
+      state,
+      pointer.instanceId,
+      "mobile",
+    );
+
+    expect(next.tilesByInstanceId[pointer.instanceId]).toEqual({
+      ...pointer,
+      viewportPreset: "mobile",
+    });
+    expect(
+      updateBrowserTileViewportPreset(next, pointer.instanceId, "mobile"),
+    ).toBe(next);
   });
 });
 

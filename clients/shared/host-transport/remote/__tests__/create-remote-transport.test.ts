@@ -54,6 +54,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
       },
     },
     requestId: () => "req-1",
+    proactiveWakeEligible: true,
     evidence: NO_TRANSPORT_EVIDENCE,
   });
 }
@@ -209,6 +210,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         streamRegistry: emptyStreamRegistry,
         webSocketFactory,
         requestId: () => "req-1",
+        proactiveWakeEligible: true,
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       expect(built).not.toBeNull();
@@ -319,6 +321,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         streamRegistry: emptyStreamRegistry,
         webSocketFactory,
         requestId: () => "req-1",
+        proactiveWakeEligible: true,
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       expect(built).not.toBeNull();

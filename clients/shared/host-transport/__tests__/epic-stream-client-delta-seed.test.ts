@@ -192,7 +192,7 @@ describe("EpicStreamClient delta-seeded reattach (epic.subscribe@1.3)", () => {
       method: "epic.subscribe",
       // The LATEST installed minor, not @1.3: `seedOffer` rides the live open
       // request, which every minor above @1.3 keeps.
-      schemaVersion: { major: 1, minor: 6 },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
     expect(
@@ -221,7 +221,7 @@ describe("EpicStreamClient delta-seeded reattach (epic.subscribe@1.3)", () => {
       method: "epic.subscribe",
       // The LATEST installed minor, not @1.3: `seedOffer` rides the live open
       // request, which every minor above @1.3 keeps.
-      schemaVersion: { major: 1, minor: 6 },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: {
         epicId: "epic-1",
         seedOffer: { stateVectorBase64: "AQ==", roomId: "room-1" },

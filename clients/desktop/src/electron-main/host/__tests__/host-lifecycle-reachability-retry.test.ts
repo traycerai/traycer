@@ -95,6 +95,8 @@ function layoutIn(dir: string): HostFsLayout {
     stagedDir: join(dir, "staged"),
     stagedRecordFile: join(dir, "staged", "staged.json"),
     pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
+    substrateFile: join(dir, "substrate.json"),
+    transitionJournalFile: join(dir, "transition.json"),
     environment: "production" as const,
   };
 }

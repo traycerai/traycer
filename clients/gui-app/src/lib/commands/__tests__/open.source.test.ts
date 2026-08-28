@@ -47,6 +47,7 @@ describe("openSource", () => {
     expect(items.map((item) => item.label)).toEqual([
       "Agents",
       "Terminals",
+      "Browser",
       "Artifacts",
       "Files",
       "Diff",
@@ -72,7 +73,6 @@ describe("openSource", () => {
     const categories = items.filter((item) =>
       item.id.startsWith("open:category:"),
     );
-    expect(categories).toHaveLength(6);
     // Sub-page item lists are hooks (live records / file trees), exercised in
     // the per-sub-page renderHook tests; here we only assert the wiring.
     for (const item of categories) {

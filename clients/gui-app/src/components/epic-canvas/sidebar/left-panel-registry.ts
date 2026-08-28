@@ -3,6 +3,7 @@ import {
   FolderTree,
   GitBranch,
   GitPullRequest,
+  Globe2,
   MessageSquareText,
   MessagesSquare,
   Terminal,
@@ -79,6 +80,14 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       isAutoVisible: () => true,
       forcedOnHint: null,
       supportsHeaderSearch: false,
+    },
+    {
+      id: "browsers",
+      title: "Browsers",
+      icon: Globe2,
+      isAutoVisible: () => true,
+      forcedOnHint: null,
+      supportsHeaderSearch: true,
     },
     {
       id: "artifacts",

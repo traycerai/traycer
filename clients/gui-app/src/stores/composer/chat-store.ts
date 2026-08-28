@@ -17,6 +17,7 @@ import type {
   ImageGenerationResult,
   TodoItem,
   AgentUserMessage,
+  BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AgentMessageSend,
@@ -592,6 +593,7 @@ export interface ChatMessage {
   segments: ReadonlyArray<MessageSegment>;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
+  browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   settings: ChatRunSettings | null;
   createdAt: number;
   /**

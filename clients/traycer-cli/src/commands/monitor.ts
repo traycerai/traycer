@@ -68,6 +68,25 @@ import { CLI_CLIENT_IDENTITY } from "../cli-version";
  *
  * stdout carries inbox messages only; all connection/diagnostic noise goes to
  * stderr so it never pollutes the agent-facing stream.
+ *
+ * NOT read-only, despite "stream" (CLI-021). Three durable effects, all of them
+ * required for the stream to be correct rather than incidental:
+ *
+ *  1. Delivery acknowledgement - a message confirmed onto stdout advances the
+ *     agent's inbox server-side, so the at-least-once inbox stops redelivering
+ *     it on reconnect. From the negotiated `@1.2` this CLI enqueues the
+ *     `agent.inbox.ack` itself; below that there is no event id on the frame
+ *     and the host retires the row on its own (see `handleServerFrame`).
+ *  2. Credential maintenance - the store-backed revalidator rotates and
+ *     PERSISTS this machine's credentials, proactively before expiry and
+ *     reactively on `UNAUTHORIZED`. A rotation spends a single-use refresh
+ *     token, which is why it goes through the locked store.
+ *  3. Host-credential provisioning - a host reporting `missing` gets a
+ *     delegated credential minted for it, so it keeps serving after this
+ *     process exits.
+ *
+ * On the readonly agent surface this command is hidden but NOT refused; see
+ * `MONITOR_SURFACE_NOTE` in `../agent-surface.ts` for that decision.
  */
 const SUBSCRIBE_METHOD = "agent.inbox.subscribe" as const;
 const OPEN_ACK_TIMEOUT_MS = 10_000;

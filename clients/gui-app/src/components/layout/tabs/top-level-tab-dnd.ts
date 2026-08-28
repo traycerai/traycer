@@ -13,15 +13,8 @@ import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 import type { TabRef } from "@/stores/tabs/types";
 
 /** These targets are intentionally outside the Epic-canvas DnD vocabulary. */
-export const TOP_LEVEL_EDGE_SPLIT_TARGET = "top-level-edge-split";
 export const TOP_LEVEL_FILLABLE_TARGET = "top-level-fillable-slot";
 export const TOP_LEVEL_STRIP_PAIR_TARGET = "top-level-strip-pair";
-
-export interface TopLevelEdgeSplitTarget {
-  readonly kind: typeof TOP_LEVEL_EDGE_SPLIT_TARGET;
-  readonly targetRef: TabRef;
-  readonly side: SplitSideName;
-}
 
 export interface TopLevelFillableTarget {
   readonly kind: typeof TOP_LEVEL_FILLABLE_TARGET;
@@ -41,29 +34,12 @@ export interface TopLevelStripPairTarget {
 }
 
 export type TopLevelTabDropTarget =
-  | TopLevelEdgeSplitTarget
   | TopLevelFillableTarget
   | TopLevelStripPairTarget;
-
-/** The targets that arm the dwell timer before they may commit. */
-export type TopLevelDwellTarget =
-  | TopLevelEdgeSplitTarget
-  | TopLevelStripPairTarget;
-
-export function dwellTargetKey(target: TopLevelDwellTarget): string {
-  const ref = `${target.targetRef.kind}:${target.targetRef.id}`;
-  return target.kind === TOP_LEVEL_EDGE_SPLIT_TARGET
-    ? `${target.kind}:${ref}:${target.side}`
-    : `${target.kind}:${ref}`;
-}
 
 export interface ValidatedTopLevelTabDrop {
   readonly source: TabRef;
   readonly target: TopLevelTabDropTarget;
-}
-
-export function edgeSplitDropId(ref: TabRef, side: SplitSideName): string {
-  return `top-level-edge:${ref.kind}:${ref.id}:${side}`;
 }
 
 export function fillableSlotDropId(
@@ -77,13 +53,6 @@ export function readTopLevelTabDropTarget(
   value: unknown,
 ): TopLevelTabDropTarget | null {
   if (!isRecord(value)) return null;
-  if (value.kind === TOP_LEVEL_EDGE_SPLIT_TARGET) {
-    const targetRef = readTabRef(value.targetRef);
-    const side = readSide(value.side);
-    return targetRef === null || side === null
-      ? null
-      : { kind: TOP_LEVEL_EDGE_SPLIT_TARGET, targetRef, side };
-  }
   if (value.kind === TOP_LEVEL_FILLABLE_TARGET) {
     const side = readSide(value.side);
     return typeof value.splitId !== "string" ||
@@ -95,8 +64,8 @@ export function readTopLevelTabDropTarget(
   return null;
 }
 
-/** A group member can reorder its group but may never create an edge split. */
-export function resolveUnpairedHeaderEdgeSource(
+/** A group member can reorder its group but may never pair or fill a slot. */
+export function resolveUnpairedHeaderSource(
   headerTab: HeaderTabDragData,
   layout: PersistedTabStripLayout,
 ): TabRef | null {
@@ -106,9 +75,9 @@ export function resolveUnpairedHeaderEdgeSource(
 }
 
 /**
- * One live guard shared by hover, dwell firing, and drop commit. A droppable's
- * serialized data is only hit geometry: it must never authorize a mutation
- * after selection, locks, compatibility, or the command ledger have changed.
+ * One live guard shared by hover and drop commit. A droppable's serialized
+ * data is only hit geometry: it must never authorize a mutation after
+ * selection, locks, compatibility, or the command ledger have changed.
  */
 export function resolveValidatedTopLevelTabDrop(
   headerTab: HeaderTabDragData,
@@ -117,7 +86,7 @@ export function resolveValidatedTopLevelTabDrop(
 ): ValidatedTopLevelTabDrop | null {
   const ledger = getTabCommandLedger();
   if (ledger.suppressionDepth > 0) return null;
-  const source = resolveUnpairedHeaderEdgeSource(headerTab, layout);
+  const source = resolveUnpairedHeaderSource(headerTab, layout);
   if (source === null || !isEligibleUnlocked(source)) return null;
   const sourceKey = tabRefKey(source);
   if (
@@ -125,10 +94,6 @@ export function resolveValidatedTopLevelTabDrop(
     ledger.pendingRemovals.has(sourceKey)
   ) {
     return null;
-  }
-  if (target.kind === TOP_LEVEL_EDGE_SPLIT_TARGET) {
-    if (!canMutateTabSplits()) return null;
-    return edgeTargetIsLive(source, target, layout) ? { source, target } : null;
   }
   if (target.kind === TOP_LEVEL_STRIP_PAIR_TARGET) {
     if (!canMutateTabSplits()) return null;
@@ -175,28 +140,6 @@ export function stripPairTargetForIndex(
   return { kind: TOP_LEVEL_STRIP_PAIR_TARGET, targetRef: item.ref };
 }
 
-function edgeTargetIsLive(
-  source: TabRef,
-  target: TopLevelEdgeSplitTarget,
-  layout: PersistedTabStripLayout,
-): boolean {
-  if (
-    refsMatch(source, target.targetRef) ||
-    layout.activeItemId === null ||
-    !isEligibleUnlocked(target.targetRef)
-  ) {
-    return false;
-  }
-  const active = layout.items.find((item) => item.id === layout.activeItemId);
-  const targetItem = findStripItemForRef(layout, target.targetRef);
-  return (
-    active?.kind === "tab" &&
-    targetItem?.kind === "tab" &&
-    active.id === targetItem.id &&
-    refsMatch(active.ref, target.targetRef)
-  );
-}
-
 function fillableTargetIsLive(
   target: TopLevelFillableTarget,
   layout: PersistedTabStripLayout,
@@ -217,23 +160,6 @@ function isEligibleUnlocked(ref: TabRef): boolean {
 
 function refsMatch(left: TabRef, right: TabRef): boolean {
   return left.kind === right.kind && left.id === right.id;
-}
-
-function readTabRef(value: unknown): TabRef | null {
-  if (!isRecord(value)) return null;
-  if (typeof value.kind !== "string" || typeof value.id !== "string") {
-    return null;
-  }
-  if (
-    value.kind !== "epic" &&
-    value.kind !== "draft" &&
-    value.kind !== "history" &&
-    value.kind !== "settings"
-  ) {
-    return null;
-  }
-  if (value.id.length === 0) return null;
-  return { kind: value.kind, id: value.id };
 }
 
 function readSide(value: unknown): SplitSideName | null {

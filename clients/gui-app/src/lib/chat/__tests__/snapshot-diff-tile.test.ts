@@ -20,6 +20,8 @@ describe("snapshot diff tile factories", () => {
       chatId: "chat-1",
       sourceBlockIds: ["blk-1"],
       filePath: "src/feature/app.ts",
+      beforeHash: null,
+      afterHash: null,
     });
     expect(tile.type).toBe("snapshot-diff");
     expect(tile.name).toBe("app.ts · edit");
@@ -158,18 +160,24 @@ describe("snapshot diff tile factories", () => {
         chatId: "c1",
         sourceBlockIds: ["b1"],
         filePath: "a.ts",
+        beforeHash: null,
+        afterHash: null,
       }).id,
       makeSnapshotSegmentDiffTile({
         hostId: HOST,
         chatId: "c1",
         sourceBlockIds: ["b2"],
         filePath: "a.ts",
+        beforeHash: null,
+        afterHash: null,
       }).id,
       makeSnapshotSegmentDiffTile({
         hostId: HOST,
         chatId: "c2",
         sourceBlockIds: ["b1"],
         filePath: "a.ts",
+        beforeHash: null,
+        afterHash: null,
       }).id,
       makeSnapshotCumulativeDiffTile({
         hostId: HOST,
@@ -201,6 +209,11 @@ describe("snapshot diff tile schema round-trip", () => {
       chatId: "chat-1",
       sourceBlockIds: ["blk-1"],
       filePath: "src/app.ts",
+      // The captured endpoints are the whole reason a persisted segment tile
+      // still resolves once its row leaves the window, so the round trip has
+      // to carry them rather than a pair of nulls.
+      beforeHash: "sha256:before",
+      afterHash: "sha256:after",
     });
     const parsed = parseTileRef(serializeTileRef(tile));
     expect(parsed).toEqual(tile);
@@ -258,9 +271,13 @@ describe("snapshot diff tile schema round-trip", () => {
       chatId: "chat-1",
       sourceBlockIds: ["blk-1"],
       filePath: "src/app.ts",
+      beforeHash: null,
+      afterHash: null,
     });
     // A persisted tile that carried a stale (random-uuid) id must re-derive
-    // the deterministic id from its payload on rehydrate.
+    // the deterministic id from its payload on rehydrate. This one also
+    // predates the captured endpoints, so its `diff` carries neither - the
+    // shape every segment tile on disk has today.
     const parsed = parseTileRef({
       id: "stale-uuid",
       type: "snapshot-diff",

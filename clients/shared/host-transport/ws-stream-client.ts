@@ -8,6 +8,7 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -981,7 +982,7 @@ export class WsStreamClient<
   ): void {
     const myManifest = selectConnectionManifestForPeer(
       this.options.registry,
-      buildStreamManifest(this.options.registry),
+      buildStreamManifest(this.options.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
     let changed = false;
@@ -1812,7 +1813,10 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = buildStreamManifest(this.config.registry);
+    const manifest = buildStreamManifest(
+      this.config.registry,
+      CLIENT_SERVED_STREAM_MAJORS,
+    );
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
@@ -1992,7 +1996,7 @@ class StreamSession<
     const theirManifest = ackParse.data.manifest;
     const myManifest = selectConnectionManifestForPeer(
       this.config.registry,
-      buildStreamManifest(this.config.registry),
+      buildStreamManifest(this.config.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
     const compat = checkStreamMethodCompatibility(
@@ -2794,8 +2798,9 @@ function predictedSubscribeSchemaVersion(
  * never heard of, even though the abstract compatibility check passed (this
  * is what broke `chat.subscribe@1.1` against host-v1.0.0 - the compat check
  * passed, but the client still declared `1.1`, which host-v1.0.0's registry
- * has no contract for). Cross-major skew never reaches here: streams have no
- * cross-major bridge, so `compat.ok` would already be `false`.
+ * has no contract for). Cross-major canonical skew never reaches here: the
+ * open-ack selection has already chosen the highest shared installed major
+ * before this request is prepared.
  */
 export function prepareStreamSubscribeRequest(
   registry: VersionedStreamRpcRegistry,

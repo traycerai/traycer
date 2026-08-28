@@ -31,6 +31,7 @@ const commandMock = vi.hoisted(() => ({
 const legacyMock = vi.hoisted(() => ({
   paths: [] as string[],
   callbacksByPath: new Map<string, WorktreeDeleteStreamCallbacks>(),
+  stopOwnersByPath: new Map<string, boolean>(),
   /** Paths whose stream fails to open, driving `deleteOneWorktree`'s catch. */
   throwForPaths: new Set<string>(),
   closeCount: 0,
@@ -86,9 +87,14 @@ vi.mock(
     WorktreeDeleteStreamClient: class {
       constructor(options: {
         readonly worktreePath: string;
+        readonly stopOwners: boolean;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
         legacyMock.paths.push(options.worktreePath);
+        legacyMock.stopOwnersByPath.set(
+          options.worktreePath,
+          options.stopOwners,
+        );
         if (legacyMock.throwForPaths.has(options.worktreePath)) {
           throw new Error("could not open the delete stream");
         }
@@ -152,12 +158,12 @@ function reachHost(): void {
 function runTaskCleanup(
   paths: ReadonlyArray<string>,
 ): Promise<WorktreeCleanupOutcome> {
-  return runWorktreeCleanup(
-    stubOpenStreamTransport(),
-    "host-1",
+  return runWorktreeCleanup(stubOpenStreamTransport(), {
+    hostId: "host-1",
     paths,
-    "task_cleanup",
-  );
+    source: "task_cleanup",
+    stopOwnersPaths: new Set(),
+  });
 }
 
 /** Hands the whole cleanup to the older-host fan-out. */
@@ -171,6 +177,7 @@ beforeEach(() => {
   commandMock.closeCount = 0;
   legacyMock.paths = [];
   legacyMock.callbacksByPath.clear();
+  legacyMock.stopOwnersByPath.clear();
   legacyMock.throwForPaths.clear();
   legacyMock.closeCount = 0;
   loggerMock.throwForMessages.clear();
@@ -206,12 +213,12 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("preserves task_sweep as distinct durable command provenance", async () => {
-    const promise = runWorktreeCleanup(
-      stubOpenStreamTransport(),
-      "host-1",
-      ["/wt/sweep"],
-      "task_sweep",
-    );
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/sweep"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(),
+    });
 
     expect(commandMock.commands).toHaveLength(1);
     expect(commandMock.commands[0]?.source).toBe("task_sweep");
@@ -246,7 +253,7 @@ describe("runWorktreeCleanup on a current host", () => {
     // A decline is `deleted: false`, not a thrown failure - both are failures
     // for the tally, and neither stops its siblings.
     callbacks.onTargetComplete("/wt/declined", false);
-    callbacks.onTargetFailed("/wt/busy", "worktree is busy");
+    callbacks.onTargetFailed("/wt/busy", "worktree is busy", undefined);
     callbacks.onCommandComplete({
       requestedCount: 3,
       deletedCount: 1,
@@ -359,7 +366,7 @@ describe("runWorktreeCleanup on an older host", () => {
     await vi.waitFor(() => expect(legacyMock.paths).toHaveLength(3));
 
     legacyCallbacksFor("/wt/b").onComplete(false);
-    legacyCallbacksFor("/wt/c").onFailed("busy");
+    legacyCallbacksFor("/wt/c").onFailed("busy", undefined);
 
     await expect(promise).resolves.toEqual({
       removed: ["/wt/a"],
@@ -448,5 +455,58 @@ describe("runWorktreeCleanup on an older host", () => {
       failed: [],
       uncertain: [],
     });
+  });
+});
+
+describe("runWorktreeCleanup stopOwners paths", () => {
+  it("sends in-use paths through deleteByPath with stopOwners and leaves others on the batch command", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/idle", "/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+    });
+
+    expect(commandMock.commands).toHaveLength(1);
+    expect(commandMock.commands[0]?.targets).toEqual([
+      { worktreePath: "/wt/idle", scripts: null },
+    ]);
+    expect(legacyMock.paths).toEqual(["/wt/busy"]);
+    expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
+
+    commandCallbacks().onTargetComplete("/wt/idle", true);
+    commandCallbacks().onCommandComplete({
+      requestedCount: 1,
+      deletedCount: 1,
+      failedCount: 0,
+    });
+    legacyCallbacksFor("/wt/busy").onComplete(true);
+
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/idle", "/wt/busy"],
+      failed: [],
+      uncertain: [],
+    });
+  });
+
+  it("reports a drop after a forced deleteByPath reached the host as unconfirmed", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+    });
+
+    expect(commandMock.commands).toHaveLength(0);
+    expect(legacyMock.paths).toEqual(["/wt/busy"]);
+    legacyCallbacksFor("/wt/busy").onConnectionStatus("open", null);
+    legacyCallbacksFor("/wt/busy").onConnectionStatus("reconnecting", null);
+
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: ["/wt/busy"],
+    });
+    expect(legacyMock.closeCount).toBe(1);
   });
 });

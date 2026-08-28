@@ -18,10 +18,35 @@ import type { StreamMethodSupport } from "./ws-stream-client";
  * against this interface instead of the concrete `WsStreamClient` is what lets
  * it select between the two by `HostDirectoryEntry.kind` (T14).
  */
+/**
+ * Caller-supplied sizing for the probe a probe-first reconnect runs, for the
+ * one caller that holds better evidence than the transport's default: a mobile
+ * resume that MEASURED how long the runtime was backgrounded. Consumed by the
+ * remote transport (whose wake probe is the socket keepalive poke); the local
+ * transport's probe is its own request-timeout design and ignores this.
+ */
+export type WakeProbeTuning = {
+  /** Deadline for the probe's answer, in ms. */
+  readonly timeoutMs: number;
+  /**
+   * When the probe proves the socket dead, redial with NO backoff delay
+   * instead of entering the ladder at its current rung. Earned only by a
+   * probe a user is actively waiting on (a foregrounded app): the person is
+   * already looking at the screen, and sleeping out a rung after proving the
+   * socket dead is pure added outage.
+   */
+  readonly immediateRedialOnFailure: boolean;
+};
+
 /** See {@link IHostStreamClient.reconnectAll}. */
 export type ReconnectAllOptions = {
   /** Keep sessions whose socket answers a liveness ping. */
   readonly probeFirst: boolean;
+  /**
+   * Probe sizing when `probeFirst` is true; `null` means the transport's
+   * default wake probe. Meaningless (and ignored) when `probeFirst` is false.
+   */
+  readonly wakeProbe: WakeProbeTuning | null;
 };
 
 export interface IHostStreamClient<

@@ -270,9 +270,9 @@ export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
 /**
  * Frozen harness id set as shipped in protocol v7.0 (with Hugging Face).
  *
- * Taken when v7.1 opened for the auth-aware enablement row fields
- * (`authStatus` / `enablementMode`): v7.0 stops being the head line there, so
- * it can no longer track the live enum. Identical to `guiHarnessIdSchema` at
+ * Taken when v7.1 opened for the catalog row's `authStatus`: v7.0 stops being
+ * the head line there, so it can no longer track the live enum. Identical to
+ * `guiHarnessIdSchema` at
  * the freeze cut - the freeze pins the SET, so a future harness cannot widen a
  * line v1.2.0-rc.1 peers already negotiate. Do NOT add new harnesses here -
  * extend the latest `guiHarnessIdSchema`; a v8.0 bridge drops post-v7.0 ids
@@ -377,15 +377,12 @@ export function canReceiveA2AMessages(target: A2ACapabilityTarget): boolean {
 /** Shared UTF-8 byte ceiling for a single A2A message body. */
 export const A2A_MESSAGE_MAX_UTF8_BYTES = 16 * 1024 * 1024;
 
-const UTF8_ENCODER = new TextEncoder();
-
-/**
- * UTF-8 byte length of `value`. Uses `TextEncoder` (not `Buffer`) so this
- * stays callable from browser-hosted surfaces, not just Node.
- */
-export function utf8ByteLength(value: string): number {
-  return UTF8_ENCODER.encode(value).length;
-}
+// Re-exported, not defined here: it moved to `utils/text/utf8` once the
+// transcript skeleton needed the same count. It stays exported from THIS
+// module because it is half of the size gate above - a caller checking a body
+// against `A2A_MESSAGE_MAX_UTF8_BYTES` should not have to know the counter
+// lives somewhere else.
+export { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 // ─── Agent-to-agent unary surface (`agent.create` / `agent.list` /
 // `agent.sendMessage` / `agent.getTranscript`) ─────────────────────────────
@@ -627,12 +624,10 @@ export type AgentSelectionGuideRequest = z.infer<
   typeof agentSelectionGuideRequestSchema
 >;
 
-// A single contributing guide file. Current hosts emit exactly one `global`
-// source (`~/.traycer/agent-selection-guide.md`, `priority` fixed at 1, `path`
-// kept for attribution). The `workspace` variant is legacy wire shape: older
-// hosts still emit per-workspace `.traycer/agent-selection-guide.md` sources,
-// and released 1.0 responses must keep parsing, but current clients ignore
-// workspace entries instead of layering them over the global guide.
+// A single contributing guide file. Hosts emit workspace sources before the
+// global source, with higher priority values for more specific workspaces.
+// Clients sort by priority and layer workspace instructions over the global
+// guide. The paths are kept for attribution in the rendered instructions.
 export const agentSelectionGuideSourceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),

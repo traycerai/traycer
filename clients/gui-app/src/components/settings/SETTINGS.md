@@ -494,6 +494,29 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
+  - **Browser**: the in-app browser has no toggle - it is always on, and the
+    group carries no master switch.
+    Web link default + per-kind terminal/markdown link open-mode selects are
+    always active (no `disabled` state).
+    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
+    default `off` - what the GUI does when the AGENT opens a browser tab via
+    its REPL `openTab` tool) governs suppressing host-driven opens that
+    previously always split the canvas.
+    `pip` floats the tab picture-in-picture unless a user-converted PiP is
+    showing or the epic surface is hidden; `tile` places a canvas tile
+    grouped by session - same-session opens become tabs of one pane - even
+    in hidden epics; `off` answers electron foreground creates with a hidden
+    off-screen view so the agent's open still succeeds, and leaves headless
+    tabs in the sidebar.
+    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
+    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
+    in the dock, seeded snapshot-only so surfacing stays ephemeral across
+    reloads.
+    A conditional Detected dev origins row follows.
+    There is no standing risk disclosure in this group - the master toggle
+    row that carried one was deleted along with the toggle, and the
+    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
+    it.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show
@@ -1617,9 +1640,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
   `agent.selectionGuide.setGlobal`, and
   `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
-  hooks. The global guide is the only scope: per-workspace
-  `.traycer/agent-selection-guide.md` overrides were removed (older hosts may
-  still send them, current clients ignore them).
+  hooks. This settings panel edits only the global guide. A workspace can add
+  `.traycer/agent-selection-guide.md` manually; agents layer that file over the
+  global guide when they work in that workspace.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,

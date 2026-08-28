@@ -1,6 +1,8 @@
 export {
   hostDoctorV10,
+  hostGetInstallationInfoUpgradeV10ToV11,
   hostGetInstallationInfoV10,
+  hostGetInstallationInfoV11,
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
@@ -8,6 +10,8 @@ export {
   hostUpdateCheckV10,
   hostUpdateCheckV11,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "./contracts";
 
 export {
@@ -20,6 +24,7 @@ export {
   hostDoctorResponseSchema,
   hostGetInstallationInfoRequestSchema,
   hostGetInstallationInfoResponseSchema,
+  hostGetInstallationInfoResponseV11Schema,
   hostServiceDeregisterRequestSchema,
   hostServiceDeregisterResponseSchema,
   hostServiceRegisterRequestSchema,
@@ -34,6 +39,7 @@ export {
   hostUpdateCheckResponseSchemaV11,
   hostUpdateInstallRequestSchema,
   hostUpdateInstallResponseSchema,
+  hostUpdateInstallResponseV11Schema,
   type HostAvailableManifest,
   type HostDoctorIssue,
   type DoctorTransportVantage,
@@ -41,6 +47,7 @@ export {
   type HostDoctorResponse,
   type HostGetInstallationInfoRequest,
   type HostGetInstallationInfoResponse,
+  type HostGetInstallationInfoResponseV11,
   type HostServiceDeregisterRequest,
   type HostServiceDeregisterResponse,
   type HostServiceRegisterRequest,
@@ -55,4 +62,5 @@ export {
   type HostUpdateCheckResponseV11,
   type HostUpdateInstallRequest,
   type HostUpdateInstallResponse,
+  type HostUpdateInstallResponseV11,
 } from "./schemas";

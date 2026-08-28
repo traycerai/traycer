@@ -87,7 +87,6 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
-  CHAT_OWNERSHIP,
   CHAT_ORIGIN,
   isChatFilterActive,
   matchesChatOwnershipFilter,
@@ -110,7 +109,6 @@ import {
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
-  useOpenTileContentIds,
 } from "@/stores/epics/canvas/store";
 import {
   isOpenableEpicNodeKind,
@@ -120,6 +118,10 @@ import {
   useEpicSidebarEffectiveExpanded,
   useEpicSidebarExpansionStore,
 } from "@/stores/epics/epic-sidebar-expansion-store";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
@@ -225,8 +227,17 @@ import {
   revealArchiveHiddenIds,
   sidebarTreeRootIds,
   useMaybeSidebarBulkSelection,
-  useSidebarArchiveHiddenIds,
 } from "./epic-sidebar-selection";
+import {
+  chatDescendantKind,
+  useChatArchiveHiddenIds,
+  type ChatDescendantStatusKind,
+} from "./use-chat-archive-hidden-ids";
+import {
+  chatFilterEmptyStateDescription,
+  FILTERED_EMPTY_TITLE,
+  useChatFilterMatchIds,
+} from "./epic-sidebar-panel-filters";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -264,6 +275,10 @@ import { type IndicatorRunningKind } from "@/components/notifications/notificati
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  useChatTreeSurface,
+  useRevealRowControls,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -320,7 +335,6 @@ const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
 const EMPTY_CLOUD_CHATS: readonly CloudChatSummary[] = [];
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
-const EMPTY_ALWAYS_VISIBLE_IDS: ReadonlyArray<string> = [];
 const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
 
@@ -343,16 +357,6 @@ function archiveEmptyStateCopy(
       : null,
   };
 }
-
-type ChatDescendantStatusKind =
-  | "failure"
-  | "fork"
-  | "interview"
-  | "approval"
-  | "running"
-  | "background"
-  | "done"
-  | "terminal-failure";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -390,35 +394,6 @@ const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
   "done",
   "terminal-failure",
 ];
-
-/** The ladder kind an activity tier occupies. */
-function activityTierKind(tier: AgentActivityTier): ChatDescendantStatusKind {
-  return tier === "turn" ? "running" : "background";
-}
-
-/**
- * The single tier a descendant chat is counted under - its own highest. The
- * attention precedence goes through the shared `attentionTone`, so
- * failure > interview > approval lives in exactly one place.
- */
-function chatDescendantKind(
-  indicatorState: NotificationIndicatorState,
-  tier: AgentActivityTier | undefined,
-): ChatDescendantStatusKind | null {
-  const tone = attentionTone(indicatorState);
-  if (tone === FAILURE_TONE) return "failure";
-  if (tone === FORK_TONE) return "fork";
-  if (tone === INTERVIEW_TONE) return "interview";
-  if (tone === APPROVAL_TONE) return "approval";
-  // Terminal failure is demoted only for the exact chat's own glyph, where a
-  // newer live turn/Done is a stronger statement of current state. Once this
-  // chat is rolled into a collapsed parent it is a distinct failed child and
-  // must remain attention-priority over a sibling's activity or completion.
-  if (terminalFailureTone(indicatorState, "gui") !== null) return "failure";
-  if (tier !== undefined) return activityTierKind(tier);
-  if (indicatorState.unreadDone) return "done";
-  return null;
-}
 
 /**
  * Rollup over a collapsed parent's hidden chat descendants: the
@@ -586,38 +561,6 @@ function usePanelRootIds(
 }
 
 /**
- * Nodes the active interface and ownership filters MATCH - the raw matches, with
- * no ancestor expansion. Every local agent is owned by the viewer;
- * collaborators' agents arrive only as cloud rows. `null` when neither filter is
- * active.
- *
- * Ancestor expansion is deliberately NOT done here. A path ancestor is a
- * rendering concession, not a match, and expanding before combining with search
- * would let one narrowing's concession satisfy the other's predicate - see
- * {@link intersectMatchIds}.
- */
-function useChatFilterMatchIds(epicId: string): ReadonlySet<string> | null {
-  const filter = useChatFilter(epicId);
-  const liveRecords = useEpicArtifactRecords();
-  return useMemo(() => {
-    if (!isChatFilterActive(filter)) return null;
-    const includeLocal = matchesChatOwnershipFilter(true, filter.ownership);
-    return new Set(
-      liveRecords.flatMap((record): string[] =>
-        includeLocal &&
-        CHATS_TREE_FILTER(record.type) &&
-        (filter.origin === CHAT_ORIGIN.All ||
-          (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
-          (filter.origin === CHAT_ORIGIN.Tui &&
-            record.type === "terminal-agent"))
-          ? [record.id]
-          : [],
-      ),
-    );
-  }, [filter, liveRecords]);
-}
-
-/**
  * Whether a cloud row survives the archive filter.
  *
  * The row carries its own `isArchived`, so this is the same question the local
@@ -654,18 +597,6 @@ function cloudRowMatchesOwnershipFilter(
   return matchesChatOwnershipFilter(chat.isOwnedByViewer, filter.ownership);
 }
 
-function chatFilterEmptyStateDescription(filter: ChatFilter): string {
-  const interfaceActive = filter.origin !== CHAT_ORIGIN.All;
-  const ownershipActive = filter.ownership !== CHAT_OWNERSHIP.All;
-  if (interfaceActive && !ownershipActive) {
-    return "The Interface filter is hiding the other agents.";
-  }
-  if (ownershipActive && !interfaceActive) {
-    return "The Ownership filter is hiding the other agents.";
-  }
-  return "The current filters are hiding the other agents.";
-}
-
 // Panel body composes sort/filter/expansion/selection/pending-create hooks in
 // a stable order; child row complexity is isolated below.
 // eslint-disable-next-line complexity
@@ -681,6 +612,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const allRootIds = usePanelRootIds(panelId, comparator);
   const filterMatchIds = useChatFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
+  const revealRequest = useSidebarNodeRevealRequest(tabId);
+  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
   // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns
   // the selection actions before it ever considers the search row), so while
   // selection mode is on there is no search input to type into, to read a query
@@ -694,7 +627,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // keeps a half-typed query from narrowing a tree with no visible search box.
   const searchOpen = usePanelHeaderSearchOpen(tabId, panelId);
   const rawSearchQuery = usePanelHeaderSearchQuery(tabId, panelId);
-  const searchQuery = searchOpen && !selectionMode ? rawSearchQuery : "";
+  // A mounting surface may own the query instead - see `ChatTreeSurface`. It
+  // then owns the input too, so this panel's open/closed state says nothing
+  // about whether a query is live and must not gate it.
+  const surfaceSearchQuery = useChatTreeSurface()?.searchQuery ?? null;
+  const panelSearchQuery = searchOpen && !selectionMode ? rawSearchQuery : "";
+  const searchQuery = surfaceSearchQuery ?? panelSearchQuery;
   const searchActive = searchQuery.trim().length > 0;
   const searchMatchIds = useMemo(
     () =>
@@ -716,6 +654,25 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => expandMatchesToVisibleIds(narrowedMatchIds, tree.nodeById),
     [narrowedMatchIds, tree],
   );
+  // Reveal is a transient visibility exception. It must be able to surface the
+  // requested local row through the user's current narrowing without mutating
+  // their search or filter state; once the row scrolls into view, the request
+  // is consumed and the usual projection resumes.
+  const revealVisibleIds = useMemo(() => {
+    if (
+      revealRequest === null ||
+      !Object.hasOwn(tree.nodeById, revealRequest.nodeId)
+    ) {
+      return narrowedVisibleIds;
+    }
+    if (narrowedVisibleIds === null) return null;
+    const revealPathIds = expandMatchesToVisibleIds(
+      new Set([revealRequest.nodeId]),
+      tree.nodeById,
+    );
+    if (revealPathIds === null) return narrowedVisibleIds;
+    return new Set([...narrowedVisibleIds, ...revealPathIds]);
+  }, [narrowedVisibleIds, revealRequest, tree]);
   // Filter-only, still ancestor-expanded: the indicator query below reads this
   // one so it does not refetch on every keystroke.
   const filterVisibleIds = useMemo(
@@ -738,6 +695,11 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     // Selection mode: the keystroke would open a search whose input the header
     // has no room to render.
     if (searchOpen || selectionMode) return;
+    // A surface owning the query owns the input too, and this writes the PANEL
+    // store - which that surface never renders. Installing it there would
+    // swallow the keystroke and file it somewhere invisible, leaving stale
+    // state for the desktop panel to open with later.
+    if (surfaceSearchQuery !== null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (isTypeToFilterEditableTarget(event.target)) return;
       if (!isTypeToFilterKey(event)) return;
@@ -746,13 +708,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     };
     region.addEventListener("keydown", onKeyDown);
     return () => region.removeEventListener("keydown", onKeyDown);
-  }, [tabId, panelId, searchOpen, selectionMode, openSearch]);
+  }, [
+    tabId,
+    panelId,
+    searchOpen,
+    selectionMode,
+    openSearch,
+    surfaceSearchQuery,
+  ]);
   const archiveVisibility = useChatArchiveVisibility(epicId);
   // The filter's own value, for the cloud rows. The local tree consumes it as
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
   // tree, so it answers both axes directly.
   const chatFilter = useChatFilter(epicId);
-  const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   const canSetVisibility = useCloudChatVisibilitySupported();
   // Epic-session-bound like every other sharing fact in this tree: the
@@ -776,8 +744,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   });
   const hasCollaborators = taskHasCollaborators(collaboratorsQuery.data);
   const filterRootIds = useMemo(
-    () => applyVisibleFilter(allRootIds, narrowedVisibleIds),
-    [allRootIds, narrowedVisibleIds],
+    () => applyVisibleFilter(allRootIds, revealVisibleIds),
+    [allRootIds, revealVisibleIds],
   );
 
   // Indicators must be fetched BEFORE archive hiding is applied. Archived
@@ -821,40 +789,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
   const [notificationIndicators, setNotificationIndicators] =
     useState<SurfaceNotificationIndicators>(EMPTY_INDICATOR_STATE_RESPONSE);
-  const openTileContentIds = useOpenTileContentIds(tabId);
-  const activityTiers = useEpicAgentActivityTiers();
-  const appLocalNotificationRows = useAppLocalNotificationsStore(
-    (state) => state.byId,
-  );
-  const alwaysVisibleIds = useMemo((): ReadonlyArray<string> => {
-    if (archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Unarchived) {
-      return EMPTY_ALWAYS_VISIBLE_IDS;
-    }
-    return indicatorChatIds.filter((chatId) => {
-      if (openTileContentIds.has(chatId)) return true;
-      const indicatorState = selectNotificationIndicatorState(
-        { byId: appLocalNotificationRows },
-        { epicId, chatId },
-        null,
-        notificationIndicators,
-      );
-      return (
-        chatDescendantKind(indicatorState, activityTiers.get(chatId)) !== null
-      );
-    });
-  }, [
-    activityTiers,
-    appLocalNotificationRows,
-    archiveVisibility,
+  const baseArchiveHiddenIds = useChatArchiveHiddenIds({
     epicId,
-    indicatorChatIds,
+    tabId,
+    chatIds: indicatorChatIds,
     notificationIndicators,
-    openTileContentIds,
-  ]);
-  const archiveHiddenIds = useMemo(
-    () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
-    [baseArchiveHiddenIds, alwaysVisibleIds, tree],
-  );
+  });
+  const archiveHiddenIds = useMemo(() => {
+    if (revealRequest === null) return baseArchiveHiddenIds;
+    return revealArchiveHiddenIds(
+      baseArchiveHiddenIds,
+      [revealRequest.nodeId],
+      tree,
+    );
+  }, [baseArchiveHiddenIds, revealRequest, tree]);
 
   // Two independent narrowings, kept separate on purpose. `filterRootIds` is
   // the interface/ownership filter result and feeds the "no matches" empty
@@ -870,8 +818,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [filterRootIds, archiveHiddenIds],
   );
   const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(narrowedVisibleIds, archiveHiddenIds, tree),
-    [narrowedVisibleIds, archiveHiddenIds, tree],
+    () => combineSidebarVisibleIds(revealVisibleIds, archiveHiddenIds, tree),
+    [revealVisibleIds, archiveHiddenIds, tree],
   );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
@@ -968,13 +916,24 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       ),
     [unfoldedCloudChats, chatFilter, searchQuery],
   );
-  const visibleCloudChats = useMemo(
-    () =>
-      filterMatchingCloudChats.filter((chat) =>
-        cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
-      ),
-    [filterMatchingCloudChats, archiveVisibility],
-  );
+  const visibleCloudChats = useMemo(() => {
+    const visible = filterMatchingCloudChats.filter((chat) =>
+      cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
+    );
+    if (revealRequest === null) return visible;
+    const revealedCloudChat = unfoldedCloudChats.find(
+      (chat) => chat.identity.chatId === revealRequest.nodeId,
+    );
+    return revealedCloudChat === undefined ||
+      visible.includes(revealedCloudChat)
+      ? visible
+      : [...visible, revealedCloudChat];
+  }, [
+    archiveVisibility,
+    filterMatchingCloudChats,
+    revealRequest,
+    unfoldedCloudChats,
+  ]);
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -1019,12 +978,16 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  // Filter- and search-only: see `combineSidebarVisibleIds`. Archive hiding must
-  // never reach here. A search match nested under a collapsed parent forces that
-  // parent open for the same reason a filter match does.
+  // Filter-, search-, and reveal-only: see `combineSidebarVisibleIds`. Archive
+  // hiding must never reach here. A nested target forces its parent open for the
+  // same reason a filter match does.
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, narrowedVisibleIds),
-    [ancestorIdsOfActive, narrowedVisibleIds],
+    () =>
+      mergeForcedExpanded(
+        mergeForcedExpanded(ancestorIdsOfActive, ancestorIdsOfReveal),
+        revealVisibleIds,
+      ),
+    [ancestorIdsOfActive, ancestorIdsOfReveal, revealVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -1047,6 +1010,30 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandAction],
   );
+
+  useLayoutEffect(() => {
+    if (revealRequest === null) return;
+    const region = treeRegionRef.current;
+    if (region === null) return;
+    for (const ancestorId of ancestorIdsOfReveal) {
+      expandAction(tabId, panelId, ancestorId);
+    }
+    const row = Array.from(
+      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
+    if (row === undefined) return;
+    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
+  }, [
+    ancestorIdsOfReveal,
+    expandAction,
+    expandedIds,
+    panelId,
+    revealRequest,
+    tabId,
+    tree,
+    visibleCloudChats,
+  ]);
 
   const expansion = useMemo<ExpansionController>(
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
@@ -1204,7 +1191,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No matches for the current filters."
+        title={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(chatFilter)}
         testId="epic-chat-sidebar-filter-empty"
       />
@@ -1322,7 +1309,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           <SidebarViewerContext.Provider value={isViewer}>
             <SidebarSortContext.Provider value={comparator}>
               <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                {searchOpen && !selectionMode ? (
+                {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
                   <ChatSearchHeaderInput
                     tabId={tabId}
                     resultCount={searchResultCount}
@@ -1420,6 +1407,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const node = useEpicTreeNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
+  // Non-null only where this tree is mounted on a surface that cannot express
+  // the desktop open gestures - see `ChatTreeSurface`.
+  const surface = useChatTreeSurface();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
   );
@@ -1468,10 +1458,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const renamePending = anyMutationPending([
-    renameChat.isPending,
-    renameTerminalAgent.isPending,
-  ]);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = anyMutationPending([
@@ -1571,6 +1557,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         instanceId: uuidv4(),
       }),
     );
+    // The opening itself is the tree's, on every surface. A mounting surface
+    // only gets to append - the switcher sheet closes here.
+    if (surface !== null) surface.onRowActivated();
   }, [
     // No `nodeId` / `nodeName`: the tile ref is built inside `openRef`, which
     // closes over both and is itself a dependency.
@@ -1580,6 +1569,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     navigateNested,
     openableType,
     prepareOpenTilePreviewInTabFocusTarget,
+    surface,
     tabId,
   ]);
 
@@ -1637,7 +1627,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   }, [canMutate, nodeName]);
 
   const commitRename = useCallback(() => {
-    if (renamePending) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1647,26 +1636,68 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
+    // Settle the editor on COMMIT, not on the ack — same contract as the
+    // artifact tree and as `useInlineRename`, which both tab strips rename
+    // through. The overlay below is the feedback; a failure toasts and rolls
+    // back. This also closes a real hole in the arms that follow: the
+    // no-RPC-arm `else` retired the stamp and left the input open forever,
+    // because the only `setIsRenaming(false)` lived in the success callback.
+    setIsRenaming(false);
+    // DOC-RESIDENT terminal agents keep the direct doc write - see the same
+    // branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a
+    // row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`),
+    // so the overlay path would only ever roll back.
+    if (artifactType === "terminal-agent") {
+      const agents = epicHandle.store.getState().tuiAgents.byId;
+      if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+          renameArtifactInTab(tabId, nodeId, trimmed);
+        }
+        return;
+      }
+    }
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do. That write no-opped for every registry-backed row — which
+    // post chats-off-YJS is most of this tree — so these renames had no local
+    // feedback at all. Rationale and the promise-carried retire contract live
+    // in `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    const landed = (): void => {
+      retire("landed");
+      // The tab snapshot only on settlement - it is a persisted fallback with
+      // no rollback path, so a speculative write would preserve a rejected
+      // title across restarts - and only while this is still the LATEST
+      // stamped rename for the node: settles are unordered, and an older ack
+      // landing last must not overwrite the newer snapshot. See
+      // `use-rename-canvas-tab.ts`.
+      if (
+        requestId === null ||
+        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+      ) {
+        renameArtifactInTab(tabId, nodeId, trimmed);
+      }
+    };
+    const failed = (): void => {
+      retire("failed");
+    };
     if (artifactType === "chat") {
-      renameChat.mutate(
-        { epicId, chatId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameChat
+        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+        .then(landed, failed);
     } else if (artifactType === "terminal-agent") {
-      renameTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameTerminalAgent
+        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+        .then(landed, failed);
+    } else {
+      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
+      // would never land; drop it outright.
+      retire("failed");
     }
   }, [
     artifactType,
@@ -1677,14 +1708,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameArtifactInTab,
     renameChat,
     renameTerminalAgent,
-    renamePending,
     renameValue,
     tabId,
   ]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (renamePending) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename();
@@ -1693,7 +1722,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename, renamePending],
+    [commitRename],
   );
 
   const performDelete = () => {
@@ -1776,7 +1805,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onRenameValueChange={setRenameValue}
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
-      renamePending={renamePending}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
@@ -1824,7 +1852,6 @@ interface ChatNodeShellProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1926,7 +1953,6 @@ function ChatNodeShellBody(
     onRenameValueChange,
     onCommitRename,
     onRenameKeyDown,
-    renamePending,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1953,8 +1979,15 @@ function ChatNodeShellBody(
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
+  const childCreateSurface = useChatTreeSurface();
   const handleNewChildAgent = useCallback(() => {
     if (!canMutate) return;
+    // Same dismiss the tap path makes, and for the same reason root create
+    // already makes it: the modal opens over the surface, and without this the
+    // sheet is still there when the modal closes. Root and child create must
+    // answer this identically - an asymmetry here is a divergence, not a
+    // feature.
+    if (childCreateSurface !== null) childCreateSurface.onRowActivated();
     openNewConversationModal({
       epicId,
       tabId,
@@ -1967,7 +2000,14 @@ function ChatNodeShellBody(
       // a child is not required to live on its parent's machine.
       hostId: null,
     });
-  }, [canMutate, epicId, nodeId, openNewConversationModal, tabId]);
+  }, [
+    canMutate,
+    childCreateSurface,
+    epicId,
+    nodeId,
+    openNewConversationModal,
+    tabId,
+  ]);
   const { decision } = props;
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
   const rowMenuEntries = chatRowMenuEntries({
@@ -2015,7 +2055,6 @@ function ChatNodeShellBody(
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
             isArchived={archiveRow.isArchived}
@@ -2100,8 +2139,38 @@ interface NodeChevronProps {
 
 function NodeChevron(props: NodeChevronProps) {
   const { hasChildren, expanded, onToggle } = props;
+  const surface = useChatTreeSurface();
   if (!hasChildren) return <TreeChevronSpacer />;
-  return <TreeChevron expanded={expanded} onToggle={onToggle} />;
+  if (surface === null) {
+    return <TreeChevron expanded={expanded} onToggle={onToggle} />;
+  }
+  // Desktop's chevron is an 11.25px glyph INSIDE the row button, which is fine
+  // for a cursor and not for a thumb: a near-miss lands on the row instead, and
+  // on a surface that closes itself on activation that miss dismisses the sheet
+  // rather than merely doing nothing. So the hit box grows and the glyph does
+  // not - an absolutely-positioned pseudo takes no space in flow, so the column
+  // stays desktop's exact width and the density ruling is untouched. `onToggle`
+  // moves to this wrapper so one handler owns the whole enlarged box; it
+  // already stops propagation, which is what keeps the row from opening.
+  return (
+    <span
+      // Same `aria-hidden` the glyph inside already carries: this wrapper adds
+      // hit area and nothing else, so exposing a second nameless control would
+      // be noise rather than access.
+      //
+      // It does NOT claim keyboard reachability. Expansion in this tree is
+      // pointer-only on BOTH form factors - desktop binds no ArrowRight/Left
+      // and neither does the row button - so a keyboard-only user cannot open
+      // a collapsed branch here. That gap is desktop's and predates this
+      // mount; what the mount changed is that a phone now inherits it, where
+      // the flat list it replaced had listed every descendant outright.
+      aria-hidden="true"
+      onClick={onToggle}
+      className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
+    >
+      <TreeChevron expanded={expanded} onToggle={undefined} />
+    </span>
+  );
 }
 
 interface ChatNodeChildrenProps {
@@ -2481,7 +2550,6 @@ interface ChatRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
   readonly isArchived: boolean;
@@ -2498,7 +2566,6 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renamePending,
     nodeName,
     nodeId,
   } = props;
@@ -2507,6 +2574,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
   // nothing shifts horizontally or vertically between viewing and renaming.
   return (
     <div
+      data-sidebar-node-id={nodeId}
       className={cn(
         "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
@@ -2537,18 +2605,10 @@ function ChatRenameRow(props: ChatRenameRowProps) {
             }}
             onBlur={onBlur}
             onKeyDown={onKeyDown}
-            disabled={renamePending}
             className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
             aria-label={`Rename ${nodeName}`}
             data-testid={`epic-sidebar-rename-input-${nodeId}`}
           />
-          {renamePending ? (
-            <AgentSpinningDots
-              className="shrink-0 text-muted-foreground"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
         </div>
       </div>
     </div>
@@ -2676,12 +2736,17 @@ function chatRowClassName(state: {
   readonly selectionMode: boolean;
   readonly isArchived: boolean;
   readonly isActive: boolean;
+  readonly revealRowControls: boolean;
 }): string {
   return cn(
     "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
     state.isDragging && "cursor-grabbing opacity-60",
-    nodePadRightClass(state.showRowControls, state.reserveArchiveSlot),
+    nodePadRightClass(
+      state.showRowControls,
+      state.reserveArchiveSlot,
+      state.revealRowControls,
+    ),
     state.selectionMode && "cursor-pointer",
     state.isArchived && ARCHIVED_ROW_CLASS,
     state.isActive
@@ -2776,6 +2841,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // that menu as "New child agent"), so the single-control pad-right reserve is
   // claimed whenever the row is editable and not bulk-selecting.
   const showRowControls = selectionMode ? false : canEdit;
+  const revealRowControls = useRevealRowControls();
   const rowClassName = chatRowClassName({
     isDragging,
     showRowControls,
@@ -2783,6 +2849,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     selectionMode,
     isArchived,
     isActive,
+    revealRowControls,
   });
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
   if (selectionMode) {
@@ -2791,6 +2858,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         htmlFor={selectionInputId}
         ref={dragRef}
         data-testid={`epic-sidebar-item-${nodeId}`}
+        data-sidebar-node-id={nodeId}
         data-artifact-type={artifactType}
         className={rowClassName}
         style={{
@@ -2864,6 +2932,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           : null,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
+      data-sidebar-node-id={nodeId}
       data-artifact-type={artifactType}
       className={rowClassName}
       style={{
@@ -3634,6 +3703,7 @@ function ChatRowArchiveButton(props: {
   const label = props.isArchived
     ? `Unarchive ${props.nodeName}`
     : `Archive ${props.nodeName}`;
+  const revealed = useRevealRowControls();
   return (
     <TooltipWrapper
       label={label}
@@ -3648,7 +3718,12 @@ function ChatRowArchiveButton(props: {
         aria-label={label}
         disabled={props.pending}
         data-testid={`epic-sidebar-archive-${props.nodeId}`}
-        className="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100"
+        className={cn(
+          "absolute right-7 top-1/2 -translate-y-1/2 transition-opacity",
+          revealed
+            ? "opacity-100"
+            : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100",
+        )}
         onClick={(event) => {
           event.stopPropagation();
           props.onToggle();
@@ -3670,6 +3745,7 @@ function ChatMoreMenu(props: {
   readonly entries: ReadonlyArray<SidebarRowMenuEntry>;
 }) {
   const { nodeId, nodeName, entries } = props;
+  const revealed = useRevealRowControls();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -3679,7 +3755,12 @@ function ChatMoreMenu(props: {
           size="icon-xs"
           aria-label={`Agent actions for ${nodeName}`}
           data-testid={`epic-sidebar-more-${nodeId}`}
-          className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
+          className={cn(
+            "absolute right-1 top-1/2 -translate-y-1/2 transition-opacity",
+            revealed
+              ? "opacity-100"
+              : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100",
+          )}
           onClick={(event) => {
             event.stopPropagation();
           }}
