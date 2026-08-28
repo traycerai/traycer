@@ -96,6 +96,39 @@ function stageDoctorMocks() {
   }));
 }
 
+// Same isolation as `stageDoctorMocks`, but with the OS service reporting
+// `running`. Used by the recovered-host case: doctor's marker-derived
+// service-start report has to key off current state, not just the marker.
+function stageDoctorMocksWithRunningService() {
+  vi.doMock("../../manifest/host-install", () => ({
+    readHostInstallRecord: () => null,
+  }));
+  vi.doMock("../../host/bootstrap-log", () => ({
+    readBootstrapMarkers: async () => [],
+  }));
+  vi.doMock("../../host/pid-metadata", () => ({
+    readHostPidMetadata: async () => null,
+  }));
+  vi.doMock("../../service", () => ({
+    createServiceController: () => ({
+      status: async () => ({
+        state: "running",
+        version: "1.5.0",
+        listenUrl: null,
+        pid: null,
+      }),
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      start: async () => undefined,
+      stop: async () => undefined,
+      restart: async () => undefined,
+    }),
+    serviceLabelFor: (environment: "production" | "dev") => ({
+      id: `ai.traycer.host.${environment}`,
+    }),
+  }));
+}
+
 function writePendingManifest(opts: {
   readonly version: string;
   readonly stagedBinaryPath: string;
@@ -543,6 +576,111 @@ describe("runDoctor pending CLI upgrade surface", () => {
     ).toBeUndefined();
     // Still observational.
     expect(existsSync(markerPath)).toBe(true);
+  });
+
+  // The marker records what happened at `attemptedAt` and then persists until
+  // some later `host restart` reconciles it. On a machine whose supervisor
+  // already recovered the host, warning that "the host is down" would assert
+  // something this very doctor run has evidence against - the failure mode
+  // this whole PR is about, arriving via a stale file instead of a return
+  // value.
+  it("downgrades the service-start failure to non-actionable history once the host is running again", async () => {
+    stageDoctorMocksWithRunningService();
+    const cliDir = join(workHome, ".traycer", "cli");
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: "1.5.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: liveBinaryPath,
+          source: "manual",
+          pendingUpgrade: null,
+        },
+        null,
+        2,
+      ),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    writeFileSync(
+      join(cliDir, "post-finalize.json"),
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: null,
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(issue).toBeDefined();
+    // Info, not warning: nothing is broken now, and it must not flip the
+    // doctor exit code for a healthy machine.
+    expect(issue?.severity).toBe("info");
+    // No repair offered, because there is nothing left to repair.
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.terminalCommand).toBeNull();
+    expect(issue?.details?.hostRunningNow).toBe(true);
+    // The helper's error is still quoted - it explains the past outage.
+    expect(issue?.message).toContain("Input/output error");
+  });
+
+  // `invalid` (read the bytes, they were nonsense) and `unreadable` (could not
+  // read the bytes at all) license different advice. Reconciliation unlinks
+  // the first but returns without unlinking on a read failure, so offering
+  // `host restart` for the second promises a repair that cannot happen.
+  // A directory at the marker path makes `readFile` fail deterministically
+  // (EISDIR) regardless of which user runs the suite - a chmod-based fixture
+  // would silently not apply under root.
+  it("offers no repair when the marker cannot be read at all, only when it cannot be parsed", async () => {
+    stageDoctorMocks();
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: "1.5.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: join(workHome, "bin", "traycer"),
+          source: "manual",
+          pendingUpgrade: null,
+        },
+        null,
+        2,
+      ),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    mkdirSync(join(cliDir, "post-finalize.json"), { recursive: true });
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_MARKER_UNREADABLE",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.terminalCommand).toBeNull();
+    // The message must not send the reader to a command that cannot help.
+    expect(issue?.message).toContain("permissions");
   });
 
   // `readPostFinalizeMarker` separates `invalid` from `absent` precisely so the

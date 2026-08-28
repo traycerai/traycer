@@ -428,8 +428,36 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       // repeat the identical warning. Offering a command that cannot resolve
       // what it is offered for is the CLI-006 defect wearing different
       // clothes: the string parses, it just does not do the job.
+      //
+      // Scoped to the PARSE-failure subtype for precisely that reason - see
+      // the `unreadable` branch below, where the same promise would be false.
       fixAction: "host-restart",
       terminalCommand: `traycer host restart`,
+      details: {
+        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        errorMessage: finalizeMarker.errorMessage,
+      },
+    });
+  }
+  // The marker file exists and cannot be READ. Deliberately no fix action and
+  // no terminal command: `reconcilePostFinalizeMarker` reads the file the same
+  // way this probe just failed to, and returns without unlinking when that
+  // read throws - so `host restart` would leave the marker, the warning, and
+  // the user's impression that they had been given a repair exactly as they
+  // were. Nothing on a command line fixes a permission; the message has to
+  // carry the actual remedy, which is what it does.
+  if (finalizeMarker.status === "unreadable") {
+    issues.push({
+      code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNREADABLE,
+      severity: "warning",
+      title: "Cannot read the CLI upgrade finalize marker",
+      message:
+        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} exists but could not be read: ` +
+        `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed, and neither can ` +
+        "'traycer host restart' - its reconcile step reads the same file and will leave it in place. " +
+        "Check the ownership and permissions on that file and its directory; they should belong to the user Traycer runs as.",
+      fixAction: null,
+      terminalCommand: null,
       details: {
         markerPath: cliPostFinalizeMarkerPath(opts.environment),
         errorMessage: finalizeMarker.errorMessage,
@@ -467,22 +495,42 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     finalizeMarker.marker.status === "swapped" &&
     finalizeMarker.marker.serviceStartError !== null
   ) {
+    // THE MARKER IS HISTORY, NOT A LIVE READING. It records what happened at
+    // `attemptedAt` and then persists until some later `host restart`
+    // reconciles it - so on a machine whose supervisor already recovered the
+    // host, an unconditional warning would assert "the host is down" while
+    // this same doctor run has positive evidence that it is up. That is the
+    // failure mode this PR exists to remove, and reporting it about a stale
+    // file rather than a command's return value does not make it better.
+    //
+    // Both states are worth saying, so the severity carries the difference
+    // instead of suppressing one: a host that is still down gets an
+    // actionable warning, and a host that recovered gets an info-level note
+    // explaining the outage it just had. Info keeps `host doctor`'s exit code
+    // (error/fatal only) unaffected for a machine that is now healthy.
+    const hostRecovered = hostProcessAlive || serviceStatus?.state === "running";
     issues.push({
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
-      severity: "warning",
-      title: "CLI upgrade completed but the host service did not start",
-      message:
-        `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
-        `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry; ` +
-        "the host is simply down. Start it with 'traycer host restart'.",
-      fixAction: "host-restart",
-      terminalCommand: `traycer host restart`,
+      severity: hostRecovered ? "info" : "warning",
+      title: hostRecovered
+        ? "Host briefly failed to start after a CLI upgrade (since recovered)"
+        : "CLI upgrade completed but the host service did not start",
+      message: hostRecovered
+        ? `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. The host is running now, so this is a record of a past outage rather than a live fault - ` +
+          "quote it if you are investigating why the host was briefly unavailable around that time. The next 'traycer host restart' clears the record."
+        : `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
+          `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry; ` +
+          "the host is simply down. Start it with 'traycer host restart'.",
+      fixAction: hostRecovered ? null : "host-restart",
+      terminalCommand: hostRecovered ? null : `traycer host restart`,
       details: {
         markerPath: cliPostFinalizeMarkerPath(opts.environment),
         attemptedAt: finalizeMarker.marker.attemptedAt,
         serviceStartError: finalizeMarker.marker.serviceStartError,
         livePath: finalizeMarker.marker.livePath,
         stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
+        hostRunningNow: hostRecovered,
       },
     });
   }
@@ -913,6 +961,7 @@ function postFinalizeMarkerIssue(
 function finalizeMarkerDetail(read: PostFinalizeMarkerRead): string {
   if (read.status === "absent") return "absent";
   if (read.status === "invalid") return `invalid: ${read.errorMessage}`;
+  if (read.status === "unreadable") return `unreadable: ${read.errorMessage}`;
   return read.marker.status;
 }
 

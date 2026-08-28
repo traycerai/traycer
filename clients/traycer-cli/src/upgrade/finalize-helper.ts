@@ -470,7 +470,18 @@ function toPostFinalizeMarker(value: PostFinalizeMarker): PostFinalizeMarker {
 // this CLI cannot interpret - a fault worth naming rather than silence.
 export type PostFinalizeMarkerRead =
   | { readonly status: "absent" }
+  // The file was READ but its contents are not a marker (bad JSON, wrong
+  // shape). `reconcilePostFinalizeMarker` unlinks this, so a lifecycle command
+  // genuinely clears it.
   | { readonly status: "invalid"; readonly errorMessage: string }
+  // The file could not be read AT ALL (EACCES, EIO, an unsearchable parent).
+  // Split from `invalid` because the two license different advice: nothing in
+  // the CLI can clear this one - reconciliation's own `readFile` fails the
+  // same way and returns without unlinking - so telling someone to run a
+  // lifecycle command would promise a repair that cannot happen. The auth and
+  // identity probes in `doctor/engine.ts` draw exactly this line for the same
+  // reason (`HOST_AUTH_DIR_INACCESSIBLE`).
+  | { readonly status: "unreadable"; readonly errorMessage: string }
   | { readonly status: "present"; readonly marker: PostFinalizeMarker };
 
 // Read the marker WITHOUT consuming it or touching the manifest.
@@ -501,8 +512,11 @@ export async function readPostFinalizeMarker(opts: {
     if (isErrnoException(err) && err.code === "ENOENT") {
       return { status: "absent" };
     }
+    // Could not read the bytes - distinct from "read them and they were
+    // nonsense". See `PostFinalizeMarkerRead` for why the caller needs these
+    // apart.
     return {
-      status: "invalid",
+      status: "unreadable",
       errorMessage: err instanceof Error ? err.message : String(err),
     };
   }
