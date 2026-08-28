@@ -317,7 +317,6 @@ describe("app route tab-strip navigation", () => {
       expect(router.state.location.pathname).toBe(`/draft/${draftId}`);
     });
   });
-
   it("aligns active tab border joins and covers the header baseline", async () => {
     const epicTabId = useEpicCanvasStore
       .getState()

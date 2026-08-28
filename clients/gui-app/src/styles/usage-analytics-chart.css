@@ -34,6 +34,15 @@
  * to light/dark.
  */
 .usage-chart-root {
+  /* Semantic harness anchors. Light-mode values with very bright brand colors
+     are contrast-adjusted; dark mode below can use their brighter accents. */
+  --usage-harness-amp: #d93e34;
+  --usage-harness-claude: #d47628;
+  --usage-harness-codex: #2a78d6;
+  --usage-harness-huggingface: #9a6700;
+  --usage-harness-omp: #c65300;
+  --usage-harness-opencode: #303030;
+  --usage-harness-reasonix: #0153e5;
   --usage-series-1: #2a78d6; /* blue */
   --usage-series-2: #eb6834; /* orange */
   --usage-series-3: #1baf7a; /* aqua */
@@ -80,6 +89,13 @@
 }
 
 .dark .usage-chart-root {
+  --usage-harness-amp: #f35a4e;
+  --usage-harness-claude: #e58a45;
+  --usage-harness-codex: #3987e5;
+  --usage-harness-huggingface: #ffd21e;
+  --usage-harness-omp: #f97316;
+  --usage-harness-opencode: #d8d8d8;
+  --usage-harness-reasonix: #4f82ff;
   --usage-series-1: #3987e5;
   --usage-series-2: #d95926;
   --usage-series-3: #199e70;
