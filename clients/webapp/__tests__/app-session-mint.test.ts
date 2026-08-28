@@ -6,6 +6,7 @@ import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fix
 import {
   runAppSessionMint,
   WEB_MINT_NAVIGATION_KEY,
+  WEB_MINT_TARGET_KEY,
   WEB_MINT_VERIFIER_KEY,
   webCryptoPkce,
   type AppSessionMintOutcome,
@@ -169,28 +170,25 @@ interface Dashboard {
 }
 
 /**
- * A stub of the DEPLOYED dashboard - what `/login/app` does today, not what
- * would be convenient. Every branch below is pinned to live code, and the
- * citations are the point: this shell is a pure consumer of that contract, so
- * a test written against a friendlier one would certify nothing.
+ * The sign-in handoff as DEPLOYED, not as would be convenient. This shell is a
+ * pure consumer of that contract, so a double written against a friendlier one
+ * would certify nothing - every behaviour below is one this flow actually has
+ * to survive:
  *
- *  - `routes/_platform/login/app.tsx` L83-93: BOTH parameters are persisted on
- *    mount, before any auth gate turns a signed-out visitor around.
- *  - the same file L162-199: with a session it calls `issue-code` and returns
- *    to the redirect uri with `code` appended - `new URL(uri, origin)` then
- *    `searchParams.set("code", …)`, which is why a fragment survives; a
- *    missing uri or challenge is its terminal error state and redirects
- *    nowhere.
- *  - `lib/public-routes.ts`: `/login/app` is deliberately NOT public, so a
- *    signed-out visitor is signed out and sent to `/login`
- *    (`stores/auth-store.ts` `signOutCredential`, which carries `redirect_uri`
- *    from the URL and the whole current reference as `redirectTo`).
- *  - `routes/_platform/login/index.tsx` L43-68: the sign-in entry persists a
- *    challenge it is given, and clears a stored one ONLY when the redirect uri
- *    differs - the same-attempt carve-out this flow depends on.
- *  - `lib/post-session-continuation.ts` L54-69: a redirect uri WITH a
- *    challenge is the app handoff; a redirect uri WITHOUT one is the extension
- *    handoff, which returns `traycer-tokens` and never a `code`.
+ *  - the handoff persists the redirect uri and the PKCE challenge as soon as
+ *    it is reached, before any auth gate can turn a signed-out visitor around;
+ *  - with a session it issues a one-time code and returns to the redirect uri
+ *    with `code` SET on it - which is why a fragment survives, and why a
+ *    `code` the destination already carried does not;
+ *  - it is not reachable signed out: that visitor is bounced to sign-in, which
+ *    carries the redirect uri onward and keeps a stored challenge as long as
+ *    the redirect uri has not changed;
+ *  - after sign-in, the continuation picks its destination from what survived:
+ *    a redirect uri WITH a challenge is this app's handoff, a redirect uri
+ *    alone is the editor-extension one, which hands back an encrypted token
+ *    payload and never a code;
+ *  - a missing redirect uri or challenge is a terminal error page that
+ *    redirects nowhere.
  */
 class DeployedDashboardStub implements Dashboard {
   private redirectUri: string | null = null;
@@ -306,7 +304,10 @@ class DeployedDashboardStub implements Dashboard {
   }
 }
 
-/** `validateRedirectUri`'s relative arm (`lib/safe-redirect.ts` L84-86). */
+/**
+ * The handoff's redirect-uri validation, relative arm: a same-origin
+ * reference is admitted as given, a protocol-relative one is not.
+ */
 function validRedirectUri(candidate: string | null): string | null {
   if (candidate === null || candidate.length === 0) return null;
   return candidate.startsWith("/") && !candidate.startsWith("//")
@@ -683,12 +684,13 @@ describe("bounded retry", () => {
 });
 
 describe("single-use handoff material", () => {
-  it("clears the verifier and the budget once a credential lands", async () => {
+  it("clears the handoff and the budget once a credential lands", async () => {
     const world = buildWorld(true);
 
     await settle(world.tab, world.dashboard, NO_OVERRIDES);
 
     expect(world.tab.slots.has(WEB_MINT_VERIFIER_KEY)).toBe(false);
+    expect(world.tab.slots.has(WEB_MINT_TARGET_KEY)).toBe(false);
     expect(world.tab.slots.has(WEB_MINT_NAVIGATION_KEY)).toBe(false);
   });
 
@@ -703,26 +705,54 @@ describe("single-use handoff material", () => {
 
     expect(outcome).toEqual({ kind: "stored-credential" });
     expect(world.authn.exchangeAttempts).toEqual(["code-1"]);
-    expect(world.tab.href).toBe(new URL(DEEP_LINK, ORIGIN).toString());
   });
 
-  it("does not spend a code belonging to another tab's round trip", async () => {
+  it("treats a code with no handoff in flight as the page's own query", async () => {
     const world = buildWorld(true);
     const foreign = new URL(DEEP_LINK, ORIGIN);
-    foreign.searchParams.set("code", "code-from-elsewhere");
+    foreign.searchParams.set("code", "page-value");
     world.tab.href = foreign.toString();
 
     const outcome = await world.tab.boot(NO_OVERRIDES);
 
-    // No verifier here means the code cannot be ours; spending it would burn
-    // a code the tab that started that round trip is still waiting on.
+    // This tab is waiting for nothing, so the parameter is not auth material
+    // at all: spending it would burn a code whose round trip may still be live
+    // elsewhere, and scrubbing it would take a value off a page that owns it.
     expect(outcome).toEqual({ kind: "navigating" });
     expect(world.authn.exchangeAttempts).toEqual([]);
-    // And the dead code does not stay in the address bar to be replayed by the
-    // next load.
     expect(
       new URL(world.tab.navigations[0] ?? "").searchParams.get("redirect_uri"),
-    ).toBe(DEEP_LINK);
+    ).toBe(`${foreign.pathname}${foreign.search}${foreign.hash}`);
+  });
+});
+
+describe("destination fidelity", () => {
+  it("returns a destination that carries its own code parameter intact", async () => {
+    const world = buildWorld(true);
+    const target = "/app/epics/epic-1?code=page-value&tab=plan#step-2";
+    world.tab.href = new URL(target, ORIGIN).toString();
+
+    const outcome = await settle(world.tab, world.dashboard, NO_OVERRIDES);
+
+    // The handoff SETS its code on the destination it is given, so the value
+    // the page owned is gone from the landing URL and no inspection of that
+    // URL could recover it. Restoring the remembered destination is what makes
+    // the round trip lossless.
+    expect(outcome).toEqual({ kind: "minted" });
+    expect(world.tab.href).toBe(new URL(target, ORIGIN).toString());
+    expect(world.authn.exchangeAttempts).toEqual(["code-1"]);
+  });
+
+  it("hands the whole destination to the handoff, code parameter included", async () => {
+    const world = buildWorld(true);
+    const target = "/app/epics/epic-1?code=page-value&tab=plan#step-2";
+    world.tab.href = new URL(target, ORIGIN).toString();
+
+    await settle(world.tab, world.dashboard, NO_OVERRIDES);
+
+    expect(
+      new URL(world.tab.navigations[0] ?? "").searchParams.get("redirect_uri"),
+    ).toBe(target);
   });
 });
 
@@ -752,6 +782,34 @@ describe("two tabs of one origin", () => {
     expect(outcome).toEqual({ kind: "stored-credential" });
     expect(second.navigations).toEqual([]);
     expect((await second.store.get())?.token).toBe("sibling-access");
+  });
+
+  it("spends no code when a sibling committed before the landing", async () => {
+    const authn = new FakeAuthn();
+    const origin = new FakeOrigin();
+    const dashboard = new DeployedDashboardStub(authn, true);
+    const tab = new Tab(authn, origin.openContext(), DEEP_LINK);
+    const sibling = new Tab(authn, origin.openContext(), "/app/");
+
+    // This tab is away on its handoff when the sibling signs in, so the code
+    // it comes back holding is already redundant.
+    expect(await tab.boot(NO_OVERRIDES)).toEqual({ kind: "navigating" });
+    tab.href = serveDashboard(dashboard, tab.href);
+    await sibling.store.signIn(
+      { token: "sibling-access", refreshToken: "sibling-refresh" },
+      { id: "user-1", email: "user-1@example.test", name: "User One" },
+    );
+
+    const outcome = await tab.boot(NO_OVERRIDES);
+
+    // Not merely "a credential exists afterwards": nothing was spent to get
+    // there, and the sibling's pair is the one that survived. An exchange here
+    // would mint a SECOND session for a user who already has one, and the
+    // later write would displace the pair every other tab is holding.
+    expect(outcome).toEqual({ kind: "stored-credential" });
+    expect(authn.exchangeAttempts).toEqual([]);
+    expect((await tab.store.get())?.token).toBe("sibling-access");
+    expect(tab.href).toBe(new URL(DEEP_LINK, ORIGIN).toString());
   });
 
   it("a tab blind to that write navigates a signed-in visitor away", async () => {
@@ -784,13 +842,63 @@ describe("two tabs of one origin", () => {
   });
 });
 
+describe("adoption releases the budget", () => {
+  it("a tab that adopted a sibling's credential can mint again after signing out", async () => {
+    const authn = new FakeAuthn();
+    const origin = new FakeOrigin();
+    const dashboard = new DeployedDashboardStub(authn, true);
+    const tab = new Tab(authn, origin.openContext(), DEEP_LINK);
+    const sibling = new Tab(authn, origin.openContext(), "/app/");
+
+    // Both navigations spent against a handoff that never returns a code.
+    await settle(tab, codelessDashboard, NO_OVERRIDES);
+    expect(tab.navigations).toHaveLength(2);
+    // A sibling signs in, this tab adopts, and then the user signs out.
+    await sibling.store.signIn(
+      { token: "sibling-access", refreshToken: "sibling-refresh" },
+      { id: "user-1", email: "user-1@example.test", name: "User One" },
+    );
+    expect(await tab.boot(NO_OVERRIDES)).toEqual({ kind: "stored-credential" });
+    await tab.store.delete();
+
+    const outcome = await settle(tab, dashboard, NO_OVERRIDES);
+
+    // The counter bounds ONE unsuccessful stretch. Carrying it across a
+    // session that has since begun and ended would strand this still-open tab
+    // on the device flow forever.
+    expect(outcome).toEqual({ kind: "minted" });
+    expect(tab.slots.has(WEB_MINT_NAVIGATION_KEY)).toBe(false);
+  });
+
+  it("a budget kept across adoption sends the next boot straight to the device flow", async () => {
+    const authn = new FakeAuthn();
+    const origin = new FakeOrigin();
+    const dashboard = new DeployedDashboardStub(authn, true);
+    const tab = new Tab(authn, origin.openContext(), DEEP_LINK);
+
+    // The discriminating control: the same sequence with the counter left
+    // behind by hand, which is exactly what an adoption arm that does not
+    // clear it produces.
+    await settle(tab, codelessDashboard, NO_OVERRIDES);
+    tab.slots.set(WEB_MINT_NAVIGATION_KEY, "2");
+
+    const outcome = await settle(tab, dashboard, NO_OVERRIDES);
+
+    expect(outcome).toEqual({
+      kind: "device-flow-fallback",
+      reason: "no-code-returned",
+    });
+  });
+});
+
 describe("sign-out scope", () => {
-  it("app sign-out leaves the dashboard's own storage untouched", async () => {
+  it("app sign-out leaves another app's storage on the origin untouched", async () => {
     const origin = new FakeOrigin();
     const dashboardContext = origin.openContext();
-    // The dashboard's credential is a stranger to this shell: a different key,
-    // written by a different app on the same origin.
-    dashboardContext.write("auth-storage", '{"state":{"traycerToken":"x"}}');
+    // Another app's credential on this same origin is a stranger to this
+    // shell: a different key, written by a writer this store knows nothing
+    // about and must not disturb.
+    dashboardContext.write("other-app-storage", '{"credential":"x"}');
     const tab = new Tab(new FakeAuthn(), origin.openContext(), DEEP_LINK);
     await tab.store.signIn(
       { token: "app-access", refreshToken: "app-refresh" },
@@ -799,6 +907,6 @@ describe("sign-out scope", () => {
 
     await tab.store.delete();
 
-    expect(origin.keys()).toEqual(["auth-storage"]);
+    expect(origin.keys()).toEqual(["other-app-storage"]);
   });
 });

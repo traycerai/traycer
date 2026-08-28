@@ -43,8 +43,8 @@ const RETURN_CODE_PARAM = "code";
 const MAX_MINT_NAVIGATIONS = 2;
 
 /**
- * Where the PKCE verifier and the attempt counter live for the length of the
- * round trip.
+ * Where the PKCE verifier, the destination and the attempt counter live for
+ * the length of the round trip.
  *
  * `sessionStorage`, not `localStorage`: the bundle's own credential is
  * origin-wide because a browser holds ONE session, but a mint in flight
@@ -52,8 +52,16 @@ const MAX_MINT_NAVIGATIONS = 2;
  * has its own verifier and its own budget, and neither can consume the
  * other's. It also disposes itself - closing the tab ends the attempt - which
  * a durable slot would not.
+ *
+ * The destination is stored rather than re-read from the address bar on the
+ * way back, because the way back is lossy by construction: the handoff writes
+ * its `code` INTO the destination, so a destination that had a `code` of its
+ * own comes back with that value replaced. Remembering it is also what makes
+ * "is this `code` auth material?" answerable at all - it is, exactly when this
+ * tab is waiting for one.
  */
 export const WEB_MINT_VERIFIER_KEY = "traycer.webapp.mint.verifier";
+export const WEB_MINT_TARGET_KEY = "traycer.webapp.mint.target";
 export const WEB_MINT_NAVIGATION_KEY = "traycer.webapp.mint.navigations";
 
 /**
@@ -155,59 +163,79 @@ export type MintGiveUpReason =
 export async function runAppSessionMint(
   options: AppSessionMintOptions,
 ): Promise<AppSessionMintOutcome> {
-  const returning = await consumeReturnedCode(options);
-  if (returning !== null) {
-    return returning;
+  const pending = readPendingHandoff(options.scratchpad);
+  if (pending !== null) {
+    return completeHandoff(options, pending);
   }
   if ((await options.tokenStore.get()) !== null) {
-    return { kind: "stored-credential" };
+    return adoptStoredCredential(options);
   }
-  return beginMint(options, "no-code-returned");
+  return beginMint(options, currentTarget(options), "no-code-returned");
 }
 
 /**
- * Spends a `code` this landing carries, or reports that there was none to
- * spend (`null`).
- *
- * The code leaves the address bar BEFORE it is spent, and the verifier leaves
- * the scratchpad in the same breath. Both are single-use, and the failure that
- * matters is not losing them - it is keeping them: a reload that re-presents a
- * spent code, or a retry that pairs a fresh challenge with a stale verifier.
- * Removing them first makes every path below - success, rejection, a closed
- * tab mid-exchange - land on the same "nothing to replay" state.
+ * A handoff this tab issued and is now landing back from: where the visitor
+ * was going, and the secret that can spend the code they came back with.
  */
-async function consumeReturnedCode(
-  options: AppSessionMintOptions,
-): Promise<AppSessionMintOutcome | null> {
-  const url = new URL(options.location.href);
-  const code = url.searchParams.get(RETURN_CODE_PARAM);
-  if (code === null || code.length === 0) {
-    return null;
-  }
-  const verifier = options.scratchpad.read(WEB_MINT_VERIFIER_KEY);
-  options.scratchpad.remove(WEB_MINT_VERIFIER_KEY);
-  url.searchParams.delete(RETURN_CODE_PARAM);
-  options.location.rewrite(relativeReference(url));
+interface PendingHandoff {
+  readonly target: string;
+  readonly verifier: string | null;
+}
 
-  // A code with no verifier cannot be spent by this tab - it belongs to a
-  // round trip that started somewhere else (another tab, or a page life this
-  // one does not remember). Spending it is not merely futile, it would burn a
-  // code that its own tab may still be waiting to use.
-  if (verifier === null || verifier.length === 0) {
-    return beginMint(options, "verifier-missing");
+/**
+ * Finishes a round trip this tab started.
+ *
+ * The address bar on a landing is TRANSPORT, not truth. The handoff writes its
+ * `code` into the destination it was given, which means the value of a `code`
+ * that was already part of that destination is gone by the time the browser
+ * arrives - and no inspection of the landing URL can recover it. So the
+ * destination is remembered when the handoff is issued and restored verbatim
+ * here, which also settles the question of what a `code` on the URL MEANS: it
+ * is auth material only because this tab is waiting for one. On any other page
+ * load it is the page's own query, untouched.
+ *
+ * The verifier and the remembered destination are consumed together and up
+ * front. Both are single-use, and the failure that matters is not losing them
+ * - it is keeping them: a reload that re-presents a spent code, or a retry
+ * that pairs a fresh challenge with a stale verifier.
+ */
+async function completeHandoff(
+  options: AppSessionMintOptions,
+  pending: PendingHandoff,
+): Promise<AppSessionMintOutcome> {
+  const code = new URL(options.location.href).searchParams.get(
+    RETURN_CODE_PARAM,
+  );
+  clearHandoff(options.scratchpad);
+
+  if (code === null || code.length === 0) {
+    // Back here with nothing to spend: the visitor returned some other way, or
+    // the sign-in resolved a continuation that hands back no code at all. They
+    // are somewhere by their own account now, so a retry aims at where they
+    // ARE rather than at where they were going.
+    return beginMint(options, currentTarget(options), "no-code-returned");
+  }
+  options.location.rewrite(pending.target);
+
+  // A code with no verifier cannot be spent by this tab - the secret that
+  // matches it is gone. Spending it is not merely futile, it would burn a code
+  // whose round trip may still be live somewhere.
+  if (pending.verifier === null || pending.verifier.length === 0) {
+    return beginMint(options, pending.target, "verifier-missing");
   }
   // A credential committed while this tab was away (a sibling's mint, or its
-  // own earlier one) outranks the code: adopt it and let the code expire.
+  // own earlier one) outranks the code: adopt it, spend nothing, and let the
+  // code expire unused.
   if ((await options.tokenStore.get()) !== null) {
-    return { kind: "stored-credential" };
+    return adoptStoredCredential(options);
   }
 
-  const exchanged = await options.exchange(code, verifier);
+  const exchanged = await options.exchange(code, pending.verifier);
   if (exchanged.kind === "rejected") {
-    return beginMint(options, "code-rejected");
+    return beginMint(options, pending.target, "code-rejected");
   }
   if (exchanged.kind === "network-error") {
-    return beginMint(options, "exchange-unreachable");
+    return beginMint(options, pending.target, "exchange-unreachable");
   }
 
   // `signIn` needs an identity, and the pair is the only thing the exchange
@@ -216,22 +244,40 @@ async function consumeReturnedCode(
   // minted alongside it.
   const probe = await options.probeIdentity(exchanged.token);
   if (probe.kind !== "valid") {
-    return beginMint(options, "identity-unresolved");
+    return beginMint(options, pending.target, "identity-unresolved");
   }
   await options.tokenStore.signIn(
     { token: exchanged.token, refreshToken: exchanged.refreshToken },
     credentialsIdentityFromAuthenticatedUser(probe.user),
   );
-  options.scratchpad.remove(WEB_MINT_NAVIGATION_KEY);
+  clearMintState(options.scratchpad);
   return { kind: "minted" };
 }
 
 /**
- * Starts (or retries) the handoff, or gives up to the device flow once this
- * tab has spent its navigation budget.
+ * The mint is over because a credential exists - whoever put it there.
+ *
+ * The budget is released on THIS arm too, and not only on the arm where this
+ * tab did the minting itself. The counter exists to bound one unsuccessful
+ * stretch of attempts, and a credential in the store ends that stretch however
+ * it arrived. A tab that kept the count would carry it past the sign-out that
+ * follows and go straight to the device flow on its next boot - for attempts
+ * that belong to a session that has since ended.
+ */
+function adoptStoredCredential(
+  options: AppSessionMintOptions,
+): AppSessionMintOutcome {
+  clearMintState(options.scratchpad);
+  return { kind: "stored-credential" };
+}
+
+/**
+ * Starts (or retries) the handoff to `target`, or gives up to the device flow
+ * once this tab has spent its navigation budget.
  */
 async function beginMint(
   options: AppSessionMintOptions,
+  target: string,
   reason: MintGiveUpReason,
 ): Promise<AppSessionMintOutcome> {
   const spent = readNavigationCount(options.scratchpad);
@@ -246,15 +292,41 @@ async function beginMint(
   // Navigating anyway would take a signed-in visitor away from the page they
   // are already entitled to see.
   if ((await options.tokenStore.get()) !== null) {
-    return { kind: "stored-credential" };
+    return adoptStoredCredential(options);
   }
 
   options.scratchpad.write(WEB_MINT_VERIFIER_KEY, verifier);
+  options.scratchpad.write(WEB_MINT_TARGET_KEY, target);
   options.scratchpad.write(WEB_MINT_NAVIGATION_KEY, String(spent + 1));
   options.location.navigate(
-    loginAppUrl(new URL(options.location.href), challenge),
+    loginAppUrl(new URL(options.location.href).origin, target, challenge),
   );
   return { kind: "navigating" };
+}
+
+/** Where the visitor is right now, as a destination to come back to. */
+function currentTarget(options: AppSessionMintOptions): string {
+  return relativeReference(new URL(options.location.href));
+}
+
+function readPendingHandoff(scratchpad: MintScratchpad): PendingHandoff | null {
+  const target = scratchpad.read(WEB_MINT_TARGET_KEY);
+  if (target === null || target.length === 0) {
+    return null;
+  }
+  return { target, verifier: scratchpad.read(WEB_MINT_VERIFIER_KEY) };
+}
+
+/** Retires the single-use material, leaving the budget alone. */
+function clearHandoff(scratchpad: MintScratchpad): void {
+  scratchpad.remove(WEB_MINT_VERIFIER_KEY);
+  scratchpad.remove(WEB_MINT_TARGET_KEY);
+}
+
+/** Retires everything, including the budget - the flow is over. */
+function clearMintState(scratchpad: MintScratchpad): void {
+  clearHandoff(scratchpad);
+  scratchpad.remove(WEB_MINT_NAVIGATION_KEY);
 }
 
 /**
@@ -262,30 +334,39 @@ async function beginMint(
  *
  * BOTH PKCE parameters travel with the redirect uri, always, and that is the
  * whole reason a signed-out visitor completes this flow instead of looping.
- * `/login/app` persists what it is given before the auth gate turns a
- * signed-out visitor around, and the dashboard's post-session continuation
- * then reads those persisted values back to decide where a freshly minted
- * session goes: a redirect uri WITH a challenge is the app handoff, a redirect
- * uri WITHOUT one is the editor-extension handoff, which returns a token in
- * the URL and never a `code` this shell can spend. So dropping the challenge
- * does not degrade the flow, it silently selects a different one - and the
- * visitor comes back to a page that still has no credential.
+ * The handoff persists what it is given before the auth gate turns a
+ * signed-out visitor around, and the continuation after sign-in reads those
+ * persisted values back to decide where the fresh session goes: a redirect uri
+ * WITH a challenge is this app's handoff, a redirect uri WITHOUT one is the
+ * editor-extension handoff, which returns a token payload in the URL and never
+ * a `code` this shell can spend. So dropping the challenge does not degrade
+ * the flow, it silently selects a different one - and the visitor comes back
+ * to a page that still has no credential.
  *
  * The redirect uri is a RELATIVE reference carrying the whole destination -
- * path, query and fragment. Relative because the dashboard's validator admits
- * a same-origin relative uri directly, and whole because the query and
- * fragment ARE the page: returning a visitor to the bare path returns them
- * somewhere else, silently.
+ * path, query and fragment. Relative because the handoff's validator admits a
+ * same-origin relative uri directly, and whole because the query and fragment
+ * ARE the page: returning a visitor to the bare path returns them somewhere
+ * else, silently.
+ *
+ * One bounded window is outside this shell's reach: the page on the other side
+ * owns the request it makes, and this tab has no way to time it out from here.
+ * A stalled one leaves the visitor on that page rather than back here, so the
+ * retry budget below is only spendable once the browser actually returns.
  */
-function loginAppUrl(current: URL, codeChallenge: string): string {
-  const target = new URL(LOGIN_APP_PATH, current.origin);
-  target.searchParams.set("redirect_uri", relativeReference(current));
-  target.searchParams.set("code_challenge", codeChallenge);
-  target.searchParams.set("code_challenge_method", CODE_CHALLENGE_METHOD);
-  return target.toString();
+function loginAppUrl(
+  origin: string,
+  target: string,
+  codeChallenge: string,
+): string {
+  const handoff = new URL(LOGIN_APP_PATH, origin);
+  handoff.searchParams.set("redirect_uri", target);
+  handoff.searchParams.set("code_challenge", codeChallenge);
+  handoff.searchParams.set("code_challenge_method", CODE_CHALLENGE_METHOD);
+  return handoff.toString();
 }
 
-/** `/path?query#fragment` - the destination as the dashboard accepts it. */
+/** `/path?query#fragment` - the destination as the handoff accepts it. */
 function relativeReference(url: URL): string {
   return `${url.pathname}${url.search}${url.hash}`;
 }
