@@ -322,6 +322,30 @@ describe("startLogTail", () => {
   );
 
   it.runIf(canDenyReads)(
+    "reads a replacement from byte zero after an unreadable start then confirmed disappearance",
+    async () => {
+      writeFileSync(logPath, "unreadable-preexisting\n");
+      chmodSync(logPath, 0o000);
+
+      const { onBytes, text } = collector();
+      tail = startLogTail({
+        path: logPath,
+        onBytes,
+        onExhausted: () => undefined,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        maxMissingRetries: 60,
+      });
+
+      unlinkSync(logPath);
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 4));
+      writeFileSync(logPath, "replacement-prefix\nreplacement-tail\n");
+      await waitFor(() => text().includes("replacement-tail"), 3_000);
+
+      expect(text()).toBe("replacement-prefix\nreplacement-tail\n");
+    },
+  );
+
+  it.runIf(canDenyReads)(
     "seeds continuity when establishing EOF, so a later in-place rewrite still re-reads",
     async () => {
       writeFileSync(logPath, `${"p".repeat(300)}\n`);

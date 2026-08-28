@@ -157,7 +157,7 @@ export function startLogTail(options: LogTailOptions): LogTail {
       const handle = await open(options.path, "r");
       try {
         const stats = await handle.stat();
-        if (establishEofOnFirstRead) {
+        if (establishEofOnFirstRead && !sawFileMissing) {
           // First readable observation after an unreadable start: adopt its
           // end rather than replaying everything that was already there - and
           // seed continuity from THIS handle while we have it. Leaving it null
@@ -181,6 +181,15 @@ export function startLogTail(options: LogTailOptions): LogTail {
           }
           sawFileMissing = false;
         } else {
+          // A confirmed disappearance after the unreadable construction-time
+          // observation means this readable file is a replacement. Its bytes
+          // did not predate the follower, so consume it from byte zero instead
+          // of adopting its current EOF and silently dropping its prefix.
+          if (establishEofOnFirstRead) {
+            establishEofOnFirstRead = false;
+            offset = 0;
+            continuity = null;
+          }
           let continuityHolds = true;
           if (continuity !== null && offset >= continuity.length) {
             const probe = Buffer.alloc(continuity.length);
