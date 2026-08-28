@@ -412,6 +412,20 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // silence, and doctor calls the CLI-upgrade state clean while a file it
   // could not parse sits on disk shaping the next `host restart`.
   if (finalizeMarker.status === "invalid") {
+    // Whether `host restart` can actually clear this depends on a fact the
+    // marker's CONTENTS cannot tell us: reconciliation removes an unparseable
+    // marker with `safeUnlink`, which swallows its errors, so on a directory
+    // this user cannot write to the restart completes and the marker - and
+    // this warning - survive untouched, forever. Promising the repair without
+    // checking is the same unearned claim this PR exists to remove, one level
+    // up. `W_OK` on the parent is exactly the precondition `unlink` needs.
+    const markerDirWritable = await access(
+      dirname(cliPostFinalizeMarkerPath(opts.environment)),
+      fsConstants.W_OK,
+    ).then(
+      () => true,
+      () => false,
+    );
     issues.push({
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_MARKER_UNREADABLE,
       severity: "warning",
@@ -419,8 +433,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       message:
         `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be read: ` +
         `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed. ` +
-        "Run 'traycer host restart': its reconcile step discards a marker it cannot parse, which clears this. " +
-        "If a CLI upgrade still appears stuck afterwards, re-run 'traycer cli upgrade' to re-stage it.",
+        (markerDirWritable
+          ? "Run 'traycer host restart': its reconcile step discards a marker it cannot parse, which clears this. " +
+            "If a CLI upgrade still appears stuck afterwards, re-run 'traycer cli upgrade' to re-stage it."
+          : "Its directory is not writable by this user, so 'traycer host restart' cannot delete it either - " +
+            "its reconcile step would complete while leaving this warning in place. " +
+            "Fix the ownership or permissions on that directory first."),
       // `host restart` is the command that actually clears this. The previous
       // `traycer cli upgrade` was inert against the reported condition - it
       // never touches post-finalize.json, so an already-current CLI would
@@ -430,12 +448,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       // clothes: the string parses, it just does not do the job.
       //
       // Scoped to the PARSE-failure subtype for precisely that reason - see
-      // the `unreadable` branch below, where the same promise would be false.
-      fixAction: "host-restart",
-      terminalCommand: `traycer host restart`,
+      // the `unreadable` branch below, where the same promise would be false -
+      // and withheld again when the directory is not writable, where the
+      // deletion that makes it true cannot happen.
+      fixAction: markerDirWritable ? "host-restart" : null,
+      terminalCommand: markerDirWritable ? `traycer host restart` : null,
       details: {
         markerPath: cliPostFinalizeMarkerPath(opts.environment),
         errorMessage: finalizeMarker.errorMessage,
+        markerDirWritable,
       },
     });
   }

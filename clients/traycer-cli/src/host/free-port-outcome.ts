@@ -97,13 +97,22 @@ export function portRepairFailure(opts: {
   }
 
   if (result.release === "unverified") {
+    // The probe advice has to name the probe this platform actually runs.
+    // `pidOwnsPort` dispatches on `process.platform`: Windows never invokes
+    // `lsof`, so telling a Windows user to install it cannot change the next
+    // result and leaves the repair stuck with a recovery that reads as
+    // actionable and is not.
+    const probeAdvice =
+      process.platform === "win32"
+        ? " Re-run 'traycer host doctor' to re-check the port; if it keeps failing, check that 'netstat -ano' runs and returns output for this user, since that is what verifies ownership here."
+        : " Re-run 'traycer host doctor' to re-check the port; if the probe keeps failing, install 'lsof' so ownership can be verified.";
     return cliError({
       code: CLI_ERROR_CODES.HOST_PORT_RELEASE_UNVERIFIED,
       message:
-        `${commandName}: sent SIGTERM to pid ${pid}, but could not confirm that port ${port} was released - ${result.releaseDetail}. ` +
+        `${commandName}: signalled pid ${pid}, but could not confirm that port ${port} was released - ${result.releaseDetail}. ` +
         "Treating an unverifiable repair as successful is how a port conflict gets reported as fixed while it is still live, so this is a failure." +
         restartNote +
-        " Re-run 'traycer host doctor' to re-check the port; if the probe keeps failing, install 'lsof' (POSIX) so ownership can be verified.",
+        probeAdvice,
       details,
       exitCode: 1,
     });

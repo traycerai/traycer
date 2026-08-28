@@ -562,6 +562,8 @@ export type ReconcileOutcome =
       readonly pendingStagedBinaryPath: string;
       readonly markerLivePath: string;
       readonly manifestBinaryPath: string;
+      readonly markerAttemptedAt: string;
+      readonly pendingStagedAt: string;
     };
 
 // Read any pending post-finalize marker the detached helper wrote and
@@ -666,9 +668,37 @@ export async function reconcilePostFinalizeMarker(opts: {
   // Accepting it there would promote a version whose bytes never reached the
   // re-anchored destination. The marker only describes this operation if it
   // agrees about where the bytes came FROM and where they went TO.
+  //
+  // PATHS ARE NOT IDENTITY, which is why the timestamp check below is not
+  // belt-and-braces. Both paths are REUSABLE by design: `cli re-anchor`
+  // deliberately supports replacing the binary while keeping the same path,
+  // and `cli upgrade` derives the staged filename deterministically from the
+  // version, so retrying the same version reproduces it exactly. A marker
+  // from a prior attempt can therefore match both paths of a genuinely new
+  // pending upgrade - and applying it would clear that pending record and
+  // stamp its version while the newly staged bytes sat untouched.
+  //
+  // A marker written BEFORE the pending upgrade was staged cannot be
+  // describing it. That ordering is the closest thing to an operation ID
+  // available without adding one to the marker format, and it is decisive for
+  // the reuse case, which is by construction a LATER staging than the marker.
+  // Timestamps are compared as instants, not strings: the helper writes
+  // `(Get-Date).ToUniversalTime().ToString("o")` on Windows (7 fractional
+  // digits) against `toISOString()`'s 3 elsewhere, so lexicographic ordering
+  // would mis-sort identical moments.
+  const markerAt = Date.parse(parsed.attemptedAt);
+  const pendingStagedAt = Date.parse(pending.stagedAt);
+  // An untimestamped or unparseable marker cannot be placed in the ordering.
+  // Discarding is the conservative direction: `pendingUpgrade` survives, so
+  // the upgrade is retried rather than falsely marked complete.
+  const markerPredatesPending =
+    !Number.isFinite(markerAt) ||
+    !Number.isFinite(pendingStagedAt) ||
+    markerAt < pendingStagedAt;
   if (
     parsed.stagedBinaryPath !== pending.stagedBinaryPath ||
-    parsed.livePath !== manifest.binaryPath
+    parsed.livePath !== manifest.binaryPath ||
+    markerPredatesPending
   ) {
     await safeUnlink(markerPath);
     return {
@@ -677,6 +707,8 @@ export async function reconcilePostFinalizeMarker(opts: {
       pendingStagedBinaryPath: pending.stagedBinaryPath,
       markerLivePath: parsed.livePath,
       manifestBinaryPath: manifest.binaryPath,
+      markerAttemptedAt: parsed.attemptedAt,
+      pendingStagedAt: pending.stagedAt,
     };
   }
 

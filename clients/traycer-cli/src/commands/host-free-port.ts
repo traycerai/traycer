@@ -85,11 +85,21 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
         releaseDetail: result.releaseDetail,
         holderPid: result.holderPid,
       },
-      // "sent SIGTERM to", not "terminated" - the signal is all this command
-      // did to the process, and a server that closes its listener while
-      // draining connections satisfies the repair without dying. The verified
-      // claim is the port one, which is what `releaseDetail` carries.
-      human: `sent SIGTERM to pid ${args.pid}; port ${args.port} released (${result.releaseDetail})`,
+      // Rendered from what actually happened to the signal, not from the fact
+      // that we reached the success path. There are two ways to get here: the
+      // SIGTERM was delivered, or the owner exited on its own between the
+      // ownership probe and the kill (ESRCH) and the port was then verified
+      // free anyway. Saying "sent SIGTERM" in the second case describes an act
+      // this command did not perform - a small lie, but the same kind the rest
+      // of this change exists to remove.
+      //
+      // "sent SIGTERM to", not "terminated", in the first case: the signal is
+      // all this command did to the process, and a server that closes its
+      // listener while draining connections satisfies the repair without
+      // dying. The verified claim is the port one, in `releaseDetail`.
+      human: result.killed
+        ? `sent SIGTERM to pid ${args.pid}; port ${args.port} released (${result.releaseDetail})`
+        : `pid ${args.pid} exited before SIGTERM could be delivered (${result.killError}); port ${args.port} verified free (${result.releaseDetail})`,
       exitCode: 0,
     };
   };
