@@ -767,8 +767,10 @@ describe("FolderRow", () => {
       NOOP,
     );
     expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
-    expect(screen.getByTestId("folder-location-trigger")).toBeTruthy();
-    expect(screen.getByTestId("folder-location-trigger").disabled).toBe(false);
+    const location = screen.getByTestId("folder-location-trigger");
+    expect(location instanceof HTMLButtonElement && location.disabled).toBe(
+      false,
+    );
     // aria-disabled keeps the explanation in normal keyboard traversal while
     // guarding activation during the fetch.
     const pin = screen.getByTestId("folder-make-primary");

@@ -77,6 +77,7 @@ describe("TeardownCommitDialog", () => {
   });
 
   it("keeps a long holder label wrapping inside the dialog with the confirm button in the footer", () => {
+    const unbrokenToken = "x".repeat(200);
     render(
       <TeardownCommitDialog
         open
@@ -84,8 +85,7 @@ describe("TeardownCommitDialog", () => {
         holders={[
           {
             ...HOLDER,
-            label:
-              "This agent is working. Stopping the agent also stops its background shells and clears queued messages",
+            label: unbrokenToken,
           },
         ]}
         onImmediate={vi.fn()}
@@ -96,11 +96,15 @@ describe("TeardownCommitDialog", () => {
     const dialog = screen.getByTestId("teardown-commit-dialog");
     const label = screen.getByTestId("teardown-holder-label");
     const confirm = screen.getByTestId("teardown-commit-immediate");
+    const footer = confirm.closest("[data-slot='dialog-footer']");
+    expect(label.textContent).toBe(unbrokenToken);
     expect(dialog.contains(label)).toBe(true);
     expect(dialog.contains(confirm)).toBe(true);
-    expect(label.className).toContain("break-words");
+    expect(label.className).toContain("wrap-anywhere");
     expect(label.className).toContain("min-w-0");
-    expect(confirm.closest("[data-slot='dialog-footer']")).toBeTruthy();
+    expect(footer).toBeTruthy();
+    expect(footer?.className).toContain("flex-wrap");
+    expect(footer?.className).toContain("min-w-0");
   });
 
   it("labels terminal-agent defer as apply on next Update", () => {

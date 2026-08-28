@@ -262,6 +262,50 @@ function workspaceSummaryFromBindingEntry(
   };
 }
 
+/**
+ * Working disk facts a row can stage from. A refresh that rewrites the listing
+ * with schema-default `resolvedAt: null` must not wipe a previously resolved
+ * snapshot — that is the working set for Location/Branch, matching how a
+ * settled-busy pill keeps its last good snapshot. First open (never resolved)
+ * keeps the unresolved fallback so git/non-git is not guessed.
+ */
+function lastResolvedWorkspaceSummary(
+  live: WorktreeWorkspaceSummaryV15 | undefined,
+  remembered: WorktreeWorkspaceSummaryV15 | undefined,
+  fallback: WorktreeWorkspaceSummaryV15,
+): WorktreeWorkspaceSummaryV15 {
+  if (live !== undefined && live.resolvedAt !== null) return live;
+  if (remembered !== undefined) return remembered;
+  return live ?? fallback;
+}
+
+function rememberResolvedSummaries(
+  prev: ReadonlyMap<string, WorktreeWorkspaceSummaryV15>,
+  liveByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV15>,
+  bindingEntries: ReadonlyArray<WorktreeBindingEntry>,
+): ReadonlyMap<string, WorktreeWorkspaceSummaryV15> {
+  const bound = new Set(bindingEntries.map((entry) => entry.workspacePath));
+  let changed = false;
+  const next = new Map<string, WorktreeWorkspaceSummaryV15>();
+  for (const [path, summary] of prev) {
+    if (!bound.has(path)) {
+      changed = true;
+      continue;
+    }
+    next.set(path, summary);
+  }
+  for (const [path, live] of liveByPath) {
+    if (!bound.has(path) || live.resolvedAt === null) continue;
+    const prior = next.get(path);
+    if (prior !== undefined && prior.resolvedAt === live.resolvedAt) {
+      continue;
+    }
+    next.set(path, live);
+    changed = true;
+  }
+  return changed ? next : prev;
+}
+
 export type HostWorkspaceSelectorSurface =
   | { readonly kind: "home"; readonly draftId: string | null }
   | BoundOwnerSurface;
@@ -1744,6 +1788,7 @@ type FolderEditorAction =
     }
   | { readonly type: "stageRemoval"; readonly workspacePath: string }
   | { readonly type: "unstageRemoval"; readonly workspacePath: string }
+  | { readonly type: "discardStaged" }
   | { readonly type: "resumed" };
 function folderEditorReducer(
   state: FolderEditorState,
@@ -1776,6 +1821,16 @@ function folderEditorReducer(
       next.delete(action.workspacePath);
       return { ...state, pendingRemovedPaths: next };
     }
+    case "discardStaged":
+      // Clear overlays Discard itself created. Terminal add/remove commits the
+      // binding immediately and marks dirty WITHOUT resume — that dirty set is
+      // the only bookkeeping that Update still has to resync the PTY, so a
+      // blanket `resumed` here would suppress a required rebind.
+      if (state.pendingRemovedPaths.size === 0) return state;
+      return {
+        ...state,
+        pendingRemovedPaths: new Set<string>(),
+      };
     case "resumed":
       return {
         dirtyPathsSinceResume: new Set<string>(),
@@ -1907,14 +1962,27 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // to fetch — is `isPending` in v5 but never actually loading, so guard on the
   // active first fetch only.
   const metadataPending = props.hostClient !== null && metadataQuery.isLoading;
+  const [lastResolvedByPath, setLastResolvedByPath] = useState<
+    ReadonlyMap<string, WorktreeWorkspaceSummaryV15>
+  >(() => new Map());
+  const rememberedByPath = rememberResolvedSummaries(
+    lastResolvedByPath,
+    summariesByPath,
+    bindingEntries,
+  );
+  if (rememberedByPath !== lastResolvedByPath) {
+    setLastResolvedByPath(rememberedByPath);
+  }
   const workspaces = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV15>>(
     () =>
-      bindingEntries.map(
-        (entry) =>
-          summariesByPath.get(entry.workspacePath) ??
+      bindingEntries.map((entry) =>
+        lastResolvedWorkspaceSummary(
+          summariesByPath.get(entry.workspacePath),
+          rememberedByPath.get(entry.workspacePath),
           workspaceSummaryFromBindingEntry(entry),
+        ),
       ),
-    [bindingEntries, summariesByPath],
+    [bindingEntries, rememberedByPath, summariesByPath],
   );
 
   // In-epic surfaces address their bound owner host (`props.activeHostId` is
@@ -2132,6 +2200,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             entries: worktreeCreateEntries(stagedEntries),
           })
           .then((result) => {
+            if (isCancelled()) return;
             applyWorktreeCreateResult({
               stagedEntries,
               changedWorkspacePaths,
@@ -2153,6 +2222,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             trackUserInitiatedWorktreeWrite(stagedEntries, result);
           })
           .catch((error: unknown) => {
+            if (isCancelled()) return;
             if (!isWorktreeRebindBlocked(error)) return;
             const live = readLiveCommitCapture();
             const dropped = droppedRunDirectoriesFromDraft({
@@ -2225,7 +2295,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       }),
     );
     if (snapshot.holders.length === 0) {
-      applyStagedFoldersAndResume(capture);
+      const runId = ++teardownRunIdRef.current;
+      applyStagedFoldersAndResume(
+        capture,
+        () => teardownRunIdRef.current !== runId,
+      );
       return;
     }
     setTeardownDialog({
@@ -2259,8 +2333,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [stagedKey, unstageWorktreeEntry],
   );
   const discardStagedFolders = useCallback((): void => {
+    // Same per-run token as Cancel: an in-flight captured create must not
+    // apply/resurrect the choice the user just abandoned.
+    teardownRunIdRef.current += 1;
+    setTeardownCommitPending(false);
+    setTeardownDialog(null);
     clearStagedWorktreeIntent(stagedKey);
-    dispatchEditor({ type: "resumed" });
+    dispatchEditor({ type: "discardStaged" });
   }, [clearStagedWorktreeIntent, stagedKey]);
   // Phase-1 GUI-composed teardown: stop disclosed owner-scoped holders
   // (managed-command stop, agent.stop) before removeBindingEntry /
@@ -2658,9 +2737,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const branchPrefixWarning = branchDefault.warning;
       const currentBranch = branchForSummary(ws);
       const otherWorktrees = ws.worktrees.filter((w) => !w.isMain);
+      const liveResolvedAt =
+        summariesByPath.get(ws.workspacePath)?.resolvedAt ?? ws.resolvedAt;
       const rowMetadataPending = isRowMetadataPending(
         metadataPending,
-        ws.resolvedAt,
+        liveResolvedAt,
       );
       const rowIsGitRepo = ws.resolvedAt !== null && ws.isGitRepo;
       const branchLabel = workspaceRunBranchLabel({
@@ -2692,6 +2773,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       pendingBranchByPath,
       pendingRemovePaths,
       stagedEntryByPath,
+      summariesByPath,
       surface.binding,
     ],
   );
