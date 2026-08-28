@@ -102,6 +102,7 @@ function renderMinimap(
         scrollLength: 160,
       })}
       rows={transcriptListRows({ window: null, rendered: messages })}
+      transcriptWindow={null}
       onSelect={onSelect}
       side={options.side ?? "right"}
       topOffsetAdjustmentRef={{ current: 0 }}
@@ -129,6 +130,7 @@ function renderRegisteredMinimap(input: {
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
         rows={transcriptListRows({ window: null, rendered: messages })}
+        transcriptWindow={null}
         onSelect={onSelect}
         side={input.side}
         topOffsetAdjustmentRef={{ current: 0 }}
@@ -342,6 +344,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
             window: null,
             rendered: makeTranscript(3),
           })}
+          transcriptWindow={null}
           onSelect={onSelect}
           side="hide"
           topOffsetAdjustmentRef={{ current: 0 }}

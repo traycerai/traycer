@@ -152,3 +152,46 @@ export function selectRestorableSetupInterruption(
   }
   return null;
 }
+
+/**
+ * The same answer, brought forward over events that arrived AFTER the one that
+ * produced `baseline`.
+ *
+ * The windowed line needs this because the host's derived value is a snapshot,
+ * not a subscription: it states the answer as of the frame it rode in on, and
+ * the next `setup.failed` or `setup.running` reaches the client as an
+ * `eventAppended` with no snapshot behind it. Without a fold the composer stops
+ * restoring drafts for every failure that happens mid-session, and keeps
+ * offering a restore for one a retry has already cleared - in both cases until
+ * something unrelated forces a resnapshot.
+ *
+ * `laterEvents` must be exactly that - later. Feeding it the client's whole
+ * event array is wrong in a way that is easy to miss: on the windowed line that
+ * array holds HYDRATED events too, whose clearing successors may simply not
+ * have been fetched, so an interruption the host already knows was retried
+ * would come back. The transcript window's live-append list is the set that
+ * carries this property by construction.
+ */
+export function foldRestorableSetupInterruption(input: {
+  readonly baseline: RestorableSetupInterruption | null;
+  readonly laterEvents: readonly ChatEvent[];
+}): RestorableSetupInterruption | null {
+  const { baseline, laterEvents } = input;
+  // A later interruption supersedes the baseline outright - it is newer by
+  // construction, and this run also applies the clearing rule among the later
+  // events themselves.
+  const later = selectRestorableSetupInterruption(laterEvents);
+  if (later !== null) return later;
+  if (baseline === null) return null;
+  // No later interruption, so the only question left is whether one of these
+  // events cleared the baseline. `-1` scans the whole array: the baseline's own
+  // event precedes all of them.
+  return hasSubsequentRestoreClearingEvent(
+    laterEvents,
+    -1,
+    baseline.workspacePath,
+    baseline.eventType,
+  )
+    ? null
+    : baseline;
+}

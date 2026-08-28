@@ -13,6 +13,7 @@ import {
   chatAccumulatedFileChangeSummarySchema,
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
+  chatLocateRowResponseSchema,
   chatRangeResponseSchema,
   chatReadAccumulatedFileChangeResponseSchema,
   RANGE_REQUEST_ID_MAX_CHARS,
@@ -608,5 +609,54 @@ describe("chatIndexChangeSchema", () => {
   it("rejects an entry missing a required skeleton field", () => {
     const withoutRowId = { createdAt: 1000, role: "user", byteLength: 10 };
     expect(rowSkeletonEntrySchema.safeParse(withoutRowId).success).toBe(false);
+  });
+});
+
+// ─── Group 6: chatLocateRowResponseSchema ───────────────────────────────────
+
+/**
+ * An ordinal is a coordinate, and a coordinate means nothing without the space
+ * it is in. `chat.locateRow` is a unary RPC on a different connection from the
+ * stream, so a restore or a compaction between the host numbering the row and
+ * the client consuming the number leaves the client holding a position in a
+ * space it has left - in range, fetchable, and pointing at the wrong row.
+ *
+ * The epoch is REQUIRED rather than optional for that reason: a producer that
+ * omits it hands back an uncheckable coordinate, and the failure it causes is
+ * silent at every layer below this schema.
+ */
+describe("chatLocateRowResponseSchema's found/not-found arms", () => {
+  it("accepts a found answer stamped with the epoch it is numbered in", () => {
+    const parsed = chatLocateRowResponseSchema.parse({
+      found: true,
+      ordinal: 42,
+      epoch: 7,
+    });
+    expect(parsed).toEqual({ found: true, ordinal: 42, epoch: 7 });
+  });
+
+  it("rejects a found answer with no epoch", () => {
+    expect(
+      chatLocateRowResponseSchema.safeParse({ found: true, ordinal: 42 })
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts the opaque refusal, which carries nothing", () => {
+    // `found: false` answers "no live session", "no row matches" and "you may
+    // not read this chat" alike; anything that distinguished them would rebuild
+    // the liveness oracle the sibling read closed.
+    const parsed = chatLocateRowResponseSchema.parse({ found: false });
+    expect(parsed).toEqual({ found: false });
+  });
+
+  it("strips an ordinal smuggled onto the refusal arm", () => {
+    const parsed = chatLocateRowResponseSchema.parse({
+      found: false,
+      ordinal: 42,
+      epoch: 7,
+    });
+    expect(parsed).toEqual({ found: false });
+    expect(parsed).not.toHaveProperty("ordinal");
   });
 });

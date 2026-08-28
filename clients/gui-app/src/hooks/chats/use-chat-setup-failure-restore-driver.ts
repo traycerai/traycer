@@ -65,9 +65,23 @@ export function useChatSetupFailureRestoreDriver(
     handle.store,
     (state) => state.transcriptDerived,
   );
+  // The third input, and the one that makes the windowed answer live rather
+  // than as-of-the-last-snapshot: the records the host pushed since. Subscribed
+  // as the window itself, whose identity the store replaces whenever any of
+  // this moves, rather than as `.liveEvents` - a selector returning a nested
+  // array is stable only by luck of the reducer.
+  const transcriptWindow = useStore(
+    handle.store,
+    (state) => state.transcriptWindow,
+  );
   const interruption = useMemo(
-    () => selectRestorableSetupInterruption({ events, transcriptDerived }),
-    [events, transcriptDerived],
+    () =>
+      selectRestorableSetupInterruption({
+        events,
+        transcriptDerived,
+        transcriptWindow,
+      }),
+    [events, transcriptDerived, transcriptWindow],
   );
   const replaceDraft = useComposerDraftStore((state) => state.replaceDraft);
   // Dedupe set is keyed alongside the chat-session handle so opening a

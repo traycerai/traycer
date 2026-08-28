@@ -594,6 +594,44 @@ export function latestForkableAssistantMessageId(
   return null;
 }
 
+/**
+ * The same boundary, brought forward past one the host already named.
+ *
+ * The windowed line reads that boundary off `chatTranscriptDerived`, which the
+ * host recomputes per SNAPSHOT - while the gate in front of the gesture
+ * (`composerActiveTurnStatus`) is cleared by a LIVE `turnStateChanged` frame.
+ * Between the two there is a window in which the gesture is allowed and the
+ * boundary still names the PREVIOUS turn, so a fork silently omits the turn the
+ * user just watched finish. Two clocks, and only one of them ticks live.
+ *
+ * The repair is local because the evidence is local: the turn that just
+ * completed is in the live tail this client is holding. So the scan looks only
+ * at what follows `known` in display order and answers `null` otherwise - it
+ * can move the boundary FORWARD and never backward, which is what makes it safe
+ * to prefer over the host's value. `known: null` means the host has no boundary
+ * at all, so any forkable row here is newer than nothing.
+ *
+ * `null` when `known` is not in `messages`: that is a boundary outside the
+ * hydrated window, and nothing here can order against it. It is also not the
+ * failing case - a turn completing live sits immediately after the one the last
+ * snapshot named, and the tail carrying it carries both.
+ */
+export function forkableAssistantMessageIdAfter(
+  messages: ReadonlyArray<ChatMessageModel>,
+  known: string | null,
+): string | null {
+  const knownIndex =
+    known === null
+      ? -1
+      : messages.findIndex((message) => message.persistentMessageId === known);
+  if (knownIndex === -1 && known !== null) return null;
+  for (let index = messages.length - 1; index > knownIndex; index--) {
+    const messageId = forkableAssistantMessageId(messages[index]);
+    if (messageId !== null) return messageId;
+  }
+  return null;
+}
+
 // Fork boundary for a message containing a pending or resolved interview.
 // Unlike `forkableAssistantMessageId` it does NOT require the turn to be
 // finished (`completedAt`/`runState`) — question-level fork actions remain

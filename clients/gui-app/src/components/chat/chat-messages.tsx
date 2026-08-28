@@ -2725,6 +2725,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             <div className="contents max-md:hidden">
               <ChatTurnMinimap
                 rows={listRows}
+                transcriptWindow={transcriptWindow}
                 inViewRefreshRef={minimapInViewRefreshRef}
                 listRef={chatTimelineRef}
                 topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}

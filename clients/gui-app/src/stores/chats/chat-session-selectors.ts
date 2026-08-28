@@ -1,4 +1,5 @@
 import {
+  foldRestorableSetupInterruption,
   selectRestorableSetupInterruption as protocolSelectRestorableSetupInterruption,
   type RestorableSetupInterruption,
 } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
@@ -39,19 +40,41 @@ export type { RestorableSetupInterruption };
  * and `useChatSetupFailureRestoreDriver` read the same way they always have.
  */
 export function selectRestorableSetupInterruption(
-  state: Pick<ChatSessionState, "events" | "transcriptDerived">,
+  state: Pick<
+    ChatSessionState,
+    "events" | "transcriptDerived" | "transcriptWindow"
+  >,
 ): RestorableSetupInterruption | null {
-  // On the windowed line the host has ALREADY answered this, and the scan below
-  // could not answer it at any amount of hydration: the event occupies no
-  // ordinal, so it is in no row's record set and `state.events` never receives
-  // it. This is the one consumer in the sweep with no client-side repair.
+  // On the windowed line the host has ALREADY answered this over the whole
+  // event log, and the scan below could not: a path-less interruption occupies
+  // no ordinal, so it is in no row's record set, and `loadRange` - addressed by
+  // ordinal - can never ask for it. Anything the client has not been PUSHED it
+  // will never obtain.
   //
-  // Not a `??` chain: `restorableSetupInterruption: null` INSIDE a derived
-  // payload is a real answer - "nothing to restore", the ordinary case - not a
-  // missing one. Falling through to the scan on it would re-run, on every
-  // ordinary chat, precisely the scan that cannot see the event.
+  // But the host's answer is a snapshot, not a subscription. The event does
+  // reach `state.events` when it is appended live - `onEventAppended` ->
+  // `takeLiveRecords` -> `appendLiveRecords` seats a record with no ordinal in
+  // `window.liveEvents`, and `hydratedRecords` publishes it - so a failure that
+  // happens mid-session is visible to this client and simply absent from a
+  // derived value computed before it existed. Hence a FOLD: the host's answer
+  // is the baseline, and the live appends since are applied over it.
+  //
+  // Folded over `window.liveEvents` and deliberately NOT over `state.events`.
+  // On this line that array also holds HYDRATED events, whose clearing
+  // successors may never have been fetched - so scanning it would resurrect an
+  // interruption the host already knows a retry cleared, and restore a draft
+  // the user never lost. The live-append list is post-snapshot by construction.
+  //
+  // Not a `??` chain either: `restorableSetupInterruption: null` INSIDE a
+  // derived payload is a real answer - "nothing to restore", the ordinary case
+  // - not a missing one. Falling through to the whole-array scan on it would
+  // re-run, on every ordinary chat, precisely the scan that cannot see the
+  // event.
   if (isWindowedTranscript(state)) {
-    return state.transcriptDerived.restorableSetupInterruption;
+    return foldRestorableSetupInterruption({
+      baseline: state.transcriptDerived.restorableSetupInterruption,
+      laterEvents: state.transcriptWindow.liveEvents,
+    });
   }
   return protocolSelectRestorableSetupInterruption(state.events);
 }

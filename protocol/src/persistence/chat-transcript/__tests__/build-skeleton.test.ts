@@ -602,3 +602,193 @@ describe("buildRowSkeleton", () => {
     ]);
   });
 });
+
+/**
+ * # The row's projection CONTEXT is part of its invalidation fingerprint
+ *
+ * `transcriptRowContextSchema`'s values are derived from WHOLE history: a
+ * setup card's window is open until a `worktree.missing` closes it, and that
+ * boundary event arrives arbitrarily later than the card's own records. The
+ * card's records do not move, so every other skeleton field is byte-identical -
+ * and the context rides the RANGE, not the skeleton, so there is no entry field
+ * of its own to differ either.
+ *
+ * Absent this the host's comparison reports "unchanged", no `updated` is
+ * emitted, and the client renders a historical setup card as the live one for
+ * the rest of the connection.
+ */
+describe("row context in the body fingerprint", () => {
+  function setupEvent(fields: {
+    eventId: string;
+    type: ChatEvent["type"];
+    timestamp: number;
+  }): ChatEvent {
+    return chatEventSchema.parse({
+      eventId: fields.eventId,
+      type: fields.type,
+      timestamp: fields.timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/repo" },
+    });
+  }
+
+  const running = setupEvent({
+    eventId: "e-running",
+    type: "setup.running",
+    timestamp: 1,
+  });
+  const succeeded = setupEvent({
+    eventId: "e-succeeded",
+    type: "setup.succeeded",
+    timestamp: 2,
+  });
+  // The boundary. Not a setup event, forms no card of its own, and belongs to
+  // no card's record set - so it changes the FIRST card's context and nothing
+  // else about it.
+  const missing = setupEvent({
+    eventId: "e-missing",
+    type: "worktree.missing",
+    timestamp: 3,
+  });
+
+  function cardEntryFor(events: ReadonlyArray<ChatEvent>) {
+    const entries = buildRowSkeleton(
+      {
+        messages: [],
+        events: [...events],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+    const card = entries.find((entry) => entry.role === "system");
+    expect(card).toBeDefined();
+    return card!;
+  }
+
+  it("moves the digest when a later event closes an earlier row's window", () => {
+    const open = cardEntryFor([running, succeeded]);
+    const closed = cardEntryFor([running, succeeded, missing]);
+
+    // Sanity: the fixture really did flip only the context. Without this the
+    // assertion below could pass on a fixture that changed the records too.
+    expect(open.rowId).toBe(closed.rowId);
+    expect(open.createdAt).toBe(closed.createdAt);
+    expect(open.role).toBe(closed.role);
+    expect(open.byteLength).toBe(closed.byteLength);
+    expect(open.preview).toBe(closed.preview);
+    expect(open.sentByAgent).toBe(closed.sentByAgent);
+
+    expect(open.bodyDigest).not.toBe(closed.bodyDigest);
+  });
+
+  it("leaves the digest alone when the context did not move", () => {
+    // The other half: the fingerprint must not report a change for a rebuild
+    // that landed on the same answer, or every rebuild would evict every row.
+    expect(cardEntryFor([running, succeeded]).bodyDigest).toBe(
+      cardEntryFor([running, succeeded]).bodyDigest,
+    );
+  });
+});
+
+/**
+ * # An assistant slice's DECORATING events are part of its fingerprint too
+ *
+ * The finding this closes named two things, and the projection context above is
+ * only the first. A range serves a turn's decorating events with every slice of
+ * it (`rowRecordIds`), and the renderer folds them into the elapsed counter and
+ * the restore affordance - so a `checkpoint.captured` landing on a turn whose
+ * rows are already hydrated changes what those rows render while `blockIds`,
+ * and therefore every field of the entry, stays identical.
+ *
+ * The failure is the quietest kind: the row is there, and merely poorer than it
+ * was - a restore dialog with no restore point.
+ */
+describe("decorating events in the body fingerprint", () => {
+  const assistant = assistantMessage({
+    messageId: "m-assistant",
+    timestamp: 10,
+    text: "reply",
+    usage: null,
+  });
+  const turnId = "t-1";
+
+  function turnEvent(fields: {
+    eventId: string;
+    type: ChatEvent["type"];
+    timestamp: number;
+  }): ChatEvent {
+    return chatEventSchema.parse({
+      eventId: fields.eventId,
+      type: fields.type,
+      timestamp: fields.timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    });
+  }
+
+  /** The assistant record, re-parsed onto the turn the events decorate. */
+  const turnAssistant = messageSchema.parse({ ...assistant, turnId });
+  const started = turnEvent({
+    eventId: "e-started",
+    type: "turn.started",
+    timestamp: 9,
+  });
+  const captured = turnEvent({
+    eventId: "e-checkpoint",
+    type: "checkpoint.captured",
+    timestamp: 11,
+  });
+
+  function sliceEntryFor(events: ReadonlyArray<ChatEvent>) {
+    const entries = buildRowSkeleton(
+      {
+        messages: [turnAssistant],
+        events: [...events],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+    const slice = entries.find((entry) => entry.role === "assistant");
+    expect(slice).toBeDefined();
+    return slice!;
+  }
+
+  it("moves the digest when a checkpoint decorates an already-projected turn", () => {
+    const before = sliceEntryFor([started]);
+    const after = sliceEntryFor([started, captured]);
+
+    // Sanity: the row itself did not move - only what decorates it.
+    expect(before.rowId).toBe(after.rowId);
+    expect(before.createdAt).toBe(after.createdAt);
+    expect(before.byteLength).toBe(after.byteLength);
+
+    expect(before.bodyDigest).not.toBe(after.bodyDigest);
+  });
+
+  it("leaves byteLength alone, because the turn's records are shared", () => {
+    // Charged per ROW: billing every slice of a steered turn for the whole
+    // turn's decorating events would over-estimate its height several times
+    // over. The digest has no such additivity to protect - it only has to move.
+    expect(sliceEntryFor([started, captured]).byteLength).toBe(
+      sliceEntryFor([started]).byteLength,
+    );
+  });
+});

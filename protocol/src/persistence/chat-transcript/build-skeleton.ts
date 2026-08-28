@@ -25,6 +25,7 @@ import {
   ROW_SKELETON_PREVIEW_MAX_CHARS,
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 /**
  * # Building the row skeleton
@@ -176,10 +177,18 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
  *
  * ## The fingerprint half
  *
- * Over exactly the same material, deliberately: the digest's job is to catch
- * the body changes `byteLength` cannot express, so a digest computed over a
- * DIFFERENT set of records than the length would leave a gap between the two
- * that neither one covers.
+ * Over the same RECORDS, deliberately: the digest's job is to catch the body
+ * changes `byteLength` cannot express, so a digest computed over a different
+ * set of records than the length would leave a gap between the two that neither
+ * one covers.
+ *
+ * It also covers two things the length does not: the row's projection CONTEXT
+ * (see `contextFingerprint`) and an assistant slice's DECORATING events. Both
+ * asymmetries run in the safe direction. The digest answers "must I drop what I
+ * hold for this ordinal" and the length answers "how tall to draw it", so
+ * anything a range serves for the row belongs in the first whether or not it
+ * belongs in the second - and the decorating events are precisely a case where
+ * it does not, being shared by every slice of one turn.
  *
  * A record the lookup cannot resolve contributes nothing to the length and a
  * MARKER to the digest. Those are different questions and the answers are
@@ -196,13 +205,70 @@ interface RowBodyFingerprint {
 /** Absorbed where a record was expected and not found. See above. */
 const ABSENT_RECORD_MARKER = " absent";
 
+/**
+ * The row's projection CONTEXT, as a stable string.
+ *
+ * An array in a fixed order rather than `JSON.stringify(context)`: this value
+ * is compared across two independent projection runs, and a stringify compares
+ * key ORDER as much as content - the same reason the host's entry comparator is
+ * field-by-field rather than a stringify.
+ *
+ * The mapped type is a drift guard, and a COMPILE-time one: a field added to
+ * `transcriptRowContextSchema` and not fingerprinted here fails to type-check.
+ * That is the same hazard the host's variants table covers for the entry
+ * schema, and it has to be covered here too - the context is the half of a row
+ * that no other skeleton field can see.
+ *
+ * Absent folds to `null` rather than being skipped, because absent is a real
+ * answer here - "the projection declines to speak" - and has to stay
+ * distinguishable from a value.
+ */
+function contextFingerprint(context: TranscriptRowContext): string {
+  const fields: {
+    readonly [K in keyof Required<TranscriptRowContext>]: unknown;
+  } = {
+    legacyRowAnchorAt: context.legacyRowAnchorAt ?? null,
+    sessionAnchor: context.sessionAnchor ?? null,
+    hasLaterOverlappingChanges: context.hasLaterOverlappingChanges ?? null,
+    setupWindowIndex: context.setupWindowIndex ?? null,
+    setupWindowIsActive: context.setupWindowIsActive ?? null,
+    completedSteer: context.completedSteer ?? null,
+  };
+  return JSON.stringify([
+    fields.legacyRowAnchorAt,
+    fields.sessionAnchor,
+    fields.hasLaterOverlappingChanges,
+    fields.setupWindowIndex,
+    fields.setupWindowIsActive,
+    fields.completedSteer,
+  ]);
+}
+
 function rowBodyFingerprint(
   source: TranscriptRowSource,
+  context: TranscriptRowContext,
   lookup: TranscriptRecordLookup,
   blocksById: ReadonlyMap<string, ContentBlock>,
 ): RowBodyFingerprint {
   const digest = startContentFingerprint();
   let byteLength = 0;
+
+  // The row's CONTEXT, first and unconditionally.
+  //
+  // `row-projection.ts` sets a row's context from the whole event list, so a
+  // LATER event flips an EARLIER row's context - a `queue.fallback` retracting
+  // a steer badge, a later checkpoint that starts overlapping this one - while
+  // every other field of the entry stays byte-identical. Nothing else in the
+  // skeleton can see that, so without this the comparison reports "unchanged",
+  // no `updated` is emitted, and the client renders the stale context for the
+  // life of the connection. It is `bodyDigest`'s own failure mode, one field
+  // over.
+  //
+  // Not charged to `byteLength`: the context is a handful of scalars that
+  // change no row's height, and the length is a scroll-height hint. That breaks
+  // the "same material" symmetry above in the only safe direction - the digest
+  // covers strictly more than the length, never less.
+  pushContentFingerprint(digest, contextFingerprint(context));
 
   const absorbRecord = (record: Message | ChatEvent | undefined): void => {
     if (record === undefined) {
@@ -212,6 +278,18 @@ function rowBodyFingerprint(
     const encoded = encodeRecord(record);
     byteLength += utf8ByteLength(encoded);
     pushContentFingerprint(digest, encoded);
+  };
+
+  // Digest-only, deliberately: see the call site. `byteLength` is charged per
+  // ROW and these records belong to the turn.
+  const absorbEvents = (eventIds: readonly string[]): void => {
+    for (const eventId of eventIds) {
+      const event = lookup.eventsById.get(eventId);
+      pushContentFingerprint(
+        digest,
+        event === undefined ? ABSENT_RECORD_MARKER : encodeRecord(event),
+      );
+    }
   };
 
   const absorbBlocks = (blockIds: readonly string[]): void => {
@@ -233,6 +311,22 @@ function rowBodyFingerprint(
       break;
     case "assistant-slice":
       absorbBlocks(source.blockIds);
+      // The turn's DECORATING events, into the digest and not the length.
+      //
+      // A range serves these with the row (`rowRecordIds`) and the renderer
+      // folds them into the elapsed counter and the restore affordance - so a
+      // `checkpoint.captured` or a `turn.paused` landing on a turn whose rows
+      // are already hydrated changes what those rows render while every field
+      // of the entry, `blockIds` included, stays identical. No `updated` is
+      // emitted and the row keeps a missing restore point for the connection,
+      // which is the quietest possible failure: the row is there and merely
+      // poorer than it was.
+      //
+      // Not charged to `byteLength` for the reason stated above: these records
+      // are shared by every slice of the turn, and billing each slice for all
+      // of them would over-estimate a steered turn's height several times over.
+      // The digest has no such additivity to protect - it only has to move.
+      absorbEvents(source.decoratingEventIds);
       break;
     case "steer":
       // BOTH, summed: `rowRecordIds` serves the turn's records and the steered
@@ -379,7 +473,7 @@ export function buildRowSkeleton(
     const isLastOfTurn =
       source.kind === "assistant-slice" &&
       lastRowIndexByTurn.get(source.turnKey) === index;
-    const body = rowBodyFingerprint(source, lookup, blocksById);
+    const body = rowBodyFingerprint(source, row.context, lookup, blocksById);
     return {
       rowId: row.rowId,
       createdAt: row.createdAt,

@@ -1,6 +1,10 @@
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+import {
+  chatTranscriptEventRowId,
+  forkedChatLinkRowId,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 
 /**
  * # The list the transcript draws: hydrated rows and placeholders together
@@ -37,6 +41,17 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * consulted only for rows that are NOT hydrated, which is exactly what it is
  * for.
  *
+ * One exception, and it is narrow by construction: a LIVE RECORD - a record the
+ * host pushed whole, which `pruneSupersededLiveRecords` keeps precisely until a
+ * span carries it - is seated at the ordinal the skeleton names for it. Between
+ * the `indexChanged` that first names such a record and the range that serves
+ * its body there is otherwise a gap in which it is neither placed nor unplaced,
+ * and it disappears behind a placeholder for the length of that round trip.
+ * This does not reopen the sparse-skeleton hazard above: a row with no skeleton
+ * entry simply has no ordinal to be seated at and still falls through to the
+ * live tail. Nor the steer-split hazard below: a projected row is not a live
+ * record, so it is not eligible.
+ *
  * ## What lands after the last ordinal
  *
  * Pending sends, the live assistant row, and records the index has not placed
@@ -48,7 +63,10 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * partially-hydrated steer-split turn renders rows the range never served
  * (its records back the whole turn), and those rows do own ordinals - they are
  * simply not hydrated. Appending them here would draw them twice, out of
- * order, alongside the placeholders still holding their real positions.
+ * order, alongside the placeholders still holding their real positions. Those
+ * rows stay PLACEHOLDERS rather than being seated at their ordinals: the
+ * renderer inferred them from a sibling row's records, so their bodies are this
+ * client's guesses at ordinals the host declined to serve.
  *
  * ## A hydrated row the renderer withheld is OMITTED, not placeholder'd
  *
@@ -108,35 +126,66 @@ export function isUnplacedRowKey(key: string): boolean {
 }
 
 /**
- * Every row id the index names, keyed by the skeleton array that produced it.
+ * Every row id the index names and the ordinal it names it at, keyed by the
+ * skeleton array that produced it.
  *
  * Module-scope and keyed on array IDENTITY for the same reason
  * `chat-timeline.tsx`'s row caches are: `transcriptListRows` re-runs on every
  * streaming token (`messages` is rebuilt wholesale per token), while the
  * skeleton array is replaced only when a chunk lands or the index changes.
- * Building this inline would put an O(rowCount) Set on the per-token path -
+ * Building this inline would put an O(rowCount) Map on the per-token path -
  * 20k entries per token on a long chat - which is precisely the per-token
  * O(history) work the windowed line exists to delete.
+ *
+ * The ORDINAL and not merely membership, because both questions this answers
+ * need it: "does the index name this row?" (so it is not an unplaced record)
+ * and "where?" (so a live record the index has just started naming can be
+ * seated there instead of dropped). One pass, one cache entry.
  *
  * Safe to publish from a render: the value is a pure function of the array it
  * is keyed on, so a discarded render can only ever populate the same answer.
  */
-const skeletonRowIdCache = new WeakMap<
+const skeletonOrdinalCache = new WeakMap<
   readonly (RowSkeletonEntry | undefined)[],
-  ReadonlySet<string>
+  ReadonlyMap<string, number>
 >();
 
-function skeletonRowIdSet(
+function skeletonOrdinalByRowId(
   skeleton: readonly (RowSkeletonEntry | undefined)[],
-): ReadonlySet<string> {
-  const cached = skeletonRowIdCache.get(skeleton);
+): ReadonlyMap<string, number> {
+  const cached = skeletonOrdinalCache.get(skeleton);
   if (cached !== undefined) return cached;
-  const ids = new Set<string>();
-  for (const entry of skeleton) {
-    if (entry !== undefined) ids.add(entry.rowId);
+  const ordinals = new Map<string, number>();
+  skeleton.forEach((entry, ordinal) => {
+    if (entry !== undefined) ordinals.set(entry.rowId, ordinal);
+  });
+  skeletonOrdinalCache.set(skeleton, ordinals);
+  return ordinals;
+}
+
+/**
+ * The row ids of the records this client holds LIVE - pushed whole by the host
+ * and not yet superseded by a span.
+ *
+ * Rebuilt per call rather than cached, because it is proportional to the live
+ * records and not to the transcript: `liveMessages` holds the handful of
+ * records the index has not placed yet and `liveEvents` is capped outright, so
+ * this is bounded work on the per-token path in a way a `rowCount` scan is not.
+ *
+ * Both event row-id shapes, because both are rows a live event can materialize
+ * (`row-projection.ts` builds a forked-chat link and a notification anchor from
+ * the event log, and the renderer mints the same two ids from the same
+ * helpers). Reading only one would silently leave that kind of row behind a
+ * placeholder.
+ */
+function liveRecordRowIds(window: TranscriptWindow): ReadonlySet<string> {
+  const rowIds = new Set<string>();
+  for (const message of window.liveMessages) rowIds.add(message.messageId);
+  for (const event of window.liveEvents) {
+    rowIds.add(chatTranscriptEventRowId(event.eventId));
+    rowIds.add(forkedChatLinkRowId(event.eventId));
   }
-  skeletonRowIdCache.set(skeleton, ids);
-  return ids;
+  return rowIds;
 }
 
 /**
@@ -168,6 +217,42 @@ const placeholderRowsBySkeleton = new WeakMap<
   object,
   Map<number, TranscriptListRow>
 >();
+
+/**
+ * Seat the live records the index has started naming, in place.
+ *
+ * Extracted rather than inlined only because the merge below is already at the
+ * lint's complexity ceiling; the reasoning for it lives at the call site.
+ *
+ * Writes into `modelByOrdinal` and `placedRowIds` - the same two structures the
+ * span pass fills - so everything downstream reads one answer per ordinal
+ * regardless of which pass produced it.
+ */
+function seatLiveRecords(input: {
+  readonly window: TranscriptWindow;
+  readonly rendered: readonly ChatMessageModel[];
+  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly modelByOrdinal: Map<number, ChatMessageModel>;
+  readonly placedRowIds: Set<string>;
+  readonly suppressedOrdinals: ReadonlySet<number>;
+}): void {
+  const liveRowIds = liveRecordRowIds(input.window);
+  if (liveRowIds.size === 0) return;
+  for (const model of input.rendered) {
+    if (!liveRowIds.has(model.id)) continue;
+    if (input.placedRowIds.has(model.id)) continue;
+    const ordinal = input.skeletonOrdinals.get(model.id);
+    if (ordinal === undefined || ordinal >= input.window.rowCount) continue;
+    if (
+      input.modelByOrdinal.has(ordinal) ||
+      input.suppressedOrdinals.has(ordinal)
+    ) {
+      continue;
+    }
+    input.modelByOrdinal.set(ordinal, model);
+    input.placedRowIds.add(model.id);
+  }
+}
 
 /**
  * Merge what the renderer produced with what the window says exists.
@@ -220,7 +305,44 @@ export function transcriptListRows(input: {
     });
   }
 
-  const skeletonRowIds = skeletonRowIdSet(window.skeleton);
+  const skeletonOrdinals = skeletonOrdinalByRowId(window.skeleton);
+
+  // A live record the index has just started naming, seated at the ordinal it
+  // names rather than dropped.
+  //
+  // `placedRowIds` comes only from the SPANS, so between the `indexChanged`
+  // that first names a live record's row id and the range response that
+  // delivers its authoritative body there is a gap where the row is neither
+  // placed (no span covers it) nor unplaced (the skeleton names it) - and the
+  // trailing loop below, which drops every skeleton-named model, would drop the
+  // one copy of the body this client has. What the user sees is a message they
+  // just sent turning into a skeleton placeholder until the range lands.
+  //
+  // Restricted to models a LIVE RECORD backs, which is the whole discrimination
+  // this needs. A rendered model is not evidence that the client holds the row:
+  // hydrating one row of a steer-split assistant turn pulls the turn's shared
+  // records, and rendering those projects EVERY row of that turn - including
+  // ones the host never served, whose bodies here would be this client's
+  // guesses at an ordinal it was refused. A live record is the opposite: the
+  // host sent it, whole, and `pruneSupersededLiveRecords` keeps it exactly
+  // until a span carries the same record. So this seats what was delivered and
+  // leaves what was inferred as a placeholder.
+  //
+  // Written into `modelByOrdinal` rather than checked inside the `rowCount`
+  // loop: that loop already runs per token over the whole chat, and this keeps
+  // the addition proportional to the live records instead.
+  //
+  // A span always wins - it IS the authoritative copy - so an ordinal a span
+  // already answered for is left alone, whether it placed a model or the
+  // renderer withheld one.
+  seatLiveRecords({
+    window,
+    rendered,
+    skeletonOrdinals,
+    modelByOrdinal,
+    placedRowIds,
+    suppressedOrdinals,
+  });
 
   let placeholders = placeholderRowsBySkeleton.get(window.skeleton);
   if (placeholders === undefined) {
@@ -258,7 +380,12 @@ export function transcriptListRows(input: {
     if (placedRowIds.has(model.id)) continue;
     // A row the SKELETON names owns an ordinal, so it is not an unplaced
     // record however it came to be rendered - see the note above the loop.
-    if (skeletonRowIds.has(model.id)) continue;
+    // Two ways to reach here still naming one: the model is a PROJECTION the
+    // renderer inferred from a sibling row's records rather than a record this
+    // client holds (the steer-split turn), or a span already answered for its
+    // ordinal. Either way the ordinal is accounted for, and appending a second,
+    // ordinal-less copy would draw the row twice.
+    if (skeletonOrdinals.has(model.id)) continue;
     rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
   }
   return rows;

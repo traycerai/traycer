@@ -47,7 +47,7 @@ export interface SetupCardRow {
   /**
    * The window's position in the host's WHOLE-LOG partition - the value the
    * card's row id is built from, so it must be the host's and never this
-   * client's local index. See {@link adoptWholeLogIdentity}.
+   * client's local index. See {@link alignToWholeLog}.
    */
   readonly windowIndex: number;
   readonly model: SetupCardViewModel;
@@ -112,41 +112,59 @@ export function buildSetupCardRows(
   /**
    * The host's whole-log partition, when this client is on the windowed line.
    * Empty on the legacy line, where `events` IS the whole log and the local
-   * partition is already authoritative. See {@link adoptWholeLogIdentity}.
+   * partition is already authoritative. See {@link alignToWholeLog}.
    */
   wholeLogWindows: ReadonlyArray<SetupCardWindowIdentity>,
 ): ReadonlyArray<SetupCardRow> {
   const local = partitionSetupCardWindows(events);
-  const identities = adoptWholeLogIdentity(local, wholeLogWindows);
-  return local.map((window, index) => {
-    const identity = identities[index];
-    return {
-      createdAt: window.createdAt,
-      windowIndex: identity.windowIndex,
-      isActive: identity.isActive,
-      hasCreatingEvent: identity.hasCreatingEvent,
-      triggeringMessageId: window.triggeringMessageId,
-      model: deriveViewModel(
-        window.events,
-        binding,
-        window.createdAt,
-        identity.isActive,
-      ),
-    };
-  });
+  return alignToWholeLog(local, wholeLogWindows).map((aligned) => ({
+    createdAt: aligned.identity.createdAt,
+    windowIndex: aligned.identity.windowIndex,
+    isActive: aligned.identity.isActive,
+    hasCreatingEvent: aligned.identity.hasCreatingEvent,
+    triggeringMessageId: aligned.triggeringMessageId,
+    model: deriveViewModel(
+      aligned.events,
+      binding,
+      aligned.identity.createdAt,
+      aligned.identity.isActive,
+    ),
+  }));
+}
+
+/** One card to draw: whose lifecycle it is, and the events the slice holds. */
+interface AlignedSetupCardWindow {
+  readonly identity: SetupCardWindowIdentity;
+  readonly events: ReadonlyArray<ChatEvent>;
+  readonly triggeringMessageId: string | null;
 }
 
 /**
- * Re-attach each locally-partitioned window to its whole-log identity.
+ * Re-attach the locally-partitioned windows to the host's whole-log partition.
  *
- * On the windowed line `events` is a SLICE, so the local partition answers
- * three questions wrongly and silently: the first window it can see is numbered
- * 0 whatever its real position, a historically closed window looks active
- * because the `worktree.missing` boundary that closed it is outside the slice,
- * and a genesis window can lose its `setup.creating` the same way. The
- * renumber is the worst of the three, because `windowIndex` is part of the
- * card's ROW ID - so the card computes an id the skeleton never published, its
- * ordinal is suppressed, and it draws unplaced at the tail.
+ * On the windowed line `events` is a SLICE, so the local partition answers four
+ * questions wrongly and silently. Three are per-window flags: the first window
+ * it can see is numbered 0 whatever its real position, a historically closed
+ * window looks active because the `worktree.missing` boundary that closed it is
+ * outside the slice, and a genesis window can lose its `setup.creating` the
+ * same way. The renumber is the worst of those, because `windowIndex` is part
+ * of the card's ROW ID - the card then computes an id the skeleton never
+ * published, its ordinal is suppressed, and it draws unplaced at the tail.
+ *
+ * The fourth is the COUNT, and no per-window correction can reach it. That same
+ * absent `worktree.missing` does not merely mislabel a window, it MERGES two:
+ * the boundary is not a setup event, so a slice that dropped it partitions two
+ * lifecycles into one. One card is then drawn for two reserved ordinals, and
+ * the second reads to the row merge as a row renderer policy withheld
+ * (`transcript-list-rows.ts`) rather than one nobody built - so it silently
+ * renders nothing at all, with no placeholder either.
+ *
+ * Hence the host's list decides HOW MANY cards exist, and the slice supplies
+ * only their contents. A merged local window is re-split across the host's own
+ * anchors; the events are all present, only the boundary between them was
+ * missing.
+ *
+ * ## Which local window belongs to which host window
  *
  * Matched on `createdAt` walking both lists in order, which is sound because
  * both are chronological and the local one is a SUBSEQUENCE of the host's: a
@@ -155,40 +173,132 @@ export function buildSetupCardRows(
  * lifecycles stamped in the same millisecond map one-to-one instead of both
  * resolving to the first.
  *
- * A window with no match keeps its local answer. That is the legacy line (the
- * host sent no list, so there is nothing to adopt) and the genuinely new window
- * whose events arrived as live deltas after the last snapshot - in both cases
- * the local partition is the best answer available, and asserting a wrong index
- * would be worse than the one it already has.
+ * ## Two deliberate asymmetries
+ *
+ * A host window the slice holds NO events for draws no card. That is the
+ * ordinary cold card - its row is unhydrated, so the transcript wants the
+ * skeleton placeholder there, and a card built from no events would replace a
+ * "loading" row with a permanently blank one.
+ *
+ * A local window the host's list does not name draws one anyway, numbered past
+ * the end of that list. That is the genuinely new lifecycle whose events
+ * arrived as live deltas after the last snapshot: the host has not published it
+ * yet, and its next partition will append it at exactly that index.
  */
-function adoptWholeLogIdentity(
+function alignToWholeLog(
   local: ReadonlyArray<SetupCardWindow>,
   wholeLog: ReadonlyArray<SetupCardWindowIdentity>,
-): ReadonlyArray<SetupCardWindowIdentity> {
+): ReadonlyArray<AlignedSetupCardWindow> {
+  if (wholeLog.length === 0) {
+    // The legacy line: the host sent no list because `events` IS the whole log,
+    // so the local partition is authoritative for the count and the flags
+    // alike.
+    return local.map((window, index) => ({
+      identity: {
+        createdAt: window.createdAt,
+        windowIndex: index,
+        isActive: window.isActive,
+        hasCreatingEvent: window.hasCreatingEvent,
+      },
+      events: window.events,
+      triggeringMessageId: window.triggeringMessageId,
+    }));
+  }
+
+  const held: ChatEvent[][] = wholeLog.map(() => []);
+  const live: SetupCardWindow[] = [];
   let cursor = 0;
-  return local.map((window, index) => {
+  for (const window of local) {
     while (
       cursor < wholeLog.length &&
       wholeLog[cursor].createdAt < window.createdAt
     ) {
       cursor += 1;
     }
-    const match =
-      cursor < wholeLog.length &&
-      wholeLog[cursor].createdAt === window.createdAt
-        ? wholeLog[cursor]
-        : null;
-    if (match === null) {
-      return {
+    if (
+      cursor >= wholeLog.length ||
+      wholeLog[cursor].createdAt !== window.createdAt
+    ) {
+      live.push(window);
+      continue;
+    }
+    // This local window anchors at `cursor` and may cover the host windows
+    // AFTER it too, when the boundaries separating them are outside the slice.
+    // Each event goes to the last host window that had started by the time it
+    // was stamped, never earlier than the anchor.
+    //
+    // A host window stamped in the SAME millisecond as the anchor cannot take
+    // anything, and that guard is load-bearing rather than defensive: without
+    // it the anchor's own earliest event - the one whose timestamp IS the
+    // anchor - would shift to the sibling, leaving the anchor with an empty
+    // bucket and drawing no card for it at all. Two lifecycles a millisecond
+    // apart have no timestamp boundary to be split on, so that pair stays
+    // merged exactly as it was before this alignment existed, which is a
+    // degradation and not a loss.
+    const anchor = cursor;
+    const anchoredAt = wholeLog[anchor].createdAt;
+    let furthest = anchor;
+    for (const event of window.events) {
+      let target = anchor;
+      while (
+        target + 1 < wholeLog.length &&
+        wholeLog[target + 1].createdAt <= event.timestamp &&
+        wholeLog[target + 1].createdAt > anchoredAt
+      ) {
+        target += 1;
+      }
+      held[target].push(event);
+      if (target > furthest) furthest = target;
+    }
+    cursor = furthest + 1;
+  }
+
+  const fromHost = wholeLog.flatMap<AlignedSetupCardWindow>(
+    (identity, index) => {
+      const windowEvents = held[index];
+      if (windowEvents.length === 0) return [];
+      return [
+        {
+          identity,
+          events: windowEvents,
+          triggeringMessageId: triggeringMessageIdOf(windowEvents),
+        },
+      ];
+    },
+  );
+  return [
+    ...fromHost,
+    ...live.map((window, offset) => ({
+      identity: {
         createdAt: window.createdAt,
-        windowIndex: index,
+        windowIndex: wholeLog.length + offset,
         isActive: window.isActive,
         hasCreatingEvent: window.hasCreatingEvent,
-      };
-    }
-    cursor += 1;
-    return match;
-  });
+      },
+      events: window.events,
+      triggeringMessageId: window.triggeringMessageId,
+    })),
+  ];
+}
+
+/**
+ * The id of the user message whose send carried this window's creation.
+ *
+ * Re-read here rather than carried over from the local window, because a local
+ * window re-split across two host anchors has one `setup.creating` per half and
+ * the merged window's answer is only ever the first half's. Same rule
+ * `describeWindow` states: every creating event in a window comes from the same
+ * send, so the first match is authoritative.
+ */
+function triggeringMessageIdOf(
+  windowEvents: ReadonlyArray<ChatEvent>,
+): string | null {
+  const creating = windowEvents.find(
+    (event) => event.type === "setup.creating",
+  );
+  return creating === undefined
+    ? null
+    : readMetadataString(creating, "triggeringMessageId");
 }
 
 /**

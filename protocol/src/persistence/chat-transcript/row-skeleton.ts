@@ -83,7 +83,8 @@ import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation"
 const byteLengthSchema = z.number().int().nonnegative();
 
 /**
- * A fingerprint of the row's BODY, for change detection only.
+ * A fingerprint of everything about the row a client must DROP what it holds
+ * for - its body and its projection context - for change detection only.
  *
  * ## Why this exists when `updated` already carries staleness
  *
@@ -96,6 +97,21 @@ const byteLengthSchema = z.number().int().nonnegative();
  * comparison then reports "unchanged", no `updated` entry is emitted, and a
  * client that already loaded that row keeps rendering the old body for the
  * life of the connection - `updated` is its only eviction signal.
+ *
+ * ## Why it covers the row CONTEXT as well as the body
+ *
+ * The same failure, one field over. `transcriptRowContextSchema`'s values are
+ * derived from WHOLE history - a later `queue.fallback` retracts a steer badge,
+ * a later checkpoint starts overlapping an earlier one - so a LATER event flips
+ * an EARLIER row's context with every field of this entry byte-identical. The
+ * context does not ride the skeleton (it rides the range, per its own doc), so
+ * absent this there is nothing in the entry that could differ, and the stale
+ * context is permanent for the connection.
+ *
+ * Folding it in here rather than shipping a second digest is deliberate: this
+ * frame's per-row bytes multiply by the length of the chat, and the two ask one
+ * question with one answer - the client's remedy for either is to drop the row
+ * and refetch it, which is what an `updated` means.
  *
  * That is the one failure this whole line cannot recover from on its own. A
  * missing row gets re-requested; a row nobody knows is stale does not.

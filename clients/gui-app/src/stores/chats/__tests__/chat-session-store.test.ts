@@ -57,7 +57,10 @@ import {
   type StreamFlushCoordinator,
   type StreamFlushRegistrationInput,
 } from "@/stores/chats/stream-flush-coordinator";
+import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import { selectRestorableSetupInterruption } from "@/stores/chats/chat-session-selectors";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -10952,6 +10955,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption({
         events: [],
+        transcriptWindow: emptyTranscriptWindow(),
         transcriptDerived: {
           latestAssistantUsage: null,
           pinnedTodo: null,
@@ -10995,6 +10999,9 @@ describe("createChatSessionStore", () => {
             messageId: "queued-msg-hydrated",
           },
         ],
+        // HYDRATED, not live-appended: it is in `events` and NOT in the
+        // window's live list, which is the distinction the fold turns on.
+        transcriptWindow: emptyTranscriptWindow(),
         transcriptDerived: {
           latestAssistantUsage: null,
           pinnedTodo: null,
@@ -11007,6 +11014,109 @@ describe("createChatSessionStore", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  // ─── ... but the host's answer is a snapshot, not a subscription ─────────
+  //
+  // The derived value states the answer as of the frame it rode in on. A setup
+  // failure that happens NEXT reaches this client as an `eventAppended` with no
+  // snapshot behind it - `appendLiveRecords` seats a record with no ordinal in
+  // `window.liveEvents`, which is exactly the "later than the baseline" set.
+  // Without the fold the composer stops restoring drafts for every mid-session
+  // failure until something unrelated forces a resnapshot.
+
+  function derivedWith(
+    restorableSetupInterruption: RestorableSetupInterruption | null,
+  ): ChatTranscriptDerived {
+    return {
+      latestAssistantUsage: null,
+      pinnedTodo: null,
+      pinnedTaskTodoItems: [],
+      latestForkableAssistantMessageId: null,
+      restorableSetupInterruption,
+      interviewAnswerability: [],
+      latestAssistantAuthFailureTurnKey: null,
+      setupCardWindows: [],
+    };
+  }
+
+  function liveSetupEvent(
+    eventId: string,
+    type: ChatEvent["type"],
+    messageId: string | null,
+  ): ChatEvent {
+    return {
+      ...chatEvent(eventId, type, { workspacePath: "/repo" }),
+      messageId,
+    };
+  }
+
+  it("folds a live-appended interruption over the host's baseline", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          liveEvents: [
+            liveSetupEvent("event-live", "setup.failed", "queued-msg-live"),
+          ],
+        },
+        transcriptDerived: derivedWith(null),
+      }),
+    ).toMatchObject({
+      eventId: "event-live",
+      messageId: "queued-msg-live",
+    });
+  });
+
+  it("clears the host's baseline once a live retry transitions setup back to running", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          liveEvents: [liveSetupEvent("event-retry", "setup.running", null)],
+        },
+        transcriptDerived: derivedWith({
+          eventType: "setup.failed",
+          eventId: "event-host-derived",
+          workspacePath: "/repo",
+          terminalSessionId: null,
+          setupExitCode: 1,
+          clientActionId: "send-1",
+          messageId: "queued-msg",
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the host's baseline when the live appends say nothing about it", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          // A different workspace's retry must not clear this one.
+          liveEvents: [
+            {
+              ...chatEvent("event-other", "setup.running", {
+                workspacePath: "/other",
+              }),
+              messageId: null,
+            },
+          ],
+        },
+        transcriptDerived: derivedWith({
+          eventType: "setup.failed",
+          eventId: "event-host-derived",
+          workspacePath: "/repo",
+          terminalSessionId: null,
+          setupExitCode: 1,
+          clientActionId: "send-1",
+          messageId: "queued-msg",
+        }),
+      }),
+    ).toMatchObject({ eventId: "event-host-derived" });
   });
 });
 

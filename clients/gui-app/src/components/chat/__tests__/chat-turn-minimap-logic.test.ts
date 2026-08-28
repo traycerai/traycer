@@ -1,14 +1,78 @@
 import { describe, expect, it } from "vitest";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
+  chatTurnMinimapItems,
   compactChatTurnMinimapPreview,
   resolveChatTurnMinimapCurrentIndex,
   resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { MINIMAP_TRACK_END_HIT_PADDING } from "@/components/minimap/minimap-track-geometry";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { ROW_SKELETON_PREVIEW_MAX_CHARS } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+
+function skeletonEntry(
+  rowId: string,
+  role: "user" | "assistant",
+  preview: string | null,
+): RowSkeletonEntry {
+  return {
+    rowId,
+    createdAt: 1000,
+    role,
+    byteLength: 32,
+    bodyDigest: `d-${rowId}`,
+    ...(preview === null ? {} : { preview }),
+  };
+}
+
+function userModel(id: string, content: string): ChatMessageModel {
+  return {
+    id,
+    role: "user",
+    content,
+    segments: [],
+    structuredContent: null,
+    attachments: [],
+    settings: null,
+    createdAt: 1000,
+    completedAt: 1000,
+    stopped: null,
+    persistentMessageId: id,
+    senderLabel: null,
+    assistantMeta: null,
+    statusLabel: null,
+    agentSenderInfo: null,
+    agentMessage: null,
+    runState: null,
+    sessionAnchor: null,
+    steerBadge: null,
+  };
+}
+
+function assistantModel(id: string, content: string): ChatMessageModel {
+  return { ...userModel(id, content), role: "assistant" };
+}
+
+/**
+ * What `transcriptListRows` produces for a window whose assistant row is
+ * streaming: a new array whose hydrated row carries a NEW model object per
+ * token, beside a placeholder whose identity the skeleton cache holds stable.
+ */
+function listRowsFor(
+  window: TranscriptWindow,
+  assistantContent: string,
+): ReadonlyArray<TranscriptListRow> {
+  return transcriptListRows({
+    window,
+    rendered: [assistantModel("r-1", assistantContent)],
+  });
+}
 
 const TURNS = [
   { rowIndex: 0, endRowIndex: 1 },
@@ -86,5 +150,116 @@ describe("chat turn minimap logic", () => {
     expect(CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS).toBeLessThan(
       ROW_SKELETON_PREVIEW_MAX_CHARS,
     );
+  });
+});
+
+/**
+ * The rail's derive is a whole-transcript scan plus a per-turn allocation and
+ * preview compaction. `rows` is rebuilt on every streaming token, so keying the
+ * derive on it ran all of that dozens of times a second - O(history) work in
+ * the structure that exists to make long chats cheap.
+ *
+ * A block delta folds into `messages` and never touches the `TranscriptWindow`
+ * (`applyBufferedDeltas`), so the window is the identity that survives exactly
+ * that churn. These pin the derive to it.
+ *
+ * The assertions are on REFERENTIAL identity, deliberately: a `toEqual` here
+ * passes against the bug, because re-deriving produces an equal answer. Only
+ * "the same array came back" says the scan did not run.
+ */
+describe("chatTurnMinimapItems caching", () => {
+  const skeleton: ReadonlyArray<RowSkeletonEntry> = [
+    skeletonEntry("r-0", "user", "first question"),
+    skeletonEntry("r-1", "assistant", null),
+  ];
+
+  function windowWith(
+    entries: ReadonlyArray<RowSkeletonEntry>,
+  ): TranscriptWindow {
+    return {
+      epoch: 1,
+      rowCount: entries.length,
+      indexRevision: 1,
+      skeleton: entries,
+      skeletonComplete: true,
+      // The assistant row is hydrated - it is the one taking tokens.
+      spans: [
+        {
+          fromOrdinal: 1,
+          rowIds: ["r-1"],
+          messages: [],
+          events: [],
+          rowContext: {},
+          bytes: 32,
+          contextBytes: 0,
+          touchedAt: 1,
+        },
+      ],
+      liveMessages: [],
+      liveEvents: [],
+      hydratedBytes: 32,
+      unsettledByteMessageIds: [],
+      invalidated: false,
+      clock: 1,
+    };
+  }
+
+  it("does not re-derive across a pure block delta", () => {
+    const window = windowWith(skeleton);
+    // The streaming assistant row: same row, new model object per token, so a
+    // NEW `rows` array each time - which is what `transcriptListRows` produces.
+    const rowsBefore = listRowsFor(window, "the reply so f");
+    const rowsAfter = listRowsFor(window, "the reply so far");
+    expect(rowsAfter).not.toBe(rowsBefore);
+
+    const first = chatTurnMinimapItems({ rows: rowsBefore, window });
+    const second = chatTurnMinimapItems({ rows: rowsAfter, window });
+
+    expect(second).toBe(first);
+    expect(first.map((item) => item.messageId)).toEqual(["r-0"]);
+  });
+
+  it("re-derives when the index changes", () => {
+    const window = windowWith(skeleton);
+    const first = chatTurnMinimapItems({
+      rows: listRowsFor(window, "reply"),
+      window,
+    });
+    // An `updated` index delta rebuilds the window - here the first turn's
+    // preview was edited.
+    const edited = windowWith([
+      skeletonEntry("r-0", "user", "edited question"),
+      skeletonEntry("r-1", "assistant", null),
+    ]);
+    const second = chatTurnMinimapItems({
+      rows: listRowsFor(edited, "reply"),
+      window: edited,
+    });
+
+    expect(second).not.toBe(first);
+    expect(second.map((item) => item.label)).toEqual(["edited question"]);
+  });
+
+  it("re-derives when an unplaced row is appended", () => {
+    const window = windowWith(skeleton);
+    const first = chatTurnMinimapItems({
+      rows: listRowsFor(window, "reply"),
+      window,
+    });
+    // A pending send: a human turn the index has not placed yet. Same window,
+    // so only the unplaced tail can report it.
+    const withPending = [
+      ...listRowsFor(window, "reply"),
+      {
+        kind: "hydrated" as const,
+        key: "pending-1",
+        ordinal: null,
+        model: userModel("pending-1", "a new question"),
+      },
+    ];
+    const second = chatTurnMinimapItems({ rows: withPending, window });
+
+    expect(second).not.toBe(first);
+    expect(second.map((item) => item.messageId)).toEqual(["r-0", "pending-1"]);
   });
 });

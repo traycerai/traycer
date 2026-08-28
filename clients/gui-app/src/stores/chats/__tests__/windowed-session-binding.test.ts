@@ -1528,6 +1528,202 @@ describe("accumulated-change chunks", () => {
     }
   });
 
+  /**
+   * The generation counter is the host's PER-SUBSCRIBER one, so a reconnect
+   * mints a fresh subscriber that starts over at 1 - and one re-stream per
+   * subscriber is the modal case, which makes `1 == 1` the modal collision.
+   * A colliding generation reads as "the stream I am already assembling", so
+   * the new stream's chunks splice into the RETAINED previous-generation array.
+   *
+   * The failure needs all three: a reconnect, a colliding generation, AND the
+   * new stream's index-0 chunk dropped. With that chunk delivered the array is
+   * rebuilt correctly on its own (`slice(0, 0) + summaries`), which is why a
+   * plain reconnect fixture passes against the bug.
+   */
+  it("does not splice a restarted generation into the array a previous connection left", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      const connectedSnapshot = (): void => {
+        harness.callbacks().onWindowedSnapshot(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 1,
+            tailFromOrdinal: 0,
+            tailMessages: [userMessage("m-0", 0)],
+            accumulatedFileChangeCount: 3,
+          }),
+        );
+      };
+
+      // First connection: a complete stream from the first subscriber's
+      // generation 1.
+      connectedSnapshot();
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts")],
+          isFinal: false,
+        },
+      });
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 2,
+          generation: 1,
+          summaries: [summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+
+      // The reconnect. Same transcript, so the same epoch - `indexRevision`
+      // is null because the host holds no index for the NEW subscriber and is
+      // about to rebuild one.
+      connectedSnapshot();
+      const resnapshotsBeforeTheGap = harness.resnapshotCount();
+
+      // The second subscriber's index-0 chunk - `["x.ts", "y.ts"]` - is
+      // DROPPED here, and its generation restarted at 1.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 2,
+          generation: 1,
+          summaries: [summary("z.ts")],
+          isFinal: true,
+        },
+      });
+
+      const state = harness.handle.store.getState();
+      // NOT ["a.ts", "b.ts", "z.ts"] - a prefix of the previous connection's
+      // set wearing the new one's tail, at exactly the authoritative length, so
+      // both the gap check and the count watchdog would read it as healthy
+      // while every content fetch against the stale digests returns `stale`.
+      expect(
+        state.accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      // And the recovery is asked for, because nothing on the ordinary path
+      // re-sends these chunks.
+      expect(harness.resnapshotCount()).toBe(resnapshotsBeforeTheGap + 1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * The other half of the same fix, and the reason the reset is keyed on
+   * `indexRevision === null` rather than on "a snapshot arrived".
+   *
+   * An aux-only re-broadcast reports the revision the host is HOLDING for this
+   * subscriber and sends no chunks at all. Resetting the tracker there would
+   * make the next chunk of the stream still in flight look like a foreign
+   * generation and buy a `requestSummaryRestream()` - once per aux frame, for
+   * as long as aux traffic keeps arriving during a long summary stream.
+   */
+  it("keeps assembling across a held-revision snapshot instead of restreaming", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts")],
+          isFinal: false,
+        },
+      });
+
+      // The aux-only frame, mid-stream. The revision matches the one this
+      // client holds, so the window is untouched and no skeleton follows.
+      const auxFrame = windowedSnapshot({
+        epoch: 4,
+        rowCount: 1,
+        tailFromOrdinal: 0,
+        tailMessages: [userMessage("m-0", 0)],
+        accumulatedFileChangeCount: 3,
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...auxFrame,
+        snapshot: { ...auxFrame.snapshot, indexRevision: 0 },
+      });
+
+      // The rest of the stream that was already on the wire.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 2,
+          generation: 1,
+          summaries: [summary("c.ts")],
+          isFinal: true,
+        },
+      });
+
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(harness.resnapshotCount()).toBe(0);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
   it("drops a chunk from an abandoned epoch instead of letting it replace the set", () => {
     // These are the one windowed stream whose chunks never pass through a
     // function holding the epoch - `applySkeletonChunk` and `applyRangeResponse`

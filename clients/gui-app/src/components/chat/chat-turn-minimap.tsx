@@ -11,7 +11,7 @@ import {
 } from "react";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
-  compactChatTurnMinimapPreview,
+  chatTurnMinimapItems,
   resolveChatTurnMinimapCurrentIndex,
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapHitStripWidth,
@@ -20,10 +20,7 @@ import {
 } from "@/components/chat/chat-turn-minimap-logic";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { useRegisterTileMinimap } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
-import {
-  MinimapListCard,
-  type MinimapListEntry,
-} from "@/components/minimap/minimap-list-card";
+import { MinimapListCard } from "@/components/minimap/minimap-list-card";
 import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
 import { MinimapRailTick } from "@/components/minimap/minimap-rail-tick";
 import {
@@ -34,6 +31,7 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   useSettingsStore,
   type MinimapPlacement,
@@ -44,6 +42,12 @@ export interface ChatTurnMinimapProps {
    *  `positionAtIndex`, so they must live in LIST index space, which on the
    *  windowed line includes placeholder rows. */
   readonly rows: ReadonlyArray<TranscriptListRow>;
+  /**
+   * The window `rows` was merged from, or `null` on the legacy line. Read only
+   * as the derive's cache key - see `chatTurnMinimapItems`, which is what keeps
+   * the rail off the per-token path.
+   */
+  readonly transcriptWindow: TranscriptWindow | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly topOffsetAdjustmentRef: RefObject<number>;
   readonly viewportRef: RefObject<HTMLElement | null>;
@@ -52,56 +56,6 @@ export interface ChatTurnMinimapProps {
   readonly onSelect: (messageId: string) => void;
   /** `hide` keeps the turn model published for the tile bar, rail and all. */
   readonly side: MinimapPlacement;
-}
-
-interface ChatTurnMinimapItem extends MinimapListEntry {
-  readonly endRowIndex: number;
-  readonly messageId: string;
-  readonly rowIndex: number;
-}
-
-/**
- * Whether a row is a HUMAN-sent user turn - the only kind the rail lists.
- * Answerable for unhydrated rows too: the skeleton carries `role`,
- * `sentByAgent` and `preview` precisely so the minimap can list a turn whose
- * body has not arrived (see `row-skeleton.ts`).
- */
-function isHumanUserRow(row: TranscriptListRow): boolean {
-  if (row.kind === "hydrated") {
-    return row.model.role === "user" && row.model.agentSenderInfo === null;
-  }
-  return (
-    row.entry !== null &&
-    row.entry.role === "user" &&
-    row.entry.sentByAgent !== true
-  );
-}
-
-function chatTurnMinimapRowLabel(row: TranscriptListRow): string {
-  const text =
-    row.kind === "hydrated" ? row.model.content : (row.entry?.preview ?? "");
-  return compactChatTurnMinimapPreview(text) ?? "Untitled message";
-}
-
-function deriveChatTurnMinimapItems(
-  rows: ReadonlyArray<TranscriptListRow>,
-): ReadonlyArray<ChatTurnMinimapItem> {
-  const humanRows: number[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    if (isHumanUserRow(rows[index])) humanRows.push(index);
-  }
-
-  return humanRows.map((rowIndex, index) => {
-    const row = rows[rowIndex];
-    return {
-      key: row.key,
-      label: chatTurnMinimapRowLabel(row),
-      level: 1,
-      messageId: row.key,
-      rowIndex,
-      endRowIndex: (humanRows[index + 1] ?? rows.length) - 1,
-    };
-  });
 }
 
 function clampIndex(index: number, itemCount: number): number {
@@ -118,6 +72,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     onSelect,
     side,
     topOffsetAdjustmentRef,
+    transcriptWindow,
     viewportRef,
   } = props;
   // A streaming reply replaces `rows` per token, so this array is new per
@@ -125,7 +80,18 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // survive that: the tile bar's notify compares the outline it publishes
   // (`useRegisterTileMinimap`), and the rail's geometry effect below reads
   // `refreshCurrent` through a ref instead of depending on it.
-  const items = useMemo(() => deriveChatTurnMinimapItems(rows), [rows]);
+  //
+  // Which is also why the whole-transcript scan is not keyed on `rows`.
+  // `chatTurnMinimapItems` owns that decision and re-derives only when the
+  // structure moved, returning the SAME array otherwise - so `items` is stable
+  // across a token even though `rows` is not, and everything keyed on its
+  // identity below (the `refreshCurrent` callback, the published outline) stops
+  // churning with it. The `useMemo` is left in place only to keep the lookup
+  // itself off the re-render path; the cache is what makes the result stable.
+  const items = useMemo(
+    () => chatTurnMinimapItems({ rows, window: transcriptWindow }),
+    [rows, transcriptWindow],
+  );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const coarsePointer = useCoarsePointer();
   const mobileViewport = useIsMobileViewport();

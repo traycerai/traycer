@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type {
@@ -29,6 +30,30 @@ function model(id: string): ChatMessageModel {
     runState: null,
     sessionAnchor: null,
     steerBadge: null,
+  };
+}
+
+/**
+ * A record the host pushed whole and no span carries yet - what
+ * `TranscriptWindow.liveMessages` holds between a `messageAccepted` and the
+ * range that seats it.
+ */
+function liveMessage(messageId: string): Message {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "owner-1" },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "hi" }] },
+        ],
+      },
+    },
+    timestamp: 1000,
+    sessionAnchor: null,
   };
 }
 
@@ -134,5 +159,69 @@ describe("transcriptListRows renderer-policy suppression", () => {
 
     expect(rows).toHaveLength(3);
     expect(rows[1]).toMatchObject({ kind: "hydrated", key: "r-1", ordinal: 1 });
+  });
+
+  /**
+   * The gap between "the index names this row" and "a span carries its body".
+   *
+   * A live record arrives with no ordinal and renders from `liveMessages`. The
+   * next `indexChanged` names its row id - and from that moment the row is
+   * neither placed (no span covers it, and `placedRowIds` is built from spans
+   * alone) nor unplaced (the skeleton names it). Dropping it there replaces a
+   * body this client is HOLDING with a skeleton placeholder, which is what a
+   * user watching the message they just sent turn back into a grey bar sees.
+   *
+   * `pruneSupersededLiveRecords` drops a live record only once a SPAN carries
+   * it, so the record really is still in `rendered` for this whole gap.
+   */
+  it("seats a live record at the ordinal the index has started naming", () => {
+    const rows = transcriptListRows({
+      // Only ordinal 0 is spanned; the index names r-1 and r-2 but no range
+      // has delivered either body yet. r-1 is one this client HOLDS, pushed as
+      // a live record and not yet superseded by a span.
+      window: {
+        ...windowOf(
+          3,
+          [span(0, ["r-0"])],
+          [entry("r-0"), entry("r-1"), entry("r-2")],
+        ),
+        liveMessages: [liveMessage("r-1")],
+      },
+      rendered: [model("r-0"), model("r-1")],
+    });
+
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toMatchObject({ kind: "hydrated", key: "r-1", ordinal: 1 });
+    // And exactly once - not additionally appended as an ordinal-less row,
+    // which would show the same message twice.
+    expect(rows.filter((row) => row.key === "r-1")).toHaveLength(1);
+    // The row the index names and nothing holds is still a placeholder.
+    expect(rows[2]).toMatchObject({ kind: "placeholder", ordinal: 2 });
+  });
+
+  /**
+   * The discriminating half, and the reason the seat above is gated on live
+   * records rather than on "the renderer produced a model for it".
+   *
+   * Hydrating one row of a steer-split assistant turn pulls the turn's shared
+   * records, and rendering those projects EVERY row of the turn - including
+   * ones no range ever served. Those models are the client's own inference at
+   * an ordinal the host declined to serve, so they must keep reading as
+   * placeholders. Identical fixture to the seat above, minus the live record.
+   */
+  it("leaves a projected row - one no live record backs - as a placeholder", () => {
+    const rows = transcriptListRows({
+      window: windowOf(
+        3,
+        [span(0, ["r-0"])],
+        [entry("r-0"), entry("r-1"), entry("r-2")],
+      ),
+      rendered: [model("r-0"), model("r-1")],
+    });
+
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toMatchObject({ kind: "placeholder", ordinal: 1 });
+    // And not appended after the ordinals either - it owns one.
+    expect(rows.some((row) => row.ordinal === null)).toBe(false);
   });
 });

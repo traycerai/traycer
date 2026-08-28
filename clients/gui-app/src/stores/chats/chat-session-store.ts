@@ -2520,6 +2520,22 @@ export function createChatSessionStoreWithNotificationDependencies(
      * connection. What matters is only "is this the stream I am assembling",
      * and a `>` test here would reject every chunk after a reconnect and leave
      * the panel permanently empty.
+     *
+     * Which is also why inequality ALONE is not enough, and this is reset at
+     * the rebuild boundary in `onWindowedSnapshot`. Restarting at 1 does not
+     * merely produce a lower number - it produces a COLLIDING one whenever the
+     * held value is also 1, and one rebuild per subscriber is the modal case.
+     * A colliding generation reads as "the stream I am assembling", so a chunk
+     * from the new stream whose index-0 predecessor was dropped splices into
+     * the RETAINED previous-generation array instead of asking for a re-stream.
+     * The reset makes the new stream's first chunk a change again.
+     *
+     * Reset at `indexRevision === null` specifically - the documented "the host
+     * holds no index for this subscriber and is rebuilding one" signal, which
+     * is the same condition under which the host emits these chunks at all. An
+     * aux-only snapshot must NOT reset it: no chunks accompany one, so the next
+     * chunk of the stream still in flight would read as foreign and buy a
+     * re-stream, over and over for as long as aux traffic keeps arriving.
      */
     let accumulatedSummaryGeneration = -1;
 
@@ -3380,6 +3396,23 @@ export function createChatSessionStoreWithNotificationDependencies(
         const rebased = window.epoch !== epochBeforeSnapshot;
         if (rebased || window.invalidated) {
           forgetOutstandingHydration();
+        }
+        // The rebuild boundary for the summary generation tracker. `null` is
+        // the host saying it holds no index for THIS subscriber and is about
+        // to rebuild one (see `applyWindowedSnapshot`'s own doc) - and the
+        // summary chunks are emitted only during that rebuild, so a `null`
+        // revision is exactly "a re-stream is coming, from a counter that may
+        // have restarted". Resetting to `-1` makes whatever generation that
+        // re-stream carries - including the host's first, `1` - a change.
+        //
+        // Keyed on the revision and NOT on "a snapshot arrived": an aux-only
+        // re-broadcast comes through this same handler at a live revision and
+        // sends no chunks at all, so resetting there would make the next chunk
+        // of the CURRENT stream look foreign and fire `requestSummaryRestream`
+        // - a restream livelock under any steady aux traffic. Same reasoning
+        // as the summaries themselves, below.
+        if (frame.snapshot.indexRevision === null) {
+          accumulatedSummaryGeneration = -1;
         }
         // The window and the snapshot's aux ride the fold's own `set` (or the
         // deferral's single `set`) rather than being published here first - a

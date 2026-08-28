@@ -243,6 +243,7 @@ import {
   chatTileCanAct,
   findPendingInterview,
   findUnanswerableInterviews,
+  forkableAssistantMessageIdAfter,
   latestForkableAssistantMessageId,
   selectContextUsage,
 } from "./chat-tile-session-state";
@@ -1088,6 +1089,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     epicId: view.currentEpicId,
     chatId: view.node.id,
     target: hostLocatorTarget,
+    // The coordinate space this tile is in. An ordinal numbered in another one
+    // is discarded rather than jumped to - see the hook's own doc. `null` is
+    // the legacy line, which has no ordinal space at all - and no cold rows
+    // either, so `hostLocatorTarget` is never non-null there and the query
+    // never runs. The epoch is then only ever part of a disabled query's key.
+    epoch: view.transcriptWindow?.epoch ?? 0,
   });
   // HOLD UNTIL THE TARGET RESOLVES, not merely until the snapshot loaded. The
   // chat transcript streams independently of the graph stream, so a warm tile
@@ -2191,13 +2198,24 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // it (scrolled cold, or evicted). The host derives it from the whole
   // transcript and ships it on every snapshot; `null` from it is the real
   // "no boundary yet", never "not hydrated".
-  const latestForkBoundaryId = useMemo(
-    () =>
-      state.transcriptDerived === null
-        ? latestForkableAssistantMessageId(renderedMessages)
-        : state.transcriptDerived.latestForkableAssistantMessageId,
-    [state.transcriptDerived, renderedMessages],
-  );
+  //
+  // But "on every snapshot" is the whole problem, because the GATE in front of
+  // the gesture below is cleared by a live `turnStateChanged` frame. A turn
+  // completes, the gate opens immediately, and the derived boundary still names
+  // the previous turn until a snapshot lands - so the fork the user asks for
+  // omits the turn they just watched finish, silently and plausibly. Two
+  // clocks. `forkableAssistantMessageIdAfter` is the second hand: it looks only
+  // PAST the host's answer, in the live tail where a just-completed turn always
+  // is, so it can move the boundary forward and never backward.
+  const latestForkBoundaryId = useMemo(() => {
+    if (state.transcriptDerived === null) {
+      return latestForkableAssistantMessageId(renderedMessages);
+    }
+    const derived = state.transcriptDerived.latestForkableAssistantMessageId;
+    return (
+      forkableAssistantMessageIdAfter(renderedMessages, derived) ?? derived
+    );
+  }, [state.transcriptDerived, renderedMessages]);
   // The composer host picker's "switch host" gesture. Chats are host-bound for
   // life (clone-not-migrate), so switching means FORKING onto the picked
   // machine — through the same dialog the per-message fork buttons open,

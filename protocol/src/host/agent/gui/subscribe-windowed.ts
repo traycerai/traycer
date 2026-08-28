@@ -353,15 +353,47 @@ export type ChatLocateRowRequest = z.infer<typeof chatLocateRowRequestSchema>;
  * loses nothing, because a chat it cannot read has no row for it to jump to.
  *
  * The ordinal is an index into the row enumeration the skeleton publishes, so
- * the client feeds it straight to its hydration planner. No row id rides along:
- * once the row is hydrated the client resolves the anchor through its own
- * rendered models exactly as it does for a warm target, and a second identifier
- * on the wire with no reader is the shape of defect this PR already fixed once.
+ * the client feeds it straight to its hydration planner - but only after
+ * checking the `epoch` it came stamped with, which is what the rest of this
+ * doc is about.
+ *
+ * ## Why an ordinal alone is not an answer
+ *
+ * An ordinal is a coordinate, and a coordinate means nothing without the space
+ * it is in. This is a unary RPC on a different connection from the stream, so
+ * between the host numbering the row and the client consuming the number the
+ * transcript can be re-based - a restore, a checkpoint, a compaction. Every one
+ * of those advances the epoch, and the client is then handed a position in a
+ * space it has left. Nothing downstream can detect that: the ordinal is
+ * in-range, the planner fetches it, and the reader is scrolled to a plausible
+ * wrong row. So the space rides with the coordinate and the client refuses an
+ * answer stamped with an epoch it is not in.
+ *
+ * The EPOCH and not the located row's id, and the distinction is worth stating
+ * because an earlier draft of this doc argued against a second identifier
+ * outright. That argument was about ANCHOR RESOLUTION - once the row is
+ * hydrated the client resolves the anchor through its own rendered models
+ * exactly as it does for a warm target, so a row id would ride the wire with no
+ * reader. It was never about staleness, which is a different question and needs
+ * an answer. The epoch is the one that answers it completely: within an epoch
+ * an existing ordinal keeps naming the same row (an `appended` change only adds
+ * beyond it, an `updated` moves no ordinal), and anything that MOVES a row is a
+ * `reindexed`, which advances the epoch by the same predicate. A row id would
+ * be a second, weaker check on top of a complete one.
  */
 export const chatLocateRowResponseSchema = z.discriminatedUnion("found", [
   z.object({
     found: z.literal(true),
     ordinal: z.number().int().nonnegative(),
+    /**
+     * The transcript epoch the ordinal is numbered in.
+     *
+     * The client compares it against the epoch its own window is holding and
+     * discards the answer on a mismatch, exactly as it does for a `loadRange`
+     * response - same coordinate, same rule, so the two cannot disagree about
+     * what makes an ordinal usable.
+     */
+    epoch: z.number().int().nonnegative(),
   }),
   z.object({ found: z.literal(false) }),
 ]);
