@@ -15,10 +15,12 @@ import {
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicDeletionAttributionSchema,
+  epicDeletionStatusSchema,
   epicMigrationStatusSchema,
   epicStatusSubscribeClientFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV10,
 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicCloudSyncStatusSchema } from "@traycer/protocol/host/epic/subscribe";
 import {
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
@@ -465,7 +467,22 @@ describe("epic.status.subscribe@1.0", () => {
     cloudSyncStatus: "connected",
     dirty: false,
     migration: null,
-    deleted: null,
+    deletion: { state: "none" as const },
+  };
+
+  // The pre-open control basis (see the module doc): the host must be able to
+  // emit a truthful snapshot before the epic room is open, during a migration.
+  // `permissionRole` and `cloudSyncStatus` already have truthful pre-open
+  // values; `dirty` and `deletion` are the two fields that needed an explicit
+  // not-established representation to stay honest in that state.
+  const preOpenSnapshotBasis = {
+    authorityEpoch: "epoch-1",
+    securityEpoch: 0,
+    permissionRole: null,
+    cloudSyncStatus: "disconnected" as const,
+    dirty: null,
+    migration: { state: "running" as const, progress: null },
+    deletion: { state: "unknown" as const },
   };
 
   it("parses a full snapshot frame", () => {
@@ -485,18 +502,15 @@ describe("epic.status.subscribe@1.0", () => {
       permissionRole: snapshotBase.permissionRole,
       cloudSyncStatus: snapshotBase.cloudSyncStatus,
       migration: snapshotBase.migration,
-      deleted: snapshotBase.deleted,
+      deletion: snapshotBase.deletion,
       hasBinaryPayload: false,
     });
     expect(result.success).toBe(false);
   });
 
-  describe("migration and deleted are required-and-nullable - a host must not be able to stay silent about them", () => {
+  describe("migration and deletion are required - a host must not be able to stay silent about them", () => {
     it("rejects a snapshot omitting migration", () => {
-      const {
-        migration: _migration,
-        ...withoutMigration
-      } = snapshotBase;
+      const { migration: _migration, ...withoutMigration } = snapshotBase;
       const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
         kind: "snapshot",
         ...withoutMigration,
@@ -505,14 +519,83 @@ describe("epic.status.subscribe@1.0", () => {
       expect(result.success).toBe(false);
     });
 
-    it("rejects a snapshot omitting deleted", () => {
-      const { deleted: _deleted, ...withoutDeleted } = snapshotBase;
+    it("rejects a snapshot omitting deletion", () => {
+      const { deletion: _deletion, ...withoutDeletion } = snapshotBase;
       const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
         kind: "snapshot",
-        ...withoutDeleted,
+        ...withoutDeletion,
         hasBinaryPayload: false,
       });
       expect(result.success).toBe(false);
+    });
+  });
+
+  it("parses the pre-open control basis: dirty null, deletion unknown, migration running, mid-migration before the epic is open", () => {
+    const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+      kind: "snapshot",
+      ...preOpenSnapshotBasis,
+      hasBinaryPayload: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  describe("dirty is a tri-state on the snapshot: null | true | false, never omitted", () => {
+    it.each([null, true, false])("parses dirty: %s", (dirty) => {
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "snapshot",
+        ...snapshotBase,
+        dirty,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("epicDeletionStatusSchema - unknown / none / deleted, and the redefine is pinned", () => {
+    it("parses unknown", () => {
+      expect(
+        epicDeletionStatusSchema.safeParse({ state: "unknown" }).success,
+      ).toBe(true);
+    });
+
+    it("parses none", () => {
+      expect(
+        epicDeletionStatusSchema.safeParse({ state: "none" }).success,
+      ).toBe(true);
+    });
+
+    it("parses deleted with attribution", () => {
+      expect(
+        epicDeletionStatusSchema.safeParse({
+          state: "deleted",
+          attribution: {
+            deletedByDisplayName: "A user",
+            deletedByTraycerUserId: "user-1",
+          },
+        }).success,
+      ).toBe(true);
+    });
+
+    it("rejects deleted with no attribution", () => {
+      expect(
+        epicDeletionStatusSchema.safeParse({ state: "deleted" }).success,
+      ).toBe(false);
+    });
+
+    it("rejects an unknown discriminator value", () => {
+      expect(
+        epicDeletionStatusSchema.safeParse({ state: "gone" }).success,
+      ).toBe(false);
+    });
+
+    it("rejects the old two-state shapes - bare null and a bare attribution object", () => {
+      expect(epicDeletionStatusSchema.safeParse(null).success).toBe(false);
+      expect(
+        epicDeletionStatusSchema.safeParse({
+          deletedByDisplayName: "A user",
+          deletedByTraycerUserId: "user-1",
+        }).success,
+      ).toBe(false);
     });
   });
 
@@ -623,6 +706,29 @@ describe("epic.status.subscribe@1.0", () => {
     expect(kinds).toEqual(["ping"]);
   });
 
+  it("dirtyChanged rejects dirty: null - a transition can only be emitted once the fact is established; the first dirtyChanged after a null snapshot is what establishes it, so this frame never restates 'unknown'", () => {
+    const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+      kind: "dirtyChanged",
+      authorityEpoch: "epoch-1",
+      dirty: null,
+      hasBinaryPayload: false,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("cloudSyncStatus has a reachable not-connected member - guards against narrowing away the only truthful pre-open value", () => {
+    expect(epicCloudSyncStatusSchema.safeParse("disconnected").success).toBe(
+      true,
+    );
+    const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+      kind: "snapshot",
+      ...snapshotBase,
+      cloudSyncStatus: "disconnected",
+      hasBinaryPayload: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
   describe("epicMigrationStatusSchema - the snapshot's current-state projection of the migration lifecycle", () => {
     it.each([
       ["running with progress null - the real reconnect window before the first migrationProgress", { state: "running" as const, progress: null }],
@@ -702,7 +808,7 @@ describe("epic.status.subscribe@1.0", () => {
       permissionChanged: ["securityEpoch", "permissionRole"],
       cloudSyncStatus: ["cloudSyncStatus"],
       dirtyChanged: ["dirty"],
-      epicDeleted: ["deleted"],
+      epicDeleted: ["deletion"],
       migrationStarted: ["migration"],
       migrationProgress: ["migration"],
       migrationFailed: ["migration"],

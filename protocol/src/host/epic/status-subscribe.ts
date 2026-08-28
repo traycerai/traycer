@@ -59,7 +59,7 @@
  * | `permissionChanged`   | `permissionRole`, `securityEpoch` |
  * | `cloudSyncStatus`     | `cloudSyncStatus`             |
  * | `dirtyChanged`        | `dirty`                       |
- * | `epicDeleted`         | `deleted`                     |
+ * | `epicDeleted`         | `deletion`                    |
  * | `migrationStarted`    | `migration.state === "running"` |
  * | `migrationProgress`   | `migration.progress`          |
  * | `migrationFailed`     | `migration.state === "failed"` |
@@ -69,19 +69,64 @@
  * `pong` is the only exempt kind, and it is exempt because it is not a fact
  * about the epic at all.
  *
- * ## Aggregate dirty, and why pre-snapshot silence is UNKNOWN
+ * ## Aggregate dirty, and the two places UNKNOWN lives
  *
- * `dirty` is ONE boolean per epic: the host folds root and every live room into
- * it, because that aggregation is over the host's own durability legs and the
- * per-room granularity the monolith shipped had no consumer - the sync pill
+ * `dirty` is ONE aggregate per epic: the host folds root and every live room
+ * into it, because that aggregation is over the host's own durability legs and
+ * the per-room granularity the monolith shipped had no consumer - the sync pill
  * only ever read `unknown | clean | dirty`.
  *
- * Snapshot-then-delta, and the pre-snapshot state is UNKNOWN rather than clean.
- * Under-reporting dirtiness is the dangerous direction: a pill that says "all
- * changes synced" before the host has told it anything is a claim about the
- * user's data that nothing on the wire supports. This is the same rule
- * `epic.subscribe@1.1`'s `dirtySnapshot` established, and it is restated here
- * because it was learned rather than designed.
+ * Snapshot-then-delta, and UNKNOWN is never clean. Under-reporting dirtiness is
+ * the dangerous direction: a pill that says "all changes synced" over work the
+ * cloud has never seen is a claim about the user's data that nothing supports.
+ * This is the rule `epic.subscribe@1.1`'s `dirtySnapshot` established, and it is
+ * restated here because it was learned rather than designed.
+ *
+ * UNKNOWN now has TWO representations, and they are different situations:
+ *
+ * 1. **Pre-snapshot silence.** No snapshot has arrived; the client knows
+ *    nothing about any field. Out of band, by construction.
+ * 2. **`dirty: null` INSIDE a snapshot.** A snapshot has arrived and the host is
+ *    explicitly stating it has not established dirtiness. In band, because the
+ *    snapshot-first invariant forces a truthful snapshot before the epic is
+ *    open - see the pre-open basis section below.
+ *
+ * The second exists because the first could not cover it without breaking the
+ * lane's own ordering rule. Buffering the snapshot until dirtiness is knowable
+ * would mean no snapshot during a migration - the exact window a client most
+ * needs one - and synthesizing `false` would be the false-clean claim above. So
+ * "not established" became a value rather than a delay. Both map onto the same
+ * pill state; neither may be rendered as clean.
+ *
+ * ## The pre-open control basis
+ *
+ * Migrations run DURING the epic open, and this lane is snapshot-first, so the
+ * host must emit a truthful snapshot BEFORE the epic is open. Every field has to
+ * have an honest value in that state, and only two did not:
+ *
+ * | Snapshot field    | Pre-open value | Why it is truthful there |
+ * | ----------------- | -------------- | ------------------------ |
+ * | `authorityEpoch`  | the host's current replica identity | host-owned, always known |
+ * | `securityEpoch`   | the persisted host-local epoch | host-owned, persisted beside the lane cursors |
+ * | `permissionRole`  | `null` | already means "not known here", not "no access" |
+ * | `cloudSyncStatus` | `disconnected` | an OBSERVATION - no room is open, so nothing is connected. Safe direction |
+ * | `migration`       | the real state | host-domain state the host owns directly; this is *why* the pre-open snapshot exists |
+ * | `dirty`           | `null` | composes from live-connection state; offline teardown folds edits back into the seed, so disk cannot distinguish unsynced from reconciled |
+ * | `deletion`        | `{state:"unknown"}` | deletion leaves no local marker in either direction - a local delete unlinks the seed dir (an absence), a remote delete leaves nothing until the room reports |
+ *
+ * The rule this encodes: a snapshot field either has a truthful value in every
+ * state the lane can be in, or it carries an explicit NOT-ESTABLISHED value.
+ * Never a synthesized default, and never a buffered snapshot.
+ *
+ * Frame ordering for a failed open, since it is the sequence that motivated all
+ * of this and the one a client is most likely to get wrong:
+ *
+ *     snapshot(pre-open basis, migration running) -> migrationProgress... ->
+ *     migrationFailed -> termination
+ *
+ * The client renders the migration modal off the SNAPSHOT, not off
+ * `migrationStarted` - which it may never see, because the migration was already
+ * running when it attached.
  *
  * What this lane emits is one INPUT to the sync pill, not the pill. Aggregating
  * the host's durability legs into a boolean is fine; blending unrelated
@@ -151,6 +196,63 @@ export const epicDeletionAttributionSchema = z.object({
 export type EpicDeletionAttribution = z.infer<
   typeof epicDeletionAttributionSchema
 >;
+
+/**
+ * Whether this epic has been deleted - as THREE states, not two.
+ *
+ * ## Why a discriminated union and not `attribution | null`
+ *
+ * The obvious shape - attribution when deleted, `null` otherwise - encodes two
+ * states, and this fact has three. The third is "not established yet", and it
+ * is not a hypothetical: the snapshot-first invariant obliges the host to send a
+ * truthful snapshot BEFORE the epic is open (see the pre-open basis section in
+ * the module doc), and at that point NOTHING ON DISK CAN ANSWER THIS QUESTION.
+ *
+ * Deletion leaves no local marker to read, in either direction. A local delete
+ * UNLINKS the seed directory - the evidence is an absence, and an absence is
+ * equally consistent with "never opened here". A remote delete leaves nothing at
+ * all until the cloud room reports it. So a pre-open host that answered "not
+ * deleted" would be asserting a fact it cannot observe, for an epic that may
+ * have been deleted by a collaborator while this host was offline - and the
+ * client would render a healthy session for an epic that no longer exists.
+ *
+ * `null` was already TAKEN by the two-state shape, meaning "not deleted". A
+ * third state could only have been squeezed in by overloading it, which would
+ * make the SAFE reading and the UNKNOWN reading the same wire value - exactly
+ * the collapse the `dirty` tri-state exists to prevent one field over. So the
+ * shape is redefined rather than extended, which is free here: the line is
+ * unreleased.
+ *
+ * ## The states
+ *
+ * - `unknown`  - the host cannot answer yet. Render the epic, do NOT claim it
+ *   is alive, and do not act on deletion either way. Resolves to one of the
+ *   other two once the epic is open.
+ * - `none`     - ESTABLISHED not-deleted. The host has an open room (or an
+ *   authoritative local answer) and the epic is live.
+ * - `deleted`  - the epic is gone, with whatever attribution the host has.
+ *
+ * `unknown` is NOT a one-way latch. A snapshot re-issued after an
+ * `authorityEpoch` change may legitimately return to `unknown`, because a
+ * replica replacement puts the host back in the pre-open state it was in the
+ * first time.
+ *
+ * The `deleted` arm carries {@link epicDeletionAttributionSchema} - the SAME
+ * shape the `epicDeleted` transition frame carries, so the transition and its
+ * current-state projection cannot disagree about what attribution is. Nesting
+ * it under the arm rather than beside the discriminator also means attribution
+ * exists only where it is meaningful; there is no `unknown` state carrying a
+ * vestigial null attribution for a reader to misinterpret.
+ */
+export const epicDeletionStatusSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("unknown") }),
+  z.object({ state: z.literal("none") }),
+  z.object({
+    state: z.literal("deleted"),
+    attribution: epicDeletionAttributionSchema,
+  }),
+]);
+export type EpicDeletionStatus = z.infer<typeof epicDeletionStatusSchema>;
 
 /**
  * The CURRENT state of a major migration, as the snapshot projects it.
@@ -257,25 +359,59 @@ const epicStatusSubscribeSnapshotFrameSchemaV10 = z.object({
    * permission verdict.
    */
   permissionRole: permissionRoleSchema.nullable(),
+  /**
+   * Host-observed cloud room state. Truthful even on a pre-open snapshot: a
+   * host that has not opened the room has no cloud connection for this epic, so
+   * `disconnected` is an OBSERVATION, not a placeholder, and it is the safe
+   * direction (nothing renders as synced). Do not "fix" this into a tri-state -
+   * unlike `dirty` and `deletion` below, this field has a truthful value in
+   * every state the lane can be in.
+   */
   cloudSyncStatus: epicCloudSyncStatusSchema,
-  dirty: z.boolean(),
+  /**
+   * The aggregate dirty flag, or `null` when the host cannot answer yet.
+   *
+   * Three states, mapping 1:1 onto the pill's `unknown | clean | dirty`.
+   * `null` is not a default and never synthesized - it is the host stating that
+   * it has not established dirtiness, which is the honest answer on a snapshot
+   * emitted before the epic is open.
+   *
+   * Why it cannot be answered pre-open: dirtiness composes from LIVE CONNECTION
+   * state, and the offline-teardown path folds a session's edits back into the
+   * seed. Nothing on disk distinguishes a seed carrying unsynced offline edits
+   * from a fully reconciled one. So `false` pre-open would be precisely the
+   * false-clean claim this lane forbids - "all changes synced" over work the
+   * cloud has never seen.
+   *
+   * `null` is NOT a one-way latch: a snapshot re-issued after an
+   * `authorityEpoch` change may return to `null`, because a replica replacement
+   * puts the host back in the pre-open state.
+   */
+  dirty: z.boolean().nullable(),
   /**
    * The current migration state, or `null` when no migration is running,
    * failed, or blocked. See {@link epicMigrationStatusSchema} - this field is
    * what makes the cursor-less model honest for a client that reconnects
    * mid-migration.
+   *
+   * Truthful pre-open, unlike its two neighbours: a migration is host-domain
+   * state the host owns directly, so it knows whether one is running before any
+   * room is open. This is in fact the reason a pre-open snapshot has to exist at
+   * all - see the module doc.
    */
   migration: epicMigrationStatusSchema.nullable(),
   /**
-   * Attribution when the epic has ALREADY been deleted, `null` otherwise.
+   * Whether the epic has been deleted - `unknown` / `none` / `deleted`, never a
+   * bare nullable. See {@link epicDeletionStatusSchema} for why this fact needs
+   * three states and why `null` could not be reused for the third.
    *
-   * The current-state projection of the `epicDeleted` frame. A client
-   * reconnecting after the deletion - a persisted tab list, or a reconnect that
-   * raced the delete - would otherwise receive a snapshot describing a healthy
-   * session for an epic that no longer exists, and only learn otherwise if a
-   * transition frame it already missed were somehow re-sent.
+   * The current-state projection of the `epicDeleted` frame. Without it, a
+   * client reconnecting after a deletion - a persisted tab list, or a reconnect
+   * that raced the delete - would receive a snapshot describing a healthy
+   * session for an epic that no longer exists, and could only learn otherwise
+   * if a transition frame it already missed were somehow re-sent.
    */
-  deleted: epicDeletionAttributionSchema.nullable(),
+  deletion: epicDeletionStatusSchema,
   ...epicLaneTextFrameFields,
 });
 
@@ -316,6 +452,19 @@ export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
      * Transition delta for the aggregate dirty flag, after this cycle's
      * `snapshot`. Absence means clean ONLY after that snapshot has been
      * received; before it, dirtiness is unknown.
+     *
+     * `dirty` here is a PLAIN BOOLEAN while the snapshot's is nullable, and the
+     * asymmetry is deliberate rather than an oversight. A transition can only
+     * be emitted once the host has established the fact - there is no event
+     * "dirtiness became unknown", because the host does not un-learn it within a
+     * subscription. So this frame carries `true` or `false` and never null, and
+     * THE FIRST `dirtyChanged` AFTER A NULL SNAPSHOT IS WHAT ESTABLISHES THE
+     * FACT: a client sitting on `unknown` leaves that state here, not by
+     * timeout and not by assumption.
+     *
+     * Returning to unknown is possible, but it is a REPLICA event rather than a
+     * dirtiness event: it arrives as an `authorityEpoch` change followed by a
+     * fresh snapshot whose `dirty` is null again.
      */
     z.object({
       kind: z.literal("dirtyChanged"),
