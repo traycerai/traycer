@@ -63,13 +63,28 @@ export type PathKind = "file" | "folder";
  */
 export type BrowserTabMentionContextType = "browser-tab";
 
+/**
+ * The epic-scoped entities a mention chip can DECODE to an attachment.
+ *
+ * Every member is reachable: `mentionAttachmentFromAttrs` names these four
+ * literals and the artifact kinds explicitly before falling through to `null`,
+ * and `entityMentionAttachmentFromAttrs` - the only producer of an
+ * `EntityMentionAttachment` - is called from nowhere else.
+ *
+ * `"user"` is deliberately NOT here, and its absence is not an oversight to
+ * correct. A user mention is real and renders as `@name`, but it is the
+ * SERIALIZER's concern: `ContextType.User` in `json-content-serializer.ts` has
+ * its own branches for both the LLM and plain-text forms, reading the node's
+ * raw attrs. It is not an epic-scoped entity - it carries no `epicId`, which
+ * this decoder requires - so listing it here only ever widened a type past
+ * what any code path could produce.
+ */
 export type EntityMentionContextType =
   | "epic"
   | "chat"
   | "terminal-agent"
   | "terminal"
-  | EpicArtifactKind
-  | "user";
+  | EpicArtifactKind;
 
 /**
  * Wire spelling, not a local one: these strings ARE `ContextType` members in
