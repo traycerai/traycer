@@ -1273,6 +1273,17 @@ function teardownSendRefusalReason(
   return undefined;
 }
 
+/**
+ * A send held by the rebind-consent dialog: the input to re-dispatch on
+ * confirm, and the PATH-SPECIFIC dispatch that must run it — a confirmed
+ * compaction still needs its lock and queue promotion, not the composer's
+ * title bookkeeping.
+ */
+type GatedChatSend = {
+  readonly submit: ChatComposerSubmitInput;
+  readonly dispatch: (input: ChatComposerSubmitInput) => boolean;
+};
+
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
@@ -2103,8 +2114,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
   } | null>(null);
-  const pendingSubmitRef =
-    useRef<ArmedTeardownSubmit<ChatComposerSubmitInput> | null>(null);
+  const pendingSubmitRef = useRef<ArmedTeardownSubmit<GatedChatSend> | null>(
+    null,
+  );
   const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
   if (node.id !== teardownOwnerId) {
     setTeardownOwnerId(node.id);
@@ -2166,6 +2178,70 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
 
+  // The one rebind-consent gate for every send-shaped path this tile owns —
+  // composer submits, next-step clicks, implement-plan, compaction. A path
+  // that calls `chatActions.sendMessage` without passing through here
+  // reopens one of two holes: a phantom disclosure on a no-op draft, or a
+  // staged rebind committing silently.
+  const submitThroughRebindGate = useCallback(
+    (
+      submit: ChatComposerSubmitInput,
+      dispatch: (input: ChatComposerSubmitInput) => boolean,
+    ): boolean => {
+      const stagedKey: WorktreeStagingKey = {
+        surface: "owner",
+        hostId: activeHostId,
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      // The disclosure is consent for the rebind a send would commit. A send
+      // whose draft commits nothing (none staged, or one that restates the
+      // committed binding) has no rebind to consent to — gating it would put
+      // "Send in the new folder?" in front of every steer of a busy agent.
+      if (
+        !worktreeDraftCommitsRebind({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        })
+      ) {
+        return dispatch(submit);
+      }
+      const snapshot = snapshotTeardownHolders(
+        droppedRunDirectoriesFromDraft({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        }),
+      );
+      const capture: WorktreeCommitCapture = {
+        draft: readStagedWorktreeIntent(stagedKey),
+        revision: stagedWorktreeIntentRevision(stagedKey),
+        binding: state.worktreeBinding,
+        removedWorkspacePaths: [],
+        stopTargets: snapshot.stopTargets,
+      };
+      if (snapshot.holders.length > 0) {
+        pendingSubmitRef.current = {
+          input: { submit, dispatch },
+          capture,
+          ownerId: node.id,
+        };
+        setTeardownDialog({ holders: snapshot.holders });
+        return false;
+      }
+      return dispatch(submit);
+    },
+    [
+      activeHostId,
+      currentEpicId,
+      node.id,
+      snapshotTeardownHolders,
+      state.worktreeBinding,
+    ],
+  );
+
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
       if (!canAct) return false;
@@ -2200,63 +2276,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
-      const stagedKey: WorktreeStagingKey = {
-        surface: "owner",
-        hostId: activeHostId,
-        epicId: currentEpicId,
-        ownerKind: "chat",
-        ownerId: node.id,
-      };
-      // The disclosure is consent for the rebind a send would commit. A send
-      // whose draft commits nothing (none staged, or one that restates the
-      // committed binding) has no rebind to consent to — gating it would put
-      // "Send in the new folder?" in front of every steer of a busy agent.
-      if (
-        !worktreeDraftCommitsRebind({
-          binding: state.worktreeBinding,
-          draft: readStagedWorktreeIntent(stagedKey),
-          removedWorkspacePaths: [],
-        })
-      ) {
-        return dispatchUserSend(input);
-      }
-      const snapshot = snapshotTeardownHolders(
-        droppedRunDirectoriesFromDraft({
-          binding: state.worktreeBinding,
-          draft: readStagedWorktreeIntent(stagedKey),
-          removedWorkspacePaths: [],
-        }),
-      );
-      const capture: WorktreeCommitCapture = {
-        draft: readStagedWorktreeIntent(stagedKey),
-        revision: stagedWorktreeIntentRevision(stagedKey),
-        binding: state.worktreeBinding,
-        removedWorkspacePaths: [],
-        stopTargets: snapshot.stopTargets,
-      };
-      if (snapshot.holders.length > 0) {
-        pendingSubmitRef.current = {
-          input,
-          capture,
-          ownerId: node.id,
-        };
-        setTeardownDialog({ holders: snapshot.holders });
-        return false;
-      }
-      return dispatchUserSend(input);
+      return submitThroughRebindGate(input, dispatchUserSend);
     },
     [
       activeEditingQueueItemId,
-      activeHostId,
       canAct,
       chatActions,
-      currentEpicId,
       dispatchUi,
       dispatchUserSend,
-      node.id,
       profile,
-      snapshotTeardownHolders,
-      state.worktreeBinding,
+      submitThroughRebindGate,
     ],
   );
   const canSendNextStep =
@@ -2269,24 +2298,31 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
       if (!canSendNextStep) return false;
-      const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return false;
+      if (userMessageSenderForProfile(profile) === null) return false;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(option.prompt),
         slashCatalog,
       );
-      return (
-        chatActions.sendMessage({
+      return submitThroughRebindGate(
+        {
           content,
-          sender,
-          settings: nextStepSettings,
+          contentText: option.prompt,
           attachments: [],
+          settings: nextStepSettings,
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
-        }) !== null
+        },
+        dispatchUserSend,
       );
     },
-    [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
+    [
+      canSendNextStep,
+      dispatchUserSend,
+      nextStepSettings,
+      profile,
+      slashCatalog,
+      submitThroughRebindGate,
+    ],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact
@@ -2318,18 +2354,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [],
   );
-  const compactConversation = useCallback(
-    (commandName: string): void => {
-      if (!canSendNextStep) return;
+  // The compaction's own dispatch behind the rebind gate: the lock, the
+  // queue-or-run-now policy, and the promotion belong to the moment the send
+  // actually leaves — a consent dialog may sit between the click and this, so
+  // deciding them at click time would act on stale turn/queue state (and take
+  // the double-click lock for a compaction that never fired).
+  const dispatchCompactSend = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
       const states = compactStateByChatIdRef.current;
       const existing = states.get(handle.chatId);
-      if (existing?.locked === true) return;
+      if (existing?.locked === true) return false;
       const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return;
-      const content = buildSubmittedChatJSONContent(
-        plainTextPromptContent(`/${commandName}`),
-        slashCatalog,
-      );
+      if (sender === null) return false;
       // A cheap re-entrancy guard against a double-click firing two real
       // compactions: the optimistic-queue dedupe only suppresses the second
       // row's on-screen echo, not the frame that already went to the host.
@@ -2346,29 +2382,58 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       const { activeTurn, queue } = handle.store.getState();
       const runNow = activeTurn === null && queue.items.length === 0;
       const sent = chatActions.sendMessage({
-        content,
+        content: input.content,
         sender,
-        settings: nextStepSettings,
-        attachments: [],
+        settings: input.settings,
+        attachments: input.attachments,
         deliveryPolicy: runNow ? "auto" : "after_turn",
-        restore: { content, browserAnnotations: [] },
+        restore: input.restore,
       });
-      if (sent === null || runNow) return;
+      if (sent === null) return false;
+      if (runNow) return true;
       state.cancelPromotion?.();
       state.cancelPromotion = promoteQueuedMessageToFront({
         store: handle.store,
         messageId: sent.messageId,
         reorder: chatActions.queueReorder,
       });
+      return true;
+    },
+    [chatActions, handle.chatId, handle.store, profile],
+  );
+  const compactConversation = useCallback(
+    (commandName: string): void => {
+      if (!canSendNextStep) return;
+      if (compactStateByChatIdRef.current.get(handle.chatId)?.locked === true) {
+        return;
+      }
+      if (userMessageSenderForProfile(profile) === null) return;
+      const content = buildSubmittedChatJSONContent(
+        plainTextPromptContent(`/${commandName}`),
+        slashCatalog,
+      );
+      submitThroughRebindGate(
+        {
+          content,
+          contentText: `/${commandName}`,
+          attachments: [],
+          settings: nextStepSettings,
+          // Placeholder only: `dispatchCompactSend` decides queue-or-run-now
+          // from live turn/queue state at actual dispatch.
+          deliveryPolicy: "auto",
+          restore: { content, browserAnnotations: [] },
+        },
+        dispatchCompactSend,
+      );
     },
     [
       canSendNextStep,
-      chatActions,
+      dispatchCompactSend,
       handle.chatId,
-      handle.store,
       nextStepSettings,
       profile,
       slashCatalog,
+      submitThroughRebindGate,
     ],
   );
   const nextStepActions = useMemo(
@@ -2380,23 +2445,30 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const sendImplementPlanMessage = useCallback((): boolean => {
     if (!canAct) return false;
-    const sender = userMessageSenderForProfile(profile);
-    if (sender === null) return false;
+    if (userMessageSenderForProfile(profile) === null) return false;
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,
     );
-    return (
-      chatActions.sendMessage({
+    return submitThroughRebindGate(
+      {
         content,
-        sender,
-        settings: nextStepSettings,
+        contentText: "Implement the plan above.",
         attachments: [],
+        settings: nextStepSettings,
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
-      }) !== null
+      },
+      dispatchUserSend,
     );
-  }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
+  }, [
+    canAct,
+    dispatchUserSend,
+    nextStepSettings,
+    profile,
+    slashCatalog,
+    submitThroughRebindGate,
+  ]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
     () => ({
       epicId: currentEpicId,
@@ -2861,7 +2933,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           return;
         }
         setTeardownDialog(null);
-        dispatchUserSend(armed.input);
+        armed.input.dispatch(armed.input.submit);
       },
       onDismiss: () => {
         pendingSubmitRef.current = null;
