@@ -964,7 +964,55 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     expect(rows[0].windowIndex).toBe(1);
   });
 
-  it("joins an OPEN window, which bounds nothing", () => {
+  it("opens a NEW lifecycle past an OPEN window when the slice HOLDS the boundary", () => {
+    // `closedAt: null` is "open AS OF THE SNAPSHOT", not "open, therefore
+    // everything later joins it". The live events below arrived after that
+    // snapshot, and they carry the very boundary the host had not seen yet -
+    // so the client's own partition is the FRESHER evidence here, and reading
+    // the published `null` as an unconditional answer overrides it with a
+    // staler one.
+    //
+    // The empty-bucket inference gets this right on its own: window 0 already
+    // received an event, so a later local window is not its cold-opening tail.
+    // The `null` short-circuit is what stepped in front of that and merged two
+    // lifecycles into one card - the count defect this file's header calls the
+    // one no per-window correction can reach.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent("setup.running", { workspacePath: "/repo" }, 1_000),
+        setupEvent("setup.succeeded", { workspacePath: "/repo" }, 2_000),
+        // The re-bind boundary, live. It forms no window of its own.
+        setupEvent("worktree.missing", { workspacePath: "/repo" }, 4_000),
+        setupEvent("setup.running", { workspacePath: "/other" }, 5_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: null,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.windowIndex)).toEqual([0, 1]);
+    expect(rows[1].createdAt).toBe(5_000);
+    // The second card is its own lifecycle, not a re-run of the first: the
+    // reattachment reused window 0's row id and lifecycle flags, so the new
+    // binding rendered as the OLD one flipping back to `setting-up`.
+    expect(rows[0].model.workspaces[0].workspacePath).toBe("/repo");
+    expect(rows[1].model.workspaces[0].workspacePath).toBe("/other");
+  });
+
+  it("anchors to an OPEN window whose bucket is still empty", () => {
+    // The cold-opening tail, one field over from the test above: same open
+    // window, but the slice supplied it NOTHING, so this live event is that
+    // lifecycle's own later activity rather than a new one. `closedAt: null`
+    // is not what decides it - the empty bucket is - which is exactly the
+    // difference the test above turns on.
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
       BINDING,
@@ -980,6 +1028,7 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     );
 
     expect(rows[0].windowIndex).toBe(0);
+    expect(rows[0].createdAt).toBe(1_000);
   });
 
   it("does not leak the merged window's triggering message onto the second half", () => {

@@ -6783,22 +6783,41 @@ function applyContentDelta(
 }
 
 // The block id whose OWNING message a detached backgrounded-subagent event
-// targets, plus whether routing to that owner is MANDATORY:
+// targets, plus whether that owner MUST already exist:
 //   - `subagent.*`             → the subagent block (`event.blockId`).
 //   - a terminal `tool_call.*` / `command.completed` → its non-empty
 //     `parentBlockId` when it is a subagent CHILD; otherwise its own `blockId`
 //     (a genuinely top-level background terminal - Claude backgrounds through a
 //     `tool_call`, Codex through a plain `command`).
 //   - any other nested event  → its `parentBlockId`.
-// `mandatory` is set whenever the owner comes from `parentBlockId` or from a
-// parentless background tool terminal: such an event belongs to an older row
-// and must NEVER fall through to the active turn, where the accumulator would
-// mint a duplicate top-level card for it.
 // Null for everything else (text/reasoning/top-level tool deltas), so the
 // common high-frequency path skips the owner lookup.
+//
+// `ownerMustExist` decides what happens when the scan finds NO owner, and it
+// says what it means rather than proxying it through how the owner is named.
+// The distinction it draws is whether this event OPENS its own card or updates
+// one:
+//
+//   - `subagent.started` opens it. `accumulateTurnContent` builds the block
+//     FROM this event, so "no message owns it" is the ordinary birth of every
+//     subagent card, not evidence of a detached one. Dropping it there means
+//     the card is never created - and then its own progress and completion
+//     have no owner either, so nothing about that subagent ever renders.
+//   - `subagent.progress` / `subagent.completed` update it. They ALSO build a
+//     card when none exists (see the accumulator), which is exactly the
+//     synthesis that must not happen under an unrelated turn: their card's row
+//     is evictable on the windowed line, so an ownerless one means gone, not
+//     new.
+//   - a `parentBlockId` owner, or a parentless BACKGROUND terminal, belongs to
+//     an older row for the same reason and never falls through.
+//
+// A parentless FOREGROUND terminal keeps the fall-through it has always had:
+// with the active turn's own row consulted (see `activeTurnOwnsBlock`) a live
+// call's terminal never reaches here, so what is left is a terminal whose
+// `started` was genuinely never seen, and completing it beats stranding it.
 function detachedSubagentOwnerTarget(
   event: RuntimeEvent,
-): { readonly ownerBlockId: string; readonly mandatory: boolean } | null {
+): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
   const parentBlockId =
     "parentBlockId" in event &&
     typeof event.parentBlockId === "string" &&
@@ -6810,7 +6829,10 @@ function detachedSubagentOwnerTarget(
     event.type === "subagent.progress" ||
     event.type === "subagent.completed"
   ) {
-    return { ownerBlockId: event.blockId, mandatory: false };
+    return {
+      ownerBlockId: event.blockId,
+      ownerMustExist: event.type !== "subagent.started",
+    };
   }
   if (
     event.type === "tool_call.completed" ||
@@ -6818,17 +6840,54 @@ function detachedSubagentOwnerTarget(
     event.type === "command.completed"
   ) {
     if (parentBlockId !== null) {
-      return { ownerBlockId: parentBlockId, mandatory: true };
+      return { ownerBlockId: parentBlockId, ownerMustExist: true };
     }
     return {
       ownerBlockId: event.blockId,
-      mandatory: "backgroundTask" in event && event.backgroundTask === true,
+      ownerMustExist:
+        "backgroundTask" in event && event.backgroundTask === true,
     };
   }
   if (parentBlockId !== null) {
-    return { ownerBlockId: parentBlockId, mandatory: true };
+    return { ownerBlockId: parentBlockId, ownerMustExist: true };
   }
   return null;
+}
+
+// Does the ACTIVE TURN's row already own this block?
+//
+// The active turn writes to one of two places, and which one is not a detail
+// this check can skip: `state.messages[assistantIndex]` once the turn has
+// materialized a row, and `liveAssistantMessage` before it does - which is the
+// ordinary case for a turn that is still streaming. `liveAssistantMessage` is
+// NOT in `state.messages`, so a scan of `state.messages` alone answers "no row
+// owns this block" for every card the active turn is currently building, and
+// the detached branch then drops the turn's own tool calls and subagent cards.
+//
+// The live row counts only while it IS the active turn's. A completed turn's
+// row stays visible after the next turn starts (see
+// `liveAssistantForActiveTurnState`), and an event for a block it owns is not
+// the active turn's to accumulate - letting it pass here would write that
+// block into the NEW turn's row instead.
+function activeTurnOwnsBlock(
+  state: ChatSessionState,
+  assistantIndex: number,
+  blockId: string,
+): boolean {
+  if (
+    assistantIndex >= 0 &&
+    assistantMessageOwnsBlock(state.messages[assistantIndex], blockId)
+  ) {
+    return true;
+  }
+  const live = state.liveAssistantMessage;
+  const activeTurnId = state.activeTurn?.turnId ?? null;
+  return (
+    live !== null &&
+    activeTurnId !== null &&
+    live.turnId === activeTurnId &&
+    live.blocks.some((block) => block.blockId === blockId)
+  );
 }
 
 /**
@@ -7440,13 +7499,7 @@ function applyContentBlockDelta(
   const detachedTarget = detachedSubagentOwnerTarget(event);
   if (
     detachedTarget !== null &&
-    !(
-      assistantIndex >= 0 &&
-      assistantMessageOwnsBlock(
-        state.messages[assistantIndex],
-        detachedTarget.ownerBlockId,
-      )
-    )
+    !activeTurnOwnsBlock(state, assistantIndex, detachedTarget.ownerBlockId)
   ) {
     const routed = applyEventToOwningMessage(
       state,
@@ -7459,22 +7512,25 @@ function applyContentBlockDelta(
     // top-level card on an unrelated turn. The owner is its only legitimate
     // target, so drop it (identity = no-op) instead.
     //
-    // Unconditional now, and `mandatory` no longer gates it. That flag divides
-    // events by how their owner is NAMED - `parentBlockId` versus their own
-    // `blockId` - which was a sound proxy for "the owner must exist" only while
-    // the transcript was whole. On the windowed line it is not: a
-    // `subagent.started/progress/completed` names its own card's block
-    // (`detachedSubagentOwnerTarget` returns `mandatory: false` for exactly
-    // those three), and that card's row is EVICTABLE. A background subagent
-    // outliving its spawning turn then finds its owner gone for a reason that
-    // has nothing to do with the event - and synthesizes its progress or
-    // completion under whatever turn happens to be active.
+    // Gated on `ownerMustExist`, which is the direct question and not the
+    // `parentBlockId`-versus-own-`blockId` proxy this used to read. That proxy
+    // was sound only while the transcript was whole: on the windowed line a
+    // `subagent.progress/completed` names its own card's block and that card's
+    // row is EVICTABLE, so a background subagent outliving its spawning turn
+    // finds its owner gone for a reason that has nothing to do with the event
+    // - and synthesizes its progress or completion under whatever turn happens
+    // to be active. Those two are `ownerMustExist` now, so they still drop.
+    //
+    // What must NOT drop is an event that opens its own card, because "no
+    // owner" is its normal starting condition rather than evidence of
+    // anything. `subagent.started` is that event, and dropping it took the
+    // subagent card with it - see `detachedSubagentOwnerTarget`.
     //
     // Dropping is safe precisely because eviction is recoverable: the row is
     // re-served whole by the range that re-hydrates it, carrying this update
     // already folded in. Falling through is not - it writes a card under a turn
     // that never spawned it, and no later frame corrects that.
-    return state;
+    if (detachedTarget.ownerMustExist) return state;
   }
   // Steer-split carryover: a block that was still STREAMING when a steered
   // user message split the turn lives in an EARLIER assistant row of the SAME

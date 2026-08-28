@@ -1636,6 +1636,40 @@ export function applyIndexChange(
     return voidedTranscriptWindow(window, input);
   }
 
+  // Is this frame NEWS - and if so, is it the NEXT news? Revisions are
+  // consecutive within an epoch, so anything but the immediate successor means
+  // a frame this client never received - and for an `updated`-only frame that
+  // is the difference between noticing and rendering a superseded body until
+  // the connection drops.
+  //
+  // A revision that is not GREATER is a duplicate or a reordered straggler
+  // rather than a gap: applying it again is what the atomic-frame rule already
+  // forbids, so it is dropped rather than treated as loss.
+  //
+  // This runs BEFORE the append-count check below, and the order is the whole
+  // point rather than a style choice. A duplicate carrying `appended` entries
+  // was already applied here, so this window's `rowCount` already includes
+  // those rows and the frame's own count equals it - which the count check
+  // reads as `0 !== appendedRows`, the exact signature of a LOST frame. Ask
+  // that question of a frame already known to be stale and the most harmless
+  // thing a stream can do becomes a blanked transcript and a full refetch. The
+  // count is a consistency claim ABOUT a frame's changes; it is only meaningful
+  // once the frame is established as one this window has not seen.
+  //
+  // Both readings compare against a counter this window is assumed to share
+  // with the sender, so both are suspended for exactly one frame after a
+  // rebuild boundary - the delta path reaches that boundary whenever a delta
+  // arrives before the next aux snapshot does, which is ordinary. See
+  // {@link TranscriptWindow.indexRevisionRebuilding}. While suspended the count
+  // check below is the only detector left, which is why it is not folded into
+  // this block.
+  if (!window.indexRevisionRebuilding) {
+    if (input.indexRevision <= window.indexRevision) return window;
+    if (input.indexRevision !== window.indexRevision + 1) {
+      return voidedTranscriptWindow(window, input);
+    }
+  }
+
   // A frame can be LOST without the stream dying: the host's pump surfaces a
   // deterministic send failure as fatal, but keeps drop-and-continue for a
   // flaky socket write. So `rowCount` can grow by more than the entries that
@@ -1647,8 +1681,8 @@ export function applyIndexChange(
   // either - every identity check against them rejects a valid range forever.
   // `skeletonComplete` merely goes false, which requests no repair.
   //
-  // The count is the whole detector, because `appended` is the only member
-  // that moves `rowCount` and it always appends contiguously at the end.
+  // The count is the whole detector for that, because `appended` is the only
+  // member that moves `rowCount` and it always appends contiguously at the end.
   const appendedRows = input.changes.reduce(
     (total, change) =>
       change.type === "appended" ? total + change.entries.length : total,
@@ -1656,28 +1690,6 @@ export function applyIndexChange(
   );
   if (input.rowCount - window.rowCount !== appendedRows) {
     return voidedTranscriptWindow(window, input);
-  }
-
-  // The detector for the loss the count above cannot see. Revisions are
-  // consecutive within an epoch, so anything but the immediate successor means
-  // a frame this client never received - and for an `updated`-only frame that
-  // is the difference between noticing and rendering a superseded body until
-  // the connection drops.
-  //
-  // A revision that is not GREATER is a duplicate or a reordered straggler
-  // rather than a gap: applying it again is what the atomic-frame rule already
-  // forbids, so it is dropped rather than treated as loss.
-  //
-  // Both readings below compare against a counter this window is assumed to
-  // share with the sender, so both are suspended for exactly one frame after a
-  // rebuild boundary - the delta path reaches that boundary whenever a delta
-  // arrives before the next aux snapshot does, which is ordinary. See
-  // {@link TranscriptWindow.indexRevisionRebuilding}.
-  if (!window.indexRevisionRebuilding) {
-    if (input.indexRevision <= window.indexRevision) return window;
-    if (input.indexRevision !== window.indexRevision + 1) {
-      return voidedTranscriptWindow(window, input);
-    }
   }
 
   const skeleton = [...window.skeleton];

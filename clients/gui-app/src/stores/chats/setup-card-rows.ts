@@ -224,8 +224,26 @@ interface AlignedSetupCardWindow {
  *
  * A window closed at T contains no event stamped at or after T - that is what
  * closing means - so a local window anchored there opens a new lifecycle, while
- * one anchored before T is that window's cold-opening tail. An OPEN window
- * (`closedAt: null`) has no such bound, so a later event joins it.
+ * one anchored before T is that window's cold-opening tail.
+ *
+ * ## `closedAt: null` answers NOTHING, and reading it as "joins" merged two
+ *
+ * An open window has no bound, and the tempting next step - "no bound, so a
+ * later window is its tail" - is false. `null` is a fact about the SNAPSHOT: it
+ * says the host had not closed that lifecycle at the moment it published the
+ * list. Every local window this question is ever asked about is built partly or
+ * wholly from events that arrived AFTER that, and the boundary closing it can
+ * be one of them (`worktree.missing` is live-delivered and forms no window of
+ * its own). So the published `null` is the STALER of the two accounts, and
+ * letting it answer overrode the client's own partition with it: a re-bind
+ * observed live was reattached to the historical identity, reusing its row id
+ * and lifecycle flags, and the two lifecycles drew one card between them.
+ *
+ * It therefore falls through to the same inference `undefined` uses - not
+ * because the two mean the same thing, but because neither one BOUNDS
+ * anything, and the empty-bucket reading is what is left. That reading gets the
+ * live-boundary case right on its own: the preceding window has already
+ * received events, so a later local window is not its cold-opening tail.
  *
  * The TIE is `>=`, i.e. an event stamped exactly at `closedAt` is treated as
  * past the boundary. `closedAt` is the closing event's own timestamp and a
@@ -257,9 +275,12 @@ function belongsToPrecedingWindow(input: {
   readonly precedingBucketEmpty: boolean;
 }): boolean {
   const closedAt = input.preceding.closedAt;
-  // An OPEN window bounds nothing, so a later local window is its tail.
-  if (closedAt === null) return true;
-  if (closedAt !== undefined) return input.window.createdAt < closedAt;
+  // A KNOWN bound settles it outright. `null` and `undefined` do not, and they
+  // fail over to the same inference for opposite reasons - one has no bound
+  // yet, the other has no field - so neither may answer on its own.
+  if (closedAt !== null && closedAt !== undefined) {
+    return input.window.createdAt < closedAt;
+  }
   return input.precedingBucketEmpty;
 }
 

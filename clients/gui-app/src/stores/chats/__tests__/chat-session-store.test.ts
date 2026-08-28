@@ -21,6 +21,7 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { RuntimeEvent } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
@@ -9554,6 +9555,240 @@ describe("createChatSessionStore", () => {
       expect.objectContaining({ type: "text", blockId: "active-text" }),
     ]);
   });
+
+  // The live turn's OWN cards, which the detached drop must never eat.
+  //
+  // "No message owns this block" is the detached test, and it is satisfied by
+  // two opposite situations: an evicted owner (drop) and a block that does not
+  // exist YET because this very event creates it (keep). The active turn's row
+  // is `liveAssistantMessage` until it materializes, and that is not in
+  // `state.messages` at all - so on a live turn the ownership scan finds
+  // nothing for either one, and reading that as "detached" drops the card at
+  // its birth. Everything after it then has no owner either, so nothing about
+  // the subagent ever renders.
+  it("creates the active turn's own subagent card from its first subagent.started", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitTextDelta(callbacks, "Active turn", 4);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "subagent.started",
+        blockId: "live-subagent",
+        timestamp: 5,
+        name: "Explore",
+      },
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-subagent",
+        status: "streaming",
+      }),
+    ]);
+  });
+
+  it("keeps applying progress and completion to the subagent card it created", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "live-subagent",
+      timestamp: 5,
+      name: "Explore",
+    });
+    emit({
+      type: "subagent.progress",
+      blockId: "live-subagent",
+      timestamp: 6,
+      update: "reading files",
+    });
+    emit({
+      type: "subagent.completed",
+      blockId: "live-subagent",
+      timestamp: 7,
+      outcome: "completed",
+      result: "done",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-subagent",
+        status: "completed",
+        progressUpdates: ["reading files"],
+        result: "done",
+      }),
+    ]);
+  });
+
+  // The widest arm of the same seam: a nested event names its owner through
+  // `parentBlockId`, and that owner is MANDATORY - it never falls through. So
+  // for a subagent's own tool activity the live row is the only place its
+  // parent can be found, and not looking there strands every child of a card
+  // the active turn is still building.
+  it("nests a live subagent's own tool call under it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "live-subagent",
+      timestamp: 5,
+      name: "Explore",
+    });
+    emit({
+      type: "tool_call.started",
+      blockId: "child-tool",
+      parentBlockId: "live-subagent",
+      timestamp: 6,
+      toolName: "Grep",
+      agentMessageSend: null,
+    });
+    emit({
+      type: "tool_call.completed",
+      blockId: "child-tool",
+      parentBlockId: "live-subagent",
+      timestamp: 7,
+      toolName: "Grep",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "subagent", blockId: "live-subagent" }),
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "child-tool",
+        parentBlockId: "live-subagent",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  // A foreground tool call is the same shape one step over: `tool_call.started`
+  // creates the block on the live row, and its terminal names that block by its
+  // own id with no `parentBlockId`. If the terminal is read as detached the
+  // call spins forever, which is the same defect as the subagent card and not a
+  // separate one.
+  it("completes the active turn's own foreground tool call", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "tool_call.started",
+      blockId: "live-tool",
+      timestamp: 5,
+      toolName: "Read",
+      agentMessageSend: null,
+    });
+    emit({
+      type: "tool_call.completed",
+      blockId: "live-tool",
+      timestamp: 6,
+      toolName: "Read",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "live-tool",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  // The other half of the seam: an update naming a card that genuinely is not
+  // here must still be dropped rather than synthesized under whatever turn is
+  // running. `subagent.progress` and `subagent.completed` both BUILD a card
+  // when none exists (see the accumulator), which is exactly what makes the
+  // fall-through dangerous for them and harmless for `started`.
+  it.each([
+    [
+      "progress",
+      {
+        type: "subagent.progress",
+        blockId: "evicted-subagent",
+        timestamp: 5,
+        update: "still working",
+      } satisfies RuntimeEvent,
+    ],
+    [
+      "completed",
+      {
+        type: "subagent.completed",
+        blockId: "evicted-subagent",
+        timestamp: 5,
+        outcome: "completed",
+        result: "done",
+      } satisfies RuntimeEvent,
+    ],
+  ])(
+    "still drops an ownerless subagent %s rather than opening a card for it",
+    (_label, event) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      emitTextDelta(callbacks, "Active turn", 4);
+
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
 
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();

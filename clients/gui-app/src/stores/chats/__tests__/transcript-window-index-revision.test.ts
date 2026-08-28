@@ -617,6 +617,80 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
     expect(result).toBe(window);
   });
 
+  /**
+   * The two no-ops above both carry `updated`-only changes, so `rowCount` never
+   * moves and the append-count consistency check passes trivially on its way to
+   * the revision guard. A duplicate carrying `appended` entries does not: this
+   * client already applied them, so its `rowCount` ALREADY includes them and
+   * the frame's own count matches it exactly - which reads to a count check as
+   * "rows appeared that this frame does not account for", the signature of a
+   * LOST frame.
+   *
+   * So the guards have to run in the order their questions nest. "Is this frame
+   * news at all" is answerable from the revision alone and settles the frame;
+   * "are these changes internally consistent with the count" is only meaningful
+   * about a frame that IS news. Asking the second one first turns the most
+   * harmless thing a stream can do - deliver something twice - into a blanked
+   * transcript and a full refetch.
+   */
+  const appendedFrame = (
+    indexRevision: number,
+    rowCount: number,
+    fromOrdinal: number,
+    count: number,
+  ): Parameters<typeof applyIndexChange>[1] => ({
+    epoch: 4,
+    rowCount,
+    indexRevision,
+    changes: [
+      { type: "appended", entries: skeletonEntries(fromOrdinal, count) },
+    ],
+  });
+
+  it.each([
+    ["an immediate re-delivery of the frame just applied", 0],
+    ["a straggler that arrives after a NEWER append landed", 1],
+  ])("is a no-op for %s", (_label, newerFrames) => {
+    const applied = applyIndexChange(
+      windowAtRevision(5),
+      appendedFrame(6, 12, 10, 2),
+    );
+    expect(applied.invalidated).toBe(false);
+    expect(applied.rowCount).toBe(12);
+
+    let held = applied;
+    for (let index = 0; index < newerFrames; index += 1) {
+      held = applyIndexChange(
+        held,
+        appendedFrame(7 + index, 13 + index, 12 + index, 1),
+      );
+      expect(held.invalidated).toBe(false);
+    }
+
+    // The same frame again. Referential identity, as for the `updated`
+    // duplicates above: it is dropped whole rather than read for a count.
+    expect(applyIndexChange(held, appendedFrame(6, 12, 10, 2))).toBe(held);
+  });
+
+  /**
+   * The other half, so the reordering above cannot be mistaken for "the count
+   * check is gone". A frame that IS the immediate successor still has its
+   * appended entries reconciled against `rowCount`, and a mismatch there is
+   * still the lost-frame signal it always was.
+   */
+  it("still voids when a SUCCESSOR frame's rowCount outruns its appended rows", () => {
+    const window = windowAtRevision(5);
+    expect(window.spans.length).toBeGreaterThan(0);
+
+    // Revision 6 is the immediate successor, so the revision guards pass; the
+    // count does not - `rowCount` grew by three and only one entry arrived.
+    const result = applyIndexChange(window, appendedFrame(6, 13, 10, 1));
+
+    expect(result.invalidated).toBe(true);
+    expect(result.spans).toEqual([]);
+    expect(result.skeleton).toEqual([]);
+  });
+
   it("treats a non-consecutive revision as a loss and voids the coordinate", () => {
     const window = windowAtRevision(5);
     expect(window.spans.length).toBeGreaterThan(0);
