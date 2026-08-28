@@ -63,6 +63,10 @@ function modelWithPersistentMessageId(
   return { ...model(id), persistentMessageId };
 }
 
+function modelWithoutPersistentMessageId(id: string): ChatMessageModel {
+  return { ...model(id), persistentMessageId: null };
+}
+
 function skeletonEntry(rowId: string): RowSkeletonEntry {
   return {
     rowId,
@@ -407,6 +411,37 @@ describe("transcriptListRows", () => {
       kind: "placeholder",
       ordinal: 4_999,
     });
+  });
+
+  it("does not append a span-backed synthetic row after void placeholders", () => {
+    const syntheticId = "forked-chat-link:event-1";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [span(0, [syntheticId])],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [modelWithoutPersistentMessageId(syntheticId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
+  it("keeps a genuinely pending null-record row after void placeholders", () => {
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [modelWithoutPersistentMessageId("pending-user")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
   });
 
   it("drops a span row that claims an ordinal past rowCount", () => {

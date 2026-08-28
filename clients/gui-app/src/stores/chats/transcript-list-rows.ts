@@ -294,11 +294,16 @@ export function transcriptListRows(input: {
     // identity-free placeholders until the replacement index lands; appending
     // them too would draw the same history twice on skeleton-loss paths.
     const liveRowIds = liveRecordRowIds(window);
+    const spanRowIds = new Set<string>();
+    for (const span of window.spans) {
+      for (const rowId of span.rowIds) spanRowIds.add(rowId);
+    }
     const unplacedRendered = rendered.filter(
       (model) =>
-        model.persistentMessageId === null ||
-        liveRowIds.has(model.id) ||
-        liveRowIds.has(model.persistentMessageId),
+        !spanRowIds.has(model.id) &&
+        (model.persistentMessageId === null ||
+          liveRowIds.has(model.id) ||
+          liveRowIds.has(model.persistentMessageId)),
     );
     return [
       ...Array.from({ length: window.rowCount }, (_unused, ordinal) => ({
