@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The cross-workspace provenance gates walk and parse four workspace trees
+// per test; their cost scales with repository size, not with the code under
+// test, so the 5s default timeout is the wrong ceiling for them.
+vi.setConfig({ testTimeout: 30_000 });
 
 const SHARED_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -81,6 +86,17 @@ const CONDITIONAL_VERIFIER_PATTERN =
 const UNREACHABLE_VERIFIER_PATTERN =
   /if\s*\(\s*false\s*\)\s*\{[\s\S]*?verify(?:MutationCapability|UpdateMutationCapability)?\s*\([\s\S]*?\}[\s\S]*?(?:applyHost|commitHostInstallSource|controller\.|launchctl)/;
 
+// `lib/` is deliberately absent: it is gitignored EXCEPT
+// `clients/gui-app/src/lib/`, which is tracked source this gate must scan.
+const PRUNED_DIRECTORY_NAMES = new Set([
+  "node_modules",
+  "out",
+  "dist",
+  "dist-sea",
+  "dist-npm",
+  "build",
+]);
+
 async function walkSourceFiles(
   root: string,
   extensions: ReadonlySet<string>,
@@ -95,9 +111,13 @@ async function walkSourceFiles(
   const nested = await Promise.all(
     entries.map(async (entry) => {
       // Architecture gates scan repository production source, never installed
-      // dependencies. Prune before stat/recursion so a dependency symlink
-      // whose directory name ends in `.js` cannot be mistaken for a file.
-      if (entry.name === "node_modules") return [];
+      // dependencies or build outputs. Prune before stat/recursion so a
+      // dependency symlink whose directory name ends in `.js` cannot be
+      // mistaken for a file. Build-output names are gitignored repo-wide
+      // (`**/dist/` etc. — no tracked source lives under them), so scanning
+      // them would make the verdict depend on whether a local build has run;
+      // CI never sees them, and a local run must match the gate CI enforces.
+      if (PRUNED_DIRECTORY_NAMES.has(entry.name)) return [];
       const path = join(root, entry.name);
       // Follow symlinks deliberately: a repo-committed symlinked source file
       // or directory remains in coverage. Broken links and special files are
@@ -2693,6 +2713,16 @@ describe("production source enumeration", () => {
       // recurses into its TypeScript child.
       await symlink(target, join(root, "linked-source.js"), "dir");
 
+      // Build outputs are pruned like dependencies: a locally-built
+      // `dist/main/index.js` carrying a flagged identifier must not flip a
+      // gate that is green on CI (where no build output exists).
+      await mkdir(join(root, "dist", "main"), { recursive: true });
+      await writeFile(
+        join(root, "dist", "main", "index.ts"),
+        "export const built = true;\n",
+        "utf8",
+      );
+
       for (const files of [
         await sourceFiles(root),
         await moduleScanSourceFiles(root),
@@ -2705,6 +2735,9 @@ describe("production source enumeration", () => {
         expect(
           relativeFiles.some((path) => path.startsWith("node_modules/")),
         ).toBe(false);
+        expect(relativeFiles.some((path) => path.startsWith("dist/"))).toBe(
+          false,
+        );
       }
     } finally {
       await rm(root, { recursive: true, force: true });

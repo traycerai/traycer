@@ -77,6 +77,19 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
+// Dependencies and gitignored build outputs (`**/dist/` etc. — no tracked
+// source lives under these names) are pruned: scanning them would make the
+// gate's verdict depend on whether a local build has run, and CI never sees
+// them.
+const PRUNED_DIRECTORY_NAMES = new Set([
+  "node_modules",
+  "out",
+  "dist",
+  "dist-sea",
+  "dist-npm",
+  "build",
+]);
+
 async function walkSourceFiles(
   root: string,
   visited: Set<string>,
@@ -88,7 +101,7 @@ async function walkSourceFiles(
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   const nested = await Promise.all(
     entries.map(async (entry) => {
-      if (entry.name === "node_modules") return [];
+      if (PRUNED_DIRECTORY_NAMES.has(entry.name)) return [];
       const path = join(root, entry.name);
       const info = await stat(path).catch(() => null);
       if (info === null) return [];
