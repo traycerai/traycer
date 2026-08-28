@@ -560,6 +560,20 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     finalizeMarker.marker.serviceStartError !== null
   ) {
     const markerSwapCompleted = finalizeMarker.marker.status === "swapped";
+    // Empty paths are the explicit identity-less marker written when the
+    // detached helper discovers that no pending manifest remains. Every
+    // attempted swap carries both paths, even if its manifest is later
+    // cleared or replaced, so preserve that failed-swap history instead of
+    // describing all uncovered markers as empty finalization.
+    const markerAttemptedSwap =
+      finalizeMarker.marker.livePath !== "" ||
+      finalizeMarker.marker.stagedBinaryPath !== "";
+    const markerOutcomeMessage = markerSwapCompleted
+      ? "The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. "
+      : markerAttemptedSwap
+        ? `The CLI swap from ${finalizeMarker.marker.stagedBinaryPath} to ${finalizeMarker.marker.livePath} failed: ` +
+          `${finalizeMarker.marker.errorMessage ?? "no error message recorded"}. `
+        : "No pending CLI upgrade remained for the helper to apply. ";
     // THE MARKER IS HISTORY, NOT A LIVE READING. It records what happened at
     // `attemptedAt` and then persists until some later `host restart`
     // reconciles it - so on a machine whose supervisor already recovered the
@@ -615,13 +629,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           : "CLI finalization ended without restarting the host service",
       message: hostRunningNow
         ? `The finalize helper ran at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
-          `${finalizeMarker.marker.serviceStartError}. The host is running now, so this is a record of a past outage rather than a live fault - ` +
+          `${finalizeMarker.marker.serviceStartError}. ${markerOutcomeMessage}` +
+          "The host is running now, so this is a record of a past outage rather than a live fault - " +
           "quote it if you are investigating why the host was briefly unavailable around that time. The next 'traycer host restart' clears the record."
         : `The finalize helper ran at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
           `${finalizeMarker.marker.serviceStartError}. ` +
-          (markerSwapCompleted
-            ? "The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. "
-            : "No pending CLI upgrade remained for the helper to apply. ") +
+          markerOutcomeMessage +
           (startAttemptedSince
             ? "The host has been started at least once since then, so the outage you are looking at now may have a different cause - check the recent activity below. "
             : "") +
@@ -634,6 +647,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         serviceStartError: finalizeMarker.marker.serviceStartError,
         livePath: finalizeMarker.marker.livePath,
         stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
+        errorMessage: finalizeMarker.marker.errorMessage,
         // Directly observed, and named for exactly what it is. Kept apart from
         // the history flag below so nothing downstream can read one as the
         // other, which is how the contradiction above happened.
@@ -1056,7 +1070,10 @@ function postFinalizeMarkerIssue(
         `The CLI is still ${pending.currentVersion} and the upgrade remains ` +
         "pending. 'traycer host restart' retries the whole flow; if it keeps " +
         "failing, the live binary's directory is likely not writable by this " +
-        "user.",
+        "user." +
+        (marker.serviceStartError === null
+          ? ""
+          : ` The helper also could not restart the host service: ${marker.serviceStartError}`),
       fixAction: "host-restart",
       terminalCommand: `traycer host restart`,
       details: {
@@ -1067,6 +1084,7 @@ function postFinalizeMarkerIssue(
         markerStatus: marker.status,
         attemptedAt: marker.attemptedAt,
         errorMessage: marker.errorMessage,
+        serviceStartError: marker.serviceStartError,
       },
     };
   }
