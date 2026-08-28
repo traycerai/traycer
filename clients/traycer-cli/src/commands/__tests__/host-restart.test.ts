@@ -271,4 +271,82 @@ describe("buildHostRestartCommand", () => {
 
     expect(mocks.stopForRestartForceValues).toEqual([false]);
   });
+
+  // Codex P2 (round 5): `reconcilePostFinalizeMarker` used to drop the
+  // marker's `serviceStartError` on the floor while consuming the marker
+  // - the one durable record of why the host was left stopped rather
+  // than merely un-upgraded. `describeMarkerReconcile` is where that
+  // value (if any) is supposed to surface in `host restart`'s human
+  // output, so these two tests pin the human-output half of the fix
+  // (the reconcile-outcome half is covered by
+  // `upgrade/__tests__/finalize-helper.test.ts`).
+  function writePriorSwapFailedMarker(opts: {
+    readonly serviceStartError: string | null;
+  }): { readonly liveBinaryPath: string; readonly stagedBinaryPath: string } {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.0");
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: "1.4.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: liveBinaryPath,
+          source: "manual",
+          pendingUpgrade: {
+            version: "1.5.0",
+            stagedBinaryPath,
+            stagedAt: "2026-05-10T00:00:00Z",
+            reason: "binary-locked",
+          },
+        },
+        null,
+        2,
+      ),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    writeFileSync(
+      join(cliDir, "post-finalize.json"),
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: opts.serviceStartError,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    return { liveBinaryPath, stagedBinaryPath };
+  }
+
+  it("surfaces a prior helper's service-start failure in the human output when reconciling a swap-failed marker that carries one", async () => {
+    writePriorSwapFailedMarker({
+      serviceStartError: "schtasks /Run failed: service already stopped",
+    });
+
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({ ifIdle: false, force: false });
+    const result = await command(fakeCtx());
+
+    expect(result.human).toContain(
+      "could not restart the service (schtasks /Run failed: service already stopped)",
+    );
+  });
+
+  it("does not mention a service-start failure when reconciling a swap-failed marker whose serviceStartError is null", async () => {
+    writePriorSwapFailedMarker({ serviceStartError: null });
+
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({ ifIdle: false, force: false });
+    const result = await command(fakeCtx());
+
+    expect(result.human).toContain("prior helper swap failed");
+    expect(result.human).not.toContain("could not restart the service");
+  });
 });

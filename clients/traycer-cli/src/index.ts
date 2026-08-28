@@ -1798,25 +1798,39 @@ function registerServiceCommands(host: Command): void {
 }
 
 function registerCliCommands(program: Command): void {
-  const cli = program
-    .command("cli")
-    .description(
-      "Update the 'traycer' command itself, or point it at a binary you installed by hand",
-    );
+  const cli = program.command("cli").description(
+    // CLI-005 (#1505) rewrote this parent in user language; CLI-016 needs
+    // the ownership boundary stated here too, since `cli upgrade` refuses
+    // package-manager installs outright. Keep both: their sentence leads,
+    // in their register, and the refusal follows it.
+    "Update the 'traycer' command itself, or point it at a binary you installed by hand. " +
+      "Installs from Homebrew, npm, winget, Scoop, apt or rpm are updated with that package manager instead.",
+  );
 
   withRunner(
     cli
       .command("upgrade")
       .description(
-        "Self-upgrade the CLI binary; stages a pending swap when the live binary is locked",
+        "Download and install the CLI version Traycer's release feed currently publishes, replacing the tracked binary " +
+          "recorded in the CLI install manifest (not necessarily the file you invoked). " +
+          "Only Desktop-installed and manual installs can self-upgrade: Homebrew, npm, winget, Scoop, apt and rpm installs are " +
+          "refused with their manager's upgrade command, so package ownership stays intact. " +
+          "Requires a recorded install - if none exists (for example after moving the binary by hand), run " +
+          "'traycer cli re-anchor --binary-path <path> --installed-version <version>' first. " +
+          // Says "the running host is using it" rather than naming the
+          // supervisor: #1505's CLI-005 pass bans implementation vocabulary
+          // from rendered help, and its full-help test enforces that.
+          "When the file is in use - usually because the host is running from it - the new binary is staged and " +
+          "finalized on a later 'traycer host restart'; a restart retries the swap rather than guaranteeing it, and any staged " +
+          "upgrade that is still outstanding is reported by 'traycer host doctor'.",
       )
       .option(
         "--dry-run",
-        "Resolve the target version without staging or replacing",
+        "Report the version and download URL that would be installed, without downloading the binary, staging or replacing anything (the release feed itself is still fetched)",
       )
       .option(
         "--target <version>",
-        "Override the target version (defaults to latest)",
+        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets and cannot install older versions, so this asserts which build you expect rather than selecting one",
       ),
     (opts) =>
       buildCliUpgradeCommand({
@@ -1871,7 +1885,11 @@ function registerCliCommands(program: Command): void {
     cli
       .command("re-anchor")
       .description(
-        "Point Traycer's upgrade tracking at a CLI binary you installed or moved by hand, so future 'cli upgrade' runs update the right file. Use after manually relocating or replacing the binary.",
+        "Point Traycer's upgrade tracking at a CLI binary you installed or moved by hand, so future 'cli upgrade' runs update the right file. " +
+          "Use after manually relocating or replacing the binary, or when 'cli upgrade' reports no recorded install. " +
+          "Records the install as manual and clears any pending upgrade; it does not move the binary, and the version you pass is " +
+          "recorded as given - it is never checked against the binary. Refreshing Traycer's copy of the binary is best-effort: a " +
+          "failure there is reported but does not fail the command.",
       )
       .requiredOption(
         "--binary-path <path>",
@@ -1881,7 +1899,7 @@ function registerCliCommands(program: Command): void {
       // `--version` collision (see `cli mark-source`).
       .requiredOption(
         "--installed-version <version>",
-        "Version reported by the binary",
+        "Version this binary reports; recorded as given and never verified by running it",
       ),
     (opts) =>
       buildCliReAnchorCommand({

@@ -3,6 +3,7 @@ import {
   finalizePendingCliUpgrade,
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
+import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -14,6 +15,7 @@ import {
   type ServiceLabel,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
+import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
   defaultSpawnImpl,
   defaultWriteImpl,
@@ -210,7 +212,46 @@ export async function restartWithPendingCliUpgradeFinalize(
   }
 
   if (!helperOwnsServiceStart) {
-    await args.controller.relaunchAfterRestart(args.label, stop);
+    // The in-process path can replace the binary successfully and then fail
+    // to update the manifest. Preserve the same `swapped` evidence as the
+    // detached helper so the next restart can reconcile the stale pending
+    // record instead of misclassifying the moved staged file as missing.
+    if (finalize.status === "manifest-update-failed") {
+      let relaunchError: unknown = null;
+      try {
+        await args.controller.relaunchAfterRestart(args.label, stop);
+      } catch (err) {
+        relaunchError = err;
+      }
+      let markerWriteError: unknown = null;
+      try {
+        await writePostFinalizeMarkerFile(
+          cliPostFinalizeMarkerPath(args.environment),
+          {
+            status: "swapped",
+            attemptedAt: new Date().toISOString(),
+            livePath: finalize.livePath,
+            stagedBinaryPath: finalize.stagedBinaryPath,
+            errorMessage: finalize.errorMessage,
+            serviceStartError:
+              relaunchError === null
+                ? null
+                : relaunchError instanceof Error
+                  ? relaunchError.message
+                  : String(relaunchError),
+          },
+        );
+      } catch (err) {
+        markerWriteError = err;
+      }
+      // Preserve lifecycle failure precedence if both operations fail: the
+      // host is still down, which is more urgent than lost reconciliation
+      // evidence. A marker-only failure is still returned to the caller.
+      if (relaunchError !== null) throw relaunchError;
+      if (markerWriteError !== null) throw markerWriteError;
+    } else {
+      await args.controller.relaunchAfterRestart(args.label, stop);
+    }
   }
 
   return {
@@ -242,7 +283,14 @@ function humanForRestart(
     case "still-locked":
       return `${reconcilePrefix}${base}; cli upgrade ${outcome.stagedBinaryPath} still locked (${outcome.errorMessage}) - pending state retained`;
     case "staged-binary-missing":
-      return `${reconcilePrefix}${base}; cli upgrade staged binary ${outcome.stagedBinaryPath} missing - re-run 'traycer cli upgrade'`;
+      return `${reconcilePrefix}${base}; cli upgrade staged binary for ${outcome.stagedVersion} missing at ${outcome.stagedBinaryPath} - re-run 'traycer cli upgrade'`;
+    case "publish-failed":
+      // The host was relaunched regardless - the restart the user asked
+      // for is not forfeited because a staged CLI swap could not be
+      // published. The live binary is untouched and pending state stands.
+      return `${reconcilePrefix}${base}; cli upgrade could not publish ${outcome.stagedBinaryPath} over ${outcome.livePath} (${outcome.errorMessage}) - live binary unchanged, pending state retained`;
+    case "manifest-update-failed":
+      return `${reconcilePrefix}${base}; cli ${outcome.version} was installed, but the CLI manifest update failed (${outcome.errorMessage}) - service relaunched and pending state retained for reconciliation`;
     case "no-pending":
     case "no-manifest":
       return `${reconcilePrefix}${base}`;
@@ -255,7 +303,12 @@ function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
     case "applied-swapped":
       return `prior helper finalised cli upgrade ${reconcile.previousVersion} → ${reconcile.version}; `;
     case "applied-swap-failed":
-      return `prior helper swap failed (${reconcile.errorMessage}); `;
+      // Surface the service-start failure when there was one: the marker
+      // is gone after reconciliation, so this line is the last chance to
+      // say why the host was left down rather than merely un-upgraded.
+      return reconcile.serviceStartError !== null
+        ? `prior helper swap failed (${reconcile.errorMessage}) and could not restart the service (${reconcile.serviceStartError}); `
+        : `prior helper swap failed (${reconcile.errorMessage}); `;
     case "applied-parent-still-alive":
       return "prior helper timed out waiting for CLI exit; ";
     case "marker-invalid":

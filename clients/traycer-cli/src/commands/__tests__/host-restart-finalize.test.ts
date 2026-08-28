@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import type { PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,9 +26,25 @@ import type { ServiceLabel } from "../../service/label";
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
 const osHome = vi.hoisted(() => ({ current: "" }));
+const fsMocks = vi.hoisted(() => ({
+  failManifestRenameTarget: null as string | null,
+}));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (src: PathLike, dest: PathLike): Promise<void> => {
+      if (dest === fsMocks.failManifestRenameTarget) {
+        fsMocks.failManifestRenameTarget = null;
+        throw new Error("manifest rename failed: read-only filesystem");
+      }
+      return actual.rename(src, dest);
+    },
+  };
 });
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -43,6 +60,7 @@ beforeEach(() => {
   // The `store/paths` module captures `homedir()` once at module
   // load - drop the module cache so each test sees its own tmp HOME.
   vi.resetModules();
+  fsMocks.failManifestRenameTarget = null;
 });
 
 afterEach(() => {
@@ -240,6 +258,49 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(reread.version).toBe("1.5.0");
     expect(reread.pendingUpgrade).toBeNull();
+  });
+
+  it("records a swapped marker when the binary moves but the manifest update fails", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.0");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+    });
+    fsMocks.failManifestRenameTarget = manifestPath;
+
+    const calls: StubCalls = { calls: [], relaunchStop: null };
+    const controller = makeStubController(calls);
+    const { restartWithPendingCliUpgradeFinalize } =
+      await import("../host-restart");
+    const result = await restartWithPendingCliUpgradeFinalize(
+      defaultArgs(controller) as never,
+    );
+
+    expect(result.finalize.status).toBe("manifest-update-failed");
+    expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
+    expect(readFileSync(liveBinaryPath, "utf8")).toBe("staged-bytes-1.5.0");
+    expect(existsSync(stagedBinaryPath)).toBe(false);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.version).toBe("1.4.0");
+    expect(manifest.pendingUpgrade.version).toBe("1.5.0");
+    const marker = JSON.parse(
+      readFileSync(
+        join(workHome, ".traycer", "cli", "post-finalize.json"),
+        "utf8",
+      ),
+    );
+    expect(marker).toMatchObject({
+      status: "swapped",
+      livePath: liveBinaryPath,
+      stagedBinaryPath,
+      serviceStartError: null,
+    });
+    expect(marker.errorMessage).toContain("manifest rename failed");
   });
 
   it("returns no-pending and still cycles the service when no upgrade is staged", async () => {
