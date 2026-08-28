@@ -26,7 +26,8 @@ import { withCliLock } from "../store/cli-lock";
 // Registration is a prerequisite, not something this command creates: a
 // machine with no service registered is told to run `host service install`
 // (which registers AND starts) rather than having one silently registered by
-// a command that only promised to start it.
+// a command that only promised to start it. That guidance is attached to a
+// FAILED start rather than gating the attempt - see the status read below.
 //
 // `cli-lock` for the same reason `host stop` takes it: a start must not land
 // inside another actor's install/apply critical section and race the process
@@ -48,17 +49,15 @@ export const serviceStartCommand: CommandFn = async (
     },
     async () => {
       // Read INSIDE the lock: a registration observed before acquiring it can
-      // be gone by the time the start runs, and the refusal below is the one
-      // piece of guidance a user acts on.
+      // be gone by the time the start runs.
+      //
+      // ADVISORY, not a gate. On Windows `statusService` maps every
+      // `schtasks /Query` failure - a timeout, a transient access denial - to
+      // `not-installed`, so refusing on it meant a genuinely registered
+      // service could not be started whenever the preliminary query happened
+      // to fail. The platform start is the authoritative attempt; this read
+      // only decides what to SAY when that attempt fails.
       const before = await controller.status(label);
-      if (before.state === "not-installed") {
-        throw cliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message: `host service start: no OS service is registered for environment=${ctx.runtime.environment}; run 'traycer host service install' to register and start it, or 'traycer host ensure' to install the host as well`,
-          details: { environment: ctx.runtime.environment, label: label.id },
-          exitCode: 1,
-        });
-      }
       // Already running: report it and touch NOTHING. The platform start is
       // skipped deliberately rather than relied on to no-op, because on
       // Windows it does not. The Scheduled Task is registered
@@ -97,7 +96,23 @@ export const serviceStartCommand: CommandFn = async (
       // redirects the start to the agent label that launchd can actually
       // start. Refusing here would leave the one platform where Desktop is
       // the common setup without a background start.
-      await controller.start(label);
+      try {
+        await controller.start(label);
+      } catch (cause) {
+        // The start failed AND the earlier read said nothing was registered:
+        // that combination is what "you have no service" actually looks like,
+        // so attach the actionable guidance here rather than refusing up
+        // front on a read that cannot be trusted to mean it.
+        if (before.state === "not-installed") {
+          throw cliError({
+            code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+            message: `host service start: could not start the service, and no OS service appears to be registered for environment=${ctx.runtime.environment}; run 'traycer host service install' to register and start it, or 'traycer host ensure' to install the host as well (start failed: ${cause instanceof Error ? cause.message : String(cause)})`,
+            details: { environment: ctx.runtime.environment, label: label.id },
+            exitCode: 1,
+          });
+        }
+        throw cause;
+      }
       const after = await controller.status(label);
       ctx.runtime.logger.info("Service start command completed", {
         environment: ctx.runtime.environment,

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
+  startFails: false,
   statusResponses: [] as Array<{
     state: "running" | "stopped" | "not-installed" | "externally-managed";
     version: string | null;
@@ -35,6 +36,7 @@ vi.mock("../../service", async (importOriginal) => {
       },
       start: async () => {
         mocks.controllerCalls.push("start");
+        if (mocks.startFails) throw new Error("schtasks /Run failed");
       },
     }),
   };
@@ -85,34 +87,58 @@ function fakeCtx(): CommandContext {
   };
 }
 
+const NOT_INSTALLED = {
+  state: "not-installed" as const,
+  version: null,
+  listenUrl: null,
+  pid: null,
+};
+
 describe("serviceStartCommand", () => {
   beforeEach(() => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
     mocks.statusResponses = [];
+    mocks.startFails = false;
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("refuses with E_SERVICE_CONTROL_FAILED and names 'traycer host service install' when nothing is registered, without calling controller.start", async () => {
+  // The `not-installed` read is ADVISORY, not a gate. On Windows
+  // `statusService` maps every `schtasks /Query` failure - timeout, transient
+  // access denial - to `not-installed`, so refusing on it meant a genuinely
+  // registered service could not be started whenever that query happened to
+  // fail. The platform start is the authoritative attempt; the read only
+  // decides what to say when it fails.
+  it("still attempts the start when the registration probe says nothing is installed", async () => {
+    mocks.startFails = false;
     mocks.statusResponses = [
-      { state: "not-installed", version: null, listenUrl: null, pid: null },
+      NOT_INSTALLED,
+      { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
     ];
 
-    let thrown: unknown = null;
+    const result = await serviceStartCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toContain("start");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("names 'traycer host service install' when the start fails and nothing is registered", async () => {
+    mocks.startFails = true;
+    mocks.statusResponses = [NOT_INSTALLED];
+
+    let err: unknown;
     try {
       await serviceStartCommand(fakeCtx());
-    } catch (err) {
-      thrown = err;
+    } catch (caught) {
+      err = caught;
     }
 
-    expect(thrown).toBeInstanceOf(CliError);
-    const err = thrown as CliError;
-    expect(err.code).toBe(CLI_ERROR_CODES.SERVICE_CONTROL_FAILED);
-    expect(err.message).toContain("traycer host service install");
-    expect(mocks.controllerCalls).not.toContain("start");
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe(CLI_ERROR_CODES.SERVICE_CONTROL_FAILED);
+    expect((err as CliError).message).toContain("traycer host service install");
   });
 
   it("starts and reports alreadyRunning: false plus the post-start pid when the service was stopped", async () => {

@@ -1282,6 +1282,10 @@ function registerHostCommands(program: Command): void {
           "",
           "What is left behind:",
           "  default  Installed + staged host bytes and the install record are removed.",
+          "           On Windows a RUNNING host locks its own install directory, so the",
+          "           removal of the bytes can fail there while the record is still deleted -",
+          "           check `removedInstallDir` in the result, and stop the host first if you",
+          "           need the directory gone.",
           "           The OS service stays REGISTERED and is not stopped, so a running host",
           "           serves until it exits and the surviving registration then has no valid",
           "           install to launch. Recover with 'traycer host install', or clean up with",
@@ -1542,7 +1546,7 @@ function registerServiceCommands(host: Command): void {
     service
       .command("start")
       .description(
-        "Start the registered OS service in the background and return (the host keeps running after this command exits). Requires an existing registration - use 'traycer host service install' if there is none.",
+        "Start the registered OS service in the background and return (the host keeps running after this command exits). Needs an existing registration; if the start fails and none is found, it points you at 'traycer host service install'.",
       ),
     () => serviceStartCommand,
   );
