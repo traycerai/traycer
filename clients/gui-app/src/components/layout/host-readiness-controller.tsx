@@ -732,8 +732,16 @@ function fallbackContent(
     case "mobile-no-host":
       return {
         title: null,
+        // SHELL-NEUTRAL, and the kind's name is the reason it has to be: this
+        // arm is reached by every shell with no local host (`hasLocalHost:
+        // false` plus a concluded empty directory), which is the installed
+        // phone app AND a browser tab. The remedy therefore names a MACHINE to
+        // install Traycer on, never "this device" - a phone and a tab are both
+        // reading this on hardware that cannot run a host, so an instruction
+        // pointing at the thing in the reader's hand is an instruction they
+        // cannot follow.
         message:
-          "No host connected. Connect a host from this device to get started.",
+          "No host connected. Install Traycer on a computer to add a host to this account.",
         body: null,
         footer: null,
         actions: [],
