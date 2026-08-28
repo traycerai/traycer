@@ -404,6 +404,11 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const finalizeMarker = await readPostFinalizeMarker({
     environment: opts.environment,
   });
+  // Read here rather than at section 6 because the finalize marker's
+  // service-start report needs this history: "is the host up right now" cannot
+  // distinguish a start failure the host never recovered from, from one it
+  // recovered from before a later, unrelated stop.
+  const bootstrapMarkers = await readBootstrapMarkers(opts.environment, 20);
   // An UNREADABLE marker is a fault in its own right, and independent of
   // whether the manifest currently has a pending upgrade. `readPostFinalize-
   // Marker` distinguishes `invalid` from `absent` precisely so it can be
@@ -529,8 +534,32 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     // actionable warning, and a host that recovered gets an info-level note
     // explaining the outage it just had. Info keeps `host doctor`'s exit code
     // (error/fatal only) unaffected for a machine that is now healthy.
+    //
+    // "Is the host up RIGHT NOW" is not sufficient on its own, because the
+    // marker outlives the failure it records and only `host restart` clears
+    // it. A host that failed to start here, was brought up by a later
+    // `traycer host start`, and then stopped again for an unrelated reason
+    // would fail a liveness-only test - and this card would blame a fresh
+    // outage on an upgrade the machine demonstrably recovered from.
+    //
+    // The bootstrap log settles it: a `starting` marker written AFTER
+    // `attemptedAt` is positive evidence the host came up since. Recovery is
+    // therefore "running now, OR observed starting since", and only a failure
+    // with neither is still live.
+    const markerAt = Date.parse(finalizeMarker.marker.attemptedAt);
+    const startedSinceMarker = bootstrapMarkers.some((entry) => {
+      if (entry.phase !== "starting") return false;
+      const entryAt = Date.parse(entry.timestamp);
+      return (
+        Number.isFinite(entryAt) &&
+        Number.isFinite(markerAt) &&
+        entryAt > markerAt
+      );
+    });
     const hostRecovered =
-      hostProcessAlive || serviceStatus?.state === "running";
+      hostProcessAlive ||
+      serviceStatus?.state === "running" ||
+      startedSinceMarker;
     issues.push({
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
       severity: hostRecovered ? "info" : "warning",
@@ -718,7 +747,9 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // ---- 6. Recent bootstrap markers ----
-  const recentMarkers = await readBootstrapMarkers(opts.environment, 20);
+  // Already read above (the finalize marker's service-start report needs the
+  // same history to tell a live failure from one the host recovered from).
+  const recentMarkers = bootstrapMarkers;
   const recentCrash = lastCrashMarker(recentMarkers);
   if (recentCrash !== null) {
     const fields = recentCrash.entry.fields;

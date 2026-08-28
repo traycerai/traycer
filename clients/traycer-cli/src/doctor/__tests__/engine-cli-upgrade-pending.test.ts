@@ -129,6 +129,42 @@ function stageDoctorMocksWithRunningService() {
   }));
 }
 
+// `stageDoctorMocks` with a bootstrap history: the host is DOWN now, but the
+// log shows it started after a given moment. Used to prove the finalize
+// marker's service-start report keys off recovery history and not only current
+// liveness - the two differ once the host comes up and later stops again.
+function stageDoctorMocksWithStartAt(startedAt: string) {
+  vi.doMock("../../manifest/host-install", () => ({
+    readHostInstallRecord: () => null,
+  }));
+  vi.doMock("../../host/bootstrap-log", () => ({
+    readBootstrapMarkers: async () => [
+      { timestamp: startedAt, phase: "starting", fields: {} },
+    ],
+  }));
+  vi.doMock("../../host/pid-metadata", () => ({
+    readHostPidMetadata: async () => null,
+  }));
+  vi.doMock("../../service", () => ({
+    createServiceController: () => ({
+      status: async () => ({
+        state: "stopped",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      start: async () => undefined,
+      stop: async () => undefined,
+      restart: async () => undefined,
+    }),
+    serviceLabelFor: (environment: "production" | "dev") => ({
+      id: `ai.traycer.host.${environment}`,
+    }),
+  }));
+}
+
 function writePendingManifest(opts: {
   readonly version: string;
   readonly stagedBinaryPath: string;
@@ -637,6 +673,65 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(issue?.details?.hostRunningNow).toBe(true);
     // The helper's error is still quoted - it explains the past outage.
     expect(issue?.message).toContain("Input/output error");
+  });
+
+  // Current liveness alone is not enough. The marker outlives the failure it
+  // records and only `host restart` clears it, so a host that failed to start
+  // here, was brought up later, and then stopped again for an unrelated reason
+  // would look like a live upgrade failure - blaming a fresh outage on an
+  // upgrade the machine demonstrably recovered from. A `starting` marker after
+  // `attemptedAt` is the evidence that settles it.
+  it("treats the service-start failure as history when the host started after it, even though it is down now", async () => {
+    // Host is DOWN now (service "stopped", no pid metadata) but the bootstrap
+    // log shows a start AFTER the marker was written.
+    stageDoctorMocksWithStartAt("2026-05-12T00:00:00Z");
+    const cliDir = join(workHome, ".traycer", "cli");
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: "1.5.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: liveBinaryPath,
+          source: "manual",
+          pendingUpgrade: null,
+        },
+        null,
+        2,
+      ),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    writeFileSync(
+      join(cliDir, "post-finalize.json"),
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: null,
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(issue).toBeDefined();
+    // Historical, despite the host being down right now - something else took
+    // it down, and this card must not claim the outage.
+    expect(issue?.severity).toBe("info");
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.details?.hostRunningNow).toBe(true);
   });
 
   // `invalid` (read the bytes, they were nonsense) and `unreadable` (could not
