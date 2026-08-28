@@ -546,6 +546,8 @@ export type ReconcileOutcome =
       readonly status: "stale-marker-discarded";
       readonly markerStagedBinaryPath: string;
       readonly pendingStagedBinaryPath: string;
+      readonly markerLivePath: string;
+      readonly manifestBinaryPath: string;
     };
 
 // Read any pending post-finalize marker the detached helper wrote and
@@ -641,12 +643,26 @@ export async function reconcilePostFinalizeMarker(opts: {
   // mismatched marker is DISCARDED rather than applied: it describes a
   // completed operation nobody is waiting on, and leaving it would re-pose the
   // same question to every future caller.
-  if (parsed.stagedBinaryPath !== pending.stagedBinaryPath) {
+  // BOTH paths are compared, not just the staged one. The staged filename
+  // carries the version, which defeats the stale-version case - but not the
+  // re-anchor one: `cli re-anchor` can repoint `manifest.binaryPath` at a
+  // different filename without deleting this marker, and if a SAME-version
+  // upgrade then becomes pending, the deterministic staged filename matches
+  // the stale marker while its `livePath` still names the old binary.
+  // Accepting it there would promote a version whose bytes never reached the
+  // re-anchored destination. The marker only describes this operation if it
+  // agrees about where the bytes came FROM and where they went TO.
+  if (
+    parsed.stagedBinaryPath !== pending.stagedBinaryPath ||
+    parsed.livePath !== manifest.binaryPath
+  ) {
     await safeUnlink(markerPath);
     return {
       status: "stale-marker-discarded",
       markerStagedBinaryPath: parsed.stagedBinaryPath,
       pendingStagedBinaryPath: pending.stagedBinaryPath,
+      markerLivePath: parsed.livePath,
+      manifestBinaryPath: manifest.binaryPath,
     };
   }
 

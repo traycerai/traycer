@@ -445,15 +445,19 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     // the manifest still says "pending", but the disk says otherwise, and
     // reporting the manifest alone would send the reader to re-stage an
     // upgrade that has already happened.
-    const settled = postFinalizeMarkerIssue(finalizeMarker, {
-      version: pendingUpgrade.pending.version,
-      stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
-      currentVersion: pendingUpgrade.currentVersion,
-      binaryPath: pendingUpgrade.binaryPath,
-    });
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
     });
+    const settled = postFinalizeMarkerIssue(
+      finalizeMarker,
+      {
+        version: pendingUpgrade.pending.version,
+        stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
+        currentVersion: pendingUpgrade.currentVersion,
+        binaryPath: pendingUpgrade.binaryPath,
+      },
+      stagedExists,
+    );
     if (settled !== null) {
       issues.push(settled);
     } else if (!stagedExists) {
@@ -743,6 +747,7 @@ interface PendingUpgradeFacts {
 function postFinalizeMarkerIssue(
   read: PostFinalizeMarkerRead,
   pending: PendingUpgradeFacts,
+  stagedExists: boolean,
 ): DoctorIssue | null {
   if (read.status !== "present") return null;
   const marker = read.marker;
@@ -764,7 +769,28 @@ function postFinalizeMarkerIssue(
   // stale-marker case. A mismatched marker is treated as not describing this
   // upgrade at all: the caller falls through to the ordinary pending report,
   // which carries the marker's status in `details` for anyone investigating.
-  if (marker.stagedBinaryPath !== pending.stagedBinaryPath) return null;
+  // Both paths, for the reason spelled out in `reconcilePostFinalizeMarker`:
+  // the staged filename carries the version and defeats a stale-VERSION
+  // marker, but `cli re-anchor` can repoint the live binary without deleting
+  // the marker, so a same-version retry would match on staged path alone.
+  if (
+    marker.stagedBinaryPath !== pending.stagedBinaryPath ||
+    marker.livePath !== pending.binaryPath
+  ) {
+    return null;
+  }
+  // A `swap-failed` marker whose staged bytes have since been deleted is NOT
+  // the story to tell. `host restart` - the fix this branch offers - would
+  // consume the marker, find nothing to finalize, and leave the upgrade
+  // pending exactly as it was. The caller's `!stagedExists` branch has the
+  // guidance that actually recovers it ("re-run 'traycer cli upgrade' to
+  // re-stage"), so defer to it.
+  //
+  // Deliberately not applied to `swapped`: there, the staged binary is
+  // MEANT to be gone, because the helper moved it onto the live path. Absence
+  // is the expected end state of a success, so treating it as a fault would
+  // report every completed swap as a missing-stage failure.
+  if (marker.status === "swap-failed" && !stagedExists) return null;
   if (marker.status === "swapped") {
     // The bytes are already swapped; only the manifest is behind. INFO, not
     // warning: nothing is broken and nothing is at risk, so this must not

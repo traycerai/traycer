@@ -265,7 +265,7 @@ function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
       // outcome where a marker existed, looked successful, and was
       // deliberately NOT applied. Someone reading a restart that did not
       // finalise the upgrade they expected needs to see why.
-      return `discarded a stale helper marker for ${reconcile.markerStagedBinaryPath} (pending upgrade stages ${reconcile.pendingStagedBinaryPath}); `;
+      return `discarded a stale helper marker (marker staged=${reconcile.markerStagedBinaryPath} live=${reconcile.markerLivePath}; pending stages=${reconcile.pendingStagedBinaryPath} live=${reconcile.manifestBinaryPath}); `;
     case "no-marker":
       return "";
   }

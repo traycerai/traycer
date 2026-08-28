@@ -301,6 +301,60 @@ describe.skipIf(process.platform === "win32")(
       expect(result.releaseDetail).toContain("7777");
     });
 
+    // The owner exiting between the ownership probe and the SIGTERM is a race
+    // no lock can close, because the process is foreign. Treating the
+    // resulting ESRCH as "still held" named a pid that no longer exists and
+    // told the operator to terminate it, while the port was already free.
+    it("released: the target exits before SIGTERM lands (ESRCH) but the port is free", async () => {
+      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+      killSpy.mockImplementation(
+        (_pid: number, signal: string | number | undefined) => {
+          // The pre-kill liveness probe (signal 0) still succeeds; only the
+          // SIGTERM races the exit.
+          if (signal === "SIGTERM") {
+            throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+          }
+          return true;
+        },
+      );
+
+      const result = await killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+
+      expect(result.release).toBe("released");
+      expect(result.killed).toBe(false);
+      expect(result.killError).not.toBeNull();
+      expect(result.holderPid).toBeNull();
+    });
+
+    it("still-held: SIGTERM fails with EPERM and the target keeps the port", async () => {
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = ownsPort(TARGET_PID);
+      killSpy.mockImplementation(
+        (_pid: number, signal: string | number | undefined) => {
+          if (signal === "SIGTERM") {
+            throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+          }
+          return true;
+        },
+      );
+
+      const pending = killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
+      const result = await pending;
+
+      expect(result.release).toBe("still-held");
+      expect(result.killError).toContain("EPERM");
+      expect(result.holderPid).toBe(TARGET_PID);
+    });
+
     it("still-held: target stays alive and keeps the port past the deadline", async () => {
       responseQueue = [ownsPort(TARGET_PID)];
       defaultResponse = ownsPort(TARGET_PID);

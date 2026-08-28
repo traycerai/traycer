@@ -157,27 +157,39 @@ export async function killConflictingPortOwner(
       exitCode: 1,
     });
   }
+  let killError: string | null = null;
   try {
     process.kill(opts.pid, "SIGTERM");
   } catch (err) {
-    // The signal never left this process (EPERM on a foreign-user process,
-    // ESRCH on one that exited between the checks above and here). Nothing
-    // was verified because nothing was attempted, so report the port as
-    // still held rather than running a poll whose answer we already know.
-    return {
-      killed: false,
-      killError: err instanceof Error ? err.message : String(err),
-      release: "still-held",
-      releaseDetail: "SIGTERM was not delivered",
-      holderPid: opts.pid,
-    };
+    killError = err instanceof Error ? err.message : String(err);
   }
+  // VERIFY EVEN WHEN THE SIGNAL FAILED, because "we could not signal it" is
+  // not the same question as "is the port free", and the two come apart in
+  // both directions.
+  //
+  // ESRCH is the case that matters: the verified owner exited on its own
+  // between the ownership probe above and this `kill`, a race no lock can
+  // close because the process is foreign. Reporting `still-held` on the
+  // strength of the failed signal - as an earlier revision did - named a pid
+  // that no longer exists and told the operator to terminate it, while the
+  // port may well have been free the whole time. It also blinded us to a
+  // replacement listener, which is the situation that actually needs saying.
+  //
+  // EPERM lands here too and is unaffected: a process we cannot signal is
+  // still alive and still holding the port, so verification independently
+  // reaches `still-held` and `killError` supplies the reason. And if the port
+  // IS free despite a failed signal, the repair's goal is met - the caller's
+  // `released` short-circuit reports success rather than manufacturing a
+  // failure out of a signal nobody needed.
   const verification = await verifyPortReleased(opts.pid, opts.port);
   return {
-    killed: true,
-    killError: null,
+    killed: killError === null,
+    killError,
     release: verification.release,
-    releaseDetail: verification.releaseDetail,
+    releaseDetail:
+      killError === null
+        ? verification.releaseDetail
+        : `SIGTERM was not delivered (${killError}); ${verification.releaseDetail}`,
     holderPid: verification.holderPid,
   };
 }

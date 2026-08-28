@@ -376,6 +376,54 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
+  // The staged filename carries the version, so it alone defeats a stale-
+  // VERSION marker - but not a re-anchor. `cli re-anchor` repoints
+  // `manifest.binaryPath` without deleting the marker, so a SAME-version retry
+  // produces the same deterministic staged filename and would match on staged
+  // path alone, promoting a version whose bytes never reached the re-anchored
+  // destination.
+  it("discards a same-version marker whose livePath predates a 'cli re-anchor'", async () => {
+    const reanchoredLivePath = join(workHome, "bin", "traycer-cli");
+    const oldLivePath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(reanchoredLivePath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath: reanchoredLivePath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        // Same staged path (same version), but the PRE-re-anchor destination.
+        livePath: oldLivePath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerLivePath).toBe(oldLivePath);
+      expect(outcome.manifestBinaryPath).toBe(reanchoredLivePath);
+    }
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it("on 'swap-failed' marker, preserves pendingUpgrade and returns the helper's error message", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");

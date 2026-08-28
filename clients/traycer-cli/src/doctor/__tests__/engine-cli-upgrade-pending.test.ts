@@ -439,6 +439,50 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(pending?.details?.finalizeMarker).toBe("swapped");
   });
 
+  // A matching `swap-failed` marker must not mask the missing-stage recovery.
+  // `host restart` - the fix the finalize-failed card offers - would consume
+  // the marker, find no bytes to finalize, and leave the upgrade pending
+  // exactly as it was. Only the re-stage guidance actually recovers this.
+  it("prefers the re-stage guidance over the finalize-failed card when the staged binary is gone", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0-missing");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      version: "1.5.0",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: false,
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "EBUSY",
+        serviceStartError: null,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_FINALIZE_FAILED"),
+    ).toBeUndefined();
+    const pending = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    expect(pending).toBeDefined();
+    expect(pending?.title).toContain("missing");
+    expect(pending?.terminalCommand).toMatch(/traycer cli upgrade/);
+  });
+
   // `readPostFinalizeMarker` separates `invalid` from `absent` precisely so the
   // fault can be reported. Consulting that only inside the pending-upgrade
   // branch would mean a corrupt marker on a manifest with nothing pending
