@@ -18,8 +18,10 @@ runtime through **PID metadata** written by the CLI-installed host at
 ## Do not stage host binaries or wrapper scripts here
 
 The Desktop release pipeline does **not** download a host archive into this
-directory; `traycer host install latest` (invoked by the Setup splash at first
+directory; `traycer host install` (invoked by the Setup splash at first
 launch) is the single source of truth for host install, update, and uninstall.
+It installs the latest registry version by default; a specific version is
+`traycer host install --release <version>`.
 
 If you need to side-load a local host archive (instead of the released one),
 install it through the CLI's `--from <path>` option:

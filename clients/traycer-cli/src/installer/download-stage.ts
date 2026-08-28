@@ -198,7 +198,7 @@ async function ensureHostInstalledPrecondition(
       if (installed === null) {
         throw cliError({
           code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-          message: `host download: no host installed for environment=${environment}; run 'traycer host install latest' first`,
+          message: `host download: no host installed for environment=${environment}; run 'traycer host install' first`,
           details: { environment },
           exitCode: 1,
         });
@@ -259,7 +259,7 @@ export async function downloadAndStageHost(
       if (installed === null) {
         throw cliError({
           code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-          message: `host download: no host installed for environment=${opts.environment}; run 'traycer host install latest' first`,
+          message: `host download: no host installed for environment=${opts.environment}; run 'traycer host install' first`,
           details: { environment: opts.environment },
           exitCode: 1,
         });

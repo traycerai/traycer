@@ -260,6 +260,12 @@ function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
       return "prior helper timed out waiting for CLI exit; ";
     case "marker-invalid":
       return `prior helper marker invalid (${reconcile.errorMessage}); `;
+    case "stale-marker-discarded":
+      // Named explicitly rather than folded into silence: this is the one
+      // outcome where a marker existed, looked successful, and was
+      // deliberately NOT applied. Someone reading a restart that did not
+      // finalise the upgrade they expected needs to see why.
+      return `discarded a stale helper marker (marker staged=${reconcile.markerStagedBinaryPath} live=${reconcile.markerLivePath} at=${reconcile.markerAttemptedAt}; pending staged=${reconcile.pendingStagedBinaryPath} live=${reconcile.manifestBinaryPath} at=${reconcile.pendingStagedAt}); `;
     case "no-marker":
       return "";
   }
