@@ -315,7 +315,7 @@ async function requireInstalled(
   if (installed === null) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-      message: `host update: no host installed for environment=${environment}; run 'traycer host install latest' first`,
+      message: `host update: no host installed for environment=${environment}; run 'traycer host install' first`,
       details: { environment },
       exitCode: 1,
     });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
@@ -767,6 +768,10 @@ describe("FolderRow", () => {
       NOOP,
     );
     expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
+    const location = screen.getByTestId("folder-location-trigger");
+    expect(location instanceof HTMLButtonElement).toBe(true);
+    if (!(location instanceof HTMLButtonElement)) return;
+    expect(location.disabled).toBe(false);
     // aria-disabled keeps the explanation in normal keyboard traversal while
     // guarding activation during the fetch.
     const pin = screen.getByTestId("folder-make-primary");
@@ -828,6 +833,7 @@ describe("WorkspaceFolderRows", () => {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -881,6 +887,7 @@ describe("WorkspaceFolderRows", () => {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -938,6 +945,7 @@ describe("WorkspaceFolderRows", () => {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -969,6 +977,7 @@ describe("WorkspaceFolderRows", () => {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -995,6 +1004,7 @@ describe("WorkspaceFolderRows", () => {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly
@@ -1030,6 +1040,7 @@ describe("WorkspaceFolderRows", () => {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -1059,6 +1070,7 @@ describe("WorkspaceFolderRows", () => {
           }}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -1090,6 +1102,7 @@ describe("WorkspaceFolderRows", () => {
           }}
           updateEnabled
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           nestedInPopover={false}
           readOnly={false}
@@ -1101,6 +1114,42 @@ describe("WorkspaceFolderRows", () => {
     expect(update.hasAttribute("disabled")).toBe(false);
     fireEvent.click(update);
     expect(updates).toBe(1);
+  });
+
+  it("does not activate Discard via Enter while a captured run is pending", async () => {
+    const onDiscardStaged = vi.fn();
+    const view = (discardDisabled: boolean) => (
+      <TooltipProvider>
+        <WorkspaceFolderRows
+          recentWorkspaces={null}
+          moveToRecent={false}
+          items={[item({})]}
+          trailingSlot={null}
+          onAddFolder={NOOP_ADD}
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={onDiscardStaged}
+          discardDisabled={discardDisabled}
+          draftPending
+          onEditEnvironment={NOOP}
+          nestedInPopover={false}
+          readOnly={false}
+          bindingResolved
+        />
+      </TooltipProvider>
+    );
+    const rendered = render(view(false));
+    const discard = screen.getByTestId("folder-discard-staged");
+    discard.focus();
+    expect(document.activeElement).toBe(discard);
+    rendered.rerender(view(true));
+    await userEvent.keyboard("{Enter}");
+    fireEvent.keyDown(discard, { key: "Enter" });
+    expect(onDiscardStaged).not.toHaveBeenCalled();
   });
 });
 
@@ -1391,6 +1440,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1424,6 +1474,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1507,6 +1558,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1548,6 +1600,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1583,6 +1636,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1634,6 +1688,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1665,6 +1720,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1696,6 +1752,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1735,6 +1792,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1768,6 +1826,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1796,6 +1855,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1832,6 +1892,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"
@@ -1860,6 +1921,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={NOOP}
           refresh={null}
           popoverTestId="workspace-rows-popover"

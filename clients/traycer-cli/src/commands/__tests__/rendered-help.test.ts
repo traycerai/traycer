@@ -284,6 +284,9 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     path: "whoami",
     options: [
       { flags: "--json", mandatory: false },
+      // The observational mode (CLI-018): `whoami` validates and may rewrite
+      // the stored credentials, so `--local` is the read that touches nothing.
+      { flags: "--local", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
