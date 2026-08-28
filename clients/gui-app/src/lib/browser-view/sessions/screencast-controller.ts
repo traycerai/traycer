@@ -19,6 +19,7 @@ import {
   nextPointerClickCount,
   pointerButton,
   type PointerClickCount,
+  type PointerLike,
   type ScreencastFrameSize,
   type ScreencastInputFrame,
   type ScreencastKeyboardInput,
@@ -28,6 +29,14 @@ import {
 import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
 
 const WHEEL_LINE_HEIGHT_PX = 16;
+
+/**
+ * Finger travel that commits a touch press to a scroll instead of a tap. Wider
+ * than the arm buffer's click slop, which measures a mouse holding still: a
+ * finger never does, so a threshold tight enough for a cursor would turn every
+ * tap into a one-pixel scroll.
+ */
+const TOUCH_SCROLL_SLOP_PX = 8;
 
 export type ScreencastDialog = Extract<
   BrowserScreencastServerFrame,
@@ -47,7 +56,9 @@ export interface ScreencastOverlayHandlers {
   readonly onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   readonly onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   readonly onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  readonly onPointerCancel: () => void;
+  readonly onPointerCancel: (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => void;
   readonly onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }
 
@@ -121,6 +132,16 @@ interface CapturedPointer {
   readonly pointerId: number;
 }
 
+/** The one finger a touch gesture is being translated from. */
+interface ActiveTouch {
+  readonly pointerId: number;
+  readonly startX: number;
+  readonly startY: number;
+  lastX: number;
+  lastY: number;
+  scrolling: boolean;
+}
+
 /**
  * The non-React half of a screencast tile: the arm/disarm epoch protocol, the
  * input queues and their encoding dispatch, pointer capture, click counting,
@@ -147,6 +168,7 @@ export function createScreencastController(options: {
   let composing = false;
   let frameSize: ScreencastFrameSize | null = null;
   let capturedPointer: CapturedPointer | null = null;
+  let activeTouch: ActiveTouch | null = null;
   let suppressPointerId: number | null = null;
   let pendingMove: ScreencastPointerInput | null = null;
   let moveRaf: number | null = null;
@@ -233,6 +255,7 @@ export function createScreencastController(options: {
 
   const resetTransientInput = (): void => {
     armBuffer.drop();
+    activeTouch = null;
     pendingNav = [];
     forwardedKeyDowns.clear();
     claimedLocalCodes.clear();
@@ -319,7 +342,7 @@ export function createScreencastController(options: {
   };
 
   const buildPointerFrame = (request: {
-    readonly event: ReactPointerEvent<HTMLButtonElement> | WheelEvent;
+    readonly event: PointerLike;
     readonly type: ScreencastPointerInput["type"];
     readonly clampToEdge: boolean;
     readonly deltaX: number;
@@ -480,6 +503,140 @@ export function createScreencastController(options: {
     suppressPointerId = null;
     acceptedPointerDowns.clear();
     cancelPendingMove();
+    releaseCapturedPointer();
+  };
+
+  /**
+   * A touch pointer as the encoder wants to see it. The DOM event reports a
+   * finger as `button 0 / buttons 1` for its whole life, which is right for the
+   * synthesized click and wrong for the synthesized wheel - a wheel carrying a
+   * held left button reads on the page as a button-down drag, which is the
+   * text selection this translation exists to avoid.
+   */
+  const touchPointerLike = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    buttons: number,
+  ): PointerLike => ({
+    clientX: event.clientX,
+    clientY: event.clientY,
+    button: 0,
+    buttons,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+  });
+
+  const onTouchPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    event.preventDefault();
+    // A second finger is a pinch or a stray palm, neither of which this
+    // translation represents; leaving the first one in charge keeps the
+    // in-flight scroll coherent instead of tearing between two origins.
+    if (activeTouch !== null) return;
+    capturePointer(event);
+    activeTouch = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      scrolling: false,
+    };
+    // Arming on press, not on the tap that may follow, so the round trip
+    // overlaps the gesture and a scroll can start delivering on the first move.
+    arm();
+  };
+
+  const onTouchPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    const touch = activeTouch;
+    if (touch === null || touch.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - touch.lastX;
+    const deltaY = event.clientY - touch.lastY;
+    if (!touch.scrolling) {
+      const travelledX = Math.abs(event.clientX - touch.startX);
+      const travelledY = Math.abs(event.clientY - touch.startY);
+      if (
+        travelledX <= TOUCH_SCROLL_SLOP_PX &&
+        travelledY <= TOUCH_SCROLL_SLOP_PX
+      ) {
+        return;
+      }
+      touch.scrolling = true;
+    }
+    touch.lastX = event.clientX;
+    touch.lastY = event.clientY;
+    if (activeArmEpoch === null) return;
+    // Inverted: the page follows the finger, so dragging up scrolls down. The
+    // deltas are already client pixels, the same unit `handleWheel` converts
+    // its own into.
+    const frame = buildPointerFrame({
+      event: touchPointerLike(event, 0),
+      type: "wheel",
+      clampToEdge: true,
+      deltaX: -deltaX,
+      deltaY: -deltaY,
+    });
+    if (frame === null) return;
+    sendDiscretePointer(frame);
+  };
+
+  const onTouchPointerUp = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    const touch = activeTouch;
+    if (touch === null || touch.pointerId !== event.pointerId) return;
+    activeTouch = null;
+    releaseCapturedPointer();
+    if (touch.scrolling) return;
+    // A tap is a click, and a click is where typing goes - so the hidden IME
+    // input takes focus here rather than on press, which would raise the
+    // phone's keyboard over every scroll.
+    refs.imeInputRef.current?.focus();
+    const down = buildPointerFrame({
+      event: touchPointerLike(event, 1),
+      type: "down",
+      clampToEdge: true,
+      deltaX: 0,
+      deltaY: 0,
+    });
+    const up = buildPointerFrame({
+      event: touchPointerLike(event, 0),
+      type: "up",
+      clampToEdge: true,
+      deltaX: 0,
+      deltaY: 0,
+    });
+    if (down === null || up === null) return;
+    if (activeArmEpoch !== null) {
+      sendDiscretePointer(down);
+      sendDiscretePointer(up);
+      return;
+    }
+    // Still waiting on the host's `armed`: hand the pair to the arm buffer,
+    // which delivers it only while the frame it was aimed at is still the one
+    // presented - the same rule a first click on an unarmed tile obeys.
+    armBuffer.storeDown({
+      payload: down,
+      castSequence: down.castSequence,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      isPrimary: true,
+    });
+    armBuffer.storeMatchingUp({
+      payload: up,
+      isPrimary: true,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  };
+
+  const onTouchPointerCancel = (): void => {
+    activeTouch = null;
+    armBuffer.drop();
     releaseCapturedPointer();
   };
 
@@ -655,10 +812,39 @@ export function createScreencastController(options: {
       onFocus: () => {
         refs.imeInputRef.current?.focus();
       },
-      onPointerDown,
-      onPointerMove,
-      onPointerUp,
-      onPointerCancel,
+      // A finger is translated before it reaches the pointer path: forwarded
+      // verbatim it becomes a mouse drag, which on the remote page selects
+      // text rather than scrolling. Every other pointer type - mouse, pen,
+      // and the synthetic pointers a test drives - takes the branch below
+      // unchanged.
+      onPointerDown: (event) => {
+        if (event.pointerType === "touch") {
+          onTouchPointerDown(event);
+          return;
+        }
+        onPointerDown(event);
+      },
+      onPointerMove: (event) => {
+        if (event.pointerType === "touch") {
+          onTouchPointerMove(event);
+          return;
+        }
+        onPointerMove(event);
+      },
+      onPointerUp: (event) => {
+        if (event.pointerType === "touch") {
+          onTouchPointerUp(event);
+          return;
+        }
+        onPointerUp(event);
+      },
+      onPointerCancel: (event) => {
+        if (event.pointerType === "touch") {
+          onTouchPointerCancel();
+          return;
+        }
+        onPointerCancel();
+      },
       onContextMenu: (event) => {
         if (activeArmEpoch === null) return;
         event.preventDefault();
