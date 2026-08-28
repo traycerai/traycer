@@ -14,6 +14,24 @@ export interface DiffRowClickHandlers {
 export interface ChatSnapshotSegmentDiffRequest {
   readonly filePath: string;
   readonly sourceBlockIds: SnapshotSourceBlockIds;
+  /**
+   * The row's endpoints AS CLICKED, carried so the tile it opens can still
+   * resolve them once the blocks they came from are no longer hydrated.
+   *
+   * The tile addresses its content by block id and re-reads the blocks from the
+   * chat session on every render, which is what lets an in-flight edit's diff
+   * update while it streams. On a windowed transcript that re-read stops
+   * finding them: a tile is a persistent canvas node, so it outlives the
+   * hydration of the row it was opened from - reopen the canvas a week later
+   * and the blocks are cold, the lookup misses, and the tile shows
+   * source-unavailable forever.
+   *
+   * Taken at click time because that is the one moment the blocks are
+   * guaranteed present - the row was on screen. See
+   * `resolveSnapshotSegmentHashes` for which of the two wins when both resolve.
+   */
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
 }
 
 export interface ChatSnapshotHashDiffRequest {

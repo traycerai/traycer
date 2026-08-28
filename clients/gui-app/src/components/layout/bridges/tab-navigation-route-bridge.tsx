@@ -129,9 +129,9 @@ export function TabNavigationRouteBridge(): null {
       isStartupNavigationIntent(router.state.location.state);
     const restoredRoute = startupIntent ? null : pendingRestoredRoute;
     if (restoredRoute !== null) {
-      // Replace the current persisted entry BEFORE T3's first startup
+      // Replace the current persisted entry before the first startup
       // synchronization. The subscription deliberately ignores this one
-      // bookkeeping replacement, so T3 queues the restored entry as startup
+      // bookkeeping replacement, so the restored entry is queued as startup
       // work with `preserveStartupFocus = true` instead of an external commit.
       skipRestoredRouteObservationRef.current = true;
       try {

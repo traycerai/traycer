@@ -7,11 +7,13 @@ import {
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
 import type {
+  OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   PerWindowEpicViewTab,
 } from "../../ipc-contracts/window-types";
 import {
   assertString,
+  buildDraftInitialRoute,
   buildEpicInitialRoute,
   parseInitialRoute,
   parseOptionalTitle,
@@ -76,6 +78,22 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
         parseOptionalTitle(title),
         tabId,
       );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
+    async (event, draftId: unknown) => {
+      assertString(draftId, "windows.requestOpenDraftInNewWindow");
+      const sourceWindowId = bridge.resolveSenderWindowId(event);
+      if (sourceWindowId === null) {
+        log.warn(
+          "[runner-ipc] requestOpenDraftInNewWindow from unknown window",
+          {},
+        );
+        return { result: "not-found", windowId: "" };
+      }
+      return openDraftInNewWindow(bridge, sourceWindowId, draftId);
     },
   );
 
@@ -272,6 +290,102 @@ async function openEpicInNewWindow(
     )
     .catch((error: unknown) => {
       log.warn("[windows-ipc] source move state persistence failed", {
+        windowId: sourceWindowId,
+        error,
+      });
+    });
+  bridge.windowRegistry.focusById(destinationWindowId);
+  return { result: "moved", windowId: destinationWindowId };
+}
+
+/**
+ * Move a landing DRAFT into its own window. Structurally the epic move minus
+ * ownership: a draft's whole substance is its per-window record (content is
+ * hash-only editor JSON), so the move IS the relocation of that record - the
+ * destination is seeded with it in `beforeLoad`, before its renderer loads.
+ * The draft's image BYTES do not travel here: they live in a per-window
+ * IndexedDB partition the main process cannot reach, so the renderer stages
+ * them in a handoff DB before invoking this (see `landing-image-move.ts`).
+ *
+ * The source snapshot is trusted as current because the renderer flushes its
+ * per-window projection before invoking this - the same barrier the epic move
+ * uses. A draft absent from the flushed snapshot is a refused move, never a
+ * guess.
+ */
+async function openDraftInNewWindow(
+  bridge: RunnerIpcBridge,
+  sourceWindowId: string,
+  draftId: string,
+): Promise<OpenDraftInNewWindowResult> {
+  const sourceSnapshot = bridge.perWindowState.get(sourceWindowId);
+  const movedDraft = sourceSnapshot.landingDrafts.find(
+    (draft) => draft.id === draftId,
+  );
+  if (movedDraft === undefined) {
+    return { result: "not-found", windowId: "" };
+  }
+  const destination = { windowId: null as string | null };
+  let destinationWindowId: string;
+  try {
+    destinationWindowId = await bridge.windowRegistry.create({
+      initialRoute: buildDraftInitialRoute(draftId),
+      beforeLoad: (windowId) => {
+        destination.windowId = windowId;
+        // Deferred like the epic move's destination write: a synchronous
+        // `update` implementation throwing must not abort `beforeLoad` and
+        // fail the whole move over a persistence warning.
+        void Promise.resolve()
+          .then(() =>
+            bridge.perWindowState.update(windowId, {
+              epicTabs: [],
+              activeTabId: null,
+              canvasByTabId: {},
+              landingDrafts: [movedDraft],
+              activeLandingDraftId: draftId,
+            }),
+          )
+          .catch((error: unknown) => {
+            log.warn(
+              "[windows-ipc] destination draft-move state persistence failed",
+              { windowId, error },
+            );
+          });
+      },
+    });
+  } catch (err) {
+    if (destination.windowId !== null) {
+      bridge.perWindowState.clear(destination.windowId);
+      await bridge.windowRegistry.forceCloseById(destination.windowId);
+    }
+    throw err;
+  }
+
+  // The prune is a read-modify-write of whatever the source has projected BY
+  // NOW, not of `sourceSnapshot`: `create` above awaited the destination's
+  // load, and in that gap the source renderer may have projected a newer
+  // snapshot (another draft edited, a new one started). Writing the pre-await
+  // array back wholesale would revert those. Only this draft is removed.
+  //
+  // The active id is nulled rather than pointed at a successor: the source
+  // RENDERER owns successor selection (its `closeRefAfterConfirmed` picks the
+  // neighbouring tab and re-projects), and a successor chosen here would race
+  // that pick. This patch only matters if the source crashes before its own
+  // close runs.
+  void Promise.resolve()
+    .then(() => {
+      const current = bridge.perWindowState.get(sourceWindowId);
+      return bridge.perWindowState.update(sourceWindowId, {
+        landingDrafts: current.landingDrafts.filter(
+          (draft) => draft.id !== draftId,
+        ),
+        activeLandingDraftId:
+          current.activeLandingDraftId === draftId
+            ? null
+            : current.activeLandingDraftId,
+      });
+    })
+    .catch((error: unknown) => {
+      log.warn("[windows-ipc] source draft-move state persistence failed", {
         windowId: sourceWindowId,
         error,
       });

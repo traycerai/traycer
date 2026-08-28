@@ -250,6 +250,7 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
         updateReady: currentUpdateReady,
         activation: "unavailable",
         reachable: false,
+        localAttempt: null,
         removedByUser: false,
         checkedAt: new Date().toISOString(),
       };

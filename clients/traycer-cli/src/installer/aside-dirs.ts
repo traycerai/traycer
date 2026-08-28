@@ -4,6 +4,9 @@ import { basename, dirname, join } from "node:path";
 import type { ILogger } from "../logger";
 import { renameWithRetry } from "./rename-retry";
 
+/** Explicit compatibility verifier for non-contender cleanup callers only. */
+export const legacyMutationVerifier = async (): Promise<void> => undefined;
+
 // Generic `<target>.<infix>*` sibling helpers shared by every tree that
 // keeps rename-aside copies next to a canonical target - `install/`
 // (`.old-*`, ticket 2's install-trash parity) and `staged/` (`.old-*` for
@@ -70,23 +73,44 @@ export async function invalidateAsideDir(
   aside: string,
   sidecarFilename: string,
   logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<boolean> {
   // Unique per call: batch callers invalidate several asides in one tick
   // (`Promise.all`), and a shared timestamp-only name would make every
   // rename after the first hit ENOTEMPTY and burn its retry budget.
   const deadAside = `${target}.dead-${Date.now()}-${randomUUID()}`;
+  // Verification deliberately sits outside the broad cleanup catches. A
+  // capability loss is authority evidence, not an expected Windows handle
+  // failure, and must stop the composite rather than falling through to a
+  // later destructive layer.
+  let authorityFailure: unknown | null = null;
+  const verify = async (): Promise<void> => {
+    try {
+      await verifyMutationCapability();
+    } catch (cause) {
+      // `renameWithRetry` deliberately invokes its verifier before every
+      // retry. Its error must not be mistaken for a Windows rename failure
+      // and trigger the following destructive fallback layer.
+      authorityFailure = cause;
+      throw cause;
+    }
+  };
+  await verify();
   try {
-    await renameWithRetry(aside, deadAside);
+    await renameWithRetry(aside, deadAside, verify);
     return true;
-  } catch {
+  } catch (cause) {
+    if (authorityFailure !== null) throw cause;
     // Fall through to layer 2.
   }
+  await verify();
   try {
     await unlink(join(aside, sidecarFilename));
     return true;
   } catch {
     // Fall through to layer 3.
   }
+  await verify();
   try {
     await rm(aside, { recursive: true, force: true });
     return true;
@@ -108,11 +132,18 @@ function listDeadAsideDirsNewestFirst(target: string): Promise<string[]> {
 // synchronously there, since the whole point of layer 1 is to succeed via
 // a cheap rename even when the directory's contents can't yet be removed
 // (e.g. a Windows file handle still closing).
-export async function sweepDeadAsideDirs(target: string): Promise<void> {
+export async function sweepDeadAsideDirs(
+  target: string,
+  verifyMutationCapability: () => Promise<void>,
+): Promise<void> {
   const dead = await listDeadAsideDirsNewestFirst(target);
-  await Promise.all(
-    dead.map((dir) =>
-      rm(dir, { recursive: true, force: true }).catch(() => undefined),
-    ),
-  );
+  for (const dir of dead) {
+    await verifyMutationCapability();
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      // Litter cleanup remains best-effort only for I/O failures. A verifier
+      // failure above propagates and prevents another edge.
+    }
+  }
 }

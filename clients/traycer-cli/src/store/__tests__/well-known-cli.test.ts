@@ -506,7 +506,7 @@ describe("stageWellKnownCliBinary", () => {
   });
 
   // Windows-only recovery path: `stageWellKnownCliBinary` renames a
-  // pre-existing slot binary ASIDE before publishing the new one (a running
+  // pre-existing slot binary out of the way before publishing the new one (a running
   // image blocks delete/overwrite but permits being renamed itself). If the
   // publish rename then fails - antivirus holding the staged file, a racing
   // installer, a transient share violation - the aside binary must be moved
@@ -644,7 +644,7 @@ describe("stageWellKnownCliBinary", () => {
     expect(existsSync(freshOrphan)).toBe(true);
   });
 
-  // Aside-sweep tests exercise the SAME sweep, but the age comes from the
+  // Old-copy sweep tests exercise the SAME sweep, but the age comes from the
   // timestamp encoded in the `.old-` name rather than from `stat` - see
   // `asideStampedAt`'s doc comment for why a rename can't be aged via mtime.
   it("does not remove a FRESH .old- aside, which may still be the slot's only rollback copy", async () => {

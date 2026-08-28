@@ -1,5 +1,5 @@
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
-import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { isWorkspaceResolvePending } from "@traycer-clients/shared/worktree/worktree-row-state";
 
 /**
  * Host-PROVEN gone: the row resolved (not a pending git-fact placeholder) with

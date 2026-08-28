@@ -49,7 +49,10 @@ import {
   copyComposerContentToClipboard,
 } from "@/lib/composer/composer-clipboard";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  containsImageAtoms,
+  omitImageAtomsByHash,
+} from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { cn, formatSingleLine } from "@/lib/utils";
@@ -77,6 +80,7 @@ import type {
 } from "./chat-message";
 import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
+import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -99,6 +103,26 @@ import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fe
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
+
+function visibleUserSteerBadge(
+  message: ChatMessageModel,
+): ChatMessageSteerBadge | null {
+  if (message.steerBadge === null) return null;
+  if (message.steerBadge.status === "steered") return null;
+  return message.steerBadge;
+}
+
+function userMessageDisplayContent(
+  message: ChatMessageModel,
+): JsonContent | null {
+  if (message.structuredContent === null) return null;
+  const hashes = new Set(
+    (message.browserAnnotations ?? []).map(
+      (annotation) => annotation.imageHash,
+    ),
+  );
+  return omitImageAtomsByHash(message.structuredContent, hashes);
+}
 
 // Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
 // before the bubble clamps and fades, with "Show more" revealing the rest.
@@ -131,6 +155,7 @@ export function UserMessageBody({
       <>
         <UserMessageAttachmentGallery
           attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
           align="end"
         />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
@@ -152,6 +177,7 @@ export function UserMessageBody({
       <>
         <UserMessageAttachmentGallery
           attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
           align="end"
         />
         <AgentMessageDisplayView
@@ -331,10 +357,14 @@ function UserMessageDisplayView({
     setExpanded((prev) => !prev);
   }, []);
 
+  const displayContent = useMemo(
+    () => userMessageDisplayContent(message),
+    [message],
+  );
   const body =
-    message.structuredContent !== null ? (
+    displayContent !== null ? (
       <ComposerContentRenderer
-        content={message.structuredContent}
+        content={displayContent}
         variant={undefined}
         className={undefined}
         testId={undefined}
@@ -352,10 +382,7 @@ function UserMessageDisplayView({
   // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
   const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
   const confirmingDelete = actions?.confirmingDelete ?? false;
-  const visibleSteerBadge =
-    message.steerBadge !== null && message.steerBadge.status !== "steered"
-      ? message.steerBadge
-      : null;
+  const visibleSteerBadge = visibleUserSteerBadge(message);
   // Only clamp while collapsed; expanding drops both the height cap and the
   // bottom fade so the full prompt is readable in place. The overflow probe
   // keeps measuring the (now uncapped) content, so the toggle stays visible.
@@ -383,7 +410,11 @@ function UserMessageDisplayView({
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
           <UserMessageAttachmentGallery
             attachments={message.attachments}
+            browserAnnotations={message.browserAnnotations}
             align="start"
+          />
+          <BrowserReferenceChips
+            annotations={message.browserAnnotations ?? []}
           />
           <div
             ref={contentRef}
@@ -775,6 +806,7 @@ function InlineUserMessageEditor({
     () => (
       <>
         <ChatComposerAttachmentsStrip
+          taskId={null}
           content={editing.currentContent}
           editingQueueItemId={null}
           onCancelQueueEdit={null}

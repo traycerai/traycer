@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   artifactsRefreshTargetKey,
+  browserTabMentionEntriesFromSessions,
   buildCurrentEpicArtifactMentionEntries,
+  createBrowserTabMentionEntriesSnapshotCache,
   epicAgentMentionEntriesFromEpic,
   mentionNoMatchDismissVerdict,
   mergeCurrentEpicArtifactMentions,
@@ -19,6 +21,8 @@ import type {
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { EpicMentionEntry } from "@/lib/composer/types";
 import type { EpicMentionArtifactSuggestion } from "@traycer/protocol/host/epic/unary-schemas";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 function chat(
   id: string,
@@ -804,5 +808,254 @@ describe("artifactsRefreshTargetKey", () => {
     expect(artifactsRefreshTargetKey("host-1", "epic-1")).toBe(
       artifactsRefreshTargetKey("host-1", "epic-1"),
     );
+  });
+});
+
+function browserSession(
+  fields: Partial<BrowserSessionInfo> & { sessionId: string; hostId: string },
+): BrowserSessionInfo {
+  return {
+    epicId: "epic-1",
+    profile: "primary",
+    lastActivityAt: 0,
+    runtime: { kind: "headless", revision: 0 },
+    tabs: [
+      {
+        tabId: "tab-1",
+        url: "https://example.com",
+        originTier: "external",
+        status: "ready",
+        title: "Example",
+        viewed: false,
+        drivenBy: [],
+      },
+    ],
+    ...fields,
+  };
+}
+
+function browserSessionsState(
+  fields: Partial<BrowserSessionsState> & { hostId: string | null },
+): BrowserSessionsState {
+  return {
+    lifecycle: "live",
+    inventoryReady: true,
+    items: [],
+    errorMessage: null,
+    retry: () => {},
+    openTab: () => Promise.reject(new Error("not implemented")),
+    closeTab: () => Promise.reject(new Error("not implemented")),
+    ...fields,
+  };
+}
+
+describe("browserTabMentionEntriesFromSessions", () => {
+  // The context is bound to the canvas host, which is not necessarily this
+  // chat's host - a chat stays bound to its own host for life. Without the
+  // `sessions.hostId !== hostId` gate this returned the other host's tabs.
+  it("returns no entries when the sessions context is bound to a different host than the chat's", () => {
+    const sessions = browserSessionsState({
+      hostId: "canvas-host",
+      items: [browserSession({ sessionId: "s1", hostId: "canvas-host" })],
+    });
+    expect(
+      browserTabMentionEntriesFromSessions(sessions, "chat-host", true),
+    ).toEqual([]);
+  });
+
+  it("returns entries when the sessions context matches the chat's host", () => {
+    const sessions = browserSessionsState({
+      hostId: "chat-host",
+      items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+    });
+    const entries = browserTabMentionEntriesFromSessions(
+      sessions,
+      "chat-host",
+      true,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.tabId).toBe("tab-1");
+  });
+
+  // `page.attachTab` auto-wakes a dormant session before leasing it (see
+  // `SessionReplTabSource.attach` -> `ensureTabAttached` ->
+  // `runDormantActivation`, ahead of the lease), so a dormant session's tabs
+  // are fully attachable and must stay listed - excluding them would hide a
+  // reference the agent can actually resolve.
+  it("lists a dormant session's tabs and marks them dormant", () => {
+    const sessions = browserSessionsState({
+      hostId: "chat-host",
+      items: [
+        browserSession({
+          sessionId: "s1",
+          hostId: "chat-host",
+          runtime: { kind: "dormant", revision: 0 },
+          tabs: [
+            {
+              tabId: "tab-1",
+              url: "https://example.com",
+              originTier: "external",
+              status: "dormant",
+              title: "Example",
+              viewed: false,
+              drivenBy: [],
+            },
+          ],
+        }),
+      ],
+    });
+    const entries = browserTabMentionEntriesFromSessions(
+      sessions,
+      "chat-host",
+      true,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.tabId).toBe("tab-1");
+    expect(entries[0]?.dormant).toBe(true);
+  });
+
+  it("marks a live tab as non-dormant", () => {
+    const sessions = browserSessionsState({
+      hostId: "chat-host",
+      items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+    });
+    const entries = browserTabMentionEntriesFromSessions(
+      sessions,
+      "chat-host",
+      true,
+    );
+    expect(entries[0]?.dormant).toBe(false);
+  });
+});
+
+describe("createBrowserTabMentionEntriesSnapshotCache", () => {
+  // The bug this cache exists to fix: the host bumps `lastActivityAt` (and
+  // mints a fresh sessions object) on essentially every frame, which used to
+  // re-run the whole mention pipeline at frame rate even when no tab's
+  // mention-relevant fields actually changed.
+  it("returns the SAME array reference across snapshots whose sessions are content-identical for mention purposes", () => {
+    const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
+    const sessionAt = (lastActivityAt: number) =>
+      browserSessionsState({
+        hostId: "chat-host",
+        items: [
+          browserSession({
+            sessionId: "s1",
+            hostId: "chat-host",
+            lastActivityAt,
+          }),
+        ],
+      });
+
+    const first = getSnapshot(sessionAt(1), "chat-host", true);
+    // A frame that only bumps `lastActivityAt` - every tab's
+    // sessionId/tabId/title/url/viewed are unchanged - must not rebuild.
+    const second = getSnapshot(sessionAt(2), "chat-host", true);
+
+    expect(second).toBe(first);
+    expect(first).toHaveLength(1);
+  });
+
+  it("rebuilds when a tab's mention-relevant field actually changes", () => {
+    const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
+    const first = getSnapshot(
+      browserSessionsState({
+        hostId: "chat-host",
+        items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+      }),
+      "chat-host",
+      true,
+    );
+    const second = getSnapshot(
+      browserSessionsState({
+        hostId: "chat-host",
+        items: [
+          browserSession({
+            sessionId: "s1",
+            hostId: "chat-host",
+            tabs: [
+              {
+                tabId: "tab-1",
+                url: "https://example.com/other",
+                originTier: "external",
+                status: "ready",
+                title: "Example",
+                viewed: false,
+                drivenBy: [],
+              },
+            ],
+          }),
+        ],
+      }),
+      "chat-host",
+      true,
+    );
+
+    expect(second).not.toBe(first);
+    expect(second[0]?.url).toBe("https://example.com/other");
+  });
+
+  // The dormancy flag comes from `tab.status`, which is not part of the old
+  // key shape (title/url/viewed) - if `status` were left out of the content
+  // key, a session waking (dormant -> headless) with an otherwise-identical
+  // tab would keep serving the stale cached array, including its stale
+  // `dormant: true` entry, until some unrelated field also changed.
+  it("rebuilds with a new array identity when a session's runtime wakes and its tab's status flips", () => {
+    const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
+    const dormantTab = {
+      tabId: "tab-1",
+      url: "https://example.com",
+      originTier: "external" as const,
+      status: "dormant" as const,
+      title: "Example",
+      viewed: false,
+      drivenBy: [],
+    };
+    const first = getSnapshot(
+      browserSessionsState({
+        hostId: "chat-host",
+        items: [
+          browserSession({
+            sessionId: "s1",
+            hostId: "chat-host",
+            runtime: { kind: "dormant", revision: 0 },
+            tabs: [dormantTab],
+          }),
+        ],
+      }),
+      "chat-host",
+      true,
+    );
+    expect(first[0]?.dormant).toBe(true);
+
+    const second = getSnapshot(
+      browserSessionsState({
+        hostId: "chat-host",
+        items: [
+          browserSession({
+            sessionId: "s1",
+            hostId: "chat-host",
+            runtime: { kind: "headless", revision: 1 },
+            tabs: [{ ...dormantTab, status: "ready" }],
+          }),
+        ],
+      }),
+      "chat-host",
+      true,
+    );
+
+    expect(second).not.toBe(first);
+    expect(second[0]?.dormant).toBe(false);
+  });
+
+  it("returns the shared empty constant while the picker is closed, without touching the sessions snapshot", () => {
+    const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
+    const sessions = browserSessionsState({
+      hostId: "chat-host",
+      items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+    });
+
+    const closed = getSnapshot(sessions, "chat-host", false);
+    expect(closed).toEqual([]);
   });
 });

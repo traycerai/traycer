@@ -30,7 +30,7 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
-import { formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ActivityGroupModel,
   ChatActivityTimelineItem,

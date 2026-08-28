@@ -97,6 +97,42 @@ const baselineFallbackV10 = defineRpcContract({
   responseSchema: z.object({ summary: z.string() }),
 });
 
+/**
+ * Structural view of one method's registry entry, wide enough to look a minor
+ * up with a RUNTIME version.
+ *
+ * The registry's own type keys majors and minors as literals, so indexing it
+ * with `second.schemaVersion.minor` (a `number`) is a TS7053. Widening through
+ * a named structural type is the type-safe way to do that lookup — `as any` /
+ * `as unknown` are banned here, and would defeat the point in any case: the
+ * whole value of this check is that it reads the REAL registry rather than a
+ * hand-maintained list of minors that would go stale exactly when it matters.
+ */
+interface MinorLookupEntry {
+  readonly contract: { readonly responseSchema: z.ZodType };
+}
+interface MajorLookupEntry {
+  readonly versions: Readonly<Record<string, MinorLookupEntry>>;
+}
+
+/**
+ * `null` when `served` is a valid response at `version`; otherwise the
+ * actionable reason, naming the minor to extend.
+ */
+function servedResponseMismatch(
+  served: unknown,
+  version: { readonly major: number; readonly minor: number },
+): string | null {
+  const majors: Readonly<Record<string, MajorLookupEntry>> =
+    hostRpcRegistry["host.status"];
+  const entry = majors[String(version.major)]?.versions[String(version.minor)];
+  if (entry === undefined) {
+    return `host.status@${version.major}.${version.minor} is not installed in this client's registry`;
+  }
+  if (entry.contract.responseSchema.safeParse(served).success) return null;
+  return `the stub response is not valid at the negotiated host.status@${version.major}.${version.minor}; extend \`served\` with that minor's fields`;
+}
+
 const baselineUnsupportedV10 = defineRpcContract({
   method: "synthetic.baselineUnsupported",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -421,19 +457,61 @@ describe.skipIf(baselines.length === 0)(
 
         // Settle the in-flight request so nothing leaks across tests.
         if (second.kind === "request") {
+          // A RESPONSE VALID AT THE NEGOTIATED VERSION, not a fixed v1.0 body.
+          //
+          // This used to serve `{ ready, hostVersion, protocolVersion }`
+          // whatever the baseline negotiated, which is a valid response only at
+          // host.status@1.0. Against a 1.2 baseline it was already wrong — a
+          // real host advertising 1.2 sends all four 1.2 fields — but nothing
+          // could notice: `upgradeResponseAlongChain` is the only place the
+          // client parses a raw wire result against the negotiated schema, and
+          // it runs ONLY when an upgrade is needed. While the client's own
+          // latest minor was 2, negotiating 2 meant no upgrade, no parse, and a
+          // malformed stub sailed through.
+          //
+          // The moment the client gained @1.3 the 1.2→1.3 upgrade started
+          // firing and the parse rejected it. That is the guard working, not a
+          // regression: the frozen 1.2 wire schema is byte-identical to main's
+          // (this branch's contract change is purely additive), so a real 1.2
+          // peer is unaffected.
+          //
+          // Serving a superset body is sound because the line is additive and
+          // `z.object` is non-strict: extra keys are stripped at the negotiated
+          // version, missing ones are not invented.
+          const served = {
+            ready: true,
+            hostVersion: "0.0.0-smoke",
+            protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: null,
+            updateProgress: null,
+            busyBreakdown: null,
+          };
+
+          // SELF-CHECKING FIXTURE. Without this, the next released minor a
+          // baseline advertises would reintroduce the same defect and surface
+          // as the same opaque "does not match the X.Y response schema" — a
+          // failure that reads as a protocol break when it is a stale stub.
+          const failure = servedResponseMismatch(served, second.schemaVersion);
+          expect(failure).toBeNull();
+
           stub.fireMessage({
             kind: "response",
             requestId: second.requestId,
             method: second.method,
             schemaVersion: second.schemaVersion,
-            result: {
-              ready: true,
-              hostVersion: "0.0.0-smoke",
-              protocolVersion: { major: 1, minor: 0 },
-            },
+            result: served,
             error: null,
           });
-          await expect(pending).resolves.toMatchObject({ ready: true });
+          // The UPGRADED payload, not merely `ready`. The upgrade chain now
+          // actually runs for a below-latest baseline, so assert what it
+          // produces: absent evidence must arrive as `null`, never as a
+          // fabricated capability statement.
+          await expect(pending).resolves.toMatchObject({
+            ready: true,
+            updateOperation: null,
+            updateTransaction: null,
+          });
         }
       });
 

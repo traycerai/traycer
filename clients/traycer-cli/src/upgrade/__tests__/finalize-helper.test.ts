@@ -475,7 +475,7 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
-  it("on 'swap-failed' marker, preserves pendingUpgrade and returns the helper's error message", async () => {
+  it("on 'swap-failed' marker, preserves the swap and service-start errors", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
@@ -496,7 +496,7 @@ describe("reconcilePostFinalizeMarker", () => {
         livePath: liveBinaryPath,
         stagedBinaryPath,
         errorMessage: "MoveFileEx error 5: Access denied",
-        serviceStartError: null,
+        serviceStartError: "schtasks /Run failed: service already stopped",
       }),
     );
 
@@ -507,12 +507,100 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(outcome.status).toBe("applied-swap-failed");
     if (outcome.status === "applied-swap-failed") {
       expect(outcome.errorMessage).toContain("Access denied");
+      expect(outcome.serviceStartError).toBe(
+        "schtasks /Run failed: service already stopped",
+      );
     }
     expect(existsSync(markerPath)).toBe(false);
     const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(reread.pendingUpgrade).not.toBeNull();
     expect(reread.pendingUpgrade.version).toBe("1.5.0");
     expect(reread.version).toBe("1.4.0");
+  });
+
+  it.each([
+    ["null", { serviceStartError: null }],
+    ["omitted", {}],
+  ])(
+    "normalises an %s swap-failed serviceStartError to null",
+    async (_label, markerExtra) => {
+      const liveBinaryPath = join(workHome, "bin", "traycer");
+      const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+      mkdirSync(join(workHome, "bin"), { recursive: true });
+      writeFileSync(liveBinaryPath, "live-bytes");
+      writeFileSync(stagedBinaryPath, "staged-bytes");
+      writeManifest({
+        liveBinaryPath,
+        stagedBinaryPath,
+        version: "1.5.0",
+        currentVersion: "1.4.0",
+      });
+      const markerPath = join(
+        workHome,
+        ".traycer",
+        "cli",
+        "post-finalize.json",
+      );
+      writeFileSync(
+        markerPath,
+        JSON.stringify({
+          status: "swap-failed",
+          attemptedAt: "2026-05-11T00:00:00Z",
+          livePath: liveBinaryPath,
+          stagedBinaryPath,
+          errorMessage: "MoveFileEx error 5: Access denied",
+          ...markerExtra,
+        }),
+      );
+
+      const { reconcilePostFinalizeMarker } =
+        await import("../finalize-helper");
+      const outcome = await reconcilePostFinalizeMarker({
+        environment: "production",
+      });
+      expect(outcome.status).toBe("applied-swap-failed");
+      if (outcome.status === "applied-swap-failed") {
+        expect(outcome.serviceStartError).toBeNull();
+      }
+    },
+  );
+
+  it("preserves serviceStartError when swap-failed has no pending manifest", async () => {
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify({
+        version: "1.5.0",
+        installedAt: "2026-05-11T00:00:00Z",
+        binaryPath: join(workHome, "bin", "traycer"),
+        source: "manual",
+        pendingUpgrade: null,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    writeFileSync(
+      join(cliDir, "post-finalize.json"),
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: join(workHome, "bin", "traycer"),
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: "schtasks /Run failed: service already stopped",
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swap-failed");
+    if (outcome.status === "applied-swap-failed") {
+      expect(outcome.serviceStartError).toBe(
+        "schtasks /Run failed: service already stopped",
+      );
+    }
   });
 
   it("on 'parent-still-alive' marker, preserves pendingUpgrade and reports the outcome", async () => {

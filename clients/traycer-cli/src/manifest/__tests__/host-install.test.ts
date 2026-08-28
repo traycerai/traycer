@@ -82,6 +82,9 @@ function sampleRecord(version: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1234,
     executablePath: "/tmp/traycer-host",
+    // Explicit so round-trip fixtures match the schema's normalized read:
+    // an absent digest is preprocessed to `null`, not left undefined.
+    executableSha256: null,
   };
 }
 
@@ -174,6 +177,31 @@ describe("manifest/host-install - install record I/O", () => {
     const read = await readHostInstallRecord("production");
     expect(read?.version).toBe("1.2.3");
     expect(read?.installId).toBeNull();
+  });
+
+  it("round-trips a populated executableSha256", async () => {
+    const record = {
+      ...sampleRecord("1.2.3"),
+      executableSha256: "b".repeat(64),
+    };
+    await writeHostInstallRecord("production", record);
+    expect((await readHostInstallRecord("production"))?.executableSha256).toBe(
+      "b".repeat(64),
+    );
+  });
+
+  it("reads legacy records without executableSha256 as null (tolerant read)", async () => {
+    const legacy: Record<string, unknown> = { ...sampleRecord("1.2.3") };
+    delete legacy.executableSha256;
+    mkdirSync(paths.hostInstallDir("production"), { recursive: true });
+    writeFileSync(
+      paths.hostInstallRecordPath("production"),
+      JSON.stringify(legacy),
+      "utf8",
+    );
+    const read = await readHostInstallRecord("production");
+    expect(read?.version).toBe("1.2.3");
+    expect(read?.executableSha256).toBeNull();
   });
 
   it("returns null when no record exists for the environment", async () => {

@@ -100,7 +100,11 @@ function optimisticPromptItem(clientActionId: string): ChatQueuedPromptItem {
     kind: "prompt",
     queueItemId: optimisticQueuedItemId(clientActionId),
     messageId: `${clientActionId}-message`,
-    message: { kind: "user", content: CONTENT },
+    message: {
+      kind: "user",
+      content: CONTENT,
+      browserAnnotations: [],
+    },
     sender: SENDER,
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },

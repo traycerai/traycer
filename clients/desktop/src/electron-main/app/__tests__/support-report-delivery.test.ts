@@ -150,6 +150,8 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     stagedDir: join(tempDir, "staged"),
     stagedRecordFile: join(tempDir, "staged.json"),
     pendingLoginItemRevisionFile: join(tempDir, "login-item"),
+    substrateFile: join(tempDir, "substrate.json"),
+    transitionJournalFile: join(tempDir, "transition.json"),
     environment: "production",
   };
   return new DesktopSupportService({

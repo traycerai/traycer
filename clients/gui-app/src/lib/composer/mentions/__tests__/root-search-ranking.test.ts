@@ -24,6 +24,7 @@ function entry(fields: {
     action: { kind: "back" },
     updatedAt: null,
     archived: false,
+    dormant: false,
     preview: null,
   };
 }

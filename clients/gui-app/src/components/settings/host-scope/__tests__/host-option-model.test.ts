@@ -3,10 +3,15 @@ import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionKindLabel,
   hostOptionStatusWord,
+  hostOptionUpdateBadge,
   isHostOptionSelectable,
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  UNKNOWN_FLEET_UPDATE_VIEW,
+  type FleetUpdateView,
+} from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
  * The picker row's status word, which had NO coverage at all — and that is
@@ -194,5 +199,85 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
         }),
       ),
     ).toBe("Host");
+  });
+});
+
+// G4: the selector row's update badge, decorated from `FleetUpdateView` alone.
+// The `unknown`-with-`lastKnownKind` case is the one the independent cold
+// review's finding 4 named directly: a pre-`@1.3` peer (`unknown`, no
+// retained phase) must render NOTHING — the noise case a blank badge exists
+// to avoid claiming.
+describe("hostOptionUpdateBadge", () => {
+  function viewOf(overrides: Partial<FleetUpdateView>): FleetUpdateView {
+    return { ...UNKNOWN_FLEET_UPDATE_VIEW, ...overrides };
+  }
+
+  // `qualified: false` explicitly here — `viewOf`'s base
+  // (`UNKNOWN_FLEET_UPDATE_VIEW`) carries `qualified: true`, and production
+  // change 7 (`hostOptionUpdateBadge` now retains-badges ANY qualified view,
+  // not only a `kind: "unknown"` one) means a live-phase fixture that forgot
+  // to override `qualified` would silently exercise the RETAINED arm instead
+  // of the live one, reading "last seen updating" where the test's own title
+  // promises "updating".
+  it("a LIVE updating phase reads 'updating'", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "downloading", qualified: false })),
+    ).toBe("updating");
+  });
+
+  it("a retained (last-known) updating phase reads 'last seen updating'", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "downloading" }),
+      ),
+    ).toBe("last seen updating");
+  });
+
+  it("a retained failed attempt reads 'last seen update failed'", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "failed" }),
+      ),
+    ).toBe("last seen update failed");
+  });
+
+  it("a LIVE failed attempt reads 'update failed' (no 'last seen' prefix — it is current)", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "failed", qualified: false })),
+    ).toBe("update failed");
+  });
+
+  // Production change 7: a QUALIFIED view carrying a non-`unknown` kind (a
+  // stale-but-not-yet-decayed read - `projectFleetUpdateView`'s `qualified`
+  // flag is deliberately independent of `kind`) must retain-badge exactly
+  // like the `kind: "unknown"` case above, not render the present-tense live
+  // word. This is the case `viewOf`'s own default (`qualified: true`) was
+  // silently exercising in the two "LIVE" fixtures above before they pinned
+  // `qualified: false` explicitly.
+  it("a QUALIFIED (stale-but-not-decayed) downloading view reads 'last seen updating', never the present-tense word", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "downloading", qualified: true })),
+    ).toBe("last seen updating");
+  });
+
+  it("A BARE unknown with NO retained phase renders NULL — the pre-@1.3-peer noise case", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "unknown", lastKnownKind: null })),
+    ).toBeNull();
+  });
+
+  it("a retained terminal 'complete' or 'idle' phase also renders null — nothing worth badging about the past", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "complete" }),
+      ),
+    ).toBeNull();
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "unknown", lastKnownKind: "idle" })),
+    ).toBeNull();
+  });
+
+  it("an idle (up-to-date) host renders no badge at all", () => {
+    expect(hostOptionUpdateBadge(viewOf({ kind: "idle" }))).toBeNull();
   });
 });

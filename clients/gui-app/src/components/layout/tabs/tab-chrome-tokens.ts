@@ -13,21 +13,17 @@ export const TAB_CLASS_BASE =
 /**
  * Neighbour displacement while a tab is being dragged past it.
  *
- * Deliberately crisper than the tab layout spring (ζ≈1.05, ω≈35.7,
- * ~174ms to settle, no overshoot) because the general layout spring settles in
- * ~258ms — which reads as lagging next to Chrome, whose displaced tab covers its
- * visible 230 native px in 142ms with a strictly decaying per-frame delta.
- * Scaled for our 191px tabs against Chrome's 235px, the comparable visible
- * segment is ~115ms.
- *
- * Overdamped on purpose: Chrome's displacement has zero overshoot, and an
- * overshoot here would read as a bounce Chrome does not have.
+ * A short, monotone tween deliberately replaces the previous overdamped
+ * spring. The spring needed ~174ms to settle, so a quick adjacent gesture could
+ * end before the neighbour visibly reached its new position and the tab read
+ * as "chasing" the pointer. Chrome's displacement is strictly decaying with no
+ * overshoot; this curve preserves that character while completing within the
+ * duration of a fast one-slot gesture.
  */
 export const HEADER_TAB_REORDER_TRANSITION = {
-  type: "spring",
-  stiffness: 700,
-  damping: 41,
-  mass: 0.55,
+  type: "tween",
+  duration: 0.09,
+  ease: [0.2, 0, 0, 1],
 } satisfies Transition;
 
 /**

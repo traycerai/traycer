@@ -17,6 +17,8 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { InputGroupButton } from "@/components/ui/input-group";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { registerPrimaryFocusEndpoint } from "@/lib/focus/primary-focus-coordinator";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 
@@ -144,9 +146,14 @@ export function LandingTerminalDirectoryPicker(
                       </Badge>
                     ) : null}
                   </span>
-                  <span className="block truncate text-ui-xs text-muted-foreground">
-                    {workspacePath}
-                  </span>
+                  {/* Same reason as the worktree list: these rows disable
+                      themselves while a launch is in flight, and a disabled
+                      CommandItem drops pointer events for the whole row. */}
+                  <FilePathTooltip content={workspacePath} side="bottom">
+                    <StartTruncatedText className="pointer-events-auto block text-ui-xs text-muted-foreground">
+                      {workspacePath}
+                    </StartTruncatedText>
+                  </FilePathTooltip>
                 </span>
               </CommandItem>
             ))}

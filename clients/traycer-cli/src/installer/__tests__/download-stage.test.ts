@@ -10,6 +10,7 @@ import {
 import { platform as osPlatform } from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Environment = "dev" | "production";
@@ -94,7 +95,14 @@ import type {
 } from "../../registry";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { acquireCliLock } from "../../store/cli-lock";
-import { downloadAndStageHost } from "../download-stage";
+import {
+  decideHostDownloadPromotion,
+  downloadAndStageHost,
+} from "../download-stage";
+import {
+  updateAttemptRecordPath,
+  type HostUpdateAttemptRecord,
+} from "@traycer-clients/shared/host-update";
 
 const ENV: Environment = "production";
 let archiveTmpDir = "";
@@ -125,7 +133,7 @@ function buildManifest(opts: FakeClientOptions): HostVersionsManifest {
       available: true,
       unavailableReason: null,
       url: `https://example.com/${v.version}/${executableBasename()}`,
-      sizeBytes: 4,
+      sizeBytes: Buffer.byteLength("fake host binary"),
       sha256: "unused-in-fake",
       signatureUrl: `https://example.com/${v.version}/${executableBasename()}.minisig`,
       signatureAlgorithm: "minisign",
@@ -293,6 +301,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath,
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -302,6 +311,54 @@ async function writeInstall(
 function noopProgress(): void {
   // Progress events aren't asserted in most tests - a no-op sink keeps
   // call sites terse.
+}
+
+function attemptRecord(
+  overrides: Partial<HostUpdateAttemptRecord>,
+): HostUpdateAttemptRecord {
+  return {
+    schemaVersion: 2,
+    attemptId: "attempt-1",
+    generation: 1,
+    sequence: 1,
+    trigger: "manual",
+    targetVersion: "1.2.0",
+    phase: "downloading",
+    execution: "active",
+    continuation: null,
+    progress: null,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    completedAt: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+// Promote-time STATE INJECTION: a raw, test-only write straight to the
+// canonical `update-attempt.json` path `download-stage.ts`'s promote-time
+// guard reads - NOT a conforming reproduction of a real concurrent-process
+// race. The public `downloadAndStageHost` holds its outer stage-maintenance
+// capability for the whole segment (acquire through transfer through
+// promote) and currently exposes no adoption input a second contender could
+// use to legitimately hold or hand off that same capability mid-segment, so
+// there is no way, today, for a second REAL contender to reach and write
+// this file while this call's transfer is in flight without that write
+// itself being refused by the very capability this call holds. This helper
+// bypasses that entirely and writes the bytes directly, which is sufficient
+// to exercise the guard's OWN read-and-decide logic in isolation, but it is
+// not evidence that the modeled race is reachable through any currently
+// public API. If `downloadAndStageHost` (or its shared segment machinery)
+// ever gains an adoption input - the same shape `withCliUpdateExecutionSegment`
+// already supports for other callers - this locking argument, and whether
+// the race these tests model becomes actually reachable, must be revisited.
+function writeAttemptRecord(overrides: Partial<HostUpdateAttemptRecord>): void {
+  const home = hostHomeFor(ENV);
+  mkdirSync(home, { recursive: true });
+  writeFileSync(
+    updateAttemptRecordPath(home),
+    `${JSON.stringify(attemptRecord(overrides))}\n`,
+  );
 }
 
 // A manually-releasable gate for simulating a slow download. Stored as an
@@ -918,9 +975,11 @@ describe("downloadAndStageHost", () => {
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.2.0");
   });
 
-  it("reverse-completion: an older download finishing after a newer promote discards itself", async () => {
+  it("serializes overlapping downloads across the transfer", async () => {
     await writeInstall("1.0.0", {});
     const gate = makeGate();
+    const slowStarted = makeGate();
+    let fastStarted = false;
     const slowClient = fakeRegistryClient({
       latest: "1.2.0",
       versions: [
@@ -928,7 +987,7 @@ describe("downloadAndStageHost", () => {
         { version: "1.2.0", yanked: false },
       ],
       downloadGate: gate.promise,
-      onDownloadStart: null,
+      onDownloadStart: () => slowStarted.release(),
     });
     const fastClient = fakeRegistryClient({
       latest: "1.5.0",
@@ -937,7 +996,9 @@ describe("downloadAndStageHost", () => {
         { version: "1.5.0", yanked: false },
       ],
       downloadGate: null,
-      onDownloadStart: null,
+      onDownloadStart: () => {
+        fastStarted = true;
+      },
     });
 
     const slowPromise = downloadAndStageHost({
@@ -947,6 +1008,41 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: slowClient,
     });
+    await slowStarted.promise;
+    const firstFastAttempt = downloadAndStageHost({
+      environment: ENV,
+      versionRequest: null,
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fastClient,
+    });
+    const firstFastResult = firstFastAttempt.then(
+      (outcome) => ({ kind: "outcome" as const, outcome }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // T2 serialization: one outer stage-maintenance capability spans the
+    // transfer, so overlapping downloads in one segment are unrepresentable.
+    // Positively prove the second transfer has not started while the first
+    // owns that capability.
+    expect(fastStarted).toBe(false);
+    const busyResult = await firstFastResult;
+    expect(busyResult.kind).toBe("error");
+    if (busyResult.kind !== "error") {
+      throw new Error("concurrent same-process download unexpectedly ran");
+    }
+    expect(busyResult.error).toBeInstanceOf(CliError);
+    expect((busyResult.error as CliError).code).toBe(
+      CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    );
+
+    gate.release();
+    const slowOutcome = await slowPromise;
+    expect(slowOutcome).toMatchObject({
+      outcome: "promoted",
+      stagedVersion: "1.2.0",
+    });
+
     const fastOutcome = await downloadAndStageHost({
       environment: ENV,
       versionRequest: null,
@@ -958,14 +1054,31 @@ describe("downloadAndStageHost", () => {
       outcome: "promoted",
       stagedVersion: "1.5.0",
     });
-
-    gate.release();
-    const slowOutcome = await slowPromise;
-    expect(slowOutcome).toMatchObject({
-      outcome: "discarded",
-      reason: "not-strictly-newer",
-    });
+    expect(fastStarted).toBe(true);
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
+  });
+
+  it("keeps latest-stage promotion monotonic for either completion order", () => {
+    expect(
+      decideHostDownloadPromotion({
+        candidateVersion: "1.2.0",
+        installedVersion: "1.0.0",
+        stagedVersion: "1.5.0",
+        stagedStageId: "newer-stage",
+        explicitVersionRequested: false,
+        automatic: false,
+      }),
+    ).toEqual({ kind: "discard", reason: "not-strictly-newer" });
+    expect(
+      decideHostDownloadPromotion({
+        candidateVersion: "1.5.0",
+        installedVersion: "1.0.0",
+        stagedVersion: "1.2.0",
+        stagedStageId: "older-stage",
+        explicitVersionRequested: false,
+        automatic: false,
+      }),
+    ).toEqual({ kind: "promote" });
   });
 
   it("promote-after-uninstall does not resurrect a stage", async () => {
@@ -1079,5 +1192,393 @@ describe("downloadAndStageHost", () => {
       }
     })();
     expect(leftoverEntries).toEqual([]);
+  });
+
+  // Promote-time attempt guard (Host Update Layer Redesign): these tests use
+  // promote-time STATE INJECTION after the outer admission snapshot and
+  // before phase 3's re-read. This is focused fault injection, not proof of a
+  // currently representable conforming race: public download owns its outer
+  // capability across the transfer and exposes no adoption input for a second
+  // writer. The gate/release timing exercises the guard's real read-and-decide
+  // behavior against real staged I/O; if download adoption is ever added, the
+  // reachability and locking argument must be revisited separately.
+  describe("promote-time attempt guard", () => {
+    it("a parked waiting-to-activate attempt appearing during a background/latest download's transfer window yields at promote and preserves the parked attempt's staged bytes", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      // Stage 1.2.0 first - stands in for the parked attempt's already-
+      // placed bytes, exactly as `waiting-to-activate` means "bytes are
+      // already placed; only activation may proceed".
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+      const stagedBefore = await readHostStagedRecord(ENV);
+      expect(stagedBefore?.version).toBe("1.2.0");
+      const executablePath = join(stagedDirFor(ENV), executableBasename());
+      const executableBefore = readFileSync(executablePath);
+
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: client,
+      });
+      await started.promise;
+      // Promote-time STATE INJECTION after the outer admission snapshot and
+      // before phase 3's re-read. A conforming second writer cannot currently
+      // produce this state while public download holds its outer capability;
+      // this case isolates the guard's response if those bytes are observed.
+      writeAttemptRecord({
+        attemptId: "parked-attempt-1",
+        targetVersion: "1.2.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+      gate.release();
+
+      const result = await downloadPromise.then(
+        (outcome) => ({ kind: "outcome" as const, outcome }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+
+      // The load-bearing negative: the parked attempt's staged record AND
+      // its staged bytes are byte-for-byte untouched by the yielded
+      // download - not merely "some record still exists at some version".
+      const stagedAfter = await readHostStagedRecord(ENV);
+      expect(stagedAfter).toEqual(stagedBefore);
+      expect(readFileSync(executablePath)).toEqual(executableBefore);
+      expect(result).toMatchObject({
+        kind: "error",
+        error: {
+          code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+          details: expect.objectContaining({
+            disposition: "yield",
+            attemptId: "parked-attempt-1",
+            phase: "waiting-to-activate",
+            targetVersion: "1.2.0",
+            candidateVersion: "1.5.0",
+          }),
+        },
+      });
+    });
+
+    it("fails closed on corrupt attempt bytes appearing during transfer and preserves the existing stage", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+      const stagedBefore = await readHostStagedRecord(ENV);
+      const executablePath = join(stagedDirFor(ENV), executableBasename());
+      const executableBefore = readFileSync(executablePath);
+
+      const gate = makeGate();
+      const started = makeGate();
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: gate.promise,
+          onDownloadStart: () => started.release(),
+        }),
+      });
+      await started.promise;
+      writeFileSync(
+        updateAttemptRecordPath(hostHomeFor(ENV)),
+        "{not-valid-json\n",
+      );
+      gate.release();
+
+      const result = await downloadPromise.then(
+        (outcome) => ({ kind: "outcome" as const, outcome }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+      const stagedAfter = await readHostStagedRecord(ENV);
+      expect(stagedAfter).toEqual(stagedBefore);
+      expect(readFileSync(executablePath)).toEqual(executableBefore);
+      expect(result).toMatchObject({
+        kind: "error",
+        error: {
+          code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
+          details: expect.objectContaining({
+            reason: "host-download-promote",
+            recordKind: "corrupt",
+          }),
+        },
+      });
+    });
+
+    it("ablation: a TERMINAL attempt present at the same promote-time race does not block the background/latest promotion", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: client,
+      });
+      await started.promise;
+      // Same timing as the positive case above - only `phase`/`execution`
+      // differ (a finished, terminal attempt instead of a park). Proves the
+      // guard keys on nonterminal execution, not merely "a record exists".
+      writeAttemptRecord({
+        attemptId: "finished-attempt-1",
+        targetVersion: "1.2.0",
+        phase: "complete",
+        execution: "terminal",
+        continuation: null,
+        completedAt: "2026-01-01T00:05:00.000Z",
+      });
+      gate.release();
+
+      const outcome = await downloadPromise;
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
+      expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
+    });
+
+    it("an explicit `host download <version>` yields at promote when a parked attempt appears during transfer, preserving the parked attempt's staged bytes", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+      const stagedBefore = await readHostStagedRecord(ENV);
+      const executablePath = join(stagedDirFor(ENV), executableBasename());
+      const executableBefore = readFileSync(executablePath);
+
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      // Explicit version request - normally replaces ANY existing stage,
+      // even a newer one (see "an explicit version request replaces any
+      // existing stage" above). The promote-time guard must still yield in
+      // front of that otherwise-unconditional replace-any-stage policy.
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.5.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      });
+      await started.promise;
+      writeAttemptRecord({
+        attemptId: "parked-attempt-2",
+        targetVersion: "1.2.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+      gate.release();
+
+      const result = await downloadPromise.then(
+        (outcome) => ({ kind: "outcome" as const, outcome }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+
+      const stagedAfter = await readHostStagedRecord(ENV);
+      expect(stagedAfter).toEqual(stagedBefore);
+      expect(readFileSync(executablePath)).toEqual(executableBefore);
+      expect(result).toMatchObject({
+        kind: "error",
+        error: {
+          code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+          details: expect.objectContaining({
+            disposition: "yield",
+            attemptId: "parked-attempt-2",
+            phase: "waiting-to-activate",
+            targetVersion: "1.2.0",
+            candidateVersion: "1.5.0",
+          }),
+        },
+      });
+    });
+
+    it("ablation: a TERMINAL attempt present at the same explicit-download promote-time race does not block the replace-any-stage promotion", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.5.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      });
+      await started.promise;
+      writeAttemptRecord({
+        attemptId: "finished-attempt-2",
+        targetVersion: "1.2.0",
+        phase: "complete",
+        execution: "terminal",
+        continuation: null,
+        completedAt: "2026-01-01T00:05:00.000Z",
+      });
+      gate.release();
+
+      const outcome = await downloadPromise;
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
+      expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
+    });
+
+    // The absent-attempt direction of the same ablation (no `update-attempt.json`
+    // at all at promote time) is already load-bearing coverage from the
+    // pre-existing "downloads and promotes a fresh, strictly-newer version by
+    // default (latest)" and "an explicit version request replaces any
+    // existing stage, even a newer one" tests above - every test in this
+    // file before this `describe` block runs with no attempt record ever
+    // written, so those promotions already prove the absent direction.
+  });
+
+  it("structurally pins capability checks on every deliberate discard and release edge", () => {
+    // The public function currently owns its contender internally, so this is
+    // a source-contract guard for the exact cleanup boundary. Runtime holder
+    // loss is exercised by the contender/lifecycle suites; this assertion
+    // prevents a future refactor from moving these checks outside the edges.
+    //
+    // The promote-time discard edge still checks and THROWS directly (a
+    // capability loss there aborts the promote decision itself). The three
+    // `finally`-block cleanup edges route through the shared
+    // `cleanupAdmitted()` helper instead (fixup ticket, change 11): a
+    // capability loss there must skip the destructive op and return `false`
+    // rather than throw, so it can never replace the primary promote/discard
+    // outcome the caller classifies with a spurious `E_CLI_LOCK_BUSY`.
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../download-stage.ts"),
+      "utf8",
+    );
+    expect(source).toContain('reason: "host-download-discard"');
+    expect(source).toContain(
+      "const cleanupAdmitted = async (reason: string): Promise<boolean>",
+    );
+    expect(source).toContain('cleanupAdmitted("host-download-temp-cleanup")');
+    expect(source).toContain(
+      'cleanupAdmitted("host-download-archive-release")',
+    );
+    expect(source).toContain("await releaseDownloadSlot(");
+    expect(source).toContain("await releaseDownloadSlotOwnership(");
+    // The helper never throws: a lost capability returns `false` instead.
+    expect(source).toMatch(
+      /cleanupAdmitted[\s\S]*?catch\s*{\s*return false;\s*}/,
+    );
+    expect(
+      source.indexOf('cleanupAdmitted("host-download-temp-cleanup")'),
+    ).toBeLessThan(source.indexOf("await rm(ownedPath"));
+    expect(
+      source.lastIndexOf('cleanupAdmitted("host-download-archive-release")'),
+    ).toBeLessThan(source.lastIndexOf("await releaseDownloadSlotOwnership("));
   });
 });
