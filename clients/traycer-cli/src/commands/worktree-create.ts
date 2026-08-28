@@ -6,7 +6,7 @@ import {
 } from "@traycer/protocol/host";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -150,7 +150,11 @@ export function buildWorktreeCreateCommand(
     const result = await toAgentCliError(
       callHostRpc("worktree.createPaths", request),
     );
-    const parsed = parseHostResponse(worktreeCreatePathsResponseSchema, result);
+    const parsed = parseCanonicalHostResponse(
+      "worktree.createPaths",
+      worktreeCreatePathsResponseSchema,
+      result,
+    );
     return {
       data: parsed,
       human: formatWorktreeCreateResult(parsed, branch),

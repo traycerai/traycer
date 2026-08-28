@@ -2,7 +2,7 @@ import { worktreeListBindingsForEpicResponseSchemaV12 } from "@traycer/protocol/
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
 import { resolveEpicId } from "../internal/agent-context";
@@ -34,7 +34,8 @@ export function buildWorkspaceListCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("worktree.listBindingsForEpic", { epicId }),
     );
-    const parsed = parseHostResponse(
+    const parsed = parseCanonicalHostResponse(
+      "worktree.listBindingsForEpic",
       worktreeListBindingsForEpicResponseSchemaV12,
       result,
     );
