@@ -6,7 +6,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -83,7 +83,8 @@ export function buildAgentCreateCommand(opts: {
       profileSelection: parseCreateProfileSelection(opts.profile),
     });
     const result = await toAgentCliError(callHostRpc("agent.create", request));
-    const { agentId, warnings } = parseHostResponse(
+    const { agentId, warnings } = parseCanonicalHostResponse(
+      "agent.create",
       createAgentResponseSchema,
       result,
     );
