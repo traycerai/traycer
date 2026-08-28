@@ -2,25 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type {
-  IpcHostController,
   IpcManagedWindow,
   IpcWindowRecord,
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
-import type {
-  ActivateInstalledOk,
-  ApplyStagedOk,
-  ApplyStagedTrigger,
-  ConvergeReadyOk,
-  HostControllerStatus,
-  LifecycleAdmissionBlock,
-  InstallVersionOk,
-  MutationOutcome,
-  MutationProgress,
-  RemoveTraycerOk,
-  ServiceRegistrationOk,
-  UninstallOk,
-} from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
@@ -29,6 +14,7 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { shouldPreserveClosedWindowSnapshot } from "../windows-ipc";
+import { FakeHostController } from "./fake-host-controller";
 
 describe("shouldPreserveClosedWindowSnapshot", () => {
   it("prunes a deliberate mid-session close (not quitting, other windows remain)", () => {
@@ -207,111 +193,6 @@ class FakeHost {
   ensureWatcherInstalled(): void {}
   async getRecentLogTail(_maxLines: number): Promise<string | null> {
     return null;
-  }
-}
-
-const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
-  download: null,
-  mutation: null,
-  installedVersion: "1.0.0",
-  latestVersion: "1.0.0",
-  stagedVersion: null,
-  installedRuntimeVersion: "1.0.0",
-  runningRuntimeVersion: "1.0.0",
-  updateReady: false,
-  activation: "activated",
-  reachable: true,
-  removedByUser: false,
-  checkedAt: "2026-01-01T00:00:00.000Z",
-};
-
-/**
- * Structural double for `IpcHostController` - this suite exercises the
- * bridge's windows IPC surface, not `HostController` itself, so every
- * method just resolves a plausible "ok" outcome.
- */
-class FakeHostController implements IpcHostController {
-  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
-  async getStatus(): Promise<HostControllerStatus> {
-    return FAKE_HOST_CONTROLLER_STATUS;
-  }
-  async convergeReady(
-    _force: boolean,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return { kind: "ok", value: { running: true, version: "1.0.0" } };
-  }
-  async stageLatest(): Promise<void> {}
-  async applyStaged(
-    _trigger: ApplyStagedTrigger,
-    _force: boolean,
-  ): Promise<MutationOutcome<ApplyStagedOk>> {
-    return {
-      kind: "ok",
-      value: { appliedVersion: "1.0.0", runningActivated: true },
-    };
-  }
-  async activateInstalled(
-    _force: boolean,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async installVersion(
-    pin: string,
-    _force: boolean,
-  ): Promise<MutationOutcome<InstallVersionOk>> {
-    return {
-      kind: "ok",
-      value: { installedVersion: pin, runningActivated: true },
-    };
-  }
-  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return { kind: "ok", value: { registered: true } };
-  }
-  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return { kind: "ok", value: { registered: false } };
-  }
-  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async recoverIfDown(): Promise<
-    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
-  > {
-    return { kind: "suppressed" };
-  }
-  async freePortAndRestart(
-    _pid: number | null,
-    _port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
-    return {
-      kind: "ok",
-      value: {
-        removedInstallDir: true,
-        deregisteredService: true,
-        serviceRegistrationRetained: null,
-      },
-    };
-  }
-  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
-    return {
-      kind: "ok",
-      value: {
-        removedHost: true,
-        deregisteredService: true,
-        serviceRegistrationRetained: null,
-        removedLoginItem: false,
-      },
-    };
-  }
-  isPendingRevisionRefreshQuarantined(): boolean {
-    return false;
-  }
-  onMutationProgress(
-    _listener: (progress: MutationProgress) => void,
-  ): () => void {
-    return () => undefined;
   }
 }
 
