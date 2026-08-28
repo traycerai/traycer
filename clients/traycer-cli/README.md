@@ -48,6 +48,8 @@ traycer host status
 | `traycer whoami`               | Validate the stored credentials and show the signed-in user.           |
 | `traycer host ensure`          | Install, register, and start the local Traycer Host if needed.         |
 | `traycer host status`          | Show host process, endpoint, and activity status.                      |
+| `traycer host service start`   | Start the registered background host service and return.               |
+| `traycer host stop`            | Stop the running host.                                                 |
 | `traycer host doctor`          | Diagnose host installation and runtime issues.                         |
 | `traycer host logs --tail 200` | Print recent host logs.                                                |
 | `traycer host update`          | Update the installed host to the latest compatible release.            |
@@ -55,6 +57,13 @@ traycer host status
 | `traycer cli upgrade`          | Upgrade the installed CLI binary when supported by the install source. |
 | `traycer config shell get`     | Show the shell used for host bootstrap and terminal tabs.              |
 | `traycer config env list`      | Show environment overrides used by Traycer.                            |
+
+`traycer host start` is the **foreground** supervisor - it runs the host in this
+terminal and blocks until the host exits. It is also the entrypoint launchd /
+systemd / Scheduled Tasks invoke. Interactive runs print a banner naming the log
+file and how to stop; use `traycer host logs --follow` in another terminal to
+watch the log. To start the background service and get your prompt back, use
+`traycer host service start`.
 
 Use `--help` on any command group for the full local reference:
 

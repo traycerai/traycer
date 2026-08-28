@@ -259,6 +259,7 @@ vi.mock("../../runner/runner", async (importOriginal) => {
 });
 
 import { buildProgram, buildProgramWithAgentRoles } from "../../index";
+import { CLI_ERROR_CODES } from "../../runner/errors";
 
 // Native-packaging follow-up bug: previously `traycer-cli/src/index.ts`
 // only wired up `login`, `logout`, `whoami`, `host start`,
@@ -315,6 +316,22 @@ function collectOptionFlags(command: Command): Array<string | undefined> {
     ...command.options.map((option) => option.long),
     ...command.commands.flatMap(collectOptionFlags),
   ];
+}
+
+// `helpInformation()` renders only the built-in sections - `addHelpText`
+// content (the prose these tests pin) is invisible to it, so anything that
+// checks addHelpText output has to go through the real `outputHelp()` write
+// path instead (mirrors "host update --help documents --version..." above).
+function renderedHelp(cmd: Command): string {
+  const write = vi
+    .spyOn(process.stdout, "write")
+    .mockImplementation(() => true);
+  try {
+    cmd.outputHelp();
+    return write.mock.calls.map(([chunk]) => String(chunk)).join("");
+  } finally {
+    write.mockRestore();
+  }
 }
 
 describe("traycer CLI entrypoint registration", () => {
@@ -751,6 +768,78 @@ describe("traycer CLI entrypoint registration", () => {
     ]);
   });
 
+  it("host update --release selects a version without the rewrite", async () => {
+    // The registered spelling has to work on its own merits: nothing about
+    // `--release` goes through `rewriteHostUpdateVersion`, so this pins the
+    // option itself rather than the compatibility path above.
+    mocks.downloadCalls.length = 0;
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(["host", "update", "--release", "2.4.1"], {
+      from: "user",
+    });
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "2.4.1", automatic: false },
+    ]);
+  });
+
+  it("host update --version=<v> and --release=<v> land on the same option", async () => {
+    mocks.downloadCalls.length = 0;
+    const inline = buildProgram();
+    inline.exitOverride();
+    await inline.parseAsync(["host", "update", "--version=3.0.0"], {
+      from: "user",
+    });
+    const release = buildProgram();
+    release.exitOverride();
+    await release.parseAsync(["host", "update", "--release=3.0.0"], {
+      from: "user",
+    });
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "3.0.0", automatic: false },
+      { environment: "production", versionRequest: "3.0.0", automatic: false },
+    ]);
+  });
+
+  // An EXPLICIT empty target is a mistake, not a request for latest.
+  // `--version=`, `--release=` and an unset shell variable
+  // (`--release "$PIN"`) all arrive as "", and silently resolving that to
+  // latest would update a machine the caller meant to pin. The pre-`--release`
+  // code passed "" through to SemVer validation, which rejected it.
+  it.each([
+    ["--version=", ["host", "update", "--version="]],
+    ["--release=", ["host", "update", "--release="]],
+    ["--version ''", ["host", "update", "--version", ""]],
+    ["--release ''", ["host", "update", "--release", ""]],
+  ])(
+    "host update rejects an explicitly empty target (%s)",
+    async (_n, argv) => {
+      mocks.downloadCalls.length = 0;
+      const program = buildProgram();
+      program.exitOverride();
+      await expect(
+        program.parseAsync(argv, { from: "user" }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      });
+      // Crucially: it must not have fallen through to a latest-version update.
+      expect(mocks.downloadCalls).toEqual([]);
+    },
+  );
+
+  it("host update --version with no value errors against the real option name", async () => {
+    // The whole reason the target became a registered option: a missing value
+    // used to produce "option '--host-update-version <version>' argument
+    // missing", naming a spelling that appears nowhere in the CLI.
+    const program = buildProgram();
+    program.exitOverride();
+    await expect(
+      program.parseAsync(["host", "update", "--version"], { from: "user" }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("--release <version>"),
+    });
+  });
+
   it("config shell set passes everything after -- through untouched", async () => {
     const shellPassthrough = buildProgram();
     shellPassthrough.exitOverride();
@@ -792,11 +881,31 @@ describe("traycer CLI entrypoint registration", () => {
     );
   });
 
-  it("host update --help prints the --version <version> spelling users type", () => {
-    // The spelling users actually type has to be discoverable, or the command
-    // advertises "a registry version" and gives no way to name one. It cannot
-    // be a registered option (root `--version` owns that token - that
-    // collision is why the rewrite exists), so help TEXT carries it.
+  it("host update registers --release as a real option", () => {
+    // The version target is a REGISTERED option, not free-form help text over
+    // a hidden parse flag. That is what makes it visible to schema
+    // introspection and what makes its errors name a spelling the user can
+    // actually type - both were the defect (`--host-update-version` leaked
+    // into a missing-argument message and appeared nowhere in the command
+    // tree).
+    const program = buildProgram();
+    const updateCommand = expectCommand(program, ["host", "update"]);
+    expect(updateCommand.options.map((o) => o.long)).toContain("--release");
+    const help = updateCommand.helpInformation();
+    expect(help).toContain("--release <version>");
+    // The internal parse flag is gone entirely - `--version` now rewrites onto
+    // the registered option, so there is no hidden spelling left to leak.
+    expect(help).not.toContain("--host-update-version");
+    expect(updateCommand.options.map((o) => o.long)).not.toContain(
+      "--host-update-version",
+    );
+  });
+
+  it("host update --help documents --version as the compatibility alias", () => {
+    // The published spelling the host's own spawners use has to stay
+    // discoverable. It cannot be a registered option (root `--version` owns
+    // that token - that collision is why the rewrite exists), so help TEXT
+    // carries it and points at `--release`.
     //
     // Asserted against what `--help` actually prints, not `helpInformation()`:
     // the latter renders only the built-in sections, so `addHelpText` content
@@ -813,7 +922,7 @@ describe("traycer CLI entrypoint registration", () => {
         .map(([chunk]) => String(chunk))
         .join("");
       expect(printedHelp).toContain("--version <version>");
-      expect(printedHelp).toContain("Update to this exact registry version");
+      expect(printedHelp).toContain("Compatibility alias for --release");
     } finally {
       write.mockRestore();
     }
@@ -1454,5 +1563,73 @@ describe("traycer CLI entrypoint registration", () => {
       thrown = err;
     }
     expect(thrown).not.toBeNull();
+  });
+
+  // CLI audit CLI-003/CLI-004/CLI-008/CLI-009/CLI-010/CLI-012: the CLI-level
+  // pins for the foreground `host start` console, the new `host service
+  // start` command, and the disclosure copy on the install/apply/update/
+  // uninstall help text.
+
+  it("host service start is registered, visible in 'host service --help', and wired to the shared runner", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "service", "start"]);
+    expectRunnerFlags(cmd, "host service start");
+    const service = expectCommand(program, ["host", "service"]);
+    expect(service.helpInformation()).toContain("start [options]");
+  });
+
+  it("host start's --help names the foreground/blocking behaviour and points at 'traycer host service start', and the command itself is not hidden", () => {
+    const program = buildProgram();
+    const host = expectCommand(program, ["host"]);
+    const start = expectCommand(program, ["host", "start"]);
+    // Supported commands stay visible - only genuinely internal commands
+    // (`host stamp-runtime`, `host free-port`) are hidden from `host --help`.
+    expect(host.helpInformation()).toContain("start [options]");
+
+    const help = renderedHelp(start);
+    expect(help).toMatch(/foreground/i);
+    expect(help).toMatch(/blocks/i);
+    // Commander wraps long help lines, so "traycer host service start" can
+    // land split across a wrap boundary - match tolerating whitespace
+    // (including a newline + indent) between the words rather than the
+    // literal substring.
+    expect(help).toMatch(/traycer\s+host\s+service\s+start/);
+  });
+
+  it("host uninstall --help states both end states: the default leaves the OS service registered, and what --all does", () => {
+    const program = buildProgram();
+    const uninstall = expectCommand(program, ["host", "uninstall"]);
+    const help = renderedHelp(uninstall);
+    expect(help).toMatch(/service stays registered/i);
+    expect(help).toMatch(/--all/);
+    expect(help).toMatch(/deregister/i);
+  });
+
+  it("host install --help and host service install --help disclose that they start the host and can prompt for sign-in", () => {
+    const program = buildProgram();
+    for (const path of [
+      ["host", "install"],
+      ["host", "service", "install"],
+    ] as const) {
+      const cmd = expectCommand(program, path);
+      const help = renderedHelp(cmd);
+      expect(help, `'${path.join(" ")}' --help`).toMatch(/start/i);
+      expect(help, `'${path.join(" ")}' --help`).toMatch(/sign-in/i);
+    }
+  });
+
+  it("host apply --help and host update --help state their differing success contracts", () => {
+    const program = buildProgram();
+    const apply = expectCommand(program, ["host", "apply"]);
+    const applyHelp = renderedHelp(apply);
+    // apply: bytes committed, may not be running.
+    expect(applyHelp).toMatch(/committed/i);
+    expect(applyHelp).toMatch(/does NOT mean the host is\s+running/i);
+
+    const update = expectCommand(program, ["host", "update"]);
+    const updateHelp = renderedHelp(update);
+    // update: exits non-zero when the host is not healthy.
+    expect(updateHelp).toContain("E_HOST_UPDATE_HEALTH_CHECK_FAILED");
+    expect(updateHelp).toMatch(/health-check/i);
   });
 });
