@@ -97,6 +97,7 @@ function windowOf(
     skeletonStreamCoveredThrough: rowCount,
     spans,
     liveMessages: [],
+    skeletonBaselineTransientAssistantMessageIds: [],
     liveEvents: [],
     hydratedBytes: spans.reduce((sum, item) => sum + item.bytes, 0),
     unsettledByteMessageIds: [],

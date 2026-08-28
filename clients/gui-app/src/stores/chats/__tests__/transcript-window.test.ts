@@ -1813,6 +1813,31 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("keeps an accepted user when a same-epoch snapshot revision gap voids the index", () => {
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage("accepted-user-gap", 1)], events: [] },
+    );
+
+    const gapped = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: 3,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(gapped.invalidated).toBe(true);
+    expect(gapped.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-gap",
+    ]);
+  });
+
   it("keeps a just-accepted user record through an index void", () => {
     const live = appendLiveRecords(
       {
@@ -1875,6 +1900,31 @@ describe("what an overlap keeps", () => {
 
     expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-user-absent",
+    ]);
+  });
+
+  it("keeps an assistant completed after a snapshot through its older skeleton", () => {
+    const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const transientId = transientLiveAssistantMessageId("turn-after-snapshot");
+    const live = appendLiveRecords(rebuilding, {
+      messages: [assistantMessage(transientId, "turn-after-snapshot", 1)],
+      events: [],
+    });
+
+    const rebuilt = applySkeletonChunk(live, {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
     ]);
   });
 
@@ -2115,6 +2165,36 @@ describe("what an overlap keeps", () => {
     );
 
     expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not retire a completion stand-in when its assistant row has no body", () => {
+    const turnId = "turn-row-without-body";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+      },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const bodyless = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [],
+      }),
+    );
+
+    expect(bodyless.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
   });

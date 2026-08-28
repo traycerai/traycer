@@ -254,9 +254,18 @@ export interface TranscriptWindow {
    * span, the authoritative copy wins and this one is pruned. A transient
    * frozen assistant may cross a rebase provisionally, because it is not bound
    * to an ordinal; the completed replacement skeleton either confirms its turn
-   * still exists or retires it. Every other live record clears outright.
+   * still exists or retires it. A same-epoch gap also retains accepted users,
+   * matching the equivalent index-void path. Other live records clear.
    */
   readonly liveMessages: readonly Message[];
+  /**
+   * Transient assistants present when the current replacement skeleton began.
+   *
+   * A completed skeleton can disprove only this cohort. Records appended after
+   * the snapshot are newer than that authority and must survive its final
+   * chunk until a newer range or skeleton replaces them.
+   */
+  readonly skeletonBaselineTransientAssistantMessageIds: readonly string[];
   readonly liveEvents: readonly ChatEvent[];
   readonly hydratedBytes: number;
   /**
@@ -382,6 +391,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     indexRevisionRebuilding: true,
     spans: [],
     liveMessages: [],
+    skeletonBaselineTransientAssistantMessageIds: [],
     liveEvents: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
@@ -509,11 +519,19 @@ function pruneSupersededLiveRecords(
   return { ...window, liveMessages, liveEvents };
 }
 
-function assistantTurnKeys(rowIds: readonly string[]): ReadonlySet<string> {
+function servedAssistantTurnKeys(
+  rowIds: readonly string[],
+  messages: readonly Message[],
+): ReadonlySet<string> {
+  const messageKeys = new Set(
+    messages
+      .filter((message) => message.role === "assistant")
+      .map(assistantTurnKey),
+  );
   const keys = new Set<string>();
   for (const rowId of rowIds) {
     const turnKey = assistantRowTurnKey(rowId);
-    if (turnKey !== null) keys.add(turnKey);
+    if (turnKey !== null && messageKeys.has(turnKey)) keys.add(turnKey);
   }
   return keys;
 }
@@ -1128,9 +1146,17 @@ export function applyWindowedSnapshot(
   const provisionalLiveMessages = window.liveMessages.filter(
     (message) =>
       input.rowCount > 0 &&
-      message.role === "assistant" &&
-      isTransientLiveAssistantMessageId(message.messageId),
+      ((message.role === "assistant" &&
+        isTransientLiveAssistantMessageId(message.messageId)) ||
+        (missedDeltas && !rebased && message.role === "user")),
   );
+  const skeletonBaselineTransientAssistantMessageIds = provisionalLiveMessages
+    .filter(
+      (message) =>
+        message.role === "assistant" &&
+        isTransientLiveAssistantMessageId(message.messageId),
+    )
+    .map((message) => message.messageId);
   const base: TranscriptWindow =
     rebased || missedDeltas
       ? {
@@ -1140,12 +1166,14 @@ export function applyWindowedSnapshot(
           // to the old coordinate space, so carry it across a rebase. This is
           // load-bearing when the new tail row exceeds the inline snapshot
           // budget: without it the transcript is empty until loadRange returns.
-          // Other live records are deliberately not retained here; an epoch
-          // change or missed-delta authority may have deleted or rewritten
-          // them. The transient assistant retires when a freshly served span
-          // carries the same turn (see pruneSupersededLiveRecords), despite its
+          // An epoch change drops user records because that authority may have
+          // deleted or rewritten them. A same-epoch gap retains accepted users,
+          // matching the equivalent index-void path while the resnapshot loads.
+          // The transient assistant retires when a freshly served span carries
+          // the same turn (see pruneSupersededLiveRecords), despite its
           // intentionally different id.
           liveMessages: provisionalLiveMessages,
+          skeletonBaselineTransientAssistantMessageIds,
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
@@ -1165,6 +1193,10 @@ export function applyWindowedSnapshot(
           liveMessages: window.invalidated
             ? provisionalLiveMessages
             : window.liveMessages,
+          skeletonBaselineTransientAssistantMessageIds:
+            input.indexRevision === null
+              ? skeletonBaselineTransientAssistantMessageIds
+              : window.skeletonBaselineTransientAssistantMessageIds,
           rowCount: input.rowCount,
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
@@ -1268,7 +1300,7 @@ export function applyWindowedSnapshot(
       spans,
       hydratedBytes: totalBytes(spans),
     },
-    assistantTurnKeys(tailRowIds),
+    servedAssistantTurnKeys(tailRowIds, input.tail.messages),
   );
 }
 
@@ -1450,15 +1482,27 @@ function reconcileProvisionalMessagesWithSkeleton(
     const turnKey = assistantRowTurnKey(entry.rowId);
     if (turnKey !== null) skeletonAssistantTurnKeys.add(turnKey);
   }
+  const baselineMessageIds = new Set(
+    window.skeletonBaselineTransientAssistantMessageIds,
+  );
   const liveMessages = window.liveMessages.filter(
     (message) =>
       message.role !== "assistant" ||
       !isTransientLiveAssistantMessageId(message.messageId) ||
+      !baselineMessageIds.has(message.messageId) ||
       skeletonAssistantTurnKeys.has(assistantTurnKey(message)),
   );
-  return liveMessages.length === window.liveMessages.length
-    ? window
-    : { ...window, liveMessages };
+  if (
+    liveMessages.length === window.liveMessages.length &&
+    baselineMessageIds.size === 0
+  ) {
+    return window;
+  }
+  return {
+    ...window,
+    liveMessages,
+    skeletonBaselineTransientAssistantMessageIds: [],
+  };
 }
 
 /**
@@ -2076,7 +2120,7 @@ export function applyRangeResponse(
       hydratedBytes: totalBytes(spans),
       clock,
     },
-    assistantTurnKeys(response.rowIds),
+    servedAssistantTurnKeys(response.rowIds, response.messages),
   );
 }
 
