@@ -272,6 +272,12 @@ export interface RemoveTraycerOk {
   readonly removedHost: boolean;
   /** Same weaker meaning as `UninstallOk.deregisteredService` - see there. */
   readonly deregisteredService: boolean;
+  /**
+   * Same tri-state as `UninstallOk.serviceRegistrationRetained`. Carried here
+   * too: discarding it left Remove Traycer publishing the weakened boolean as
+   * an accomplished fact with no way for a caller to see the uncertainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 

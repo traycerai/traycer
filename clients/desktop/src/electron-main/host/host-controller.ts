@@ -3655,6 +3655,7 @@ export class HostController {
           value: {
             removedHost: result.removedInstallDir,
             deregisteredService: result.serviceUninstalled,
+            serviceRegistrationRetained: result.serviceRegistrationRetained,
             removedLoginItem,
           },
         };

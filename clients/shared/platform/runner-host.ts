@@ -1443,11 +1443,21 @@ export interface HostRemovalState {
 
 // Result of the in-app "Remove Traycer" action. The desktop stops + removes
 // the host service, the host install, and (on macOS) the SMAppService login
-// item, while preserving all `~/.traycer` user data. Each flag reports what
-// the teardown actually accomplished so the renderer can confirm.
+// item, while preserving all `~/.traycer` user data.
 export interface TraycerUninstallResult {
   readonly removedHost: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. See `HostUninstallResult` for why no
+   * platform can verify absence.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed: `true` = definitely still
+   * registered, `null` = nothing could confirm either way. Read this rather
+   * than `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 

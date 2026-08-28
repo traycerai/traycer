@@ -143,6 +143,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         removedHost: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
         removedLoginItem: false,
       }),
     ),

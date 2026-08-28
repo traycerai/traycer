@@ -319,6 +319,7 @@ class FakeHostController implements IpcHostController {
       value: {
         removedHost: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
         removedLoginItem: false,
       },
     };
