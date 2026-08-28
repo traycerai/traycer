@@ -10,7 +10,11 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
-import { getMobileAppPlatform, isMobileApp } from "@/lib/mobile-app";
+import {
+  getMobileAppPlatform,
+  isMobileApp,
+  type MobileAppPlatform,
+} from "@/lib/mobile-app";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -189,17 +193,12 @@ export function ClientUpdateRequiredAction(props: {
   // mobile stream's dev browser tab, which belongs to neither store and gets
   // the neutral sentence.
   if (isMobileApp()) {
-    const platform = getMobileAppPlatform();
     return (
       <p
         className="w-full text-left text-xs text-muted-foreground"
         data-testid="client-update-required-mobile-note"
       >
-        {platform === "ios"
-          ? "Update the Traycer app in TestFlight or the App Store, then reopen it."
-          : platform === "android"
-            ? "Update the Traycer app in Google Play, then reopen it."
-            : "Update the Traycer app from the store you installed it from, then reopen it."}
+        {mobileStoreUpdateNote(getMobileAppPlatform())}
       </p>
     );
   }
@@ -322,6 +321,22 @@ function renderCachedUpdateAction(input: {
     }
   }
   return null;
+}
+
+/**
+ * The one sentence a phone can act on, per shell.
+ *
+ * `null` is the mobile stream's dev browser tab, which belongs to neither
+ * store; naming one there would be a guess, so it gets the neutral sentence.
+ */
+function mobileStoreUpdateNote(platform: MobileAppPlatform | null): string {
+  if (platform === "ios") {
+    return "Update the Traycer app in TestFlight or the App Store, then reopen it.";
+  }
+  if (platform === "android") {
+    return "Update the Traycer app in Google Play, then reopen it.";
+  }
+  return "Update the Traycer app from the store you installed it from, then reopen it.";
 }
 
 function ReleasesPageButton(props: {
