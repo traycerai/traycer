@@ -217,6 +217,37 @@ describe("startLogTail", () => {
     }
   });
 
+  // Inode comparison is NOT sufficient, and this is the case that proves it:
+  // the content is replaced in place, so `ino` is unchanged and the new file is
+  // longer than the consumed offset. `unlink` + create hits the same shape
+  // whenever the allocator hands back the just-freed inode - which is exactly
+  // how this was caught, with the identity-only version passing locally and
+  // failing in CI. The continuity check (are the bytes we already read still
+  // where we read them?) is what actually decides it.
+  it("re-reads when the content changed under an UNCHANGED inode", async () => {
+    writeFileSync(logPath, "");
+    const { onBytes, text } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: () => undefined,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      maxMissingRetries: 60,
+    });
+
+    const original = `${"a".repeat(150)}\n`;
+    appendFileSync(logPath, original);
+    await waitFor(() => text().includes(original), 2_000);
+
+    // Same inode (no unlink), different bytes, longer than the old offset.
+    const replacement = `${"b".repeat(300)}\nSAME-INODE-PREFIX-KEPT\n`;
+    writeFileSync(logPath, replacement);
+    await waitFor(() => text().includes("SAME-INODE-PREFIX-KEPT"), 3_000);
+
+    expect(text()).toBe(`${original}${replacement}`);
+  });
+
   // The window BEFORE the first poll. Recording only the size at construction
   // left the identity unknown, so a replacement that landed before the first
   // tick had nothing to compare against and resumed at the old offset.

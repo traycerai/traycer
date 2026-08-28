@@ -890,7 +890,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--no-service-register",
-        "Bytes only (not supported on Windows): install the host without registering, starting, or stopping any OS service, and skip the sign-in prompt. Nothing runs until you register the service - the actor that starts it owns the sign-in question.",
+        "Bytes only (not supported on Windows): install the host without registering, starting, or stopping any OS service, and skip the sign-in prompt. No new host is started - and because nothing is stopped either, a host that was already running keeps serving the OLD bytes until it exits or you stop it. The actor that later starts the service owns the sign-in question.",
       )
       .option(
         "--force",
@@ -1283,13 +1283,14 @@ function registerHostCommands(program: Command): void {
           "           'traycer host service uninstall'.",
           "  --all    Service deregistered, the host asked to stand down, and the bytes",
           "           removed. Deregistration alone ends the supervision that would restart",
-          "           the host, but the stop itself is cooperative and best-effort: if the",
-          "           host denies the claim or outlives it, the bytes are still removed while",
-          "           the process may keep serving until it exits, and its pid metadata and",
-          "           log are kept rather than purged. `purgedRuntime` in the result (and the",
-          "           summary line) is what distinguishes a confirmed shutdown from an",
-          "           unconfirmed one - re-run with 'traycer host stop --force' if a host is",
-          "           still up.",
+          "           the host. WINDOWS: deregistration force-kills the host process tree",
+          "           first - there is no busy check, so running terminal sessions and",
+          "           in-flight agent work are lost. macOS/Linux: the stop is cooperative and",
+          "           best-effort, so a host that denies the claim or outlives it keeps",
+          "           serving while the bytes are removed anyway, with its pid metadata and",
+          "           log preserved. `purgedRuntime` in the result (and the summary line)",
+          "           distinguishes a confirmed shutdown from an unconfirmed one - re-run",
+          "           with 'traycer host stop --force' if a host is still up.",
           "Neither mode touches your data or credentials under ~/.traycer.",
           "",
         ].join("\n"),

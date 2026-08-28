@@ -34,6 +34,18 @@ const MAX_SYNC_DRAIN_BYTES = 256 * 1024;
 // (500ms later) takes the next slice.
 const MAX_TICK_READ_BYTES = 1024 * 1024;
 
+// Trailing bytes remembered from what has already been consumed, re-verified
+// at the same position before each read. This is the RELIABLE replacement
+// check; the inode below is only a fast path.
+//
+// Inode comparison is not sufficient on its own: `unlink` followed by
+// `writeFileSync` routinely REUSES the just-freed inode, so a rotation can
+// present the identical `ino` and defeat identity entirely. That is not
+// theoretical - it is exactly how this was caught, passing locally and failing
+// in CI on a different allocator. If the bytes we already read are no longer
+// where we read them, the file underneath changed, whatever its inode says.
+const CONTINUITY_BYTES = 64;
+
 export interface LogTailOptions {
   readonly path: string;
   /**
@@ -102,6 +114,13 @@ export function startLogTail(options: LogTailOptions): LogTail {
   //     across transient failures.
   let fileIdentity: number | null = start.identity;
   let sawFileMissing = false;
+  let continuity: Buffer | null = null;
+  // The initial stat failed for a reason that is NOT "the file is absent" - a
+  // transient EACCES, a Windows sharing violation. Offset 0 would then treat a
+  // pre-existing log as newly appended and replay all of it into a terminal
+  // that asked to start at the end, so instead the first successful
+  // observation establishes EOF and emits nothing.
+  let establishEofOnFirstRead = start.kind === "unreadable";
 
   /**
    * Shared replacement rule, so the poll and the synchronous drain cannot
@@ -109,15 +128,32 @@ export function startLogTail(options: LogTailOptions): LogTail {
    * re-read a post-final-poll replacement from the old offset and dropped its
    * prefix - the identical defect, on the exit path.
    */
-  const rewindIfReplaced = (identity: number | null, size: number): void => {
+  const rewindIfReplaced = (
+    identity: number | null,
+    size: number,
+    continuityHolds: boolean,
+  ): void => {
     const replaced =
       sawFileMissing ||
+      !continuityHolds ||
       (identity !== null && fileIdentity !== null && identity !== fileIdentity);
     // Truncated in place, or replaced: re-read from the top either way. Size
     // is still the right signal for truncation - same file, fewer bytes.
-    if (replaced || size < offset) offset = 0;
+    if (replaced || size < offset) {
+      offset = 0;
+      continuity = null;
+    }
     fileIdentity = identity;
     sawFileMissing = false;
+  };
+
+  const rememberTail = (chunk: Buffer): void => {
+    const combined =
+      continuity === null ? chunk : Buffer.concat([continuity, chunk]);
+    continuity =
+      combined.length <= CONTINUITY_BYTES
+        ? Buffer.from(combined)
+        : Buffer.from(combined.subarray(combined.length - CONTINUITY_BYTES));
   };
 
   const schedule = (): void => {
@@ -135,17 +171,38 @@ export function startLogTail(options: LogTailOptions): LogTail {
       try {
         const stats = await handle.stat();
         missingRetries = 0;
-        rewindIfReplaced(stats.ino > 0 ? stats.ino : null, stats.size);
+        if (establishEofOnFirstRead) {
+          // First readable observation after an unreadable start: adopt its
+          // end rather than replaying everything that was already there.
+          offset = stats.size;
+          establishEofOnFirstRead = false;
+          fileIdentity = stats.ino > 0 ? stats.ino : null;
+          continuity = null;
+          sawFileMissing = false;
+        } else {
+          let continuityHolds = true;
+          if (continuity !== null && offset >= continuity.length) {
+            const probe = Buffer.alloc(continuity.length);
+            const read = await handle.read(
+              probe,
+              0,
+              continuity.length,
+              offset - continuity.length,
+            );
+            continuityHolds =
+              read.bytesRead === continuity.length && probe.equals(continuity);
+          }
+          rewindIfReplaced(
+            stats.ino > 0 ? stats.ino : null,
+            stats.size,
+            continuityHolds,
+          );
+        }
         if (stats.size > offset) {
           const length = Math.min(stats.size - offset, MAX_TICK_READ_BYTES);
           const buffer = Buffer.alloc(length);
           const { bytesRead } = await handle.read(buffer, 0, length, offset);
-          if (bytesRead > 0) {
-            // Advanced BEFORE the sink runs, so the bytes are accounted for
-            // exactly once whatever the sink does with them.
-            offset += bytesRead;
-            chunk = buffer.subarray(0, bytesRead);
-          }
+          if (bytesRead > 0) chunk = buffer.subarray(0, bytesRead);
         }
       } finally {
         await handle.close();
@@ -183,8 +240,20 @@ export function startLogTail(options: LogTailOptions): LogTail {
     // has resolved, and which would otherwise let a poll race the foreground
     // console's synchronous drain. The bytes are simply dropped; the offset
     // has already advanced, and a stopped follower has no one left to tell.
+    // The offset is committed HERE, after the stop re-check, not at read time.
+    // Advancing it inside the await window meant a `stop()` landing mid-read
+    // left bytes that neither path would deliver: this tick discards its chunk,
+    // and `drainSync` sees an offset that has already passed them. Leaving the
+    // offset alone until delivery keeps them pending for the drain - which is
+    // the whole point of having a drain on the exit path.
     if (stopped) return;
-    if (chunk !== null) options.onBytes(chunk);
+    if (chunk !== null) {
+      // Advanced BEFORE the sink runs, so the bytes are accounted for exactly
+      // once whatever the sink does with them.
+      offset += chunk.length;
+      rememberTail(chunk);
+      options.onBytes(chunk);
+    }
     schedule();
   };
 
@@ -199,7 +268,20 @@ export function startLogTail(options: LogTailOptions): LogTail {
       // swapped out between the final poll and this drain is otherwise read
       // from the old offset, silently dropping the new file's prefix on the
       // one path that has no later poll to correct it.
-      rewindIfReplaced(stats.ino > 0 ? stats.ino : null, size);
+      let continuityHolds = true;
+      if (continuity !== null && offset >= continuity.length) {
+        const probe = Buffer.alloc(continuity.length);
+        const probeRead = readSync(
+          fd,
+          probe,
+          0,
+          continuity.length,
+          offset - continuity.length,
+        );
+        continuityHolds =
+          probeRead === continuity.length && probe.equals(continuity);
+      }
+      rewindIfReplaced(stats.ino > 0 ? stats.ino : null, size, continuityHolds);
       if (size > offset) {
         // Read the TAIL of the backlog, not its head. This runs immediately
         // before `process.exit`, so whatever it does not emit is lost - and
@@ -215,6 +297,7 @@ export function startLogTail(options: LogTailOptions): LogTail {
         if (bytesRead > 0) {
           offset = readFrom + bytesRead;
           chunk = buffer.subarray(0, bytesRead);
+          rememberTail(chunk);
           if (skipped > 0) options.onSkipped(skipped);
         }
       }
@@ -259,11 +342,23 @@ function isFileMissingError(cause: unknown): boolean {
 function initialPosition(path: string): {
   readonly size: number;
   readonly identity: number | null;
+  readonly kind: "observed" | "absent" | "unreadable";
 } {
   try {
     const stats = statSync(path);
-    return { size: stats.size, identity: stats.ino > 0 ? stats.ino : null };
-  } catch {
-    return { size: 0, identity: null };
+    return {
+      size: stats.size,
+      identity: stats.ino > 0 ? stats.ino : null,
+      kind: "observed",
+    };
+  } catch (cause) {
+    // Absent is a real observation - the file starts empty, so offset 0 IS its
+    // end. Unreadable is not: an EACCES or sharing violation says nothing
+    // about the size, and treating it as 0 replays an existing log in full.
+    return {
+      size: 0,
+      identity: null,
+      kind: isFileMissingError(cause) ? "absent" : "unreadable",
+    };
   }
 }
