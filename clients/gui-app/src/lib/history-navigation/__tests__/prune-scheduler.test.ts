@@ -14,6 +14,7 @@ function fakeController(): FakeController {
   return {
     pruneCalls,
     getEntries: () => [],
+    getEntryKeys: () => [],
     getIndex: () => 0,
     canGoBack: () => false,
     canGoForward: () => false,

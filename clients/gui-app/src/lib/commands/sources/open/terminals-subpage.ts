@@ -37,7 +37,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
-import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { isWorkspaceResolvePending } from "@traycer-clients/shared/worktree/worktree-row-state";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import {
   formatWorktreeFolderDisabledReason,

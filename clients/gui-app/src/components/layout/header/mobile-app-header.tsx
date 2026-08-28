@@ -11,7 +11,7 @@ import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobi
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
-import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -25,7 +25,11 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
  */
 export function MobileAppHeader(): ReactNode {
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
-  const rightActions = useMobileHeaderStore((state) => state.rightActions);
+  // Resolved, not read from a cell: the presented surface's registered actions,
+  // derived from the same tab layout the title comes from. See
+  // `useMobileHeaderRightActions` for why display is a resolution rather than
+  // something surfaces write here.
+  const rightActions = useMobileHeaderRightActions();
   const showGlobalResourceMonitor = useSettingsStore(
     (state) => state.showGlobalResourceMonitor,
   );

@@ -92,6 +92,8 @@ function registerChatSession(
         streamClientFactory: () => ({
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         }),
       }),

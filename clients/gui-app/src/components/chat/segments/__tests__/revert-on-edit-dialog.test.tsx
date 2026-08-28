@@ -87,3 +87,49 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
     );
   });
 });
+
+/**
+ * A windowed transcript whose history below the edit point is not hydrated
+ * cannot count the artifacts in scope. The opt-out still has to appear: it
+ * defaults to CHECKED, so hiding it would revert artifacts with nothing on
+ * screen saying so - and the host reverts the true scope regardless of what
+ * this side could see.
+ */
+describe("<RevertOnEditDialog /> uncountable artifact scope", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("still offers the opt-out when the count is unknown", () => {
+    render(
+      <RevertOnEditDialog
+        open
+        onOpenChange={onOpenChange}
+        onRevert={onRevert}
+        onDontRevert={onDontRevert}
+        artifactCount={null}
+        queuedCount={0}
+      />,
+    );
+    const checkbox = screen.getByRole("checkbox", { name: /also revert/i });
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("states no number rather than an under-count", () => {
+    render(
+      <RevertOnEditDialog
+        open
+        onOpenChange={onOpenChange}
+        onRevert={onRevert}
+        onDontRevert={onDontRevert}
+        artifactCount={null}
+        queuedCount={0}
+      />,
+    );
+    const label = screen.getByRole("dialog").textContent;
+    expect(label).toMatch(/also revert artifacts changed since this message/i);
+    // A digit here would be a measurement the client is not in a position to
+    // make - the failure this whole three-state exists to prevent.
+    expect(label).not.toMatch(/also revert \d+ artifact/i);
+  });
+});

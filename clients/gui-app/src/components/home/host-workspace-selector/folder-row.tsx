@@ -103,6 +103,20 @@ export function FolderRow(props: {
         {runPath === null ? null : (
           <CopyPathButton path={runPath} testId="folder-copy-path" />
         )}
+        {item.metadataPending ? (
+          <span
+            className="inline-flex shrink-0"
+            data-testid="folder-row-loading"
+            aria-label="Loading folder metadata"
+          >
+            <AgentSpinningDots
+              className="text-muted-foreground"
+              testId={undefined}
+              variant="dots"
+            />
+            <span className="sr-only">Loading folder metadata</span>
+          </span>
+        ) : null}
       </span>
       <FolderRowBody
         item={item}
@@ -156,33 +170,6 @@ function FolderRowBody(props: {
               Locate on this host…
             </Button>
           )}
-        </div>
-        <FolderRowActions
-          item={item}
-          readOnly={props.readOnly}
-          onEditEnvironment={props.onEditEnvironment}
-          moveToRecent={props.moveToRecent}
-        />
-      </>
-    );
-  }
-
-  // Disk metadata still loading: show a loading affordance. The action cell
-  // stays mounted (disabled pin + live remove) so the actions don't blink
-  // out and back during the fetch, shifting tab order under the keyboard.
-  if (item.metadataPending) {
-    return (
-      <>
-        <div
-          className="col-[3/5] flex min-w-0 items-center gap-2 text-ui-sm text-muted-foreground @max-[28rem]:col-[2/3] @max-[28rem]:row-start-2"
-          data-testid="folder-row-loading"
-        >
-          <AgentSpinningDots
-            className="text-current"
-            testId={undefined}
-            variant="dots"
-          />
-          <span>Loading folder metadata…</span>
         </div>
         <FolderRowActions
           item={item}

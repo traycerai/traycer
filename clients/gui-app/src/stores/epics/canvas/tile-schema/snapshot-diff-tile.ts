@@ -66,6 +66,11 @@ function parseSnapshotDiffPayload(
     chatId: value.chatId,
     sourceBlockIds,
     filePath: value.filePath,
+    // Absent on every tile persisted before the captured endpoints existed.
+    // `null` is the right reading of that: no fallback recorded, resolve from
+    // the blocks or not at all - which is what those tiles already did.
+    beforeHash: typeof value.beforeHash === "string" ? value.beforeHash : null,
+    afterHash: typeof value.afterHash === "string" ? value.afterHash : null,
   };
 }
 
@@ -102,6 +107,8 @@ function serializeSnapshotDiffPayload(
         chatId: diff.chatId,
         sourceBlockIds: [...diff.sourceBlockIds],
         filePath: diff.filePath,
+        beforeHash: diff.beforeHash,
+        afterHash: diff.afterHash,
       };
     case "snapshot-cumulative":
       return {

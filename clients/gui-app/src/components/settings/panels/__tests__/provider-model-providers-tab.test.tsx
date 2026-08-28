@@ -1372,7 +1372,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 
   it("closes a PLAIN Config row's Disconnect during a config write", () => {
-    // T3 widened the host: a config row whose key lives in
+    // A config row whose key lives in
     // `provider.x.options.apiKey` has nothing for `auth.remove` to take, so its
     // disconnect is suppressed through `disabled_providers` - a config write,
     // even though the row is not a declared custom.

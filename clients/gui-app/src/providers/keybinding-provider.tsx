@@ -32,6 +32,7 @@ import {
   isDiffsEditorEvent,
   isEditableEventTarget,
 } from "@/lib/keybindings/editable-target";
+import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -88,6 +89,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
   useEffect(() => {
     const adapter = routerAdapterFor(router);
+    const armedRef = {
+      current: useScreencastArmedStore.getState().ownerId !== null,
+    };
+    const unsubscribeArmed = useScreencastArmedStore.subscribe((state) => {
+      armedRef.current = state.ownerId !== null;
+    });
 
     const clearHintTimer = () => {
       if (hintTimerRef.current === null) return;
@@ -288,17 +295,31 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       hideLeaderHints(pathname);
     };
 
+    // Reserved v1 list is empty - OS-level chords live in the Electron menu
+    // and never reach this listener. No action-id list.
+    const skipAppActions = (
+      event: KeyboardEvent,
+      pathname: string,
+    ): boolean => {
+      if (isAnyDialogOpen()) {
+        if (hasLeaderModifier(event)) spendHintSession(pathname);
+        else resetHintSession(pathname);
+        return true;
+      }
+      if (!armedRef.current) return false;
+      if (hasLeaderModifier(event)) spendHintSession(pathname);
+      else resetHintSession(pathname);
+      resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
+      return true;
+    };
+
     const handleKeyDown = (event: KeyboardEvent) => {
       const pathname = adapter.getPathname();
       if (allLeaderModifiersReleased(event)) {
         resetHintSession(pathname);
       }
 
-      if (isAnyDialogOpen()) {
-        if (hasLeaderModifier(event)) spendHintSession(pathname);
-        else resetHintSession(pathname);
-        return;
-      }
+      if (skipAppActions(event, pathname)) return;
 
       const cleanModifier = cleanLeaderModifierFromEvent(event);
       if (isBareModifierEvent(event)) {
@@ -442,6 +463,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     return () => {
       clearHintTimer();
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
+      unsubscribeArmed();
       unsubscribeHistory();
       unsubscribeScopes();
       unregisterBaseScope();

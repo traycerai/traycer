@@ -377,15 +377,12 @@ export function canReceiveA2AMessages(target: A2ACapabilityTarget): boolean {
 /** Shared UTF-8 byte ceiling for a single A2A message body. */
 export const A2A_MESSAGE_MAX_UTF8_BYTES = 16 * 1024 * 1024;
 
-const UTF8_ENCODER = new TextEncoder();
-
-/**
- * UTF-8 byte length of `value`. Uses `TextEncoder` (not `Buffer`) so this
- * stays callable from browser-hosted surfaces, not just Node.
- */
-export function utf8ByteLength(value: string): number {
-  return UTF8_ENCODER.encode(value).length;
-}
+// Re-exported, not defined here: it moved to `utils/text/utf8` once the
+// transcript skeleton needed the same count. It stays exported from THIS
+// module because it is half of the size gate above - a caller checking a body
+// against `A2A_MESSAGE_MAX_UTF8_BYTES` should not have to know the counter
+// lives somewhere else.
+export { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 // ─── Agent-to-agent unary surface (`agent.create` / `agent.list` /
 // `agent.sendMessage` / `agent.getTranscript`) ─────────────────────────────

@@ -75,6 +75,7 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
     message: {
       kind: "user",
       content: CONTENT,
+      browserAnnotations: [],
     },
     timestamp: 1000,
     sessionAnchor: null,
@@ -189,10 +190,12 @@ function consentEntry(source: string): ImageResolutionEntry {
 const CANONICAL_INPUT: RenderedMessagesInput = {
   messages: [],
   events: [],
+  rowContext: {},
   pendingUserMessages: [],
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
+  setupCardWindows: [],
   ...BINDING,
 };
 
@@ -425,7 +428,11 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     };
     const steered: Message = {
       ...userMessage("message-queue-img"),
-      message: { kind: "user", content },
+      message: {
+        kind: "user",
+        content,
+        browserAnnotations: [],
+      },
       timestamp: 2002,
     };
 

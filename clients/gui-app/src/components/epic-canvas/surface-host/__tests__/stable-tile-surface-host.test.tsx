@@ -758,6 +758,7 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
         buildSyntheticTileSurfaceEnvironment("chat-1", {
           services: {
             openEpicHandle: {} as never,
+            hostClient: null,
             geometryAnchorElement: slot,
             panePortalContainer: null,
             isPaneFocusedNow: () => false,
@@ -826,6 +827,7 @@ describe("StableTileSurfaceHost geometry retention while hidden (confirmed scrol
         presentation,
         services: {
           openEpicHandle: {} as never,
+          hostClient: null,
           geometryAnchorElement: slot,
           panePortalContainer: null,
           isPaneFocusedNow: () => false,

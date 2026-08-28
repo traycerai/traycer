@@ -54,6 +54,12 @@ export const CLI_ERROR_CODES = {
   // compat probe) rather than treating it as a hard failure. Cleared with
   // `--force`.
   HOST_BUSY: "E_HOST_BUSY",
+  // A durable schema-v2 update attempt owns the mutation boundary. This is
+  // deliberately NOT HOST_BUSY: retrying with --force can override a live
+  // workload's cooperative stop, but it can never override attempt
+  // admission. Desktop uses this distinction to attach/yield rather than
+  // offering an ineffective force action.
+  HOST_UPDATE_ATTEMPT_ACTIVE: "E_HOST_UPDATE_ATTEMPT_ACTIVE",
   // The host is reachable but its RPC protocol is incompatible with this
   // CLI (version skew): the host answered with INCOMPATIBLE /
   // DOWNGRADE_UNSUPPORTED, or returned a response shape this CLI could not
@@ -74,6 +80,28 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+
+  // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
+  // All three replace what used to be an `exitCode: 0` result carrying a
+  // `killError` string (audit finding CLI-011). A port-conflict repair that
+  // did not free the port is a failed repair, and the restart variant used to
+  // restart the host anyway - so Doctor and Desktop reported success over an
+  // unresolved conflict, and the user was told to look elsewhere.
+  //
+  // The confirmed owner could not be signalled at all: EPERM (another user's
+  // process), or ESRCH (it exited between the identity check and the signal).
+  HOST_PORT_KILL_FAILED: "E_HOST_PORT_KILL_FAILED",
+  // SIGTERM was delivered and the process is STILL the listener at the
+  // verification deadline - it traps or ignores the signal. Nothing escalates
+  // to SIGKILL: the user confirmed terminating this process, not force-killing
+  // it, so the remedy stays theirs.
+  HOST_PORT_STILL_HELD: "E_HOST_PORT_STILL_HELD",
+  // SIGTERM was delivered but the ownership probe could not say whether the
+  // port was released (`lsof`/`netstat` missing, hung, or over its output
+  // budget). Deliberately NOT folded into the two above: "we could not check"
+  // is not "it failed", and it is emphatically not "it worked" - the same
+  // refuse-to-act-blind rule that guards the pre-kill identity check.
+  HOST_PORT_RELEASE_UNVERIFIED: "E_HOST_PORT_RELEASE_UNVERIFIED",
 
   // --- Host install + registry (NP-2 / NP-4) ---
   HOST_NOT_INSTALLED: "E_HOST_NOT_INSTALLED",
@@ -114,6 +142,7 @@ export const CLI_ERROR_CODES = {
   // --- CLI self-upgrade (NP-7) ---
   CLI_UPGRADE_PACKAGE_MANAGER_OWNED: "E_CLI_UPGRADE_PACKAGE_MANAGER_OWNED",
   CLI_UPGRADE_NO_MANIFEST: "E_CLI_UPGRADE_NO_MANIFEST",
+  CLI_UPGRADE_TARGET_UNAVAILABLE: "E_CLI_UPGRADE_TARGET_UNAVAILABLE",
   CLI_UPGRADE_DOWNLOAD_FAILED: "E_CLI_UPGRADE_DOWNLOAD_FAILED",
   CLI_UPGRADE_REPLACE_FAILED: "E_CLI_UPGRADE_REPLACE_FAILED",
   CLI_UPGRADE_FINALIZE_HELPER_FAILED: "E_CLI_UPGRADE_FINALIZE_HELPER_FAILED",

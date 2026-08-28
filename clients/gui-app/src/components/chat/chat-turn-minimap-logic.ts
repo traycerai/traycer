@@ -4,6 +4,9 @@ import {
   resolveMinimapTrackHeightStyle,
   resolveMinimapTrackTopStyle,
 } from "@/components/minimap/minimap-track-geometry";
+import type { MinimapListEntry } from "@/components/minimap/minimap-list-card";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import type { MinimapPlacement } from "@/stores/settings/settings-store";
 
 /**
@@ -276,4 +279,182 @@ export function compactChatTurnMinimapPreview(
     compact,
     CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
   ).trimEnd()}…`;
+}
+
+/**
+ * One rail entry: a human-sent turn, and the row span it covers.
+ *
+ * `rowIndex` / `endRowIndex` are LIST indexes - what `positionAtIndex` takes -
+ * and not transcript ordinals, which on the windowed line differ wherever a
+ * renderer policy withheld a row.
+ */
+export interface ChatTurnMinimapItem extends MinimapListEntry {
+  readonly endRowIndex: number;
+  readonly messageId: string;
+  readonly rowIndex: number;
+}
+
+/**
+ * Whether a row is a HUMAN-sent user turn - the only kind the rail lists.
+ * Answerable for unhydrated rows too: the skeleton carries `role`,
+ * `sentByAgent` and `preview` precisely so the minimap can list a turn whose
+ * body has not arrived (see `row-skeleton.ts`).
+ */
+function isHumanUserRow(row: TranscriptListRow): boolean {
+  if (row.kind === "hydrated") {
+    return row.model.role === "user" && row.model.agentSenderInfo === null;
+  }
+  return (
+    row.entry !== null &&
+    row.entry.role === "user" &&
+    row.entry.sentByAgent !== true
+  );
+}
+
+function chatTurnMinimapRowLabel(row: TranscriptListRow): string {
+  const text =
+    row.kind === "hydrated" ? row.model.content : (row.entry?.preview ?? "");
+  return compactChatTurnMinimapPreview(text) ?? "Untitled message";
+}
+
+function deriveChatTurnMinimapItems(
+  rows: ReadonlyArray<TranscriptListRow>,
+): ReadonlyArray<ChatTurnMinimapItem> {
+  const humanRows: number[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (isHumanUserRow(rows[index])) humanRows.push(index);
+  }
+
+  return humanRows.map((rowIndex, index) => {
+    const row = rows[rowIndex];
+    return {
+      key: row.key,
+      label: chatTurnMinimapRowLabel(row),
+      level: 1,
+      messageId: row.key,
+      rowIndex,
+      endRowIndex: (humanRows[index + 1] ?? rows.length) - 1,
+    };
+  });
+}
+
+/**
+ * What must move for the derive to re-run, beyond the window's own identity.
+ *
+ * `rows.length` is here because a PLACED row can leave the list without the
+ * window changing at all: `rendered` is post-filter, and the pinned-todo pass
+ * drops an assistant row whose only segments were lifted into the dock
+ * (`transcript-list-rows.ts` documents this as OMITTED, not placeholder'd).
+ * That state is decided by the live turn, which folds into `messages` alone -
+ * exactly the churn the window's identity is stable across - so the suppression
+ * can flip per token while `TranscriptWindow` identity and the trailing
+ * unplaced keys both hold still.
+ *
+ * The items cache LIST indexes (`rowIndex` / `endRowIndex`, see their doc), so
+ * reusing a derive across that flip points `positionAtIndex` one row past every
+ * turn below the omitted one - the rail's marks slide against the transcript
+ * with nothing on screen to explain it.
+ *
+ * Both halves are bounded: the length is a number, and the unplaced keys are
+ * the trailing run only.
+ */
+function deriveCacheKey(rows: ReadonlyArray<TranscriptListRow>): string {
+  return `${rows.length}:${unplacedRowKeys(rows)}`;
+}
+
+/**
+ * The keys of the rows that own no ordinal - the live turn, pending sends, and
+ * records the index has not placed yet.
+ *
+ * Bounded, and that is the whole reason it exists: `transcriptListRows` appends
+ * every ordinal-less row AFTER all the placed ones, so this walks back from the
+ * end and stops at the first placed row rather than scanning the transcript.
+ */
+function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
+  let key = "";
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row.ordinal !== null) break;
+    key = key.length === 0 ? row.key : `${row.key} ${key}`;
+  }
+  return key;
+}
+
+/**
+ * The last derive, per transcript window and per legacy `rows` array.
+ *
+ * `WeakMap`s, and one slot inside the windowed one, for the same reason
+ * `transcript-list-rows.ts` caches placeholders per skeleton: the value is a
+ * pure function of the key, it dies with the object it describes, and it needs
+ * no invalidation. One slot rather than a map because the key it guards moves
+ * only when an unplaced row is added or removed, which is not a churn pattern
+ * worth retaining alternatives for.
+ */
+const lastDeriveByWindow = new WeakMap<
+  object,
+  { readonly key: string; readonly items: ReadonlyArray<ChatTurnMinimapItem> }
+>();
+const lastDeriveByRows = new WeakMap<
+  object,
+  ReadonlyArray<ChatTurnMinimapItem>
+>();
+
+/**
+ * The rail's turn list, derived at most once per structural change.
+ *
+ * ## Why this is not `useMemo(..., [rows])`
+ *
+ * `rows` is rebuilt on every streaming token - `transcriptListRows` is memoized
+ * on `[transcriptWindow, messages]` and `messages` moves per token - so keying
+ * on it ran a whole-transcript scan, a per-turn object allocation and a
+ * per-turn preview compaction dozens of times a second. On a 20k-row chat that
+ * is O(history) work on the hottest path in the app, inside the structure
+ * introduced to make long chats cheap. It was harmless while the rail listed
+ * only hydrated messages, because that set was bounded; teaching it to list
+ * COLD turns is exactly what widened the scan to the whole history.
+ *
+ * ## What the answer actually depends on
+ *
+ * The `TranscriptWindow` object, and the ordinal-less tail. A block delta - the
+ * per-token event - folds into `messages` alone and never touches the window
+ * (`applyBufferedDeltas`), so the window's identity is stable across exactly
+ * the churn this is avoiding, while every input that CAN change a rail entry
+ * moves it:
+ *
+ * - a row's label, and whether it is a human turn at all, comes from the
+ *   skeleton entry for a cold row and from the model for a hydrated one - and a
+ *   user row's body changes only by an edit, which arrives as an index
+ *   `updated` and rebuilds the window;
+ * - which ordinals a renderer policy withholds is decided by the models the
+ *   spans hold, and those arrive in range responses, which rebuild the window;
+ * - rows the index has not placed are an input the window does not version, so
+ *   their keys are compared directly. They are bounded.
+ *
+ * Two inputs escape the window, not one, and the second is easy to miss
+ * because it moves a row the window DOES version: a placed row can be dropped
+ * from `rows` outright by the pinned-todo pass, which reads the live turn and
+ * therefore moves per token. `deriveCacheKey` carries both.
+ *
+ * The legacy line has no window and no ordinals, so it keys on the `rows` array
+ * itself - which is exactly the memo this replaced, and bounded there because
+ * that line hydrates the whole transcript anyway.
+ */
+export function chatTurnMinimapItems(input: {
+  readonly rows: ReadonlyArray<TranscriptListRow>;
+  readonly window: TranscriptWindow | null;
+}): ReadonlyArray<ChatTurnMinimapItem> {
+  const { rows, window } = input;
+  if (window === null) {
+    const cached = lastDeriveByRows.get(rows);
+    if (cached !== undefined) return cached;
+    const items = deriveChatTurnMinimapItems(rows);
+    lastDeriveByRows.set(rows, items);
+    return items;
+  }
+  const key = deriveCacheKey(rows);
+  const cached = lastDeriveByWindow.get(window);
+  if (cached !== undefined && cached.key === key) return cached.items;
+  const items = deriveChatTurnMinimapItems(rows);
+  lastDeriveByWindow.set(window, { key, items });
+  return items;
 }

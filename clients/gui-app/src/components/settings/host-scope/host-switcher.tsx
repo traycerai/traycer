@@ -30,6 +30,7 @@ import {
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { useHostBinding } from "@/lib/host";
+import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
 
 /**
@@ -241,6 +242,22 @@ export function HostSwitcher(props: {
   /** A host list request FAILED, so an empty `hosts` proves nothing. */
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
+  /**
+   * Resolves each row's projected update state, or `null` for a picker that
+   * does not show update badges.
+   *
+   * `null` for three of the four callers — the landing workspace selector, the
+   * header rate-limit popover, the resource monitor — because the settled
+   * product decision puts fleet update state in **Settings**, and `intent` is
+   * not a proxy for that (those popovers are `view` surfaces too). Only
+   * `SettingsSidebar` passes a resolver.
+   *
+   * Passing the RESOLVER rather than a flag is what keeps this honest: a
+   * surface can only badge state it already has, so no picker can turn badges
+   * on and reach for a per-row query to feed them — which is the "Settings
+   * does not silently connect to other hosts to improve their badges" rule.
+   */
+  readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
@@ -368,6 +385,7 @@ export function HostSwitcher(props: {
                     props.inertExceptHostId !== null &&
                     host.hostId !== props.inertExceptHostId
                   }
+                  updateView={props.updateViewForHost?.(host.hostId) ?? null}
                   onSelect={() => {
                     props.onSelect(host.hostId);
                     setOpen(false);
@@ -505,6 +523,8 @@ function HostSwitcherRow(props: {
   readonly surfaceRefusal: string | null;
   /** Inert with no word on the row — see `HostSwitcher`'s `inertExceptHostId`. */
   readonly surfaceInert: boolean;
+  /** This row's projected update state, or `null` for a non-badging picker. */
+  readonly updateView: FleetUpdateView | null;
   readonly onSelect: () => void;
 }): ReactNode {
   const { host } = props;
@@ -542,6 +562,7 @@ function HostSwitcherRow(props: {
         active={props.active}
         intent={props.intent}
         surfaceState={surfaceState}
+        updateView={props.updateView}
       />
     </CommandItem>
   );

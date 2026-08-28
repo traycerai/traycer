@@ -11,6 +11,7 @@ import type { PathLike, RmOptions } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { noopLogger } from "../../logger";
 
 type Environment = "dev" | "production";
 
@@ -37,6 +38,9 @@ const mocks = vi.hoisted(() => ({
   forceRenameFailureForPath: null as string | null,
   forceUnlinkFailureForPath: null as string | null,
   forceRmFailureForPath: null as string | null,
+  rejectRenameVerifier: false,
+  unlinkCalls: 0,
+  rmCalls: 0,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -44,6 +48,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return {
     ...actual,
     unlink: async (path: PathLike) => {
+      mocks.unlinkCalls += 1;
       if (path === mocks.forceUnlinkFailureForPath) {
         throw Object.assign(new Error("simulated unlink failure"), {
           code: "EPERM",
@@ -52,6 +57,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return actual.unlink(path);
     },
     rm: async (path: PathLike, options: RmOptions) => {
+      mocks.rmCalls += 1;
       if (path === mocks.forceRmFailureForPath) {
         throw Object.assign(new Error("simulated rm failure"), {
           code: "EPERM",
@@ -66,13 +72,21 @@ vi.mock("../rename-retry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../rename-retry")>();
   return {
     ...actual,
-    renameWithRetry: async (from: string, to: string): Promise<void> => {
+    renameWithRetry: async (
+      from: string,
+      to: string,
+      verifyBeforeAttempt: () => Promise<void>,
+    ): Promise<void> => {
+      await verifyBeforeAttempt();
+      if (mocks.rejectRenameVerifier) {
+        throw new Error("mutation authority lost");
+      }
       if (from === mocks.forceRenameFailureForPath) {
         throw Object.assign(new Error("simulated rename failure"), {
           code: "EPERM",
         });
       }
-      return actual.renameWithRetry(from, to);
+      return actual.renameWithRetry(from, to, verifyBeforeAttempt);
     },
   };
 });
@@ -128,9 +142,44 @@ import {
   writeHostStagedRecordAt,
   type HostStagedRecord,
 } from "../../manifest/host-staged";
+import { invalidateAsideDir } from "../aside-dirs";
 import { purgeHostStage, reconcileHostStage } from "../stage-reconcile";
 
 const ENV: Environment = "production";
+const testMutationVerifier = async (): Promise<void> => undefined;
+
+describe("aside invalidation authority", () => {
+  it("rethrows verifier loss from rename retry without falling through to unlink or rm", async () => {
+    const localRoot = mkdtempSync(
+      join(tmpdir(), "traycer-aside-authority-test-"),
+    );
+    const target = join(localRoot, "install");
+    const aside = `${target}.old-123`;
+    mkdirSync(aside, { recursive: true });
+    writeFileSync(join(aside, "install.json"), "{}\n");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === 2) throw new Error("mutation authority lost");
+    };
+
+    // This `describe` has no `beforeEach`/`afterEach` of its own - the
+    // existing resets live in `reconcileHostStage`'s hooks below, which
+    // never run for this suite. Reset explicitly immediately before the
+    // call under test so this assertion is not merely riding the module's
+    // zero-valued initial state (CodeRabbit review of PR #1480).
+    mocks.unlinkCalls = 0;
+    mocks.rmCalls = 0;
+    await expect(
+      invalidateAsideDir(target, aside, "install.json", noopLogger, verify),
+    ).rejects.toThrow("mutation authority lost");
+    expect(verifyCalls).toBe(2);
+    expect(mocks.unlinkCalls).toBe(0);
+    expect(mocks.rmCalls).toBe(0);
+    expect(existsSync(join(aside, "install.json"))).toBe(true);
+    rmSync(localRoot, { recursive: true, force: true });
+  });
+});
 
 async function writeInstall(
   version: string,
@@ -153,6 +202,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath,
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -180,6 +230,7 @@ async function writeStagedAt(
     executablePath: executableRelPath,
     platform: currentInstallPlatform(),
     arch: currentInstallArch(),
+    executableSha256: null,
     ...overrides,
   };
   await writeHostStagedRecordAt(stagedDir, record);
@@ -196,6 +247,9 @@ describe("reconcileHostStage", () => {
     mocks.forceRenameFailureForPath = null;
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
+    mocks.rejectRenameVerifier = false;
+    mocks.unlinkCalls = 0;
+    mocks.rmCalls = 0;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -291,6 +345,7 @@ describe("reconcileHostStage", () => {
       executablePath: "traycer-host",
       platform: currentInstallPlatform(),
       arch: currentInstallArch(),
+      executableSha256: null,
     });
     // Deliberately never write the executable file itself.
 
@@ -474,7 +529,7 @@ describe("reconcileHostStage", () => {
     renameSync(stagedDirFor(ENV), asideDir);
     await writeStagedAt(stagedDirFor(ENV), "1.6.0", {});
 
-    await purgeHostStage(ENV, null);
+    await purgeHostStage(ENV, null, testMutationVerifier);
 
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
     expect(existsSync(asideDir)).toBe(false);
@@ -492,9 +547,9 @@ describe("reconcileHostStage", () => {
     mocks.forceUnlinkFailureForPath = join(asideDir, "staged.json");
     mocks.forceRmFailureForPath = asideDir;
 
-    await expect(purgeHostStage(ENV, null)).rejects.toThrow(
-      "Could not invalidate every recoverable staged aside",
-    );
+    await expect(
+      purgeHostStage(ENV, null, testMutationVerifier),
+    ).rejects.toThrow("Could not invalidate every recoverable staged aside");
     expect(existsSync(asideDir)).toBe(true);
 
     mocks.forceRenameFailureForPath = null;
@@ -509,7 +564,7 @@ describe("reconcileHostStage", () => {
     await writeInstall("1.0.0", {});
     await writeStagedAt(stagedDirFor(ENV), "1.8.0", { stageId: "stage-b" });
 
-    const outcome = await purgeHostStage(ENV, "stage-a");
+    const outcome = await purgeHostStage(ENV, "stage-a", testMutationVerifier);
 
     expect(outcome).toEqual({
       outcome: "stage-fingerprint-mismatch",

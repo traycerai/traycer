@@ -122,6 +122,36 @@ export function finishTransitionJournal(input: {
   };
 }
 
+/**
+ * The canonical terminal-phase classifier. Exhaustive by construction.
+ *
+ * A boolean chain (what this used to be) silently answers `false` for a phase
+ * it has never heard of, so adding a terminal phase upstream would quietly
+ * reclassify retained journals as in-flight. The `never` guard turns that into
+ * a compile error at the one place the decision belongs.
+ */
 export function isTerminalPhase(phase: TransitionPhase): boolean {
-  return phase === "done" || phase === "failed" || phase === "compensated";
+  switch (phase) {
+    case "done":
+    case "failed":
+    case "compensated":
+      return true;
+    case "fallback-journaled":
+    case "fallback-attesting-slot":
+    case "fallback-provisioning":
+    case "fallback-evicting-agent":
+    case "fallback-committing":
+    case "reclaim-probing":
+    case "reclaim-awaiting-probe":
+    case "reclaim-provisioning-agent":
+    case "reclaim-committing-shutdown":
+    case "reclaim-verifying-agent":
+    case "reclaim-cleaning-fallback":
+    case "reclaim-compensating-fallback":
+      return false;
+    default: {
+      const unhandled: never = phase;
+      throw new Error(`unclassified transition phase: ${String(unhandled)}`);
+    }
+  }
 }

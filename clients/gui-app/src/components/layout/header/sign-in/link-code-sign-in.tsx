@@ -294,7 +294,10 @@ export function LinkCodeSignIn(props: {
             {noticeLine}
             {/* A real button in the hero's stack, not a bare text line
                 wedged between two buttons — outline keeps it clearly
-                subordinate to the Scan primary. */}
+                subordinate to the Scan primary. The hero paints white text
+                over its backdrop while `outline` sets a surface with no text
+                color of its own, so the label pins its foreground - otherwise
+                it inherits the hero's white onto the light surface. */}
             <Button
               type="button"
               size="lg"
@@ -303,7 +306,7 @@ export function LinkCodeSignIn(props: {
               onClick={() => {
                 setOpen(true);
               }}
-              className="w-full cursor-pointer"
+              className="w-full cursor-pointer text-foreground"
             >
               Enter code manually
             </Button>
