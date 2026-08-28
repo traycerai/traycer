@@ -1,6 +1,10 @@
 import { worktreeListBindingsForEpicResponseSchemaV12 } from "@traycer/protocol/host";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import {
+  isWorkspaceResolvePending,
+  worktreeRowState,
+} from "@traycer-clients/shared/worktree/worktree-row-state";
+import {
   callHostRpc,
   parseCanonicalHostResponse,
   toAgentCliError,
@@ -82,7 +86,7 @@ export function formatWorkspaceListTable(
     // `isGitRepo` is part of the placeholder a pending row carries, so it gets
     // the same "not answered yet" treatment as STATE rather than a confident
     // "no" the next refresh may contradict.
-    row.isGitResolvePending ? "?" : row.isGitRepo ? "yes" : "no",
+    isWorkspaceResolvePending(row) ? "?" : row.isGitRepo ? "yes" : "no",
     formatState(row),
     String(row.sources.length),
     row.runningDir,
@@ -117,65 +121,34 @@ function formatRepo(row: WorktreeBindingSelectorRowV12): string {
 }
 
 /**
- * What this row's state actually is, mirroring the precedence in the GUI
- * pickers (`clients/gui-app/src/lib/worktree/worktree-folder-disabled-reason.ts`
- * — `worktreeFolderRowBadge`), which is the canonical derivation.
+ * The CLI's wording for each shared row state. WHICH state a row is in is
+ * `worktreeRowState`'s call, shared with the GUI pickers so the two cannot
+ * drift on setup/pending semantics; this function only chooses the words for a
+ * terminal table.
  *
- * Keying on `disabledReason` ALONE was wrong, and wrong in the direction that
- * hides bad news. The current host treats creation as the selector gate: once a
- * worktree exists, setup progress and outcomes stay in `setupState` and the row
- * is left selectable with `disabledReason: null`. Reading only the reason
- * therefore reported a worktree whose setup script FAILED as plain `ready`.
- * Older hosts projected the same lifecycle as `setup_*` reasons, so both
- * spellings are accepted — which is also why a legacy `setup_*` reason is not
- * treated as blocking unless disk truth (`mode === "worktree" && !isGitRepo`)
- * says the worktree is not actually there.
- *
- * Setup states are deliberately NOT "unavailable": the GUI renders them
- * `disabled: false`, because a worktree with a failed setup script is still a
- * directory an agent can work in. They are reported so the user knows why it
- * may be half-configured, not to warn them off it.
- *
- * Ideally this lives in `clients/shared` beside `classifyWorktreeTier`, so CLI
- * and GUI cannot drift; that consolidation is a separate change from this one.
+ * The two places the CLI's vocabulary diverges from the GUI's are deliberate.
+ * `missing on disk` says in a table cell what the GUI's red `missing` badge
+ * says with a tone and a hover detail it has no room for here. And every setup
+ * state prints rather than being suppressed: the GUI renders those rows
+ * `disabled: false` with a badge, and the CLI's equivalent of "still
+ * selectable, just half-configured" is to name the state and leave the row in
+ * the table.
  */
 function formatState(row: WorktreeBindingSelectorRowV12): string {
-  if (hasBlockingReason(row)) {
-    // The host derives `missing_worktree_path` from an `isGitRepo` it has not
-    // verified yet, so naming it "missing" states as fact something the next
-    // sweep may retract. The pickers render these as "checking" for exactly
-    // this reason.
-    return row.isGitResolvePending ? "checking" : "missing on disk";
-  }
-  if (row.setupState === "pending" || row.disabledReason === "setup_pending")
-    return "setup pending";
-  if (row.setupState === "running" || row.disabledReason === "setup_running")
-    return "setting up";
-  if (row.setupState === "failed" || row.disabledReason === "setup_failed")
-    return "setup failed";
-  if (
-    row.setupState === "cancelled" ||
-    row.disabledReason === "setup_cancelled"
-  )
-    return "setup cancelled";
-  return "ready";
-}
-
-/**
- * Mirrors `hasBlockingWorktreeSelectorReason`. A `setup_*` reason from an older
- * host is relaxed once the worktree demonstrably exists; anything else with a
- * reason (today only `missing_worktree_path`) genuinely blocks.
- */
-function hasBlockingReason(row: WorktreeBindingSelectorRowV12): boolean {
-  switch (row.disabledReason) {
-    case null:
-      return false;
-    case "setup_pending":
-    case "setup_running":
-    case "setup_failed":
-    case "setup_cancelled":
-      return row.mode === "worktree" && !row.isGitRepo;
-    case "missing_worktree_path":
-      return true;
+  switch (worktreeRowState(row)) {
+    case "checking":
+      return "checking";
+    case "missing":
+      return "missing on disk";
+    case "setup-pending":
+      return "setup pending";
+    case "setting-up":
+      return "setting up";
+    case "setup-failed":
+      return "setup failed";
+    case "setup-cancelled":
+      return "setup cancelled";
+    case "ready":
+      return "ready";
   }
 }
