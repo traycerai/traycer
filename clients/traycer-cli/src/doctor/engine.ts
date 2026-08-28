@@ -508,7 +508,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     // actionable warning, and a host that recovered gets an info-level note
     // explaining the outage it just had. Info keeps `host doctor`'s exit code
     // (error/fatal only) unaffected for a machine that is now healthy.
-    const hostRecovered = hostProcessAlive || serviceStatus?.state === "running";
+    const hostRecovered =
+      hostProcessAlive || serviceStatus?.state === "running";
     issues.push({
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
       severity: hostRecovered ? "info" : "warning",
