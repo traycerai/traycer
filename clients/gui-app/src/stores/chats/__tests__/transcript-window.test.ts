@@ -7,6 +7,8 @@ import type {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import {
   appendLiveRecords,
   MAX_LIVE_EVENTS,
@@ -54,6 +56,33 @@ function userMessage(messageId: string, timestamp: number): Message {
     message: { kind: "user", content: CONTENT, browserAnnotations: [] },
     timestamp,
     sessionAnchor: null,
+  };
+}
+
+function assistantMessage(
+  messageId: string,
+  turnId: string | null,
+  timestamp: number,
+): Message {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: timestamp,
+    timestamp,
+    turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -1610,6 +1639,392 @@ describe("what an overlap keeps", () => {
         [],
       ),
     ).not.toBeNull();
+  });
+
+  it("keeps a frozen live assistant across a rebase until its oversized row loads", () => {
+    const turnId = "turn-oversized";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 1)],
+      events: [],
+    });
+
+    // The completion snapshot arrives before the held subscriber's synchronous
+    // reindexed delta. Its only row exceeds the inline-tail budget.
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(hydratedRecords(rebased).messages.map((m) => m.messageId)).toEqual([
+      transientId,
+    ]);
+
+    const voided = applyIndexChange(rebased, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(hydratedRecords(voided).messages.map((m) => m.messageId)).toEqual([
+      transientId,
+    ]);
+
+    const resnapshot = applyWindowedSnapshot(voided, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(
+      hydratedRecords(resnapshot).messages.map((m) => m.messageId),
+    ).toEqual([transientId]);
+
+    const indexed = applySkeletonChunk(resnapshot, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId(turnId), 0)],
+      isFinal: true,
+    });
+    const hydrated = applyRangeResponse(
+      indexed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-durable", turnId, 1)],
+      }),
+    );
+
+    // The durable body takes over by turn identity; the stand-in id is
+    // intentionally different and must not leave a duplicate tail row.
+    expect(hydratedRecords(hydrated).messages.map((m) => m.messageId)).toEqual([
+      "assistant-durable",
+    ]);
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("keeps a frozen live assistant when a snapshot revision gap voids the index", () => {
+    const turnId = "turn-snapshot-gap";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      {
+        messages: [assistantMessage(transientId, turnId, 1)],
+        events: [],
+      },
+    );
+
+    const gapped = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 3,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(gapped.invalidated).toBe(true);
+    expect(hydratedRecords(gapped).messages.map((m) => m.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("keeps a just-accepted user record through an index void", () => {
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage("accepted-user", 1)], events: [] },
+    );
+
+    const voided = applyIndexChange(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 2,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(voided.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user",
+    ]);
+  });
+
+  it("retires a provisional user when zero rows are authoritative", () => {
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("accepted-user-deleted", 1)],
+      events: [],
+    });
+
+    const empty = applyWindowedSnapshot(live, {
+      epoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(empty.liveMessages).toEqual([]);
+    expect(hydratedRecords(empty).messages).toEqual([]);
+  });
+
+  it("keeps a user accepted after a snapshot through its older skeleton", () => {
+    const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const live = appendLiveRecords(rebuilding, {
+      messages: [userMessage("accepted-user-absent", 1)],
+      events: [],
+    });
+
+    const rebuilt = applySkeletonChunk(live, {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-absent",
+    ]);
+  });
+
+  it("retires a legacy transient by the projection timestamp turn key", () => {
+    const turnKey = "ts:42";
+    const transientId = transientLiveAssistantMessageId(turnKey);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, null, 42)],
+      events: [],
+    });
+    const indexed = applySkeletonChunk(
+      { ...live, epoch: 1, rowCount: 1 },
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnKey), 0)],
+        isFinal: true,
+      },
+    );
+    const hydrated = applyRangeResponse(
+      indexed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnKey)],
+        messages: [assistantMessage("assistant-legacy-durable", null, 42)],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+    expect(hydratedRecords(hydrated).messages.map((m) => m.messageId)).toEqual([
+      "assistant-legacy-durable",
+    ]);
+  });
+
+  it("drops a frozen assistant immediately when a rebase makes the transcript empty", () => {
+    const turnId = "turn-deleted";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(rebased.liveMessages).toEqual([]);
+    expect(hydratedRecords(rebased).messages).toEqual([]);
+  });
+
+  it("drops a frozen assistant on a same-epoch null rebuild to zero rows", () => {
+    const turnId = "turn-restart-deleted";
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 0,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      }),
+      {
+        epoch: 0,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    const live = appendLiveRecords(indexed, {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+
+    const rebuilt = applyWindowedSnapshot(live, {
+      epoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(rebuilt.skeleton).toEqual([]);
+    expect(rebuilt.liveMessages).toEqual([]);
+    expect(hydratedRecords(rebuilt).messages).toEqual([]);
+  });
+
+  it("truncates a same-epoch null rebuild before reconciling a shorter skeleton", () => {
+    const turnId = "turn-restart-shortened";
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("user-kept", 0),
+          skeletonEntry(assistantRowId(turnId), 1),
+        ],
+        isFinal: true,
+      },
+    );
+    const live = appendLiveRecords(indexed, {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebuilding.skeleton).toHaveLength(1);
+    expect(rebuilding.liveMessages).toHaveLength(1);
+
+    const rebuilt = applySkeletonChunk(rebuilding, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("user-kept", 0)],
+      isFinal: true,
+    });
+    expect(rebuilt.skeletonComplete).toBe(true);
+    expect(rebuilt.liveMessages).toEqual([]);
+  });
+
+  it("clamps skeleton stream coverage when a concrete snapshot shrinks", () => {
+    const held: TranscriptWindow = {
+      ...windowWithSkeleton(3),
+      indexRevision: 2,
+      indexRevisionRebuilding: false,
+      skeletonStreamCoveredThrough: 3,
+    };
+
+    const shrunk = applyWindowedSnapshot(held, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 2,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(shrunk.skeleton).toHaveLength(1);
+    expect(shrunk.skeletonStreamCoveredThrough).toBe(1);
+  });
+
+  it("does not retire a completion stand-in because an older span has the turn", () => {
+    const turnId = "turn-stale-span";
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry(assistantRowId(turnId), 0),
+          skeletonEntry("user-later", 1),
+        ],
+        isFinal: true,
+      },
+    );
+    const beforeCompletion = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-streaming-copy", turnId, 1)],
+      }),
+    );
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const completed = appendLiveRecords(beforeCompletion, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const unrelatedServe = applyRangeResponse(
+      completed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 1,
+        rowIds: ["user-later"],
+        messages: [userMessage("user-later-record", 3)],
+      }),
+    );
+
+    expect(
+      unrelatedServe.liveMessages.map((message) => message.messageId),
+    ).toEqual([transientId]);
+  });
+
+  it("retires a frozen assistant once the complete replacement skeleton omits its turn", () => {
+    const turnId = "turn-rewritten-away";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(rebased.liveMessages).toHaveLength(1);
+
+    const indexed = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user-row", 0)],
+      isFinal: true,
+    });
+
+    expect(indexed.skeletonComplete).toBe(true);
+    expect(indexed.liveMessages).toEqual([]);
+    expect(hydratedRecords(indexed).messages).toEqual([]);
   });
 
   it("leaves a transcript with no tail rows alone", () => {

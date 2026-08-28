@@ -16,6 +16,8 @@ import {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 
 /**
  * # The client half of the windowed transcript
@@ -249,9 +251,10 @@ export interface TranscriptWindow {
    * this field says.
    *
    * Superseded rather than merged: once the same record id arrives inside a
-   * span, the authoritative copy wins and this one is pruned. Cleared outright
-   * on a rebase, because a coordinate space the client has left says nothing
-   * about what is real.
+   * span, the authoritative copy wins and this one is pruned. A transient
+   * frozen assistant may cross a rebase provisionally, because it is not bound
+   * to an ordinal; the completed replacement skeleton either confirms its turn
+   * still exists or retires it. Every other live record clears outright.
    */
   readonly liveMessages: readonly Message[];
   readonly liveEvents: readonly ChatEvent[];
@@ -453,6 +456,7 @@ export function appendLiveRecords(
  */
 function pruneSupersededLiveRecords(
   window: TranscriptWindow,
+  freshlyServedAssistantTurnKeys: ReadonlySet<string>,
 ): TranscriptWindow {
   if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
     return window;
@@ -460,11 +464,19 @@ function pruneSupersededLiveRecords(
   const spanMessages = new Set<string>();
   const spanEvents = new Set<string>();
   for (const span of window.spans) {
-    for (const message of span.messages) spanMessages.add(message.messageId);
+    for (const message of span.messages) {
+      spanMessages.add(message.messageId);
+    }
     for (const event of span.events) spanEvents.add(event.eventId);
   }
   const liveMessages = window.liveMessages.filter(
-    (message) => !spanMessages.has(message.messageId),
+    (message) =>
+      !spanMessages.has(message.messageId) &&
+      !(
+        message.role === "assistant" &&
+        isTransientLiveAssistantMessageId(message.messageId) &&
+        freshlyServedAssistantTurnKeys.has(assistantTurnKey(message))
+      ),
   );
   const supersededEvents = window.liveEvents.filter(
     (event) => !spanEvents.has(event.eventId),
@@ -495,6 +507,14 @@ function pruneSupersededLiveRecords(
     return window;
   }
   return { ...window, liveMessages, liveEvents };
+}
+
+function assistantTurnKeys(messages: readonly Message[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "assistant") keys.add(assistantTurnKey(message));
+  }
+  return keys;
 }
 
 /**
@@ -1104,10 +1124,27 @@ export function applyWindowedSnapshot(
   );
   if (verdict === "straggler") return window;
   const missedDeltas = verdict === "gap";
+  const provisionalLiveMessages = window.liveMessages.filter(
+    (message) =>
+      input.rowCount > 0 &&
+      message.role === "assistant" &&
+      isTransientLiveAssistantMessageId(message.messageId),
+  );
   const base: TranscriptWindow =
     rebased || missedDeltas
       ? {
           ...emptyTranscriptWindow(),
+          // A settling turn is frozen into an unplaced live record before the
+          // host assigns its durable row an ordinal. That stand-in is not tied
+          // to the old coordinate space, so carry it across a rebase. This is
+          // load-bearing when the new tail row exceeds the inline snapshot
+          // budget: without it the transcript is empty until loadRange returns.
+          // Other live records are deliberately not retained here; an epoch
+          // change or missed-delta authority may have deleted or rewritten
+          // them. The transient assistant retires when a freshly served span
+          // carries the same turn (see pruneSupersededLiveRecords), despite its
+          // intentionally different id.
+          liveMessages: provisionalLiveMessages,
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
@@ -1119,6 +1156,14 @@ export function applyWindowedSnapshot(
         }
       : {
           ...window,
+          // A resnapshot answers an invalidated window and retires provisional
+          // users that predate that authority. A `messageAccepted` delivered
+          // AFTER this snapshot is appended later and must survive the older
+          // skeleton stream that follows; skeleton completeness cannot judge
+          // that race. Transient assistants use turn identity and bridge it.
+          liveMessages: window.invalidated
+            ? provisionalLiveMessages
+            : window.liveMessages,
           rowCount: input.rowCount,
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
@@ -1170,7 +1215,14 @@ export function applyWindowedSnapshot(
           clock,
         };
 
-  const tailRowIds = tailRowIdsFor(base, input);
+  // `rowCount` is authoritative even when a same-epoch `null` revision merely
+  // announces a replacement skeleton stream. A fresh host/view cache can
+  // restart at the same numeric epoch, so neither `rebased` nor `missedDeltas`
+  // necessarily fires. Bound the retained coordinate data now: otherwise old
+  // ordinals beyond the new end make final-skeleton completeness impossible,
+  // and a deleted transient can survive every rebuild.
+  const boundedBase = boundWindowToRowCount(base, input.rowCount);
+  const tailRowIds = tailRowIdsFor(boundedBase, input);
   if (tailRowIds === null) {
     // Two different "no tail" answers, and only one of them is inert.
     //
@@ -1185,8 +1237,8 @@ export function applyWindowedSnapshot(
     // row for as long as the session lives. Drop what overlaps the omitted
     // region so the planner sees the gap and fetches the authoritative body.
     return input.rowCount - input.tail.fromOrdinal > 0
-      ? dropSpansOverlappingFrom(base, input.tail.fromOrdinal)
-      : base;
+      ? dropSpansOverlappingFrom(boundedBase, input.tail.fromOrdinal)
+      : boundedBase;
   }
   // Keyed by row id exactly as a range's is, so a tail seated on the
   // positional ids `tailRowIdsFor` falls back to simply misses every lookup
@@ -1208,12 +1260,43 @@ export function applyWindowedSnapshot(
     // serve and outranks any older span still holding a copy of the same turn.
     servedAt: clock,
   };
-  const spans = insertSpan(base.spans, tailSpan);
-  return pruneSupersededLiveRecords({
-    ...base,
+  const spans = insertSpan(boundedBase.spans, tailSpan);
+  return pruneSupersededLiveRecords(
+    {
+      ...boundedBase,
+      spans,
+      hydratedBytes: totalBytes(spans),
+    },
+    assistantTurnKeys(input.tail.messages),
+  );
+}
+
+/** Apply a snapshot's authoritative row-space boundary to retained state. */
+function boundWindowToRowCount(
+  window: TranscriptWindow,
+  rowCount: number,
+): TranscriptWindow {
+  const skeleton = window.skeleton.slice(0, rowCount);
+  const spans = window.spans.filter((span) => spanEnd(span) <= rowCount);
+  const liveMessages = rowCount === 0 ? [] : window.liveMessages;
+  const changed =
+    skeleton.length !== window.skeleton.length ||
+    spans.length !== window.spans.length ||
+    liveMessages.length !== window.liveMessages.length;
+  if (!changed) return window;
+  return {
+    ...window,
+    skeleton,
     spans,
+    liveMessages,
     hydratedBytes: totalBytes(spans),
-  });
+    skeletonStreamCoveredThrough: Math.min(
+      window.skeletonStreamCoveredThrough,
+      rowCount,
+    ),
+    skeletonComplete:
+      window.skeletonComplete && coversEveryOrdinal(skeleton, rowCount),
+  };
 }
 
 /**
@@ -1332,7 +1415,41 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  return reconcileSpansWithSkeleton(next, chunk);
+  return reconcileProvisionalMessagesWithSkeleton(
+    reconcileSpansWithSkeleton(next, chunk),
+  );
+}
+
+/**
+ * Retire provisional live records the authoritative replacement index disproves.
+ *
+ * Only a COMPLETE skeleton can answer absence. Before then, a missing turn may
+ * simply sit in a chunk that has not arrived yet. A named user row remains
+ * provisional until its range body lands; a present assistant turn is kept
+ * until {@link pruneSupersededLiveRecords} replaces the transient message with
+ * the freshly served authoritative record by turn identity.
+ */
+function reconcileProvisionalMessagesWithSkeleton(
+  window: TranscriptWindow,
+): TranscriptWindow {
+  if (!window.skeletonComplete || window.liveMessages.length === 0) {
+    return window;
+  }
+  const skeletonAssistantTurnKeys = new Set<string>();
+  for (const entry of window.skeleton) {
+    if (entry === undefined) continue;
+    const turnKey = assistantRowTurnKey(entry.rowId);
+    if (turnKey !== null) skeletonAssistantTurnKeys.add(turnKey);
+  }
+  const liveMessages = window.liveMessages.filter(
+    (message) =>
+      message.role !== "assistant" ||
+      !isTransientLiveAssistantMessageId(message.messageId) ||
+      skeletonAssistantTurnKeys.has(assistantTurnKey(message)),
+  );
+  return liveMessages.length === window.liveMessages.length
+    ? window
+    : { ...window, liveMessages };
 }
 
 /**
@@ -1558,11 +1675,25 @@ function voidedTranscriptWindow(
     readonly indexRevision: number;
   },
 ): TranscriptWindow {
+  const liveMessages = window.liveMessages.filter(
+    (message) =>
+      input.rowCount > 0 &&
+      ((message.role === "user" && input.epoch === window.epoch) ||
+        (message.role === "assistant" &&
+          isTransientLiveAssistantMessageId(message.messageId))),
+  );
   return {
     ...emptyTranscriptWindow(),
     epoch: input.epoch,
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
+    // `reindexed` is the middle frame of the held-subscriber completion
+    // handoff: the rebasing snapshot has already frozen the assistant, while
+    // the replacement skeleton/range have not arrived yet. The stand-in owns
+    // no ordinal, so retain it across this void just as the snapshot rebase
+    // does. A zero-row authority drops it immediately; otherwise the complete
+    // replacement skeleton or durable range retires it.
+    liveMessages,
     invalidated: true,
     clock: window.clock + 1,
   };
@@ -1868,12 +1999,15 @@ export function applyRangeResponse(
     servedAt: clock,
   };
   const spans = insertSpan(window.spans, span);
-  return pruneSupersededLiveRecords({
-    ...window,
-    spans,
-    hydratedBytes: totalBytes(spans),
-    clock,
-  });
+  return pruneSupersededLiveRecords(
+    {
+      ...window,
+      spans,
+      hydratedBytes: totalBytes(spans),
+      clock,
+    },
+    assistantTurnKeys(response.messages),
+  );
 }
 
 /**

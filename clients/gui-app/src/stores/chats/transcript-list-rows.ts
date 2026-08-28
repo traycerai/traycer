@@ -49,8 +49,10 @@ import {
  * and it disappears behind a placeholder for the length of that round trip.
  * This does not reopen the sparse-skeleton hazard above: a row with no skeleton
  * entry simply has no ordinal to be seated at and still falls through to the
- * live tail. Nor the steer-split hazard below: a projected row is not a live
- * record, so it is not eligible.
+ * live tail. Projected assistant rows are eligible only when their
+ * `persistentMessageId` names a live record; that includes split slices from
+ * the same delivered assistant record without treating projection alone as
+ * proof that a body is held.
  *
  * ## What lands after the last ordinal
  *
@@ -239,7 +241,11 @@ function seatLiveRecords(input: {
   const liveRowIds = liveRecordRowIds(input.window);
   if (liveRowIds.size === 0) return;
   for (const model of input.rendered) {
-    if (!liveRowIds.has(model.id)) continue;
+    const backedByLiveRecord =
+      liveRowIds.has(model.id) ||
+      (model.persistentMessageId !== null &&
+        liveRowIds.has(model.persistentMessageId));
+    if (!backedByLiveRecord) continue;
     if (input.placedRowIds.has(model.id)) continue;
     const ordinal = input.skeletonOrdinals.get(model.id);
     if (ordinal === undefined || ordinal >= input.window.rowCount) continue;
@@ -267,17 +273,47 @@ export function transcriptListRows(input: {
   readonly rendered: readonly ChatMessageModel[];
 }): readonly TranscriptListRow[] {
   const { window, rendered } = input;
-  // The legacy line, and the void window. An invalidated index names ordinals
-  // in a coordinate space this client has left, so drawing placeholders from it
-  // would put rows in positions that no longer mean anything; the caller owes a
-  // `resnapshot` and this renders what it holds until that lands.
-  if (window === null || window.invalidated) {
+  // The legacy line has no ordinal space at all.
+  if (window === null) {
     return rendered.map((model) => ({
       kind: "hydrated",
       key: model.id,
       ordinal: null,
       model,
     }));
+  }
+
+  if (window.invalidated) {
+    // The index identities are void, but the frame that voided them still
+    // authoritatively announced how many rows exist in the replacement space.
+    // Keep the virtualized list mounted with identity-free placeholders so a
+    // known nonempty chat can never flash the brand-new-chat empty state or
+    // lose LegendList's measurements/scroll position during the resnapshot.
+    // Only genuinely unplaced rendered records remain after the ordinal
+    // space. Bodies already backed by a retained span are represented by the
+    // identity-free placeholders until the replacement index lands; appending
+    // them too would draw the same history twice on skeleton-loss paths.
+    const liveRowIds = liveRecordRowIds(window);
+    const unplacedRendered = rendered.filter(
+      (model) =>
+        model.persistentMessageId === null ||
+        liveRowIds.has(model.id) ||
+        liveRowIds.has(model.persistentMessageId),
+    );
+    return [
+      ...Array.from({ length: window.rowCount }, (_unused, ordinal) => ({
+        kind: "placeholder" as const,
+        key: unplacedRowKey(ordinal),
+        ordinal,
+        entry: null,
+      })),
+      ...unplacedRendered.map((model) => ({
+        kind: "hydrated" as const,
+        key: model.id,
+        ordinal: null,
+        model,
+      })),
+    ];
   }
 
   const modelsById = new Map(rendered.map((model) => [model.id, model]));
@@ -318,8 +354,9 @@ export function transcriptListRows(input: {
   // one copy of the body this client has. What the user sees is a message they
   // just sent turning into a skeleton placeholder until the range lands.
   //
-  // Restricted to models a LIVE RECORD backs, which is the whole discrimination
-  // this needs. A rendered model is not evidence that the client holds the row:
+  // Restricted to models a LIVE RECORD backs, directly by row id or through
+  // the projected model's persistent record id. A rendered model alone is not
+  // evidence that the client holds the row:
   // hydrating one row of a steer-split assistant turn pulls the turn's shared
   // records, and rendering those projects EVERY row of that turn - including
   // ones the host never served, whose bodies here would be this client's
