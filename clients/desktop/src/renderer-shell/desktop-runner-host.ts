@@ -36,6 +36,7 @@ import type {
   IHostManagement,
   IHostTray,
   IFileDropHost,
+  IFileSaveHost,
   IMigrationHost,
   INotificationHost,
   IRunnerHost,
@@ -658,6 +659,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
+  readonly fileSave: IFileSaveHost;
   readonly windows: DesktopWindowsBridge;
   readonly menu: DesktopMenuBridge;
   readonly appUpdates: DesktopAppUpdatesBridge;
@@ -795,6 +797,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
+    this.fileSave = buildDesktopFileSave(this.bridge.fileDrops);
     this.service = {
       install: () => this.bridge.service.install(),
       uninstall: (purge) => this.bridge.service.uninstall(purge),
@@ -1143,6 +1146,21 @@ function isEphemeralDropPath(filePath: string): boolean {
     /[\\/]TemporaryItems[\\/]/i.test(filePath) ||
     /screencaptureui/i.test(filePath)
   );
+}
+
+/**
+ * The desktop's `IFileSaveHost`, over the same preload surface the drop
+ * helpers use. The sandboxed renderer cannot write through the File System
+ * Access API (`createWritable()` throws `NotAllowedError`), so the bytes go to
+ * the main process, which shows a native save dialog and writes them there;
+ * the dialog is also what makes this the one shell that learns an absolute
+ * path, and therefore the one that can re-open the file afterwards.
+ */
+function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
+  return {
+    saveFile: (request) => bridge.saveFile(request),
+    openSavedFile: (path) => bridge.openSavedFile(path),
+  };
 }
 
 function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {

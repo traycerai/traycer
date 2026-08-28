@@ -14,6 +14,7 @@ import { captureUsageExportImageBlob } from "@/lib/usage-analytics/usage-export-
 import { appLogger } from "@/lib/logger";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 
 export interface UseUsageImageExportParams {
   /**
@@ -70,8 +71,8 @@ export interface UseUsageImageExportResult {
  * dialog's summary region (headline, tiles, trend chart) to a PNG, then
  * hand it to the clipboard or the save-to-disk path. Both legs reuse the
  * app-wide runtime-aware plumbing - `copyImageBlobPromiseToClipboard` falls
- * back to the desktop nativeImage bridge, `saveBlobToDisk` to the native save
- * dialog - so this hook only owns capture + toasts.
+ * back to the desktop nativeImage bridge, `saveBlobToDisk` to whichever save
+ * route this shell owns - so this hook only owns capture + toasts.
  *
  * ONE mutation carries both legs, discriminated by its variables: a capture
  * is an expensive full-region rasterisation, so two of them must never be in
@@ -90,6 +91,7 @@ export function useUsageImageExport(
     analyticsSource,
   } = params;
 
+  const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
   const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
@@ -105,7 +107,7 @@ export function useUsageImageExport(
         heading,
         subheading,
       });
-      return saveBlobToDisk(blob, fileName);
+      return saveBlobToDisk(blob, fileName, fileSave);
     },
     onSuccess: (saved, input) => {
       if (input.action === "copy") {
@@ -122,7 +124,7 @@ export function useUsageImageExport(
           action: "download",
           source: analyticsSource,
         });
-        toastSavedFile(saved, openSaved.mutate);
+        toastSavedFile(saved, openSaved.mutate, fileSave);
       }
     },
     onError: (err, input) => {
