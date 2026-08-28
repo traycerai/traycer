@@ -134,34 +134,37 @@ describe("ChatTranscriptPlaceholderRow", () => {
     (fontSize) => {
       const previousFontSize = document.documentElement.style.fontSize;
       document.documentElement.style.fontSize = `${fontSize}px`;
-      const heightMemory = {
-        observeSkeleton: () => undefined,
-        observeLayoutBasis: () => undefined,
-        recordMeasuredHeight: () => undefined,
-        placeholderHeight: () => 3_200,
-      };
-      render(
-        <ChatTranscriptPlaceholderRow
-          entry={entry({
-            role: "user",
-            byteLength: 2_048,
-            preview: "A tall remembered prompt",
-          })}
-          ordinal={13}
-          heightMemory={heightMemory}
-        />,
-      );
+      try {
+        const heightMemory = {
+          observeSkeleton: () => undefined,
+          observeLayoutBasis: () => undefined,
+          recordMeasuredHeight: () => undefined,
+          placeholderHeight: () => 3_200,
+        };
+        render(
+          <ChatTranscriptPlaceholderRow
+            entry={entry({
+              role: "user",
+              byteLength: 2_048,
+              preview: "A tall remembered prompt",
+            })}
+            ordinal={13}
+            heightMemory={heightMemory}
+          />,
+        );
 
-      const row = screen.getByTestId("chat-transcript-placeholder-row");
-      const shell = row.firstElementChild;
-      const bubble = screen.getByTestId(
-        "chat-transcript-placeholder-user-bubble",
-      );
-      expect(shell?.className).toContain("h-full");
-      expect(shell?.className).toContain("justify-around");
-      expect(bubble.className).not.toContain("h-full");
-      expect(bubble.className).toContain("w-2/3");
-      document.documentElement.style.fontSize = previousFontSize;
+        const row = screen.getByTestId("chat-transcript-placeholder-row");
+        const shell = row.firstElementChild;
+        const bubble = screen.getByTestId(
+          "chat-transcript-placeholder-user-bubble",
+        );
+        expect(shell?.className).toContain("h-full");
+        expect(shell?.className).toContain("justify-around");
+        expect(bubble.className).not.toContain("h-full");
+        expect(bubble.className).toContain("w-2/3");
+      } finally {
+        document.documentElement.style.fontSize = previousFontSize;
+      }
     },
   );
 
