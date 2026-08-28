@@ -68,7 +68,7 @@ export interface EdgeNavSwipeHandlers {
   readonly onDragStart: (direction: EdgeNavDirection) => EdgeNavDragResponse;
   /** Inward travel so far, on every move of a followed drag. */
   readonly onDragMove: (travelPx: number) => void;
-  /** The release of a followed drag. Called exactly once per `onDragStart` true. */
+  /** The release of a followed drag. Called exactly once per `follow` response. */
   readonly onDragEnd: (release: EdgeNavSwipeRelease) => void;
   /**
    * The discrete step, for a swipe nothing can follow. The caller performs the
