@@ -8,6 +8,15 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  emptyTranscriptWindow,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import type {
   ChatMessage,
   InterviewSegment,
@@ -45,10 +54,15 @@ import {
   findPendingInterview,
   findUnanswerableInterviews,
   resolvedTurnStatus,
+  selectContextUsage,
+  shouldGenerateChatTitleForSubmittedMessage,
   showRestoreResultToast,
   type InlineEditState,
 } from "../chat-tile-session-state";
-import type { PendingUserMessage } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  PendingUserMessage,
+} from "@/stores/chats/chat-session-store";
 
 beforeEach(() => {
   toastSuccess.mockClear();
@@ -921,9 +935,11 @@ describe("findUnanswerableInterviews", () => {
     ];
 
     expect(
-      findUnanswerableInterviews(messages, [
-        { blockId: "settled-block", requestedAt: 10 },
-      ]),
+      findUnanswerableInterviews(
+        messages,
+        [{ blockId: "settled-block", requestedAt: 10 }],
+        null,
+      ),
     ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
   });
 
@@ -932,6 +948,7 @@ describe("findUnanswerableInterviews", () => {
       findUnanswerableInterviews(
         [],
         [{ blockId: "ghost-block", requestedAt: 7 }],
+        null,
       ),
     ).toEqual([{ blockId: "ghost-block", requestedAt: 7 }]);
   });
@@ -946,7 +963,7 @@ describe("findUnanswerableInterviews", () => {
 
     // The two derivations partition the host's pending set - a block routed to
     // the card must never also raise the escape hatch.
-    expect(findUnanswerableInterviews(messages, pending)).toEqual([]);
+    expect(findUnanswerableInterviews(messages, pending, null)).toEqual([]);
     expect(
       findPendingInterview(messages, (id) => id === "streaming-block")?.blockId,
     ).toBe("streaming-block");
@@ -963,10 +980,14 @@ describe("findUnanswerableInterviews", () => {
     ];
 
     expect(
-      findUnanswerableInterviews(messages, [
-        { blockId: "settled-block", requestedAt: 10 },
-        { blockId: "streaming-block", requestedAt: 20 },
-      ]),
+      findUnanswerableInterviews(
+        messages,
+        [
+          { blockId: "settled-block", requestedAt: 10 },
+          { blockId: "streaming-block", requestedAt: 20 },
+        ],
+        null,
+      ),
     ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
   });
 
@@ -978,6 +999,7 @@ describe("findUnanswerableInterviews", () => {
           { blockId: "newer-block", requestedAt: 20 },
           { blockId: "older-block", requestedAt: 10 },
         ],
+        null,
       ).map((interview) => interview.blockId),
     ).toEqual(["older-block", "newer-block"]);
   });
@@ -985,7 +1007,7 @@ describe("findUnanswerableInterviews", () => {
   it("returns one stable empty reference so the composer memo cannot churn", () => {
     // `renderedMessages` changes on every streaming token; a fresh `[]` here
     // would re-identify the composer's props each token.
-    const first = findUnanswerableInterviews([], []);
+    const first = findUnanswerableInterviews([], [], null);
     const second = findUnanswerableInterviews(
       [
         interviewMessage("m-1", [
@@ -993,9 +1015,476 @@ describe("findUnanswerableInterviews", () => {
         ]),
       ],
       [{ blockId: "streaming-block", requestedAt: 10 }],
+      null,
     );
 
     expect(first).toEqual([]);
     expect(second).toBe(first);
   });
+
+  /**
+   * The windowed line, where "not in `messages`" stopped being evidence.
+   *
+   * The three cases below are the three states the host's judgement can be in
+   * for a pending id, and only ONE of them may reach the dismiss affordance.
+   * The other two are a question the reader can still answer.
+   */
+  describe("on the windowed line", () => {
+    it("does not offer to dismiss a question the host placed at an ordinal", () => {
+      // The bug this fixes. The block is answerable and merely cold - its row
+      // outside the retained window - so the rendered scan misses it, and
+      // before the host's answer this offered to settle it as errored.
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [{ blockId: "cold-block", requestedAt: 10 }],
+          [{ blockId: "cold-block", ordinal: 7 }],
+        ),
+      ).toEqual([]);
+    });
+
+    it("offers to dismiss a question the host says no row renders", () => {
+      // `ordinal: null` is a judgement, not an absence: the host walked the
+      // whole transcript and found nothing that could ever draw a card. This
+      // is the phantom-interview case, and suppressing the notice here would
+      // leave the chat wedged with no way out.
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [{ blockId: "stuck-block", requestedAt: 10 }],
+          [{ blockId: "stuck-block", ordinal: null }],
+        ),
+      ).toEqual([{ blockId: "stuck-block", requestedAt: 10 }]);
+    });
+
+    it("does not offer to dismiss a question the host has not judged", () => {
+      // An id that became pending AFTER the snapshot: `interviewRequested`
+      // publishes it, and the block delta that would have rendered it was
+      // dropped because its row is evicted. Absent from the judgement is
+      // "unjudged", never "unrenderable" - the next snapshot decides.
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [{ blockId: "fresh-block", requestedAt: 10 }],
+          [{ blockId: "other-block", ordinal: null }],
+        ),
+      ).toEqual([]);
+    });
+
+    it("still keeps a rendered streaming block out of the notice", () => {
+      // The rendered scan is not replaced by the judgement, it is narrowed by
+      // it: a block this client can already draw needs no host opinion.
+      const messages = [
+        interviewMessage("m-1", [
+          { blockId: "live-block", status: "streaming" },
+        ]),
+      ];
+
+      expect(
+        findUnanswerableInterviews(
+          messages,
+          [{ blockId: "live-block", requestedAt: 10 }],
+          [{ blockId: "live-block", ordinal: null }],
+        ),
+      ).toEqual([]);
+    });
+
+    it("separates a cold question from a genuinely stuck one in the same chat", () => {
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [
+            { blockId: "stuck-block", requestedAt: 10 },
+            { blockId: "cold-block", requestedAt: 20 },
+          ],
+          [
+            { blockId: "stuck-block", ordinal: null },
+            { blockId: "cold-block", ordinal: 3 },
+          ],
+        ),
+      ).toEqual([{ blockId: "stuck-block", requestedAt: 10 }]);
+    });
+  });
 });
+
+/**
+ * A minimal `ChatSessionRecord` - `ChatSessionState["chat"]` post
+ * `chatRecordWithoutTranscript`, so it carries no `messages`/`events` fields.
+ * `shouldGenerateChatTitleForSubmittedMessage` only reads `isTitleEditedByUser`
+ * off it, but the fixture is typed through the real field so a widening back
+ * to `Chat` would surface here too.
+ */
+function chatRecord(
+  isTitleEditedByUser: boolean,
+): NonNullable<ChatSessionState["chat"]> {
+  return {
+    id: "chat-1",
+    parentId: null,
+    userId: "owner-1",
+    hostId: "host-1",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser,
+    settings: null,
+    activeSessionChain: null,
+    claudePendingWakes: [],
+    archivedAt: null,
+    pinnedUserProviderHandle: null,
+    lastDeliveredRolesDigest: null,
+  };
+}
+
+function persistedUserMessage(
+  messageId: string,
+): Extract<Message, { role: "user" }> {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "owner-1" },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+    timestamp: 4,
+    sessionAnchor: null,
+  };
+}
+
+function pendingUserMessage(clientActionId: string): PendingUserMessage {
+  const accountContext: AccountContext = { type: "PERSONAL" };
+  return {
+    clientActionId,
+    messageId: `message-${clientActionId}`,
+    content: CONTENT,
+    attachments: [],
+    sender: { type: "user", userId: "owner-1" },
+    settings: SETTINGS,
+    timestamp: 4,
+    accountContext,
+    deliveryPolicy: null,
+    restore: { content: CONTENT, browserAnnotations: [] },
+    restoreWorktreeIntent: null,
+  };
+}
+
+/**
+ * Off the windowed line there is no window and no derived payload, which is
+ * what makes `state.messages` the whole transcript there.
+ */
+const LEGACY_LINE = {
+  transcriptWindow: emptyTranscriptWindow(),
+  transcriptDerived: null,
+} as const;
+
+/** A windowed session holding `rowCount` rows, with the skeleton described. */
+function windowedLine(input: {
+  readonly rowCount: number;
+  readonly skeleton: readonly (RowSkeletonEntry | undefined)[];
+  readonly skeletonComplete: boolean;
+}): {
+  readonly transcriptWindow: TranscriptWindow;
+  readonly transcriptDerived: ChatTranscriptDerived;
+} {
+  return {
+    transcriptWindow: {
+      ...emptyTranscriptWindow(),
+      epoch: 1,
+      rowCount: input.rowCount,
+      skeleton: input.skeleton,
+      skeletonComplete: input.skeletonComplete,
+    },
+    transcriptDerived: {
+      latestAssistantUsage: null,
+      pinnedTodo: null,
+      pinnedTaskTodoItems: [],
+      latestForkableAssistantMessageId: null,
+      restorableSetupInterruption: null,
+      interviewAnswerability: [],
+      latestAssistantAuthFailureTurnKey: null,
+      setupCardWindows: [],
+    },
+  };
+}
+
+function skeletonEntry(
+  rowId: string,
+  role: RowSkeletonEntry["role"],
+): RowSkeletonEntry {
+  return { rowId, createdAt: 0, role, byteLength: 10, bodyDigest: "d0" };
+}
+
+describe("shouldGenerateChatTitleForSubmittedMessage", () => {
+  it("generates a title for the first message on a fresh, unedited chat", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...LEGACY_LINE,
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not generate a title once the user has edited it themselves", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(true),
+        messages: [],
+        pendingUserMessages: [],
+        ...LEGACY_LINE,
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not generate a title for an empty submission", () => {
+    const empty: JsonContent = { type: "doc", content: [] };
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...LEGACY_LINE,
+        content: empty,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not generate a title while a send is already pending", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [pendingUserMessage("action-1")],
+        ...LEGACY_LINE,
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not generate a title once the transcript already has a user message", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [persistedUserMessage("m1")],
+        pendingUserMessages: [],
+        ...LEGACY_LINE,
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("still reads a null chat (no snapshot yet) as not user-edited", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: null,
+        messages: [],
+        pendingUserMessages: [],
+        ...LEGACY_LINE,
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  // ─── The windowed line, where `messages` stops being the transcript ──────
+
+  it("does not re-title an established chat whose user rows are all unhydrated", () => {
+    // The failure this fixes. `messages` is empty because nothing in the
+    // window is hydrated - not because nobody has ever spoken. The skeleton
+    // knows better.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 2,
+          skeleton: [
+            skeletonEntry("row-0", "user"),
+            skeletonEntry("row-1", "assistant"),
+          ],
+          skeletonComplete: true,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("still titles a brand-new windowed chat, whose skeleton is empty AND incomplete", () => {
+    // `rowCount === 0` has to be checked before completeness: no chunk is ever
+    // sent for an empty transcript, so its skeleton never becomes `complete`
+    // and this chat would otherwise read as unknown and never be titled.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 0,
+          skeleton: [],
+          skeletonComplete: false,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  it("holds off while the skeleton is still streaming and has shown no user row", () => {
+    // `unknown`. Folded into "do not generate" because the two failures are
+    // not symmetric - re-titling rewrites what the user has been reading.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 4,
+          skeleton: [undefined, skeletonEntry("row-1", "assistant")],
+          skeletonComplete: false,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("titles a chat whose complete skeleton holds only system rows", () => {
+    // A setup card renders as `system` and is not a person speaking, so a
+    // chat that has only ever shown one is still awaiting its first message.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 1,
+          skeleton: [skeletonEntry("row-0", "system")],
+          skeletonComplete: true,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  it("answers from a PARTIAL skeleton the moment one user row is delivered", () => {
+    // Chunks add entries and never retract one, so a delivered `user` entry
+    // is decisive however much of the skeleton is still outstanding.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 40,
+          skeleton: [undefined, skeletonEntry("row-1", "user")],
+          skeletonComplete: false,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+});
+
+const USAGE_A: TokenUsage = {
+  inputTokens: 10,
+  outputTokens: 20,
+  totalTokens: 30,
+};
+
+const USAGE_B: TokenUsage = {
+  inputTokens: 400,
+  outputTokens: 500,
+  totalTokens: 900,
+};
+
+function assistantMessageWithUsage(
+  messageId: string,
+  usage: TokenUsage | null,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet-4",
+      displayName: "Claude Sonnet 4",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: 5,
+    timestamp: 5,
+    turnId: "turn-1",
+    usage,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
+describe("selectContextUsage", () => {
+  it("prefers the live turn's usage over both persisted sources", () => {
+    expect(
+      selectContextUsage({
+        liveTurnUsage: USAGE_A,
+        messages: [assistantMessageWithUsage("a-1", USAGE_B)],
+        transcriptDerived: derivedWith(USAGE_B),
+      }),
+    ).toBe(USAGE_A);
+  });
+
+  it("scans backwards for the last usage-bearing assistant row off the windowed line", () => {
+    expect(
+      selectContextUsage({
+        liveTurnUsage: null,
+        messages: [
+          assistantMessageWithUsage("a-1", USAGE_A),
+          assistantMessageWithUsage("a-2", USAGE_B),
+          // A later row that never reported usage must not blank the chip.
+          assistantMessageWithUsage("a-3", null),
+        ],
+        transcriptDerived: null,
+      }),
+    ).toBe(USAGE_B);
+  });
+
+  it("reads the host's fold on the windowed line, where the scan would find nothing", () => {
+    // The shape the chip is being fixed for: a chat long enough to be windowed
+    // holds no hydrated assistant row at all, so the backwards scan returns
+    // null and the chip reads blank. The host looked at the whole transcript.
+    expect(
+      selectContextUsage({
+        liveTurnUsage: null,
+        messages: [],
+        transcriptDerived: derivedWith(USAGE_A),
+      }),
+    ).toBe(USAGE_A);
+  });
+
+  it("reports the host's null rather than falling back to a hydrated row", () => {
+    // Not a `??` chain. `latestAssistantUsage: null` is an ANSWER - the chip's
+    // empty form - so a hydrated row must not override the party that can see
+    // the whole transcript. Kills the mutation that writes `?? scan(...)`.
+    expect(
+      selectContextUsage({
+        liveTurnUsage: null,
+        messages: [assistantMessageWithUsage("a-1", USAGE_B)],
+        transcriptDerived: derivedWith(null),
+      }),
+    ).toBeNull();
+  });
+});
+
+function derivedWith(
+  latestAssistantUsage: TokenUsage | null,
+): ChatTranscriptDerived {
+  return {
+    latestAssistantUsage,
+    pinnedTodo: null,
+    pinnedTaskTodoItems: [],
+    latestForkableAssistantMessageId: null,
+    restorableSetupInterruption: null,
+    interviewAnswerability: [],
+    latestAssistantAuthFailureTurnKey: null,
+    setupCardWindows: [],
+  };
+}

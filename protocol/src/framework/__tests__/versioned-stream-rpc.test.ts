@@ -112,7 +112,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(3);
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(7);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(8);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       1,

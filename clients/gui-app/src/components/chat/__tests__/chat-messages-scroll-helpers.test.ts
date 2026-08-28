@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   acceptExhaustedPersistedRestoreFallback,
-  buildMessageIdToIndex,
+  buildRowKeyToIndex,
   chatTimelineGetItemType,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
@@ -11,8 +11,9 @@ import {
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
-  viewportAnchorMessageId,
+  viewportAnchorRowKey,
 } from "@/components/chat/chat-messages-scroll-helpers";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { makeMessageAt } from "./chat-message-fixtures";
 
 function user(id: string, createdAt: number): ChatMessageModel {
@@ -42,19 +43,30 @@ function a2aUser(id: string, createdAt: number): ChatMessageModel {
   };
 }
 
-describe("buildMessageIdToIndex", () => {
+function rowsOf(messages: ReadonlyArray<ChatMessageModel>) {
+  return transcriptListRows({ window: null, rendered: messages });
+}
+
+function rowOf(message: ChatMessageModel) {
+  return rowsOf([message])[0];
+}
+
+describe("buildRowKeyToIndex", () => {
   it("maps each message id to its index", () => {
     const messages = [user("a", 1), assistant("b", 2), user("c", 3)];
-    expect(buildMessageIdToIndex(messages).get("a")).toBe(0);
-    expect(buildMessageIdToIndex(messages).get("b")).toBe(1);
-    expect(buildMessageIdToIndex(messages).get("c")).toBe(2);
-    expect(buildMessageIdToIndex(messages).get("missing")).toBeUndefined();
+    const rows = rowsOf(messages);
+    expect(buildRowKeyToIndex(rows).get("a")).toBe(0);
+    expect(buildRowKeyToIndex(rows).get("b")).toBe(1);
+    expect(buildRowKeyToIndex(rows).get("c")).toBe(2);
+    expect(buildRowKeyToIndex(rows).get("missing")).toBeUndefined();
   });
 });
 
 describe("chatTimelineLocationForMessage", () => {
   it("returns navigation location with the fixed view offset", () => {
-    const indexById = buildMessageIdToIndex([user("a", 1), assistant("b", 2)]);
+    const indexById = buildRowKeyToIndex(
+      rowsOf([user("a", 1), assistant("b", 2)]),
+    );
     expect(chatTimelineLocationForMessage("b", indexById, true)).toEqual({
       index: 1,
       viewOffset: CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
@@ -63,7 +75,7 @@ describe("chatTimelineLocationForMessage", () => {
   });
 
   it("returns null when the message id is unknown", () => {
-    const indexById = buildMessageIdToIndex([user("a", 1)]);
+    const indexById = buildRowKeyToIndex(rowsOf([user("a", 1)]));
     expect(
       chatTimelineLocationForMessage("missing", indexById, false),
     ).toBeNull();
@@ -224,8 +236,9 @@ describe("chatViewportAnchorRowIndex + viewportActiveUserMessageId", () => {
       user("u1", 3),
     ];
     const state = stateWithRowTops([0, 90, 180], 0);
+    const rows = rowsOf(messages);
     // Default anchor offset is NAV_OFFSET + 1 = 49 → still row 0 (u0)
-    expect(viewportActiveUserMessageId(state, messages)).toBe("u0");
+    expect(viewportActiveUserMessageId(state, rows, messages)).toBe("u0");
   });
 
   it("keeps the physical assistant row for scroll restoration", () => {
@@ -234,15 +247,17 @@ describe("chatViewportAnchorRowIndex + viewportActiveUserMessageId", () => {
       assistant("a0", 2),
       user("u1", 3),
     ];
+    const rows = rowsOf(messages);
     const state = stateWithRowTops([0, 90, 990], 400);
 
-    expect(viewportAnchorMessageId(state, messages)).toBe("a0");
-    expect(viewportActiveUserMessageId(state, messages)).toBe("u0");
+    expect(viewportAnchorRowKey(state, rows)).toBe("a0");
+    expect(viewportActiveUserMessageId(state, rows, messages)).toBe("u0");
   });
 
   it("returns null when the list state cannot be measured", () => {
+    const messages = [user("u0", 1)];
     expect(
-      viewportActiveUserMessageId({ scroll: 0 }, [user("u0", 1)]),
+      viewportActiveUserMessageId({ scroll: 0 }, rowsOf(messages), messages),
     ).toBeNull();
   });
 
@@ -274,11 +289,13 @@ describe("chatTimelineGetItemType", () => {
   it("splits human-sent user rows from A2A agent-sent rows", () => {
     const human = user("h", 1);
     const a2a = a2aUser("a", 2);
-    expect(chatTimelineGetItemType(human)).toBe("user:human");
-    expect(chatTimelineGetItemType(a2a)).toBe("user:a2a");
-    expect(chatTimelineGetItemType(assistant("x", 3))).toBe("assistant");
-    expect(chatTimelineGetItemType(human)).not.toBe(
-      chatTimelineGetItemType(a2a),
+    const humanRow = rowOf(human);
+    const a2aRow = rowOf(a2a);
+    expect(chatTimelineGetItemType(humanRow)).toBe("user:human");
+    expect(chatTimelineGetItemType(a2aRow)).toBe("user:a2a");
+    expect(chatTimelineGetItemType(rowOf(assistant("x", 3)))).toBe("assistant");
+    expect(chatTimelineGetItemType(humanRow)).not.toBe(
+      chatTimelineGetItemType(a2aRow),
     );
   });
 });

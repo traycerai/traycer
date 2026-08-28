@@ -79,6 +79,8 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },

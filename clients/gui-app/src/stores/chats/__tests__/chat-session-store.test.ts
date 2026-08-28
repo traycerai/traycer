@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  Chat,
   ChatEvent,
   ClaudePendingWake,
   InterviewDeliveryProjection,
@@ -20,6 +21,7 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { RuntimeEvent } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
@@ -60,7 +62,10 @@ import {
   type StreamFlushCoordinator,
   type StreamFlushRegistrationInput,
 } from "@/stores/chats/stream-flush-coordinator";
+import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import { selectRestorableSetupInterruption } from "@/stores/chats/chat-session-selectors";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -390,6 +395,8 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -431,6 +438,15 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        // Delegated rather than stubbed: this harness drives a REAL
+        // `ChatStreamClient` over a mock socket, so the reads have to reach it
+        // for a test to observe what was put on the wire.
+        requestTranscriptRange: (request) => {
+          client.requestTranscriptRange(request);
+        },
+        requestResnapshot: () => {
+          client.requestResnapshot();
+        },
         interviewSettlementActionsProtocolSupported: () =>
           client.interviewSettlementActionsProtocolSupported(),
         close: () => {
@@ -661,32 +677,38 @@ function emitSnapshotWithQueuedSend(
   });
 }
 
-function emitSnapshotFrame(input: SnapshotFrameInput): void {
+/**
+ * Returns the raw `chat` record it just sent, so a caller can hold a
+ * reference to the exact object the snapshot carried - the aliasing test
+ * mutates it after the fact to prove the store copied rather than aliased it.
+ */
+function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
   input.callbacks.onConnectionStatus("open", null);
+  const chat: Chat = {
+    id: CHAT_ID,
+    parentId: null,
+    userId: OWNER_ID,
+    hostId: "test-host",
+    title: "Host Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser: false,
+    settings: input.settings ?? null,
+    activeSessionChain: null,
+    claudePendingWakes: [...(input.claudePendingWakes ?? [])],
+    messages: [...input.messages],
+    events: [],
+    archivedAt: null,
+    pinnedUserProviderHandle: null,
+    lastDeliveredRolesDigest: null,
+  };
   input.callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "test-host",
-        title: "Host Chat",
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: input.settings ?? null,
-        activeSessionChain: null,
-        claudePendingWakes: [...(input.claudePendingWakes ?? [])],
-        messages: [...input.messages],
-        events: [],
-        archivedAt: null,
-        pinnedUserProviderHandle: null,
-        lastDeliveredRolesDigest: null,
-      },
+      chat,
       access: {
         role: input.access,
         ownerUserId: OWNER_ID,
@@ -711,6 +733,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         : { turnInProgress: input.turnInProgress }),
     },
   });
+  return chat;
 }
 
 function emitSnapshotWithWorktree(
@@ -1093,6 +1116,8 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => {
             closeCalls += 1;
           },
@@ -1144,6 +1169,8 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },
@@ -1180,6 +1207,73 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
       PENDING_CLAUDE_WAKE,
     ]);
+  });
+
+  it("carries the transcript once: `chat` drops the arrays while the scalars and the real messages copy survive", () => {
+    const harness = createHarness();
+    const messages = [persistedUserMessage("m1"), persistedUserMessage("m2")];
+
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages,
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const state = harness.handle.store.getState();
+    if (state.chat === null) throw new Error("Expected chat");
+
+    // The regression guard: a future `{...snapshot.chat}` spread would
+    // silently reintroduce the duplicate, and this is the only check that
+    // would catch it - the type-level guarantee disappears the moment
+    // someone widens `ChatSessionRecord` back to `Chat`.
+    expect(Object.keys(state.chat)).not.toContain("messages");
+    expect(Object.keys(state.chat)).not.toContain("events");
+
+    // The four scalar reads `ChatSessionRecord` exists to serve.
+    expect(state.chat.title).toBe("Host Chat");
+    expect(state.chat.isTitleEditedByUser).toBe(false);
+    expect(state.chat.settings).toEqual(SETTINGS);
+    expect(state.chat.parentId).toBeNull();
+
+    // The strip must not have taken the real copy.
+    expect(state.messages).toEqual(messages);
+  });
+
+  it("carries the events transcript once: `chat` drops events too, and state.events keeps the full copy", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const events = [
+      chatEvent("event-1", "turn.started", null),
+      chatEvent("event-2", "turn.completed", null),
+    ];
+
+    emitSnapshotWithWorktree(callbacks, events, null);
+
+    const state = harness.handle.store.getState();
+    if (state.chat === null) throw new Error("Expected chat");
+    expect(Object.keys(state.chat)).not.toContain("events");
+    expect(Object.keys(state.chat)).not.toContain("messages");
+    expect(state.events).toEqual(events);
+  });
+
+  it("does not alias the snapshot's chat object - mutating it after the fact does not write through into store state", () => {
+    const harness = createHarness();
+    const sentChat = emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // Simulates a caller (or a future bug) mutating the object it handed to
+    // the store after the fact - it must not be the same reference.
+    sentChat.title = "mutated after the fact";
+
+    expect(harness.handle.store.getState().chat?.title).toBe("Host Chat");
   });
 
   it("seeds composer settings from the initial persisted chat snapshot", () => {
@@ -1362,7 +1456,10 @@ describe("createChatSessionStore", () => {
       retryable: true,
       generation: 0,
     };
-    const snapshot = (): void =>
+    const snapshot = (): void => {
+      // Block body: this branch's `emitSnapshotFrame` returns the chat record
+      // it emitted (the windowed adapter needs it), so a concise arrow would
+      // return it out of a `: void` annotation.
       emitSnapshotFrame({
         callbacks,
         access: "owner",
@@ -1370,6 +1467,7 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         pendingFileEditApprovals: [],
       });
+    };
     snapshot();
     harness.handle.store.setState({
       interviewDeliveryRetryProtocolSupported: true,
@@ -9458,6 +9556,478 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
+  // The live turn's OWN cards, which the detached drop must never eat.
+  //
+  // "No message owns this block" is the detached test, and it is satisfied by
+  // two opposite situations: an evicted owner (drop) and a block that does not
+  // exist YET because this very event creates it (keep). The active turn's row
+  // is `liveAssistantMessage` until it materializes, and that is not in
+  // `state.messages` at all - so on a live turn the ownership scan finds
+  // nothing for either one, and reading that as "detached" drops the card at
+  // its birth. Everything after it then has no owner either, so nothing about
+  // the subagent ever renders.
+  it("creates the active turn's own subagent card from its first subagent.started", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitTextDelta(callbacks, "Active turn", 4);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "subagent.started",
+        blockId: "live-subagent",
+        timestamp: 5,
+        name: "Explore",
+      },
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-subagent",
+        status: "streaming",
+      }),
+    ]);
+  });
+
+  it("keeps applying progress and completion to the subagent card it created", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "live-subagent",
+      timestamp: 5,
+      name: "Explore",
+    });
+    emit({
+      type: "subagent.progress",
+      blockId: "live-subagent",
+      timestamp: 6,
+      update: "reading files",
+    });
+    emit({
+      type: "subagent.completed",
+      blockId: "live-subagent",
+      timestamp: 7,
+      outcome: "completed",
+      result: "done",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-subagent",
+        status: "completed",
+        progressUpdates: ["reading files"],
+        result: "done",
+      }),
+    ]);
+  });
+
+  // The widest arm of the same seam: a nested event names its owner through
+  // `parentBlockId`, and that owner is MANDATORY - it never falls through. So
+  // for a subagent's own tool activity the live row is the only place its
+  // parent can be found, and not looking there strands every child of a card
+  // the active turn is still building.
+  it("nests a live subagent's own tool call under it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "live-subagent",
+      timestamp: 5,
+      name: "Explore",
+    });
+    emit({
+      type: "tool_call.started",
+      blockId: "child-tool",
+      parentBlockId: "live-subagent",
+      timestamp: 6,
+      toolName: "Grep",
+      agentMessageSend: null,
+    });
+    emit({
+      type: "tool_call.completed",
+      blockId: "child-tool",
+      parentBlockId: "live-subagent",
+      timestamp: 7,
+      toolName: "Grep",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "subagent", blockId: "live-subagent" }),
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "child-tool",
+        parentBlockId: "live-subagent",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  // A foreground tool call is the same shape one step over: `tool_call.started`
+  // creates the block on the live row, and its terminal names that block by its
+  // own id with no `parentBlockId`. If the terminal is read as detached the
+  // call spins forever, which is the same defect as the subagent card and not a
+  // separate one.
+  it("completes the active turn's own foreground tool call", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "tool_call.started",
+      blockId: "live-tool",
+      timestamp: 5,
+      toolName: "Read",
+      agentMessageSend: null,
+    });
+    emit({
+      type: "tool_call.completed",
+      blockId: "live-tool",
+      timestamp: 6,
+      toolName: "Read",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "live-tool",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  // The other half of the seam: an update naming a card that genuinely is not
+  // here must still be dropped rather than synthesized under whatever turn is
+  // running. `subagent.progress` and `subagent.completed` both BUILD a card
+  // when none exists (see the accumulator), which is exactly what makes the
+  // fall-through dangerous for them and harmless for `started`.
+  it.each([
+    [
+      "progress",
+      {
+        type: "subagent.progress",
+        blockId: "evicted-subagent",
+        timestamp: 5,
+        update: "still working",
+      } satisfies RuntimeEvent,
+    ],
+    [
+      "completed",
+      {
+        type: "subagent.completed",
+        blockId: "evicted-subagent",
+        timestamp: 5,
+        outcome: "completed",
+        result: "done",
+      } satisfies RuntimeEvent,
+    ],
+  ])(
+    "still drops an ownerless subagent %s rather than opening a card for it",
+    (_label, event) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      emitTextDelta(callbacks, "Active turn", 4);
+
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  // `workflow.*` is the same card by another name: all three write the SAME
+  // `subagent` block through `makeSubAgentBlock`, addressed by `event.blockId`,
+  // and all three build one when none exists - the accumulator's `started`
+  // opens, `progress`/`completed` update-or-synthesize, exactly as `subagent.*`
+  // does. A Workflow run is a fleet that outlives its spawning turn for the
+  // same reason a background subagent does, so it inherits the same hazard and
+  // must inherit the same rule.
+  it("creates the active turn's own workflow card from its first workflow.started", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitTextDelta(callbacks, "Active turn", 4);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "workflow.started",
+        blockId: "live-workflow",
+        timestamp: 5,
+        name: "review-changes",
+        intent: "Review changed files across dimensions",
+      },
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-workflow",
+        status: "streaming",
+      }),
+    ]);
+  });
+
+  it("keeps applying progress and completion to the workflow card it created", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "workflow.started",
+      blockId: "live-workflow",
+      timestamp: 5,
+      name: "review-changes",
+      intent: "Review changed files",
+    });
+    emit({
+      type: "workflow.progress",
+      blockId: "live-workflow",
+      timestamp: 6,
+      activity: { kind: "phase", text: "Review" },
+      agentsStarted: 3,
+      agentsFinished: 1,
+    });
+    emit({
+      type: "workflow.completed",
+      blockId: "live-workflow",
+      timestamp: 7,
+      outcome: "completed",
+      result: "3 findings",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-workflow",
+        status: "completed",
+        progressUpdates: ["Review"],
+        result: "3 findings",
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      "progress",
+      {
+        type: "workflow.progress",
+        blockId: "evicted-workflow",
+        timestamp: 5,
+        activity: { kind: "phase", text: "Verify" },
+        agentsStarted: 4,
+        agentsFinished: 2,
+      } satisfies RuntimeEvent,
+    ],
+    [
+      "completed",
+      {
+        type: "workflow.completed",
+        blockId: "evicted-workflow",
+        timestamp: 5,
+        outcome: "completed",
+        result: "done",
+      } satisfies RuntimeEvent,
+    ],
+  ])(
+    "still drops an ownerless workflow %s rather than opening a card for it",
+    (_label, event) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      emitTextDelta(callbacks, "Active turn", 4);
+
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  // The door the opens-its-own-card exemption leaves open, and both sides of
+  // it. The accumulator deliberately accepts a `subagent.started` re-emitted
+  // AFTER its turn completed - Codex resolves the agent nickname
+  // asynchronously and re-emits when it lands - so "no row owns this block" can
+  // mean an evicted row rather than a new card. Nothing on the wire separates
+  // the two: a `blockDelta` carries no turn identity, and the re-emit is the
+  // same event shape as the start. Only the session's memory of what it has
+  // already opened can, so that is what decides it.
+  it.each([
+    ["subagent", "subagent.started", "subagent.progress"],
+    ["workflow", "workflow.started", "workflow.progress"],
+  ])(
+    "drops a late %s start re-emit whose card was evicted",
+    (_label, startedType, _progressType) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      const started: RuntimeEvent =
+        startedType === "subagent.started"
+          ? {
+              type: "subagent.started",
+              blockId: "run-1",
+              timestamp: 5,
+              name: "Explore",
+            }
+          : {
+              type: "workflow.started",
+              blockId: "run-1",
+              timestamp: 5,
+              name: "review",
+              intent: "Review",
+            };
+      const emit = (event: RuntimeEvent): void => {
+        callbacks.onBlockDelta({
+          kind: "blockDelta",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event,
+        });
+      };
+
+      // The genuine first start opens the card on the live turn.
+      emit(started);
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ blockId: "run-1" })]);
+
+      // That turn ends and a new one begins; the old row is not hydrated here,
+      // which is exactly what eviction looks like to this reducer.
+      settleTurnAndEvictItsRow(callbacks);
+      emitTextDelta(callbacks, "Second turn", 20);
+
+      // The nickname resolves and the adapter re-emits the SAME start.
+      emit({ ...started, timestamp: 21 });
+
+      // The new turn shows its own text and nothing else: the re-emit did not
+      // mint a copy of the old card here.
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  it("still opens a card for a DIFFERENT run started on the later turn", () => {
+    // The direction the memory must not break. A start whose block id this
+    // session has never seen is a first start no matter how many turns have
+    // been and gone, so the later turn's own subagent still gets its card.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "run-1",
+      timestamp: 5,
+      name: "Explore",
+    });
+
+    settleTurnAndEvictItsRow(callbacks);
+    emit({
+      type: "subagent.started",
+      blockId: "run-2",
+      timestamp: 21,
+      name: "Verify",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "run-2",
+        status: "streaming",
+      }),
+    ]);
+  });
+
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -10501,7 +11071,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-gating" },
+      eventId: "event-gating",
       messageId: "queued-msg-1",
       clientActionId: "send-1",
     });
@@ -10559,8 +11129,8 @@ describe("createChatSessionStore", () => {
       event: gating,
     });
     expect(
-      selectRestorableSetupInterruption(harness.handle.store.getState())?.event
-        .eventId,
+      selectRestorableSetupInterruption(harness.handle.store.getState())
+        ?.eventId,
     ).toBe("event-gating-1");
 
     callbacks.onEventAppended({
@@ -10596,7 +11166,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-gating-2" },
+      eventId: "event-gating-2",
       messageId: "queued-msg-2",
     });
   });
@@ -10673,7 +11243,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-cancelled-gating" },
+      eventId: "event-cancelled-gating",
       messageId: sent.messageId,
       clientActionId: sent.clientActionId,
       workspacePath: "/repo",
@@ -10722,10 +11292,187 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-cancelled-gating" },
+      eventId: "event-cancelled-gating",
       messageId: "queued-msg-cancelled",
       clientActionId: "send-cancelled",
     });
+  });
+
+  // ─── On the windowed line the host has already answered ─────────────────
+  //
+  // The one consumer in the `state.messages` sweep with NO client-side repair.
+  // The event this comes from occupies no ordinal, so it is in no row's record
+  // set: `sliceTranscriptTail` never carries it and `loadRange` - addressed by
+  // ordinal - cannot ask for it. `state.events` never receives it however much
+  // the client hydrates, so the scan above is not "degraded over a window", it
+  // is permanently blind. It rides the snapshot instead.
+
+  it("takes the host's derived interruption when the events array cannot hold it", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: emptyTranscriptWindow(),
+        transcriptDerived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: {
+            eventType: "setup.failed",
+            eventId: "event-host-derived",
+            workspacePath: "/repo",
+            terminalSessionId: null,
+            setupExitCode: 1,
+            clientActionId: "send-1",
+            messageId: "queued-msg",
+          },
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+      }),
+    ).toMatchObject({
+      eventId: "event-host-derived",
+      messageId: "queued-msg",
+    });
+  });
+
+  it("reports the host's null rather than re-running the scan over a window", () => {
+    // Not a `??` chain. `restorableSetupInterruption: null` inside a derived
+    // payload is an ANSWER - "nothing to restore", the ordinary case - so a
+    // stray hydrated event must not override the party that read the whole
+    // event log. Falling through here would restore a draft the user never
+    // lost, which is the failure this whole selector exists to avoid.
+    expect(
+      selectRestorableSetupInterruption({
+        events: [
+          // Carries a `messageId`, so the scan WOULD return it - without that
+          // the selector skips it anyway and the assertion proves nothing.
+          {
+            ...chatEvent("event-hydrated", "setup.failed", {
+              workspacePath: "/repo",
+            }),
+            messageId: "queued-msg-hydrated",
+          },
+        ],
+        // HYDRATED, not live-appended: it is in `events` and NOT in the
+        // window's live list, which is the distinction the fold turns on.
+        transcriptWindow: emptyTranscriptWindow(),
+        transcriptDerived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: null,
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+      }),
+    ).toBeNull();
+  });
+
+  // ─── ... but the host's answer is a snapshot, not a subscription ─────────
+  //
+  // The derived value states the answer as of the frame it rode in on. A setup
+  // failure that happens NEXT reaches this client as an `eventAppended` with no
+  // snapshot behind it - `appendLiveRecords` seats a record with no ordinal in
+  // `window.liveEvents`, which is exactly the "later than the baseline" set.
+  // Without the fold the composer stops restoring drafts for every mid-session
+  // failure until something unrelated forces a resnapshot.
+
+  function derivedWith(
+    restorableSetupInterruption: RestorableSetupInterruption | null,
+  ): ChatTranscriptDerived {
+    return {
+      latestAssistantUsage: null,
+      pinnedTodo: null,
+      pinnedTaskTodoItems: [],
+      latestForkableAssistantMessageId: null,
+      restorableSetupInterruption,
+      interviewAnswerability: [],
+      latestAssistantAuthFailureTurnKey: null,
+      setupCardWindows: [],
+    };
+  }
+
+  function liveSetupEvent(
+    eventId: string,
+    type: ChatEvent["type"],
+    messageId: string | null,
+  ): ChatEvent {
+    return {
+      ...chatEvent(eventId, type, { workspacePath: "/repo" }),
+      messageId,
+    };
+  }
+
+  it("folds a live-appended interruption over the host's baseline", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          liveEvents: [
+            liveSetupEvent("event-live", "setup.failed", "queued-msg-live"),
+          ],
+        },
+        transcriptDerived: derivedWith(null),
+      }),
+    ).toMatchObject({
+      eventId: "event-live",
+      messageId: "queued-msg-live",
+    });
+  });
+
+  it("clears the host's baseline once a live retry transitions setup back to running", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          liveEvents: [liveSetupEvent("event-retry", "setup.running", null)],
+        },
+        transcriptDerived: derivedWith({
+          eventType: "setup.failed",
+          eventId: "event-host-derived",
+          workspacePath: "/repo",
+          terminalSessionId: null,
+          setupExitCode: 1,
+          clientActionId: "send-1",
+          messageId: "queued-msg",
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the host's baseline when the live appends say nothing about it", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          // A different workspace's retry must not clear this one.
+          liveEvents: [
+            {
+              ...chatEvent("event-other", "setup.running", {
+                workspacePath: "/other",
+              }),
+              messageId: null,
+            },
+          ],
+        },
+        transcriptDerived: derivedWith({
+          eventType: "setup.failed",
+          eventId: "event-host-derived",
+          workspacePath: "/repo",
+          terminalSessionId: null,
+          setupExitCode: 1,
+          clientActionId: "send-1",
+          messageId: "queued-msg",
+        }),
+      }),
+    ).toMatchObject({ eventId: "event-host-derived" });
   });
 });
 
@@ -10788,6 +11535,8 @@ function createCoalesceHarness(): CoalesceHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -10856,6 +11605,63 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
       reasoningEffort: null,
       serviceTier: null,
     },
+  });
+}
+
+/**
+ * Settle turn 1 into a row, EVICT that row, and start turn 2.
+ *
+ * Both halves matter and neither can be skipped. Seating the settled row is
+ * what releases `liveAssistantMessage` (`liveAssistantCoveredByMessages`
+ * matches it by `turnId`); without it the live row is re-stamped onto the new
+ * turn and carries its blocks along, so the old card is still owned and the
+ * detached path is never reached. Dropping the row on the next snapshot is
+ * eviction as this reducer sees it: `state.messages` is what is HYDRATED, and a
+ * row outside the retained window is simply not in it.
+ */
+function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
+  const settled: Extract<Message, { role: "assistant" }> = {
+    role: "assistant",
+    messageId: "assistant-turn-1",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: 5,
+    timestamp: 10,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [settled],
+    queue: { status: "idle", items: [] },
+    pendingFileEditApprovals: [],
+  });
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [],
+    queue: { status: "idle", items: [] },
+    pendingFileEditApprovals: [],
+    runStatus: "running",
+    activeTurn: {
+      ...runningActiveTurn(),
+      turnId: "turn-2",
+      userMessageId: "message-2",
+      startedAt: 20,
+      updatedAt: 20,
+    },
+    turnInProgress: true,
   });
 }
 
@@ -11125,6 +11931,8 @@ describe("surface visibility rollup", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       }),
     });
@@ -11583,6 +12391,8 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },

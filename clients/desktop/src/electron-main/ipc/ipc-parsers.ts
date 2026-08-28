@@ -305,6 +305,11 @@ export function buildEpicInitialRoute(
   return `${epicPath}/${encodeURIComponent(tabId ?? epicId)}`;
 }
 
+/** Mirrors the renderer's `draftPathname` (`/draft/{draftId}`). */
+export function buildDraftInitialRoute(draftId: string): string {
+  return `/draft/${encodeURIComponent(draftId)}`;
+}
+
 export function parsePerWindowStatePatch(value: unknown): PerWindowStatePatch {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return {};

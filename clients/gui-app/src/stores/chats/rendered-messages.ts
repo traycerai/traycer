@@ -13,13 +13,49 @@ import type {
   ChatApprovalState,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
-  ChatQueuedItem,
   ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe";
+import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
+// The ONE comparator. The host numbers rows with it to build the windowed
+// transcript's skeleton, and this is where those ordinals get drawn - so a
+// second, locally-written `a.createdAt - b.createdAt` here would be a silent
+// way for the two sides to disagree about which row an ordinal names.
+import {
+  compareCanonicalRowOrder,
+  forkedChatLinkRowSource,
+  notificationAnchorRowSource,
+} from "@traycer/protocol/persistence/chat-transcript/row-order";
+// Identity of the assistant turn a record contributes to (records sharing a key
+// accumulate into ONE rendered turn). Shared rather than local because the
+// host's fork-boundary derivation groups by the same key, and a chat must not
+// change where it forks depending on which side computed it.
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+// The row ENUMERATION - which rows a chat has, and in what order. The host
+// numbers ordinals from these exact functions, so every decision that changes a
+// row's existence, id, or position is consumed from here rather than restated:
+// the steer split, the trailing-boundary rule, steered-user suppression, the
+// stopped-turn fold, and every row id.
+import {
+  assistantRowId,
+  assistantRowTurnKey,
+  assistantSliceRowId,
+  assistantTurnNeedsTrailingRow,
+  chatTranscriptEventRowId,
+  forkedChatLinkRowId,
+  nestedSteeredMessageIds,
+  planAssistantTurnRows,
+  queueSteerRowId,
+  setupCardRowId,
+  turnStoppedInfoByTurnKey,
+  type AssistantTurnRowPlan,
+  type TurnStoppedInfo,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   isNoOpCheckpointEntry,
+  overlappingCheckpointIds,
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
@@ -64,7 +100,6 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
-import { chatTranscriptEventRowId } from "@/stores/chats/chat-transcript-jump-store";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -104,6 +139,27 @@ export interface RenderedMessagesDisplayContext {
 export interface RenderedMessagesInput {
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
+  /**
+   * `ChatSessionState.transcriptRowContext` - what the host says each hydrated
+   * row renders WITH, by row id (`row-context.ts`).
+   *
+   * The derivations below that look at the rows AROUND the one they are drawing
+   * cannot answer from a bounded window, so on the windowed line they read this
+   * instead and fall back to their own walk only where it says nothing. Empty on
+   * the legacy line, where the whole transcript is materialized and every walk
+   * is already correct.
+   */
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
+  /**
+   * `ChatSessionState.setupCardWindows` - the host's WHOLE-LOG setup partition.
+   *
+   * Separate from {@link rowContext} because the repair it makes possible
+   * cannot be keyed by row id: a setup card's row id contains the very window
+   * index the client would be looking the correction up to obtain. Empty on the
+   * legacy line, where the local partition already sees every event. See
+   * `adoptWholeLogIdentity`.
+   */
+  readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly activeTurn: ChatActiveTurn | null;
@@ -320,135 +376,20 @@ function checkpointSignature(view: CheckpointManifestView | null): string {
   ].join(";");
 }
 
-function steeredMessageIdsFromEvents(
-  events: ReadonlyArray<ChatEvent>,
-): ReadonlySet<string> {
-  const steeredMessageIds = new Set<string>();
-  const steerRequestMessageIdsByQueueItemId = new Map<string, string>();
-  for (const event of events) {
-    if (event.type === "queue.steerRequested") {
-      if (
-        event.messageId !== null &&
-        event.queueItemId !== null &&
-        isInterruptRestartSteerRequest(event)
-      ) {
-        steeredMessageIds.add(event.messageId);
-        steerRequestMessageIdsByQueueItemId.set(
-          event.queueItemId,
-          event.messageId,
-        );
-      }
-      continue;
-    }
-
-    if (
-      event.type === "queue.fallback" ||
-      event.type === "queue.resumed" ||
-      event.type === "queue.cancelled" ||
-      event.type === "queue.steerAborted"
-    ) {
-      if (event.messageId !== null) {
-        steeredMessageIds.delete(event.messageId);
-      }
-      if (event.queueItemId !== null) {
-        const messageId = steerRequestMessageIdsByQueueItemId.get(
-          event.queueItemId,
-        );
-        if (messageId !== undefined) {
-          steeredMessageIds.delete(messageId);
-          steerRequestMessageIdsByQueueItemId.delete(event.queueItemId);
-        }
-      }
-      for (const item of queueItemsFromEventMetadata(event.metadata)) {
-        if (queueItemHasActiveInterruptRestartSteer(item)) {
-          continue;
-        }
-        // Only prompt items map back to a rendered user message; a
-        // managed-command item has no message to un-badge.
-        if (item.kind === "prompt") {
-          steeredMessageIds.delete(item.messageId);
-        }
-        steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
-      }
-    }
-  }
-  return steeredMessageIds;
-}
-
-function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
-  if (event.type !== "queue.steerRequested") return false;
-  const requestedItems = queueItemsFromEventMetadata(event.metadata);
-  for (const item of requestedItems) {
-    if (item.queueItemId !== event.queueItemId) continue;
-    // Managed-command items are never steered, so they never carry a request.
-    if (item.kind !== "prompt") return false;
-    return item.steerRequest?.mode === "interrupt_restart";
-  }
-  return false;
-}
-
-function queueItemHasActiveInterruptRestartSteer(
-  item: ChatQueuedItem,
-): boolean {
-  if (item.kind !== "prompt") return false;
-  return (
-    (item.status === "steer_requested" || item.status === "steering") &&
-    item.steerRequest !== null &&
-    item.steerRequest.mode === "interrupt_restart"
-  );
-}
-
-function queueItemsFromEventMetadata(
-  metadata: ChatEvent["metadata"],
-): ReadonlyArray<ChatQueuedItem> {
-  if (metadata === null) return [];
-  const stateItems = metadata["items"];
-  if (Array.isArray(stateItems)) {
-    return stateItems.flatMap((item) => {
-      const parsed = chatQueuedItemSchema.safeParse(item);
-      return parsed.success ? [parsed.data] : [];
-    });
-  }
-  const parsed = chatQueuedItemSchema.safeParse(metadata["item"]);
-  return parsed.success ? [parsed.data] : [];
-}
-
 /**
  * Pure event-log projection of a `turn.stopped` event - everything
- * `turnStoppedInfoFromEvents` can know without looking at the turn's
+ * `turnStoppedInfoByTurnKey` can know without looking at the turn's
  * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
  * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
  * visibility, which this pure scan does not.
  */
-interface TurnStoppedEventInfo {
-  readonly stoppedAt: number;
-  readonly reason: string | null;
-  readonly messageId: string | null;
-}
-
-/**
- * `turn.stopped` events keyed by `turnId`, mirroring `steeredMessageIdsFromEvents`.
- * A user Stop (direct or cascaded `agent.stop`) always lands exactly one such
- * event per turn - the host's terminal latch (`recordTerminalTurn`) guarantees
- * at most one terminal event per turn attempt, so last-write-wins here is only
- * a defensive fallback, never an expected overwrite. `event.message` carries
- * the host's stop reason (e.g. "Stop requested by owner.") - see
- * `chat-session-manager.ts`'s `turn.stopped` handling.
+/*
+ * `turn.stopped` folding lives in the shared row projection: a stopped turn can
+ * ADD a row (the synthesized boundary after a trailing steer) and can BE a row
+ * (a Stop that landed before any assistant record), so the host numbers
+ * ordinals from this exact fold. Consumed here rather than mirrored.
  */
-function turnStoppedInfoFromEvents(
-  events: ReadonlyArray<ChatEvent>,
-): ReadonlyMap<string, TurnStoppedEventInfo> {
-  const out = new Map<string, TurnStoppedEventInfo>();
-  for (const event of events) {
-    if (event.type !== "turn.stopped" || event.turnId === null) continue;
-    out.set(event.turnId, {
-      stoppedAt: event.timestamp,
-      reason: event.message,
-      messageId: event.messageId,
-    });
-  }
-  return out;
-}
+type TurnStoppedEventInfo = TurnStoppedInfo;
 
 interface TurnLifecycleTiming {
   readonly startedAt: number | null;
@@ -624,9 +565,22 @@ function profileLabelFromSessionAnchor(
  * new anchor, so the last anchor remains in effect until the host mints the
  * next one. The active turn needs an explicit mapping before its first
  * assistant record exists; its `userMessageId` identifies the initiating row.
+ *
+ * The running `currentAnchor` is exactly the "look at the rows around this one"
+ * derivation a bounded window cannot make: a turn whose anchor was established
+ * by a user record outside the hydrated span starts the walk with none and
+ * silently loses its saved label. `contextByTurnKey` is the host's own answer
+ * for that turn and outranks the walk wherever it speaks - the walk stays as
+ * the fallback for the legacy line and for any turn the projection said nothing
+ * about.
+ *
+ * The `harnessId` agreement gate applies either way. It is what stops a label
+ * minted for one provider from being shown against another's turn, and that is
+ * a property of the anchor rather than of where the anchor came from.
  */
 function profileLabelsByTurnKeyFromMessages(input: {
   readonly messages: ReadonlyArray<Message>;
+  readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
   readonly activeTurnId: string | null;
   readonly activeTurnUserMessageId: string | null;
   readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
@@ -646,11 +600,11 @@ function profileLabelsByTurnKeyFromMessages(input: {
       }
       continue;
     }
-    if (currentAnchor?.harnessId === message.sender.harnessId) {
-      labels.set(
-        assistantTurnKey(message),
-        profileLabelFromSessionAnchor(currentAnchor),
-      );
+    const turnKey = assistantTurnKey(message);
+    const anchor =
+      input.contextByTurnKey.get(turnKey)?.sessionAnchor ?? currentAnchor;
+    if (anchor?.harnessId === message.sender.harnessId) {
+      labels.set(turnKey, profileLabelFromSessionAnchor(anchor));
     }
   }
 
@@ -913,10 +867,25 @@ export function useRenderedMessages(
   const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
   const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
   const activeTurnProfileId = input.activeTurn?.profileId ?? null;
+  // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
+  // carries the same context object, so the map is at most one entry per
+  // hydrated turn, and the derivations below all hold a turn key rather than a
+  // row id. Non-assistant rows drop out here and are read by row id where they
+  // are needed.
+  const contextByTurnKey = useMemo(() => {
+    const byTurnKey = new Map<string, TranscriptRowContext>();
+    for (const rowId of Object.keys(input.rowContext)) {
+      const turnKey = assistantRowTurnKey(rowId);
+      if (turnKey === null || turnKey === "") continue;
+      byTurnKey.set(turnKey, input.rowContext[rowId]);
+    }
+    return byTurnKey;
+  }, [input.rowContext]);
   const profileLabelsByTurnKey = useMemo(
     () =>
       profileLabelsByTurnKeyFromMessages({
         messages: input.messages,
+        contextByTurnKey,
         activeTurnId,
         activeTurnUserMessageId,
         activeTurnHarnessId,
@@ -924,6 +893,7 @@ export function useRenderedMessages(
       }),
     [
       input.messages,
+      contextByTurnKey,
       activeTurnId,
       activeTurnUserMessageId,
       activeTurnHarnessId,
@@ -965,15 +935,15 @@ export function useRenderedMessages(
   // Event-derived views change only when the event log changes, never per
   // streamed delta - memoize them so a delta doesn't re-scan the events.
   const checkpointViews = useMemo(
-    () => checkpointManifestViewsFromEvents(input.events),
-    [input.events],
+    () => checkpointManifestViewsFromEvents(input.events, contextByTurnKey),
+    [input.events, contextByTurnKey],
   );
   const steeredMessageIds = useMemo(
-    () => steeredMessageIdsFromEvents(input.events),
-    [input.events],
+    () => completedSteerMessageIds(input.events, input.rowContext),
+    [input.events, input.rowContext],
   );
   const turnStoppedByTurnKey = useMemo(
-    () => turnStoppedInfoFromEvents(input.events),
+    () => turnStoppedInfoByTurnKey(input.events),
     [input.events],
   );
   const turnLifecycleTimingByTurnKey = useMemo(
@@ -987,17 +957,26 @@ export function useRenderedMessages(
   const ownerId = input.ownerId;
   const ownerKind = input.ownerKind;
   const viewTabId = input.viewTabId;
+  const setupCardWindows = input.setupCardWindows;
   const setupCardRows = useMemo(
-    () => buildSetupCardRows(input.events, { epicId, ownerId, ownerKind }),
-    [input.events, epicId, ownerId, ownerKind],
+    () =>
+      buildSetupCardRows(
+        input.events,
+        { epicId, ownerId, ownerKind },
+        setupCardWindows,
+      ),
+    [input.events, epicId, ownerId, ownerKind, setupCardWindows],
   );
   // Project each row into its transcript card PLUS the placement signals the
   // final merge needs (anchor target + genesis-pin discriminator), so that merge
   // never has to index `setupCardRows` positionally in parallel with the cards.
   const setupCardEntries = useMemo(
     () =>
-      setupCardRows.map((row, index) => ({
-        message: buildSetupCardMessage(row, ownerId, viewTabId, index),
+      setupCardRows.map((row) => ({
+        // The HOST's window index, not this array's position - see
+        // `adoptWholeLogIdentity`. Indexing positionally here is what made the
+        // card compute a row id the skeleton never published.
+        message: buildSetupCardMessage(row, ownerId, viewTabId),
         anchorId: row.triggeringMessageId,
         hasCreatingEvent: row.hasCreatingEvent,
       })),
@@ -1111,6 +1090,7 @@ export function useRenderedMessages(
       messages: partition.settled,
       userMessagesById,
       profileLabelsByTurnKey,
+      contextByTurnKey,
       liveAssistant: null,
       externallyNestedSteeredMessageIds: activeTurnSteeredMessageIds,
       checkpointViews,
@@ -1129,6 +1109,7 @@ export function useRenderedMessages(
     partition,
     userMessagesById,
     profileLabelsByTurnKey,
+    contextByTurnKey,
     activeTurnSteeredMessageIds,
     retainedTurnKeys,
     checkpointViews,
@@ -1155,6 +1136,7 @@ export function useRenderedMessages(
             messages: partition.activeTurn,
             userMessagesById,
             profileLabelsByTurnKey,
+            contextByTurnKey,
             liveAssistant,
             externallyNestedSteeredMessageIds: NO_STEERED_IDS,
             checkpointViews,
@@ -1175,6 +1157,7 @@ export function useRenderedMessages(
       partition,
       userMessagesById,
       profileLabelsByTurnKey,
+      contextByTurnKey,
       liveAssistant,
       checkpointViews,
       activeTurnId,
@@ -1296,7 +1279,7 @@ export function useRenderedMessages(
     // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
     // memo re-runs on every streamed delta, so the no-card path must stay cheap.
     if (setupCardEntries.length === 0) {
-      return baseRows.sort((a, b) => a.createdAt - b.createdAt);
+      return baseRows.sort(compareCanonicalRowOrder);
     }
 
     // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
@@ -1340,7 +1323,7 @@ export function useRenderedMessages(
     });
 
     const sorted = [...baseRows, ...floatingCards].sort(
-      (a, b) => a.createdAt - b.createdAt,
+      compareCanonicalRowOrder,
     );
 
     // Weave each anchored card in immediately above its message. A push loop
@@ -1408,9 +1391,12 @@ function buildSetupCardMessage(
   row: SetupCardRow,
   ownerId: string,
   viewTabId: string,
-  windowIndex: number,
 ): ChatMessageModel {
-  const id = `setup-card:${ownerId}:${windowIndex}:${row.createdAt}`;
+  // THROUGH the shared builder, not a matching template literal beside it. The
+  // id has to be byte-identical to the one the host published or the card is
+  // unplaceable, and a second copy of the format is exactly the drift
+  // `row-projection.ts` keeps this builder exported to prevent.
+  const id = setupCardRowId(ownerId, row.windowIndex, row.createdAt);
   return {
     id,
     role: "system",
@@ -1425,7 +1411,7 @@ function buildSetupCardMessage(
         // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
         // window 0 can ever be genesis-pinned, so this is exact, not a guess.
         anchorMessageId: row.triggeringMessageId,
-        isGenesisPin: windowIndex === 0 && !row.hasCreatingEvent,
+        isGenesisPin: row.windowIndex === 0 && !row.hasCreatingEvent,
       },
     ],
     structuredContent: null,
@@ -1451,17 +1437,15 @@ function buildForkedChatLinkMessages(
   viewTabId: string,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
-    if (event.type !== "chat.forked") return [];
-    const metadata = event.metadata;
-    if (metadata === null) return [];
-    const sourceChatId = metadataString(metadata, "sourceChatId");
-    const sourceHostId = metadataString(metadata, "sourceHostId");
-    if (sourceChatId === null || sourceHostId === null) {
-      return [];
-    }
-    const sourceChatTitle =
-      metadataString(metadata, "sourceChatTitle") ?? "Untitled agent";
-    const id = `forked-chat-link:${event.eventId}`;
+    // Through the shared predicate, not beside it: this decides whether the
+    // event OCCUPIES AN ORDINAL, and the host numbers rows from the same
+    // function. A second copy that agreed by inspection is what put an
+    // empty-string guard on one side only.
+    const source = forkedChatLinkRowSource(event);
+    if (source === null) return [];
+    const { sourceChatId, sourceHostId } = source;
+    const sourceChatTitle = source.sourceChatTitle ?? "Untitled agent";
+    const id = forkedChatLinkRowId(event.eventId);
     return [
       {
         id,
@@ -1507,26 +1491,22 @@ function buildNotificationAnchorMessages(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
-    if (
-      event.type !== "send.failed" ||
-      event.message === null ||
-      event.metadata?.notificationAnchor !== true
-    ) {
-      return [];
-    }
+    // Shared with the host's ordinal numbering - see the forked-link builder.
+    const anchor = notificationAnchorRowSource(event);
+    if (anchor === null) return [];
     const id = chatTranscriptEventRowId(event.eventId);
     return [
       {
         id,
         role: "assistant",
-        content: event.message,
+        content: anchor.message,
         segments: [
           {
             id: `${id}:error`,
             kind: "error",
-            message: event.message,
+            message: anchor.message,
             recoverable: false,
-            code: metadataString(event.metadata, "code"),
+            code: anchor.code,
           },
         ],
         structuredContent: null,
@@ -1547,15 +1527,6 @@ function buildNotificationAnchorMessages(
       },
     ];
   });
-}
-
-function metadataString(
-  metadata: NonNullable<ChatEvent["metadata"]>,
-  key: string,
-): string | null {
-  const value = metadata[key];
-  if (typeof value !== "string") return null;
-  return value.length > 0 ? value : null;
 }
 
 /**
@@ -1656,6 +1627,11 @@ interface PersistedMessagesRenderInput {
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
   /** Immutable profile-label snapshots keyed by assistant turn identity. */
   readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
+  /**
+   * The host's per-row projection context, re-keyed by turn - see
+   * `RenderedMessagesInput.rowContext`. Empty on the legacy line.
+   */
+  readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
   readonly liveAssistant: LiveAssistantMessage | null;
   /**
    * Steered user ids nested inside turns OUTSIDE this partition; their user
@@ -1667,7 +1643,7 @@ interface PersistedMessagesRenderInput {
   readonly activeRunState: ChatMessageRunState | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly steeredMessageIds: ReadonlySet<string>;
-  /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoFromEvents`. */
+  /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoByTurnKey`. */
   readonly turnStoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>;
   /** Provider-turn lifecycle evidence and timing by `turnId`. */
   readonly turnLifecycleTimingByTurnKey: ReadonlyMap<
@@ -1820,19 +1796,59 @@ function userMessagesByIdFromMessages(
   return usersById;
 }
 
+/*
+ * Steered-user suppression decides whether a persisted user record occupies a
+ * top-level row, so it decides an ordinal. Shared with the host - see
+ * `row-projection.ts`.
+ */
+/**
+ * Which user rows render the completed-steer badge.
+ *
+ * The local fold over whatever events this client holds, WIDENED by the rows
+ * the host marked. Both halves are load-bearing and neither subsumes the other:
+ *
+ * - The local fold is the only answer for the live tail, whose `queue.*` events
+ *   arrive as deltas rather than through a range.
+ * - The carried flag is the only answer for cold history. `rowRecordIds` serves
+ *   a user row its message and no events at all, so this fold sees nothing to
+ *   badge it with - the badge was present all session and vanished the moment
+ *   the row was evicted and re-hydrated.
+ *
+ * A union rather than a preference, and the asymmetry is deliberate: the host
+ * speaks only when the answer is TRUE (see `completedSteer` on the schema), so
+ * there is no "host says no" to honour - absence is the projection declining to
+ * speak, and this fold is the fallback the schema's contract asks for.
+ *
+ * The one case the union gets arguably wrong is a `queue.fallback` RETRACTING a
+ * badge for a row whose carried context predates the retraction: the local fold
+ * drops it, the stale flag re-adds it. That is bounded rather than permanent -
+ * a retraction lands on a row in the live tail, which is re-published with fresh
+ * context on the next snapshot - and it is the same context-staleness every
+ * field on this channel has, since `TranscriptRowContext` rides the RANGE and a
+ * context-only change moves no skeleton field. The alternative is dropping the
+ * badge from all cold history, which is the bug.
+ */
+function completedSteerMessageIds(
+  events: ReadonlyArray<ChatEvent>,
+  rowContext: Readonly<Record<string, TranscriptRowContext>>,
+): ReadonlySet<string> {
+  const folded = steeredMessageIdsFromEvents(events);
+  const carried = Object.keys(rowContext).filter(
+    (rowId) => rowContext[rowId].completedSteer === true,
+  );
+  if (carried.length === 0) return folded;
+  // A user row's id IS its message id, which is what makes this lookup direct
+  // rather than a parse - `completedSteer` is only ever set on a user row.
+  const widened = new Set(folded);
+  for (const rowId of carried) widened.add(rowId);
+  return widened;
+}
+
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
-  userMessagesById: ReadonlyMap<string, UserMessage>,
+  usersById: ReadonlyMap<string, UserMessage>,
 ): ReadonlySet<string> {
-  const messageIds = new Set<string>();
-  for (const acc of turnAccumulator.values()) {
-    for (const block of acc.blocks) {
-      if (block.type === "steer" && userMessagesById.has(block.messageId)) {
-        messageIds.add(block.messageId);
-      }
-    }
-  }
-  return messageIds;
+  return nestedSteeredMessageIds(turnAccumulator.values(), usersById);
 }
 
 function renderPersistedUserMessage(
@@ -1861,16 +1877,6 @@ interface PersistedAssistantTurnRenderInput {
   readonly turnCache: Map<string, AssistantTurnCacheEntry>;
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
   readonly lastUserTimestamp: number | null;
-}
-
-/**
- * Identity of the assistant turn a record contributes to. Records sharing a
- * key accumulate into ONE rendered turn (multi-record turns: subagent flows,
- * legacy/migrated snapshots); legacy records without a `turnId` fall back to
- * their timestamp.
- */
-function assistantTurnKey(message: AssistantMessage): string {
-  return message.turnId ?? `ts:${message.timestamp}`;
 }
 
 function hasOnlyAutonomousResumeAssistantBlocks(
@@ -1948,6 +1954,19 @@ interface AssistantTurnTimingInput {
   readonly lifecycle: TurnLifecycleTiming | null;
   readonly blocks: ReadonlyArray<ContentBlock>;
   readonly persistedStartedAt: number | null;
+  /**
+   * The projection's own anchor for a turn persisted before `startedAt`
+   * existed, when it carried one - see `TranscriptRowContext`.
+   *
+   * Ahead of {@link AssistantTurnTimingInput.lastUserTimestamp} because that is
+   * the re-derivation this replaces: the walk's running user stamp is `null` in
+   * a span that does not reach the preceding user row, and the anchor then
+   * collapses onto the assistant record's COMPLETION stamp, shrinking the
+   * displayed elapsed time - often to zero. Behind `persistedStartedAt` only
+   * for symmetry: the host carries this exclusively when `startedAt` is absent,
+   * so the two are never both present.
+   */
+  readonly legacyRowAnchorAt: number | null;
   readonly lastUserTimestamp: number | null;
   readonly persistedCompletedAt: number;
   readonly stoppedAt: number | null;
@@ -1972,6 +1991,7 @@ function assistantTurnTiming(
 ): AssistantTurnTiming {
   const fallbackStartedAt =
     input.persistedStartedAt ??
+    input.legacyRowAnchorAt ??
     input.lastUserTimestamp ??
     input.persistedCompletedAt;
   const fallbackCompletedAt = input.stoppedAt ?? input.persistedCompletedAt;
@@ -2021,6 +2041,20 @@ function assistantCompletionCacheToken(
   return `${state}:${timestamp}`;
 }
 
+/**
+ * The projection's own anchor for this turn, or `null` when it carried none.
+ *
+ * A named lookup rather than an inline chain: the turn renderer is at its
+ * complexity budget, and two more branches inside it is what a lint gate reads
+ * rather than what a reader does.
+ */
+function legacyRowAnchorFor(
+  contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
+  turnKey: string,
+): number | null {
+  return contextByTurnKey.get(turnKey)?.legacyRowAnchorAt ?? null;
+}
+
 function renderPersistedAssistantMessageTurn(
   args: PersistedAssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
@@ -2052,6 +2086,7 @@ function renderPersistedAssistantMessageTurn(
     lifecycle: lifecycleTiming,
     blocks: acc.blocks,
     persistedStartedAt: acc.startedAt,
+    legacyRowAnchorAt: legacyRowAnchorFor(input.contextByTurnKey, turnKey),
     lastUserTimestamp: args.lastUserTimestamp,
     persistedCompletedAt: acc.timestamp,
     stoppedAt: stopped?.stoppedAt ?? null,
@@ -2431,109 +2466,67 @@ interface AssistantTurnRenderInput {
   readonly chatId: string;
 }
 
-type AssistantTurnTimelineEntry = {
-  readonly kind: "block";
-  readonly block: ContentBlock;
-  readonly timestamp: number;
-  readonly order: number;
-};
-
+/**
+ * Renders one turn's rows from the SHARED plan.
+ *
+ * The plan - which blocks group into which slice, where the steer bubbles fall,
+ * whether an empty turn still draws a row - is `planAssistantTurnRows` in
+ * `@traycer/protocol`, because it decides this turn's row COUNT and the host
+ * numbers ordinals from the same function. This body renders the plan; it does
+ * not re-derive it. A chunking loop here that agreed with that one by
+ * inspection is precisely the drift the projection exists to prevent.
+ */
 function renderAssistantTurnRows(
   input: AssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
-  const entries = assistantTurnTimelineEntries(input.acc.blocks);
-  const split = entries.some(entrySplitsAssistantTurn);
-  const rowIdByBlockId = assistantRowIdsByBlockId(
-    entries,
-    input.turnKey,
-    split,
-  );
-  const rows: ChatMessageModel[] = [];
-  let chunk: ContentBlock[] = [];
-  let chunkIndex = 0;
+  const blocks = input.acc.blocks;
+  const plan = planAssistantTurnRows(blocks);
+  const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
 
-  const flushChunk = (): void => {
-    if (chunk.length === 0) return;
-    rows.push(
-      renderAssistantTurnSlice({
-        acc: input.acc,
-        turnKey: input.turnKey,
-        checkpointView: input.checkpointView,
-        turnComplete: input.turnComplete,
-        runState: split ? null : input.runState,
-        pause: input.pause,
-        ctx: input.ctx,
-        epicId: input.epicId,
-        chatId: input.chatId,
-        blocks: chunk,
-        chunkIndex,
-        split,
-        rowAnchorAt: input.rowAnchorAt,
-        elapsedStartedAt: input.elapsedStartedAt,
-        rowIdByBlockId,
-      }),
-    );
-    chunk = [];
-    chunkIndex += 1;
-  };
-
-  for (const entry of entries) {
-    if (entry.block.type === "steer") {
-      flushChunk();
+  const rows = plan.entries.map((entry): ChatMessageModel => {
+    if (entry.kind === "steer") {
+      const block = blocks[entry.blockIndex];
+      if (block.type !== "steer") {
+        throw new Error("rendered-messages: plan named a non-steer block");
+      }
       // Anchor the nested steer row at the turn start too, so it stays
       // contiguous with its surrounding slices under the stable `createdAt`
       // sort instead of jumping out by its own block timestamp.
-      rows.push({
+      return {
         ...renderSteerBlockUserMessage(
-          entry.block,
+          block,
           input.ctx,
-          input.userMessagesById.get(entry.block.messageId) ?? null,
+          input.userMessagesById.get(block.messageId) ?? null,
         ),
         createdAt: input.rowAnchorAt,
-      });
-      continue;
+      };
     }
-    chunk.push(entry.block);
-  }
-  flushChunk();
+    return renderAssistantTurnSlice({
+      acc: input.acc,
+      turnKey: input.turnKey,
+      checkpointView: input.checkpointView,
+      turnComplete: input.turnComplete,
+      // A split turn's run indicator belongs on the trailing slice, which
+      // `attachRunStateToTrailingAssistantSlice` resolves once for the turn.
+      runState: plan.split ? null : input.runState,
+      pause: input.pause,
+      ctx: input.ctx,
+      epicId: input.epicId,
+      chatId: input.chatId,
+      blocks: entry.blockIndices.map((index) => blocks[index]),
+      chunkIndex: entry.chunkIndex,
+      split: plan.split,
+      rowAnchorAt: input.rowAnchorAt,
+      elapsedStartedAt: input.elapsedStartedAt,
+      rowIdByBlockId,
+    });
+  });
 
-  if (rows.length === 0 && !split) {
-    return withTurnCompletion(
-      [
-        renderAssistantTurnSlice({
-          acc: input.acc,
-          turnKey: input.turnKey,
-          checkpointView: input.checkpointView,
-          turnComplete: input.turnComplete,
-          runState: input.runState,
-          pause: input.pause,
-          ctx: input.ctx,
-          epicId: input.epicId,
-          chatId: input.chatId,
-          blocks: [],
-          chunkIndex: 0,
-          split: false,
-          rowAnchorAt: input.rowAnchorAt,
-          elapsedStartedAt: input.elapsedStartedAt,
-          rowIdByBlockId,
-        }),
-      ],
-      input,
-    );
-  }
-
-  if (split) {
-    return withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(
-        rows,
-        input,
-        chunkIndex,
-        rowIdByBlockId,
-      ),
-      input,
-    );
-  }
-  return withTurnCompletion(rows, input);
+  if (!plan.split) return withTurnCompletion(rows, input);
+  return withTurnCompletion(
+    attachRunStateToTrailingAssistantSlice(rows, input, plan, rowIdByBlockId),
+    input,
+  );
 }
 
 /**
@@ -2591,29 +2584,23 @@ function withTurnCompletion(
   );
 }
 
-function entrySplitsAssistantTurn(entry: AssistantTurnTimelineEntry): boolean {
-  return entry.block.type === "steer";
-}
-
+/**
+ * Which row each block ended up on, for in-turn block targeting (jump-to-block,
+ * image resolution). Read straight off the plan so it cannot disagree with the
+ * rows actually rendered from it.
+ */
 function assistantRowIdsByBlockId(
-  entries: ReadonlyArray<AssistantTurnTimelineEntry>,
+  plan: AssistantTurnRowPlan,
+  blocks: ReadonlyArray<ContentBlock>,
   turnKey: string,
-  split: boolean,
 ): ReadonlyMap<string, string> {
   const rowIdByBlockId = new Map<string, string>();
-  let chunkIndex = 0;
-  let chunkHasBlocks = false;
-  for (const entry of entries) {
-    if (entry.block.type === "steer") {
-      if (chunkHasBlocks) chunkIndex += 1;
-      chunkHasBlocks = false;
-      continue;
+  for (const entry of plan.entries) {
+    if (entry.kind === "steer") continue;
+    const rowId = assistantSliceRowId(turnKey, entry.chunkIndex, plan.split);
+    for (const index of entry.blockIndices) {
+      rowIdByBlockId.set(blocks[index].blockId, rowId);
     }
-    rowIdByBlockId.set(
-      entry.block.blockId,
-      assistantSliceRowId(turnKey, chunkIndex, split),
-    );
-    chunkHasBlocks = true;
   }
   return rowIdByBlockId;
 }
@@ -2731,25 +2718,29 @@ function deduplicatedAssistantImageTargets(
 function attachRunStateToTrailingAssistantSlice(
   rows: ReadonlyArray<ChatMessageModel>,
   input: AssistantTurnRenderInput,
-  nextChunkIndex: number,
+  plan: AssistantTurnRowPlan,
   rowIdByBlockId: ReadonlyMap<string, string>,
 ): ReadonlyArray<ChatMessageModel> {
-  // A live turn needs a trailing indicator row. A STOPPED turn needs one too,
-  // for a different reason: `withTurnCompletion` stamps `completedAt`/`stopped`
-  // onto whichever row is last, and when the turn's last persisted block is a
-  // steer, that's a `role: "user"` row that can't carry them - without a
-  // trailing assistant row here, the marker lands on the assistant chunk
-  // BEFORE the steer (wrong boundary) or, if the turn is steer-only, on no
-  // row at all (dropped entirely). A non-stopped completed turn never sets
-  // `input.stopped`, so it falls through this check unchanged.
-  const needsTrailingRow =
-    input.runState !== null || (input.turnComplete && input.stopped !== null);
-  if (!needsTrailingRow) return rows;
-  const lastAssistantIndex = lastAssistantRowIndex(rows);
-  if (lastAssistantIndex === rows.length - 1) {
+  // Whether this turn gains a trailing row is a ROW-COUNT decision, so it is
+  // the shared projection's to make (`assistantTurnNeedsTrailingRow`) - it is
+  // also the reason a turn's durable row count depends on an event and not
+  // only on its records. The `hasRunState` arm is the live half, which the
+  // durable projection passes as `false`.
+  const needsTrailingRow = assistantTurnNeedsTrailingRow({
+    plan,
+    turnComplete: input.turnComplete,
+    stopped: input.stopped !== null,
+    hasRunState: input.runState !== null,
+  });
+  if (!needsTrailingRow) {
+    // No row is added - but a LIVE turn whose last row is already an assistant
+    // row still takes the indicator in place. That combination is the only way
+    // to reach here with a run state, and it guarantees the last row is the
+    // assistant one, so no empty-result guard is needed (or reachable).
     if (input.runState === null) return rows;
+    const lastIndex = lastAssistantRowIndex(rows);
     return rows.map((row, index) =>
-      index === lastAssistantIndex ? { ...row, runState: input.runState } : row,
+      index === lastIndex ? { ...row, runState: input.runState } : row,
     );
   }
   // Live case (unchanged): bump past every existing row so the trailing
@@ -2776,7 +2767,7 @@ function attachRunStateToTrailingAssistantSlice(
       epicId: input.epicId,
       chatId: input.chatId,
       blocks: [],
-      chunkIndex: nextChunkIndex,
+      chunkIndex: plan.nextChunkIndex,
       split: true,
       rowAnchorAt: createdAt,
       elapsedStartedAt: input.elapsedStartedAt,
@@ -2790,17 +2781,6 @@ function lastAssistantRowIndex(rows: ReadonlyArray<ChatMessageModel>): number {
     if (rows[index]?.role === "assistant") return index;
   }
   return -1;
-}
-
-function assistantTurnTimelineEntries(
-  blocks: ReadonlyArray<ContentBlock>,
-): ReadonlyArray<AssistantTurnTimelineEntry> {
-  return blocks.map((block, index) => ({
-    kind: "block",
-    block,
-    timestamp: block.timestamp,
-    order: index * 2,
-  }));
 }
 
 /**
@@ -3184,25 +3164,8 @@ function renderStoppedTurnsWithoutAssistantRecords(
     }));
 }
 
-function assistantRowId(turnKey: string): string {
-  return `assistant:${turnKey}`;
-}
-
-function assistantSliceRowId(
-  turnKey: string,
-  chunkIndex: number,
-  split: boolean,
-): string {
-  if (!split) return assistantRowId(turnKey);
-  return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
-}
-
 const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
   [];
-
-function queueSteerRowId(queueItemId: string): string {
-  return `steer:${queueItemId}`;
-}
 
 function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,
@@ -3573,22 +3536,47 @@ interface CheckpointManifestView {
   readonly hasLaterOverlappingChanges: boolean;
 }
 
+/**
+ * The restore affordance's per-turn view, and the ONE derivation here that a
+ * window can get wrong.
+ *
+ * `hasLaterOverlappingChanges` is a whole-history fact: it asks whether a LATER
+ * checkpoint rewrites a file this one touches. Deriving it from `events` is
+ * correct on the legacy line, where that array is the whole log, and wrong on
+ * the windowed line, where it is whatever is hydrated - a span holding an old
+ * turn but none of the later checkpoints concludes `false` and the restore
+ * dialog silently drops its warning that later turns' files will also be
+ * rewound. On an irreversible action.
+ *
+ * So the projection carries the answer per row and it wins here. The local
+ * derivation is kept, not replaced, because it is still the only answer on the
+ * legacy line - and it runs through the SHARED `overlappingCheckpointIds`, so
+ * the two lines cannot reach different verdicts from the same input.
+ *
+ * Reading `=== true` rather than a truthy check is the row-context contract:
+ * an ABSENT field is the projection declining to speak, not an assertion of
+ * `false`, so absence falls through to the derivation below.
+ */
 function checkpointManifestViewsFromEvents(
   events: ReadonlyArray<ChatEvent>,
+  contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
 ): ReadonlyMap<string, CheckpointManifestView> {
   const checkpoints = events.flatMap((event) => {
     const checkpoint = checkpointManifestFromEvent(event);
     return isParsedCheckpointManifest(checkpoint) ? [checkpoint] : [];
   });
-  const overlappingCheckpointIds = overlappingCheckpointIdsFor(checkpoints);
+  const overlapping = overlappingCheckpointIds(
+    checkpoints.map((checkpoint) => checkpoint.manifest),
+  );
   return new Map(
     checkpoints.map((checkpoint) => [
       checkpoint.turnId,
       {
         manifest: checkpoint.manifest,
-        hasLaterOverlappingChanges: overlappingCheckpointIds.has(
-          checkpoint.manifest.checkpointId,
-        ),
+        hasLaterOverlappingChanges:
+          contextByTurnKey.get(checkpoint.turnId)
+            ?.hasLaterOverlappingChanges === true ||
+          overlapping.has(checkpoint.manifest.checkpointId),
       },
     ]),
   );
@@ -3608,38 +3596,6 @@ function isParsedCheckpointManifest(
   value: ParsedCheckpointManifest | null,
 ): value is ParsedCheckpointManifest {
   return value !== null;
-}
-
-function overlappingCheckpointIdsFor(
-  checkpoints: ReadonlyArray<ParsedCheckpointManifest>,
-): ReadonlySet<string> {
-  // Only real changes drive the "modified again in later turns" note:
-  // a no-op entry isn't part of this turn's change set and isn't restored,
-  // so an overlap with one would make the cumulative warning misleading.
-  //
-  // Record, per file path, the index of the last checkpoint that touches it.
-  // A checkpoint then overlaps iff any path it touches is touched again by a
-  // later checkpoint - i.e. that path's last-touch index is past this one.
-  // One forward pass plus one scan keeps this O(checkpoints * entries) instead
-  // of the quadratic pairwise comparison this hook reran on every event.
-  const lastTouchIndexByPath = new Map<string, number>();
-  checkpoints.forEach((checkpoint, index) => {
-    checkpoint.manifest.entries
-      .filter((entry) => !isNoOpCheckpointEntry(entry))
-      .forEach((entry) => {
-        lastTouchIndexByPath.set(entry.filePath, index);
-      });
-  });
-  return new Set(
-    checkpoints.flatMap((checkpoint, index) => {
-      const touchedLater = checkpoint.manifest.entries.some(
-        (entry) =>
-          !isNoOpCheckpointEntry(entry) &&
-          (lastTouchIndexByPath.get(entry.filePath) ?? index) > index,
-      );
-      return touchedLater ? [checkpoint.manifest.checkpointId] : [];
-    }),
-  );
 }
 
 function groupFileChangeRuns(

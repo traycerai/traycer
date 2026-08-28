@@ -12,27 +12,12 @@ import {
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
-  IpcHostController,
   IpcHostLifecycle,
   IpcManagedWindow,
   IpcPerWindowState,
   IpcWindowRecord,
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
-import type {
-  ActivateInstalledOk,
-  ApplyStagedOk,
-  ApplyStagedTrigger,
-  ConvergeReadyOk,
-  HostControllerStatus,
-  LifecycleAdmissionBlock,
-  InstallVersionOk,
-  MutationOutcome,
-  MutationProgress,
-  RemoveTraycerOk,
-  ServiceRegistrationOk,
-  UninstallOk,
-} from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import {
@@ -49,6 +34,7 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { FakeHostController } from "./fake-host-controller";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
 const readFeatureSettingsMock = vi.hoisted(() =>
@@ -221,117 +207,6 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   async enableLinger(): Promise<void> {}
   async getRecentLogTail(_maxLines: number): Promise<string | null> {
     return null;
-  }
-}
-
-const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
-  download: null,
-  mutation: null,
-  installedVersion: "1.0.0",
-  latestVersion: "1.0.0",
-  stagedVersion: null,
-  installedRuntimeVersion: "1.0.0",
-  runningRuntimeVersion: "1.0.0",
-  updateReady: false,
-  activation: "activated",
-  reachable: true,
-  localAttempt: null,
-  removedByUser: false,
-  checkedAt: "2026-01-01T00:00:00.000Z",
-};
-
-/**
- * Structural double for `IpcHostController` - these tests exercise the
- * bridge's window/tray/auth/lifecycle IPC surface, not `HostController`
- * itself (see `host-controller.test.ts` for that), so every method just
- * resolves a plausible "ok" outcome. `respawnCalls` lets the one test that
- * cares (`requestHostRespawn`) assert without a real controller instance.
- */
-class FakeHostController implements IpcHostController {
-  respawnCalls = 0;
-
-  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
-  async getStatus(): Promise<HostControllerStatus> {
-    return FAKE_HOST_CONTROLLER_STATUS;
-  }
-  async convergeReady(
-    _force: boolean,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return { kind: "ok", value: { running: true, version: "1.0.0" } };
-  }
-  async stageLatest(): Promise<void> {}
-  async applyStaged(
-    _trigger: ApplyStagedTrigger,
-    _force: boolean,
-  ): Promise<MutationOutcome<ApplyStagedOk>> {
-    return {
-      kind: "ok",
-      value: { appliedVersion: "1.0.0", runningActivated: true },
-    };
-  }
-  async activateInstalled(
-    _force: boolean,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async installVersion(
-    pin: string,
-    _force: boolean,
-  ): Promise<MutationOutcome<InstallVersionOk>> {
-    return {
-      kind: "ok",
-      value: { installedVersion: pin, runningActivated: true },
-    };
-  }
-  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return { kind: "ok", value: { registered: true } };
-  }
-  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return { kind: "ok", value: { registered: false } };
-  }
-  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    this.respawnCalls += 1;
-    return { kind: "ok", value: { activated: true } };
-  }
-  async recoverIfDown(): Promise<
-    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
-  > {
-    return { kind: "suppressed" };
-  }
-  async freePortAndRestart(
-    _pid: number | null,
-    _port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
-    return {
-      kind: "ok",
-      value: {
-        removedInstallDir: true,
-        deregisteredService: true,
-        serviceRegistrationRetained: null,
-      },
-    };
-  }
-  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
-    return {
-      kind: "ok",
-      value: {
-        removedHost: true,
-        deregisteredService: true,
-        serviceRegistrationRetained: null,
-        removedLoginItem: false,
-      },
-    };
-  }
-  isPendingRevisionRefreshQuarantined(): boolean {
-    return false;
-  }
-  onMutationProgress(
-    _listener: (progress: MutationProgress) => void,
-  ): () => void {
-    return () => undefined;
   }
 }
 
@@ -721,6 +596,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.windowsRequestFocus,
         RunnerHostInvoke.windowsRequestClose,
         RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+        RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
         RunnerHostInvoke.ownershipSnapshot,
         RunnerHostInvoke.ownershipClaim,
         RunnerHostInvoke.ownershipRelease,

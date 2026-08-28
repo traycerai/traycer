@@ -138,6 +138,7 @@ import type {
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
   MenuCommandPayload,
+  OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
   OwnershipEntry,
@@ -595,6 +596,9 @@ export interface DesktopWindowsBridge {
     title: string,
     tabId: string,
   ): Promise<OpenEpicInNewWindowResult>;
+  requestOpenDraftInNewWindow(
+    draftId: string,
+  ): Promise<OpenDraftInNewWindowResult>;
   ownership: {
     snapshot(): Promise<readonly OwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<OwnershipClaimResult>;

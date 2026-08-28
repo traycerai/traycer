@@ -7,7 +7,13 @@
  */
 export { openNewEpic, openNewEpicIntent } from "./new-epic";
 export { duplicateEpicTab } from "./duplicate-tab";
-export { goBack, goForward, type HistoryNavRouter } from "./history-navigation";
+export {
+  goBack,
+  goForward,
+  resolveEligibleHistoryTarget,
+  type EligibleHistoryTarget,
+  type HistoryNavRouter,
+} from "./history-navigation";
 export {
   openCreatedChatWhenProjected,
   openCreatedChatWhenProjectedWithNavigation,

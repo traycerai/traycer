@@ -218,6 +218,7 @@ import {
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  chatSubscribeV18,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -310,6 +311,10 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
+import {
+  chatLocateRowV10,
+  chatReadAccumulatedFileChangeV10,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -4832,6 +4837,45 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // The contents behind an accumulated-change summary on the windowed
+  // `chat.subscribe` line, which ships summaries and leaves the file bodies to
+  // be fetched on demand. Off-floor, so a GUI meeting an older host falls back
+  // to its legacy full-contents-in-snapshot path instead of losing the diff.
+  //
+  // Registered AHEAD of `chatSubscribeV18`, and that ordering was not an
+  // oversight: a stream minor negotiates to the highest the peers share, so
+  // registering that one IS the switch to windowed frames - it waited until
+  // the renderer could draw placeholder rows and drive viewport hydration. A
+  // unary method flips no negotiation - a client that never calls it cannot
+  // tell it exists.
+  "chat.readAccumulatedFileChange": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatReadAccumulatedFileChangeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Where a cross-tile jump target sits, for the two target kinds a client
+  // identifies by walking rendered models - which a COLD row does not have.
+  // Off-floor for the same reason as the read above: a GUI meeting an older
+  // host degrades to waiting for the row, which on a non-windowed host always
+  // arrives because that host serves the whole transcript.
+  "chat.locateRow": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatLocateRowV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "agent.gui.listHarnesses": {
     1: {
       latestMinor: 0,
@@ -8926,7 +8970,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -8951,6 +8995,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         7: {
           contract: chatSubscribeV17,
+        },
+        8: {
+          contract: chatSubscribeV18,
         },
       },
     },

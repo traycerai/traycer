@@ -64,8 +64,19 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
         : opener.segment({
             filePath,
             sourceBlockIds: segment.sourceBlockIds,
+            // Carried so the tile survives this row leaving the transcript
+            // window - see `ChatSnapshotSegmentDiffRequest`. This row is on
+            // screen, so they are the endpoints as the user sees them.
+            beforeHash: segment.beforeHash,
+            afterHash: segment.afterHash,
           }),
-    [filePath, opener, segment.sourceBlockIds],
+    [
+      filePath,
+      opener,
+      segment.afterHash,
+      segment.beforeHash,
+      segment.sourceBlockIds,
+    ],
   );
 
   const header = (

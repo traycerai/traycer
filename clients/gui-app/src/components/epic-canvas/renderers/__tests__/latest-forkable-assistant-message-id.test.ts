@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
-import { latestForkableAssistantMessageId } from "../chat-tile-session-state";
+import {
+  forkableAssistantMessageIdAfter,
+  latestForkableAssistantMessageId,
+} from "../chat-tile-session-state";
 
 // Minimal fixture mirroring the shape built in
 // `chat-tile-session-state.test.ts`'s `MESSAGE` constant - every field the
@@ -112,5 +115,75 @@ describe("latestForkableAssistantMessageId", () => {
     ];
 
     expect(latestForkableAssistantMessageId(messages)).toBe("persisted-a-1");
+  });
+});
+
+/**
+ * The host-derived boundary refreshes per SNAPSHOT while the gate in front of
+ * the host-switch fork gesture is cleared by a live `turnStateChanged` frame.
+ * In the gap between the two the gesture is open and the boundary still names
+ * the previous turn, so the fork omits the turn the user just watched finish.
+ *
+ * This is the second hand: forward-only, from the live tail.
+ */
+describe("forkableAssistantMessageIdAfter", () => {
+  const completedFirst = assistantMessage({
+    id: "a-1",
+    persistentMessageId: "persisted-a-1",
+    completedAt: 100,
+  });
+  const completedSecond = assistantMessage({
+    id: "a-2",
+    persistentMessageId: "persisted-a-2",
+    completedAt: 200,
+  });
+
+  it("names a turn that completed after the one the host knows about", () => {
+    expect(
+      forkableAssistantMessageIdAfter(
+        [completedFirst, completedSecond],
+        "persisted-a-1",
+      ),
+    ).toBe("persisted-a-2");
+  });
+
+  it("says nothing when the host's answer is already the latest", () => {
+    expect(
+      forkableAssistantMessageIdAfter(
+        [completedFirst, completedSecond],
+        "persisted-a-2",
+      ),
+    ).toBeNull();
+  });
+
+  it("never moves the boundary BACKWARD past the host's answer", () => {
+    // The hydrated window holds an older completed turn as well; a plain
+    // "latest in view" scan run against a colder window could return it.
+    // Anything at or before the known boundary is out of scope by construction.
+    expect(
+      forkableAssistantMessageIdAfter([completedFirst], "persisted-a-2"),
+    ).toBeNull();
+  });
+
+  it("takes any completed turn when the host has no boundary at all", () => {
+    expect(forkableAssistantMessageIdAfter([completedFirst], null)).toBe(
+      "persisted-a-1",
+    );
+  });
+
+  it("still refuses a turn that has not finished", () => {
+    const streaming = assistantMessage({
+      id: "a-2",
+      persistentMessageId: "persisted-a-2",
+      completedAt: null,
+      runState: "running",
+    });
+
+    expect(
+      forkableAssistantMessageIdAfter(
+        [completedFirst, streaming],
+        "persisted-a-1",
+      ),
+    ).toBeNull();
   });
 });

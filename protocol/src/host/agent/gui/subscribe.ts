@@ -1,11 +1,19 @@
 /**
- * `chat.subscribe@1.6` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.5`
+ * `chat.subscribe@1.8` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.7`
  * (frozen, near the bottom of this file) are the exact shapes shipped in
- * earlier hosts; later minors only add to them, so a `1.6` app still bridges to
- * hosts that only know `1.0`–`1.5`. Streams have no cross-major downgrade
+ * earlier hosts; later minors only add to them, so a `1.8` app still bridges to
+ * hosts that only know `1.0`–`1.7`. Streams have no cross-major downgrade
  * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
  * ships, its major must never move again - only additive minors.
+ *
+ * `1.8` is the WINDOWED line and is the one place that generalization bends:
+ * it does not merely add to `1.7`, it replaces the snapshot's embedded
+ * transcript with a skeleton plus on-demand ranges. That is a behaviour
+ * change selected by version rather than by a flag, and the host serves whole
+ * snapshots to anything below it. See `chatSubscribeV18` at the bottom. (It
+ * was drafted as `1.7` and re-based when the interview-settlement + Reasonix
+ * line took that minor first - see the note above `chatSubscribeV17`.)
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -32,7 +40,7 @@ import {
   userMessagePayloadSchemaPreAnnotation,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
-  userMessageSchemaPreTurnTail,
+  userMessageSchemaPreReasonix,
   userMessageSchemaV16,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
@@ -91,6 +99,20 @@ import {
   heldManagedCommandUpdateSchema,
   managedCommandSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+// The windowed line's payload shapes. They live in their own module (and import
+// nothing from here) so this file can stay the one place every `chat.subscribe`
+// FRAME union is assembled - the aux frames are shared between the two lines,
+// and splitting the unions across files would hide that.
+import {
+  chatAccumulatedChangeChunkSchema,
+  chatIndexChangeSchema,
+  chatLoadRangeRequestSchema,
+  chatRangeResponseSchema,
+  chatRecordSchema,
+  chatSkeletonChunkSchema,
+  chatTranscriptDerivedSchema,
+  chatTranscriptWindowSchema,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -1163,7 +1185,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
 // either an unknown harness discriminant or a managed-command queue item.
 const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchemaPreTurnTail,
+    message: userMessageSchemaPreReasonix,
     queue: chatQueueStateSchemaPreManagedCommand,
     // Pre-Reasonix event actor: an A2A chat event names the acting agent's
     // harness, and `eventAppended` rides this released line.
@@ -1219,7 +1241,7 @@ function isStructuralRecord(value: unknown): boolean {
  * `z.custom<...>` keeps the inferred type identical to the deep schema's, so
  * a shallow-parsed snapshot IS a `ChatSubscribeServerFrame` to consumers.
  *
- * ONLY SOUND ON THE LIVE LINE (`chatSubscribeLiveSchemaVersion`). The deep
+ * ONLY SOUND ON THE FULL-SNAPSHOT LINE (`chatSubscribeFullSnapshotSchemaVersion`). The deep
  * message/event schemas carry compatibility defaults (`imageResolutions`,
  * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
  * objects; the structural check skips them, so a `1.5` assistant message
@@ -2542,10 +2564,296 @@ export const chatSubscribeV17 = defineStreamRpcContract({
 });
 
 /**
- * The live line's version, declared HERE (next to the live contract) so a
- * future line bump cannot miss it. This is the one negotiated version on
- * which `chatSubscribeSnapshotServerFrameShallowSchema` is sound — see its
- * doc, and `chatSubscribeSnapshotServerFrameShallowSchemaV16` for the one
- * other line that keeps a (normalized) shallow path.
+ * The newest line whose snapshot embeds the whole chat record.
+ *
+ * This is what `chatSubscribeSnapshotServerFrameShallowSchema` is gated on,
+ * and the two must move together: the shallow parse exists only to skip a deep
+ * zod walk over `chat.messages` / `chat.events`, and the windowed line
+ * (`1.8`, below) has neither array on its snapshot at all. So this is
+ * deliberately NOT "the highest minor" — it is "the highest minor with an
+ * unbounded snapshot", and it stops moving once later minors are windowed.
+ *
+ * Renamed from `chatSubscribeLiveSchemaVersion` when the windowed line opened,
+ * because "live" had quietly come to mean two things: the newest negotiable
+ * line, and the line whose shapes the shallow parse is exact for. `1.8` is
+ * registered, so those have already come apart: the newest negotiable line is
+ * `1.8` and this stays at `1.7`. The old name invited exactly the edit that
+ * would have broken it, since it was declared "next to the live contract so a
+ * future line bump cannot miss it". A future line bump MUST miss this one.
  */
-export const chatSubscribeLiveSchemaVersion = chatSubscribeV17.schemaVersion;
+export const chatSubscribeFullSnapshotSchemaVersion =
+  chatSubscribeV17.schemaVersion;
+
+// ─── The windowed `chat.subscribe@1.8` contract ────────────────────────────
+//
+// `1.8` stops shipping the transcript with the snapshot. See
+// `subscribe-windowed.ts` for the design; the short version is that today's
+// snapshot embeds the entire persisted chat (20-40 MB on a long one) and every
+// one of the host's ~27 emit sites re-serializes it, so this line replaces that
+// with a bounded snapshot, a row skeleton streamed in chunks, and ranges of
+// bodies fetched on demand.
+//
+// **It is `1.7` plus windowing, not an alternative to it.** This line was
+// drafted as `1.7` while `1.7` was still free, and the number was taken in the
+// meantime by the interview-settlement + Reasonix line. Re-basing it was not a
+// renumber: everything below binds the LIVE schemas by reference - the chat
+// record through `chatRecordSchema`, the transcript through `messageSchema` /
+// `chatEventSchema`, the aux frames through the shared frame lists - so a
+// windowed peer sees canonical interview outcomes, answer selection evidence,
+// saved drafts, the detached delivery projection, and the twentieth harness id
+// exactly as a `1.7` peer does. Binding by reference is what makes that
+// automatic, and it is the reason a released line must NOT do the same
+// (`chatSchemaV14`'s comment, and the `1.6` freeze above).
+//
+// **Version implies behaviour.** There is no `windowed` flag and no
+// full-snapshot mode on this line. Two behaviours behind one version is the
+// arrangement where a host and a client can each believe the other is in the
+// mode it is not; a peer too old for this negotiates `1.7` or below and the
+// host serves it whole snapshots from its own fallback path.
+//
+// That is also why this union is built from scratch rather than by extending
+// `chatSubscribeServerFrameSchema`: the two lines do not differ by a few added
+// variants, they carry different snapshots. Sharing the aux frames (everything
+// that is not about the transcript) is deliberate and is what keeps the
+// renderer's reducers identical across the two modes.
+
+/**
+ * The bounded snapshot.
+ *
+ * Aux state exactly as `1.7` sends it, with three substitutions and four
+ * additions. The substitutions are the transcript itself (`chat` loses its two
+ * arrays), the accumulated-changes panel (summaries now, contents on demand -
+ * full file bodies were one of the larger byte offenders), and nothing else:
+ * every field a renderer already reads keeps its name, its type, and its
+ * optionality, because the zero-regression bar is about mixed-version fleets
+ * and a reducer that has to branch per line is where that bar gets missed.
+ *
+ * `backgroundItems` in particular keeps `.optional()` even though every `1.8`
+ * host populates it. Its optionality is a capability sentinel on the older
+ * lines, and making it required here would fork the one reducer that reads it
+ * for no gain.
+ */
+export const chatWindowedSnapshotSchema = z.object({
+  /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
+  chat: chatRecordSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  /**
+   * How many files the chat has touched. The SUMMARIES arrive on their own
+   * chunked frames, for the reason the skeleton never joined the snapshot:
+   * their count is a property of the chat's HISTORY, not of its current state,
+   * and a broad refactor touches thousands. This count is what lets the panel
+   * paint its collapsed header immediately and tell a complete list from a
+   * lossy one when the final chunk lands.
+   */
+  accumulatedFileChangeCount: z.number().int().nonnegative(),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+  /**
+   * The epoch every ordinal in this session is relative to. The host advances
+   * it only when an ordinal no longer names the row it named before; appends
+   * and in-place row updates retain it. A `range` response carrying a different
+   * epoch is discarded rather than applied.
+   */
+  transcriptEpoch: z.number().int().nonnegative(),
+  /**
+   * How many rows the transcript has, so the client can size the scrollbar and
+   * seat the tail before the skeleton has finished arriving — and so it can
+   * tell a complete skeleton from a lossy one when the final chunk lands.
+   */
+  rowCount: z.number().int().nonnegative(),
+  /**
+   * The index revision this snapshot's skeleton corresponds to - see the same
+   * field on the `indexChanged` frame.
+   *
+   * Present on EVERY snapshot, including an aux-only rebroadcast that
+   * restreams no skeleton, and that is the case it is for: it is how a client
+   * holding a same-epoch skeleton learns that deltas were emitted against it
+   * which the client never saw. Without it a lost update-only frame followed
+   * by any number of auxiliary snapshots leaves the client's stale body
+   * looking perfectly current on both sides.
+   *
+   * `null` means the host holds no index for this subscriber and is about to
+   * stream a fresh skeleton - a bootstrap, or a rebuild after a `resnapshot`.
+   * There is nothing to compare against then, and a client that treated it as
+   * a gap would void the window the chunks are about to fill and request
+   * another resnapshot for it, which is a loop.
+   */
+  indexRevision: z.number().int().nonnegative().nullable(),
+  /**
+   * The hydrated tail. Always present, because the tail is where a live turn
+   * happens and the client must paint it without a round trip.
+   */
+  tail: chatTranscriptWindowSchema,
+  /** Whole-transcript folds a windowed client cannot compute for itself. */
+  derived: chatTranscriptDerivedSchema,
+});
+export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
+
+const chatSubscribeWindowedSnapshotServerFrameSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatWindowedSnapshotSchema,
+});
+
+const chatSubscribeAccumulatedChangesServerFrameSchema = z.object({
+  kind: z.literal("accumulatedChanges"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  chunk: chatAccumulatedChangeChunkSchema,
+});
+
+const chatSubscribeSkeletonChunkServerFrameSchema = z.object({
+  kind: z.literal("skeletonChunk"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  chunk: chatSkeletonChunkSchema,
+});
+
+const chatSubscribeIndexChangedServerFrameSchema = z.object({
+  kind: z.literal("indexChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  /**
+   * The epoch AFTER the change — what subsequent `loadRange`s must carry.
+   *
+   * Unchanged from the previous frame for an `appended` or `updated` change,
+   * because neither renumbers an ordinal: the epoch versions the COORDINATE
+   * SPACE, not the index's content. It advances on `reindexed`, which is
+   * exactly the case where a client's in-flight `range` must be discarded.
+   */
+  epoch: z.number().int().nonnegative(),
+  /** Row count after the change, kept in step with the snapshot's field. */
+  rowCount: z.number().int().nonnegative(),
+  /**
+   * A per-epoch counter of index deltas, incremented by every frame the host
+   * emits and restarted at 0 by the snapshot that seats a fresh index.
+   *
+   * ## What it makes detectable
+   *
+   * The pump is allowed to drop a queued frame on a non-deterministic send
+   * failure while the stream survives, and backpressure compaction drops
+   * queued `indexChanged` frames by design. For an `appended` change the loss
+   * is self-announcing: `rowCount` moves, and the client's own append
+   * accounting notices it.
+   *
+   * An `updated`-only change moves NOTHING observable. Same epoch (an update
+   * renumbers no ordinal), same `rowCount` (it adds no row), and later
+   * same-epoch snapshots retain the existing skeleton rather than restreaming
+   * it. So a lost update-only frame left the client rendering a superseded
+   * body indefinitely - and a visible row's span is protected from eviction,
+   * so the ordinary churn that would have refetched it never fires either.
+   *
+   * A client that sees a gap here re-requests the index instead. Cheap enough
+   * to spend on every frame: one small integer against the alternative of a
+   * transcript that is quietly wrong at one row.
+   *
+   * Deliberately NOT the epoch. The epoch versions the coordinate SPACE, and
+   * conflating "your ordinals moved" with "you missed an edit" would force a
+   * full rebase for a one-row body change - the O(history) frame this whole
+   * line exists to remove.
+   */
+  indexRevision: z.number().int().nonnegative(),
+  /**
+   * Every change this frame applies, atomically. See
+   * {@link chatIndexChangeSchema} for why a mutation is routinely two of them
+   * and why splitting them across frames is unsafe.
+   */
+  changes: z.array(chatIndexChangeSchema),
+});
+
+const chatSubscribeRangeServerFrameSchema = z.object({
+  kind: z.literal("range"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  range: chatRangeResponseSchema,
+});
+
+export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
+  "kind",
+  [
+    chatSubscribeWindowedSnapshotServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
+  ],
+);
+export type ChatSubscribeWindowedServerFrame = z.infer<
+  typeof chatSubscribeWindowedServerFrameSchema
+>;
+
+/**
+ * Ask for a span of bodies.
+ *
+ * Not an owner action: it carries no `clientActionId` and is never acked,
+ * because it is a READ. A viewer scrolling a chat they do not own must be able
+ * to hydrate what they are looking at, and routing that through the action
+ * machinery would gate it on `canAct` and mint an ack per scroll.
+ */
+const loadRangeClientFrameSchema = z.object({
+  kind: z.literal("loadRange"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  request: chatLoadRangeRequestSchema,
+});
+
+/**
+ * Re-base from scratch: a fresh bounded snapshot and a fresh skeleton.
+ *
+ * The client's recovery path for the cases where its own index cannot be
+ * trusted — a reconnect, an epoch it never saw the `indexChanged` for, a
+ * `reindexed` change. A read, so it is not an owner action either.
+ */
+const resnapshotClientFrameSchema = z.object({
+  kind: z.literal("resnapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+});
+
+export const chatSubscribeWindowedClientFrameSchema = z.discriminatedUnion(
+  "kind",
+  [
+    ...chatSubscribeClientFrameSchemaOptions,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ],
+);
+export type ChatSubscribeWindowedClientFrame = z.infer<
+  typeof chatSubscribeWindowedClientFrameSchema
+>;
+
+/**
+ * The windowed line.
+ *
+ * **Registered in `hostStreamRpcRegistry`, and that registration IS the
+ * switch.** Stream minors are negotiated to the highest the two peers share,
+ * so every `1.8`-capable GUI talking to a `1.8`-capable host now lands here;
+ * anything older settles on its own minor and is served whole snapshots by the
+ * legacy handlers. It was held out of the registry until this contract, the
+ * host's windowed producers and the GUI's windowed appliers could land
+ * together, because registering it alone would have left both sides
+ * negotiating a line neither implements - on the one stream where a broken
+ * subscribe means a blank chat.
+ */
+export const chatSubscribeV18 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});

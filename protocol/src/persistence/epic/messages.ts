@@ -18,7 +18,6 @@ import {
   agentSenderSchemaPreReasonix,
   chatSessionAnchorSchema,
   chatSessionAnchorSchemaPreReasonix,
-  chatSessionAnchorSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
@@ -352,7 +351,12 @@ export const userMessageSchemaPreReasonix = z
     role: z.literal("user"),
     messageId: z.string(),
     sender: userMessageSenderSchemaPreReasonix,
-    message: userMessagePayloadSchema,
+    // Pre-annotation payload: `browserAnnotations` is live-1.7-only, minted
+    // after these lines shipped, so a released peer's wire never carries it.
+    // This freeze now also serves the `1.4`/`1.5` chat trees that the removed
+    // pre-turnTailUuid copy used to, and those are host->client slots - a
+    // consumer reading the key there would find it undefined.
+    message: userMessagePayloadSchemaPreAnnotation,
     timestamp: z.number(),
     sessionAnchor: chatSessionAnchorSchemaPreReasonix.nullable(),
   })
@@ -417,7 +421,12 @@ export const userMessageSchemaPreInReplyTo = z
     sender: userMessageSenderSchemaPreInReplyTo,
     message: userMessagePayloadSchemaPreAnnotation,
     timestamp: z.number(),
-    sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
+    // Pre-Reasonix, NOT a pre-`turnTailUuid` copy: the released baseline
+    // proves `1.0–1.3` SHIPPED the Claude anchor's `turnTailUuid` (the minors
+    // composed the then-live union at release), so a transcription without it
+    // is a retroactive narrowing - the exact silent field-strip the
+    // released-line-narrowing test exists to catch.
+    sessionAnchor: chatSessionAnchorSchemaPreReasonix.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
 
@@ -470,34 +479,17 @@ export const assistantMessageSchemaPreImage = z.object({
   serviceTier: z.string().nullable().default(null),
 });
 
-// Wire-freeze copy of `userMessageSchema` with `sessionAnchor` swapped for
-// its pre-`turnTailUuid` freeze (see `claudeChatSessionAnchorSchemaPreTurnTail`).
-// Bound to the released `chat.subscribe@1.4`/`@1.5` snapshot trees via
-// `messageSchemaPreImage` below, so neither line can observe the Claude
-// anchor's `turnTailUuid`. It also fed a `1.6` freeze and a pre-turn-tail
-// common-frame bundle in `subscribe.ts` until the release collapsed the
-// unreleased `1.6`/`1.7` pair into one live line, which took both.
-// Field-for-field hand copy, NOT `.omit()`/`.extend()` off the live shape.
-export const userMessageSchemaPreTurnTail = z
-  .object({
-    role: z.literal("user"),
-    messageId: z.string(),
-    // Pre-Reasonix sender: an agent-as-user (A2A) row carries the sending
-    // agent's harness id onto this released line.
-    sender: userMessageSenderSchemaPreReasonix,
-    message: userMessagePayloadSchemaPreAnnotation,
-    timestamp: z.number(),
-    sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
-  })
-  .superRefine(userMessageSenderKindRefine);
-
-// The user branch is the pre-turn-tail freeze, not the live `userMessageSchema`:
+// The user branch is the pre-Reasonix freeze, not the live `userMessageSchema`:
 // user messages carry no image fields (nothing changed for them at the
-// image-freeze point), but their `sessionAnchor` gained `turnTailUuid` after
-// the lines this union serves shipped, and it is bound to `chatSchemaV14` /
-// `chatSchemaV15` - both genuinely released - via the frozen chat trees.
+// image-freeze point), but their sender/anchor harness ENUM must stay frozen
+// for the released `chatSchemaV14`/`chatSchemaV15` trees this union serves.
+// An earlier revision bound a hand-frozen "pre-turnTailUuid" anchor copy here
+// on the belief that `1.4`/`1.5` shipped before the field existed; the
+// released baseline disproved that (those minors composed the then-live
+// anchor union at release, `turnTailUuid` included), so the copy was a
+// retroactive narrowing and was removed.
 export const messageSchemaPreImage = z.discriminatedUnion("role", [
-  userMessageSchemaPreTurnTail,
+  userMessageSchemaPreReasonix,
   assistantMessageSchemaPreImage,
 ]);
 

@@ -7,6 +7,7 @@ import type {
   GithubMentionSection,
   GithubPullRequestMentionFilter,
 } from "@traycer/protocol/host/mention-schemas";
+import { foldGithubIdentitySegment } from "@traycer/protocol/common/github-mention-identity";
 
 /**
  * Pure row algebra for the PR/Issue mention sections: GitHub identity, the
@@ -250,17 +251,6 @@ export function githubRepositoryIdentityKey(entry: {
     foldGithubIdentitySegment(entry.owner),
     foldGithubIdentitySegment(entry.repo),
   ].join("\x1f");
-}
-
-/**
- * The fold behind `githubRepositoryIdentityKey`, exported on its own for the
- * comparisons that are per-FIELD rather than whole-identity: the display
- * qualification and the popover's labels count name collisions one segment at
- * a time, and a verbatim segment compare there under-counts across the same
- * two provenances the key exists to reconcile.
- */
-export function foldGithubIdentitySegment(value: string): string {
-  return value.toLowerCase();
 }
 
 /**

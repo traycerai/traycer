@@ -1,37 +1,43 @@
 import type {
   GuiAgentCommandOption,
   EpicMentionSuggestion,
-  WorkspaceMentionGitType,
   WorkspaceMentionSuggestion,
 } from "@traycer/protocol/host/index";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { MentionPathTree } from "@/lib/path";
+import type {
+  BrowserTabMentionContextType,
+  EntityMentionContextType,
+  GithubMentionContextType,
+  MentionAttachment,
+  PathKind,
+} from "@traycer/protocol/common/composer-mention-attrs";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 
-export type PathKind = "file" | "folder";
-export type EntityMentionContextType =
-  | "epic"
-  | "chat"
-  | "terminal-agent"
-  | "terminal"
-  | EpicArtifactKind
-  | "user";
 /**
- * Wire spelling, not a local one: these strings ARE `ContextType` members in
- * `@traycer/protocol`'s json-content serializer, which reads the mention
- * node's `contextType` attribute straight off the submitted document. Renaming
- * them here would silently stop the serializer recognizing the chip.
+ * The mention ATTACHMENT half of this module - what a chip's node attributes
+ * decode to - lives in `@traycer/protocol/common/composer-mention-attrs`, since
+ * the host runs the same decode to build a transcript row's preview. Re-exported
+ * here so the GUI keeps one import path for composer types; the picker-facing
+ * types below (suggestion entries, previews, slash commands) are GUI-only and
+ * stay. `browser-tab` moved there with the rest rather than staying local: its
+ * own doc calls it a wire spelling, and every other mention kind already
+ * answers to that module.
  */
-export type GithubMentionContextType = "github_pull_request" | "github_issue";
-/**
- * Wire spelling, not a local one: matches `ContextType.BrowserTab` in
- * `@traycer/protocol`'s json-content serializer. A browser tab is readable but
- * not itself an Agent, so it stays a sibling of `GithubMentionContextType`
- * rather than folding into `EntityMentionContextType` (which carries
- * epic-scoped entity fields a browser tab has no use for).
- */
-export type BrowserTabMentionContextType = "browser-tab";
+export type {
+  BrowserTabMentionAttachment,
+  BrowserTabMentionContextType,
+  EntityMentionAttachment,
+  EntityMentionContextType,
+  FileMentionAttachment,
+  GitMentionAttachment,
+  GithubMentionAttachment,
+  GithubMentionContextType,
+  MentionAttachment,
+  PathKind,
+  WorktreeMentionAttachment,
+} from "@traycer/protocol/common/composer-mention-attrs";
+
 export type MentionContextType =
   | PathKind
   | "git"
@@ -196,135 +202,9 @@ export type ImageAttachment = {
   size: number | undefined;
 };
 
-export type FileMentionAttachment = {
-  kind: "mention";
-  contextType: "file" | "folder";
-  path: string;
-  pathKind: PathKind;
-  relPath: string;
-  absolutePath: string | null;
-  workspacePath: string | null;
-  label: string;
-  description: string;
-};
-
-export type GitMentionAttachment = {
-  kind: "mention";
-  contextType: "git";
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: string | null;
-  label: string;
-  description: string;
-  gitType: WorkspaceMentionGitType;
-  branchName: string | null;
-  commitHash: string | null;
-};
-
-export type WorktreeMentionAttachment = {
-  kind: "mention";
-  contextType: "worktree";
-  // The worktree's absolute directory; this is what serializes to the agent
-  // as `@<path>` since the worktree lives outside the workspace root.
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: string | null;
-  workspacePath: string | null;
-  label: string;
-  description: string;
-  worktreePath: string;
-  branch: string | null;
-  isMain: boolean;
-};
-
-export type EntityMentionAttachment = {
-  kind: "mention";
-  contextType: EntityMentionContextType;
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: null;
-  label: string;
-  description: string;
-  epicId: string;
-  artifactId: string | null;
-  artifactType: EpicArtifactKind | null;
-  chatId: string | null;
-  terminalAgentId: string | null;
-  /** Session id of a plain terminal mention; null for every other entity. */
-  terminalId: string | null;
-  status: string | number | null;
-};
-
-/**
- * A GitHub pull request or issue the composer references.
- *
- * What travels is a STABLE REFERENCE, never inlined content: provider, kind,
- * `org/repo#number`, and the URL. The agent resolves detail with its own tools
- * at read time, exactly as a file mention hands over a path rather than the
- * file's bytes - so the reference cannot go stale between insert and send, and
- * the URL keeps it resolvable where `gh` is not signed in.
- *
- * The field names are the serializer's (`organizationLogin`, `repositoryName`,
- * `issueNumber`, `githubHost`, `url`), because these become the mention node's
- * attributes verbatim and `formatMentionForLLMQuery` reads them by name.
- */
-export type GithubMentionAttachment = {
-  kind: "mention";
-  contextType: GithubMentionContextType;
-  /** The entity token: `github-pr:org/repo#123` / `github-issue:org/repo#123`. */
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: null;
-  label: string;
-  description: string;
-  githubHost: string;
-  organizationLogin: string;
-  repositoryName: string;
-  issueNumber: number;
-  url: string;
-};
-
-/**
- * A browser tab the composer references by identity, not by capturing its
- * content - the coding agent reads it live through `page.attachTab({tabId})`.
- * `path` is the durable `browser-tab:<tabId>` token (mirrors how Terminal's
- * path is `terminal:<epicId>/<terminalId>`, not its title), so a rename never
- * changes the identity the attachment carries. `label` is the tab's title at
- * mention time and `url` its address at mention time, both display-only
- * (the composer live decorator's tooltip fallback when the tab is gone),
- * since the token round-trips through `tabId` alone. `description` is unused
- * for this variant - kept at `""` only because `MentionAttachment` requires
- * the field on every member.
- */
-export type BrowserTabMentionAttachment = {
-  kind: "mention";
-  contextType: BrowserTabMentionContextType;
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: null;
-  label: string;
-  description: string;
-  tabId: string;
-  sessionId: string;
-  url: string;
-};
-
-export type MentionAttachment =
-  | FileMentionAttachment
-  | WorktreeMentionAttachment
-  | GitMentionAttachment
-  | EntityMentionAttachment
-  | GithubMentionAttachment
-  | BrowserTabMentionAttachment;
+// The mention members are re-exported above from
+// `@traycer/protocol/common/composer-mention-attrs`; what is declared here is
+// the union itself, which is wider than mentions alone.
 export type Attachment =
   | ImageAttachment
   | MentionAttachment

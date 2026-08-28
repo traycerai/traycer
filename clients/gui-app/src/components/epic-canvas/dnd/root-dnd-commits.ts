@@ -294,7 +294,11 @@ export function resolveCanvasDropPreview(
     target,
     targetRect,
     point,
-    source.kind === ARTIFACT_TAB_DND_TYPE,
+    // Product behavior: pane-body split actions are immediate across the whole
+    // pane for in-task tiles, matching the pre-parity interaction. Strip
+    // targets still win before this resolver runs, so tile reordering keeps its
+    // precise geometry without shrinking the pane's split affordance.
+    false,
   );
 }
 

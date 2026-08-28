@@ -1,22 +1,51 @@
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import type { WorkspaceMentionGitType } from "@traycer/protocol/host/index";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type {
   Attachment,
   BrowserTabMentionAttachment,
-  EntityMentionContextType,
   GithubMentionAttachment,
-  GithubMentionContextType,
   ImageAttachment,
   MentionAttachment,
-  PathKind,
   SlashCommand,
   SlashCommandTrigger,
 } from "@/lib/composer/types";
 import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
-import { DEFAULT_GITHUB_MENTION_HOST } from "@traycer/protocol/common/github-mention-host";
-import { githubMentionTokenReference } from "@/lib/composer/mentions/github-mention-display";
+import {
+  mentionAttachmentFromAttrs,
+  numberValue,
+  stringValue,
+} from "@traycer/protocol/common/composer-mention-attrs";
+import {
+  extractPlainTextFromComposerJSONContent,
+  extractPlainTextFromComposerNodes,
+  mentionPlainTextFromAttrs,
+  quotePrefixLines,
+  slashCommandLabelFromAttrs,
+  slashCommandPlainTextFromAttrs,
+} from "@traycer/protocol/common/composer-plain-text";
+
+/**
+ * The plain-text projection and the mention-attribute decode it runs on now
+ * live in `@traycer/protocol/common` - `composer-plain-text.ts` and
+ * `composer-mention-attrs.ts` - because the host builds a transcript row's
+ * minimap preview with the SAME projection, and a preview computed from a
+ * second copy would drift from the label the renderer draws.
+ *
+ * They are re-exported here under their original names deliberately: this
+ * module has ~20 importers across the GUI, and the point of the move was to
+ * share one implementation, not to rename every call site. Import either path;
+ * they are the same function object.
+ */
+export {
+  extractPlainTextFromComposerJSONContent,
+  mentionAttachmentFromAttrs,
+  mentionPlainTextFromAttrs,
+  numberValue,
+  quotePrefixLines,
+  slashCommandLabelFromAttrs,
+  slashCommandPlainTextFromAttrs,
+  stringValue,
+};
 
 // Recognizes both picker triggers. This is only the LEXICAL shape - `$` in
 // particular matches far more prose than it should (`$20`, `$PATH`), so what a
@@ -40,7 +69,7 @@ const INDENT_ONLY_REGEX = /^[ \t]*$/;
  *
  * Every member projects to nothing the regex above would refuse in front of a
  * trigger: an indent-only text node is the `[ \t]*` the regex itself accepts,
- * and the attachment atoms project to `""` outright ({@link plainTextFromNode}
+ * and the attachment atoms project to `""` outright (`composer-plain-text.ts`
  * returns the empty string for both). So passing over one cannot change what
  * the prompt reads at its leading position - which is why the scan may, and
  * must, keep going.
@@ -58,19 +87,6 @@ export function isTransparentToLeadingScan(node: JsonContent): boolean {
   }
   return node.type === "text" && INDENT_ONLY_REGEX.test(node.text ?? "");
 }
-
-const ARTIFACT_CONTEXT_TYPES: ReadonlyArray<EpicArtifactKind> = [
-  "spec",
-  "ticket",
-  "story",
-  "review",
-];
-
-const GIT_TYPES: ReadonlyArray<WorkspaceMentionGitType> = [
-  "against_uncommitted_changes",
-  "against_branch",
-  "against_commit",
-];
 
 /**
  * The catalog a raw-text converter resolves a written command against, keyed by
@@ -118,11 +134,6 @@ export function buildSubmittedChatJSONContent(
   );
 }
 
-export function extractPlainTextFromComposerJSONContent(
-  content: JsonContent,
-): string {
-  return plainTextFromNodes(content.content ?? []);
-}
 export function collectMentionAttachmentsFromJSONContent(
   content: JsonContent,
 ): MentionAttachment[] {
@@ -261,51 +272,6 @@ export function mentionAttrsFromAttachment(
   return {};
 }
 
-export function mentionAttachmentFromAttrs(
-  attrs: Record<string, unknown> | undefined,
-): MentionAttachment | null {
-  if (attrs === undefined) return null;
-
-  const contextType = stringValue(attrs.contextType);
-  if (contextType === "file" || contextType === "folder") {
-    return pathMentionAttachmentFromAttrs(attrs, contextType);
-  }
-  if (contextType === "worktree") {
-    return worktreeMentionAttachmentFromAttrs(attrs);
-  }
-  if (contextType === "git") {
-    return gitMentionAttachmentFromAttrs(attrs);
-  }
-  if (contextType === "github_pull_request" || contextType === "github_issue") {
-    return githubMentionAttachmentFromAttrs(attrs, contextType);
-  }
-  if (contextType === "browser-tab") {
-    return browserTabMentionAttachmentFromAttrs(attrs);
-  }
-  if (
-    contextType === "epic" ||
-    contextType === "chat" ||
-    contextType === "terminal-agent" ||
-    contextType === "terminal"
-  ) {
-    return entityMentionAttachmentFromAttrs(attrs, contextType);
-  }
-  if (isArtifactContextType(contextType)) {
-    return entityMentionAttachmentFromAttrs(attrs, contextType);
-  }
-  return null;
-}
-
-export function mentionPlainTextFromAttrs(
-  attrs: Record<string, unknown> | undefined,
-): string {
-  if (attrs === undefined) return "";
-
-  const mention = mentionAttachmentFromAttrs(attrs);
-  if (mention === null) return "";
-  return `@${mention.path}`;
-}
-
 export function parseLeadingSlashCommand(prompt: string): {
   readonly name: string;
   /** Offset of the trigger character; everything before it is indent. */
@@ -378,7 +344,7 @@ function nodesWithLeadingSlashCommandNode(
  * mention or another chip contributes text that correctly refuses the boundary.
  */
 function closesLeadingToken(rest: ReadonlyArray<JsonContent>): boolean {
-  const text = plainTextFromNodes(rest);
+  const text = extractPlainTextFromComposerNodes(rest);
   return text.length === 0 || /^\s/.test(text);
 }
 
@@ -559,44 +525,6 @@ function literalTextInlineNodes(text: string): JsonContent[] {
   });
 }
 
-export function slashCommandPlainTextFromAttrs(
-  attrs: Record<string, unknown> | undefined,
-): string {
-  const name = slashCommandNameFromAttrs(attrs);
-  if (name === null) return "";
-  return `/${name}`;
-}
-
-/**
- * What the chip reads on screen, which is not always what it serializes to.
- *
- * A chip written with `$` - picked from the popover, pasted, or spliced out of a
- * next-step prompt - keeps that character in its label so both the live composer
- * and the sent message show back what was written, while
- * `slashCommandPlainTextFromAttrs` still emits the canonical `/name` the provider
- * and the round-trip parser expect. Skills reach the host through
- * `skillInvocations`, keyed off the node's `kind` rather than this text, so the
- * trigger stays a purely local affordance.
- */
-export function slashCommandLabelFromAttrs(
-  attrs: Record<string, unknown> | undefined,
-): string {
-  const name = slashCommandNameFromAttrs(attrs);
-  if (name === null) return "";
-  return `${stringValue(attrs?.trigger) === "$" ? "$" : "/"}${name}`;
-}
-
-function slashCommandNameFromAttrs(
-  attrs: Record<string, unknown> | undefined,
-): string | null {
-  const name =
-    stringValue(attrs?.commandName) ??
-    stringValue(attrs?.name) ??
-    stringValue(attrs?.id);
-  if (name === null) return null;
-  return name.replace(/^[/$]+/, "");
-}
-
 function entityMentionId(
   mention: Extract<MentionAttachment, { readonly epicId: string }>,
 ): string {
@@ -609,53 +537,6 @@ function entityMentionId(
     return mention.terminalId ?? mention.path;
   }
   return mention.artifactId ?? mention.path;
-}
-
-function plainTextFromNodes(content: ReadonlyArray<JsonContent>): string {
-  return content
-    .flatMap((node) => {
-      const text = plainTextFromNode(node);
-      return text.length > 0 ? [text] : [];
-    })
-    .join("\n");
-}
-
-function plainTextFromNode(node: JsonContent): string {
-  if (node.type === "text") return node.text ?? "";
-  if (node.type === "hardBreak") return "\n";
-  if (node.type === "mention") return mentionPlainTextFromAttrs(node.attrs);
-  if (node.type === "slashCommand") {
-    return slashCommandPlainTextFromAttrs(node.attrs);
-  }
-  if (node.type === "imageAttachment") return "";
-  if (node.type === "attachmentGroup") return "";
-  // A sourced quote projects to text exactly like a blockquote - the source it
-  // remembers travels in its attrs, not in the prose.
-  if (node.type === "blockquote" || node.type === "sourcedQuote") {
-    return blockquotePlainText(node);
-  }
-  return (node.content ?? []).map((child) => plainTextFromNode(child)).join("");
-}
-
-function blockquotePlainText(node: JsonContent): string {
-  const text = (node.content ?? [])
-    .map((child) => plainTextFromNode(child))
-    .join("\n");
-  return quotePrefixLines(text);
-}
-
-/**
- * The single markdown-quote prefix rule for every plain-text projection of a
- * blockquote (submit `contentText` here, composer copy in
- * `composer-clipboard.ts`). Blank lines become a bare `>` so the quote stays
- * one contiguous block. Child serialization legitimately differs per caller;
- * only this prefixing rule is shared.
- */
-export function quotePrefixLines(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
-    .join("\n");
 }
 
 function collectMentionAttachmentsFromNodes(
@@ -720,278 +601,6 @@ function mentionKey(mention: MentionAttachment): string {
     "artifactId" in mention ? (mention.artifactId ?? "") : "",
     "chatId" in mention ? (mention.chatId ?? "") : "",
   ].join("\x1f");
-}
-
-function pathMentionAttachmentFromAttrs(
-  attrs: Record<string, unknown>,
-  contextType: PathKind,
-): MentionAttachment | null {
-  const path =
-    stringValue(attrs.path) ??
-    stringValue(attrs.relPath) ??
-    stringValue(attrs.id);
-  if (path === null) return null;
-
-  return {
-    kind: "mention",
-    contextType,
-    path,
-    pathKind: pathKindValue(attrs.pathKind) ?? contextType,
-    relPath: stringValue(attrs.relPath) ?? path,
-    absolutePath: stringValue(attrs.absolutePath),
-    workspacePath: stringValue(attrs.workspacePath),
-    label: stringValue(attrs.label) ?? path,
-    description:
-      stringValue(attrs.description) ?? stringValue(attrs.absolutePath) ?? path,
-  };
-}
-
-function worktreeMentionAttachmentFromAttrs(
-  attrs: Record<string, unknown>,
-): MentionAttachment | null {
-  const worktreePath =
-    stringValue(attrs.worktreePath) ??
-    stringValue(attrs.path) ??
-    stringValue(attrs.id);
-  if (worktreePath === null) return null;
-
-  return {
-    kind: "mention",
-    contextType: "worktree",
-    path: stringValue(attrs.path) ?? worktreePath,
-    pathKind: null,
-    relPath: null,
-    absolutePath: stringValue(attrs.absolutePath) ?? worktreePath,
-    workspacePath: stringValue(attrs.workspacePath),
-    label: stringValue(attrs.label) ?? worktreePath,
-    description: stringValue(attrs.description) ?? worktreePath,
-    worktreePath,
-    branch: stringValue(attrs.branch),
-    isMain: attrs.isMain === true,
-  };
-}
-
-function gitMentionAttachmentFromAttrs(
-  attrs: Record<string, unknown>,
-): MentionAttachment | null {
-  const path = stringValue(attrs.path) ?? stringValue(attrs.id);
-  const gitType = gitTypeValue(attrs.gitType);
-  if (path === null || gitType === null) return null;
-
-  return {
-    kind: "mention",
-    contextType: "git",
-    path,
-    pathKind: null,
-    relPath: null,
-    absolutePath: null,
-    workspacePath: stringValue(attrs.workspacePath),
-    label: stringValue(attrs.label) ?? path,
-    description: stringValue(attrs.description) ?? path,
-    gitType,
-    branchName: stringValue(attrs.branchName),
-    commitHash: stringValue(attrs.commitHash),
-  };
-}
-
-/**
- * Rebuilds a GitHub chip from its node attributes.
- *
- * A chip with no `organizationLogin`/`repositoryName`/`issueNumber` cannot be
- * turned back into a reference at all - `formatMentionForLLMQuery` would emit
- * `@github-pr:/#` - so it is rejected here and the node falls back to plain
- * text rather than shipping a broken reference to the agent.
- */
-function githubMentionAttachmentFromAttrs(
-  attrs: Record<string, unknown>,
-  contextType: GithubMentionContextType,
-): MentionAttachment | null {
-  const organizationLogin = stringValue(attrs.organizationLogin);
-  const repositoryName = stringValue(attrs.repositoryName);
-  const issueNumber = issueNumberValue(attrs.issueNumber);
-  if (
-    organizationLogin === null ||
-    repositoryName === null ||
-    issueNumber === null
-  ) {
-    return null;
-  }
-  const prefix =
-    contextType === "github_pull_request" ? "github-pr" : "github-issue";
-  // github.com is the host a node without the field means; see
-  // `DEFAULT_GITHUB_MENTION_HOST`.
-  const githubHost =
-    stringValue(attrs.githubHost) ?? DEFAULT_GITHUB_MENTION_HOST;
-  const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
-  // Rebuilt through `githubMentionToken`'s own reference builder, so a chip
-  // restored from its node keeps the identity the picker gave it - the rule
-  // lives in one place instead of being restated here. Only reached when the
-  // node carries no `path` of its own.
-  const path =
-    stringValue(attrs.path) ??
-    `${prefix}:${githubMentionTokenReference({
-      githubHost,
-      owner: organizationLogin,
-      repo: repositoryName,
-      number: issueNumber,
-    })}`;
-  return {
-    kind: "mention",
-    contextType,
-    path,
-    pathKind: null,
-    relPath: null,
-    absolutePath: null,
-    workspacePath: null,
-    label: stringValue(attrs.label) ?? `#${issueNumber}`,
-    description: stringValue(attrs.description) ?? reference,
-    githubHost,
-    organizationLogin,
-    repositoryName,
-    issueNumber,
-    url: stringValue(attrs.url) ?? "",
-  };
-}
-
-/**
- * Rebuilds a browser-tab chip from its node attributes. `tabId` is the only
- * thing that must survive - it is what `page.attachTab({tabId})` resolves,
- * and `path` is derived from it rather than trusted verbatim so a node that
- * somehow carries a stale `path` still round-trips to the tab its `tabId`
- * names.
- */
-function browserTabMentionAttachmentFromAttrs(
-  attrs: Record<string, unknown>,
-): MentionAttachment | null {
-  const tabId = stringValue(attrs.tabId) ?? stringValue(attrs.id);
-  if (tabId === null) return null;
-  return {
-    kind: "mention",
-    contextType: "browser-tab",
-    path: `browser-tab:${tabId}`,
-    pathKind: null,
-    relPath: null,
-    absolutePath: null,
-    workspacePath: null,
-    label: stringValue(attrs.label) ?? "Browser",
-    description: stringValue(attrs.description) ?? stringValue(attrs.url) ?? "",
-    tabId,
-    sessionId: stringValue(attrs.sessionId) ?? "",
-    url: stringValue(attrs.url) ?? "",
-  };
-}
-
-function entityMentionAttachmentFromAttrs(
-  attrs: Record<string, unknown>,
-  contextType: EntityMentionContextType,
-): MentionAttachment | null {
-  const epicId = stringValue(attrs.epicId);
-  const id = stringValue(attrs.id);
-  const path =
-    stringValue(attrs.path) ?? entityPathFromAttrs(attrs, contextType);
-  if (epicId === null || path === null) return null;
-
-  const artifactType =
-    artifactKindValue(attrs.artifactType) ?? artifactKindValue(contextType);
-  return {
-    kind: "mention",
-    contextType,
-    path,
-    pathKind: null,
-    relPath: null,
-    absolutePath: null,
-    workspacePath: null,
-    label: stringValue(attrs.label) ?? path,
-    description: stringValue(attrs.description) ?? path,
-    epicId,
-    artifactId: isArtifactContextType(contextType)
-      ? (stringValue(attrs.artifactId) ?? id)
-      : null,
-    artifactType,
-    chatId: contextType === "chat" ? (stringValue(attrs.chatId) ?? id) : null,
-    terminalAgentId:
-      contextType === "terminal-agent"
-        ? (stringValue(attrs.terminalAgentId) ?? id)
-        : null,
-    terminalId:
-      contextType === "terminal" ? (stringValue(attrs.terminalId) ?? id) : null,
-    status: statusValue(attrs.status),
-  };
-}
-
-function entityPathFromAttrs(
-  attrs: Record<string, unknown>,
-  contextType: EntityMentionContextType,
-): string | null {
-  const epicId = stringValue(attrs.epicId);
-  const id = stringValue(attrs.id);
-  if (contextType === "epic") return epicId === null ? id : `epic:${epicId}`;
-  if (id === null || epicId === null) return null;
-  return `${contextType}:${epicId}/${id}`;
-}
-
-export function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-export function numberValue(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/**
- * `issueNumber` after a round-trip through HTML, where it is a STRING.
- *
- * The chip is the only mention attribute that is genuinely numeric, and
- * `dataAttributeMap` parses every attribute back with `getAttribute`, which
- * only ever returns a string. So the same chip is a `number` when it comes
- * from the picker or from persisted ProseMirror JSON, and `"123"` when the
- * user copies it and pastes it back - the editor's ordinary Cmd+C path.
- * Rejecting the string form left the pasted chip with no attachment at all:
- * a blank node view, no plain-text projection, and silent omission from the
- * submitted context.
- *
- * Deliberately strict about what it accepts: a bare run of digits, so
- * `"12abc"`, `"1.5"` and `""` are still rejected rather than being coerced
- * into a reference that points somewhere else.
- */
-function issueNumberValue(value: unknown): number | null {
-  // Positive SAFE INTEGER, on both paths. `numberValue` only rejects
-  // non-finite, so the direct path accepted `0`, negatives and fractions, and
-  // the digit-string path accepted `"0"` - each producing an attachment like
-  // `github-pr:org/repo#0` that serializes a reference no catalog or search
-  // response can ever contain. `githubMentionRowBaseSchema` requires a
-  // positive integer on the wire; this is the same rule for the node
-  // reconstruction path, which reaches attachments without passing the query
-  // parser's `referenceNumber`.
-  const direct = numberValue(value);
-  if (direct !== null) return positiveIssueNumber(direct);
-  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
-  return positiveIssueNumber(Number(value));
-}
-
-function positiveIssueNumber(parsed: number): number | null {
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function pathKindValue(value: unknown): PathKind | null {
-  return value === "file" || value === "folder" ? value : null;
-}
-
-function artifactKindValue(value: unknown): EpicArtifactKind | null {
-  return isArtifactContextType(value) ? value : null;
-}
-
-function gitTypeValue(value: unknown): WorkspaceMentionGitType | null {
-  return GIT_TYPES.find((gitType) => gitType === value) ?? null;
-}
-
-function statusValue(value: unknown): string | number | null {
-  if (typeof value === "string" || typeof value === "number") return value;
-  return null;
-}
-
-function isArtifactContextType(value: unknown): value is EpicArtifactKind {
-  return ARTIFACT_CONTEXT_TYPES.some((contextType) => contextType === value);
 }
 
 function isEntityMentionAttachment(
