@@ -328,6 +328,17 @@ async function superviseRootMaintenanceExecutor(
   // stream `error` is a throw. Deliberately inert: the `close` above carries
   // the exit evidence an EPIPE does not.
   child.stdin.on("error", () => undefined);
+  // The read side is its own emitter too — an EIO mid-rebind or mid-operation
+  // with no listener is the same uncaught throw. But inert is NOT enough
+  // here: a broken protocol pipe means no frame can ever arrive again, while
+  // the executor itself may keep running, and `close` (which gates every
+  // settlement above) waits on process exit. Terminate the executor so the
+  // ordinary `close` classification runs; with no completion frame it takes
+  // the supervised failure arm — dispatch tail drained, actuator group
+  // reaped, holder restored — instead of hanging unsupervised.
+  child.stdout.on("error", () => {
+    child.kill("SIGTERM");
+  });
   if (child.pid === undefined) {
     child.kill("SIGTERM");
     throw new Error("maintenance executor did not expose a process identity");
