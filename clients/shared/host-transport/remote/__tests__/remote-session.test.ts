@@ -96,6 +96,7 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
+  RESTORE_STALL_LOG_AFTER_MS,
 } from "../config";
 import type {
   StreamCloseReason,
@@ -4636,6 +4637,201 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
         expect(relay.errors).toEqual([]);
       } finally {
         streams.forEach((stream) => stream.close());
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession ready boundary under an in-flight snapshot restore", () => {
+  /** One two-chunk stream message: enough to observe the in-flight interval. */
+  const buildChunkFrames = (
+    streamId: number,
+  ): [EncodeMuxFrameInput, EncodeMuxFrameInput] => {
+    const json = { kind: "snapshot", hasBinaryPayload: true, label: "resync" };
+    const binary = new TextEncoder().encode(
+      `resync-payload-${"x".repeat(256)}`,
+    );
+    const body = encodeMuxMessageBody(json, binary);
+    const split = Math.ceil(body.length / 2);
+    const shared = {
+      type: MuxFrameType.STREAM_FRAME,
+      streamId,
+      qos: QosClass.INTERACTIVE,
+      chunked: true,
+      compressed: false,
+      json: null,
+    } as const;
+    return [
+      {
+        ...shared,
+        seq: 0,
+        chunkFirst: true,
+        chunkLast: false,
+        binary: body.subarray(0, split),
+      },
+      {
+        ...shared,
+        seq: 1,
+        chunkFirst: false,
+        chunkLast: true,
+        binary: body.subarray(split),
+      },
+    ];
+  };
+
+  it(
+    "counts a replayed stream as restored on its FIRST accepted chunk - a large snapshot mid-transfer does not hold the session not-ready",
+    async () => {
+      // The failure this pins: a reconnect's resubscribe answers with a
+      // multi-chunk snapshot, and the session read "restored" only off the
+      // COMPLETED message - so for the whole transfer (minutes for a
+      // tens-of-MB snapshot through the relay) `isReady()` was false, the
+      // connectivity surfaces reported an outage on a link that was
+      // demonstrably carrying frames, and the retry they invited restarted
+      // the transfer from zero.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const delivered: StreamFrameEnvelope[] = [];
+      stream.onServerFrame((envelope) => {
+        delivered.push(envelope);
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // Establish the baseline: the first attach's boundary waits on this
+        // stream's snapshot exactly as a reconnect's does, so deliver it
+        // whole and reach ready once.
+        const [seedFirst, seedLast] = buildChunkFrames(
+          relay.subscribeStreamIds[0],
+        );
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(delivered).toHaveLength(1), WAIT);
+
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        // The discriminating control: the subscribe replay is on the wire but
+        // no restore evidence has arrived, so the boundary is still blocked.
+        expect(session.isReady()).toBe(false);
+
+        const [firstChunk, lastChunk] = buildChunkFrames(
+          relay.subscribeStreamIds[1],
+        );
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        // One accepted chunk IS restore evidence: ready flips while the
+        // message is still in flight...
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        // ...and provably BEFORE the consumer saw anything - the stream's own
+        // delivery still waits for the completed message.
+        expect(delivered).toHaveLength(1);
+
+        relay.deliverToClient(await relay.encryptFrame(lastChunk));
+        await vi.waitFor(() => expect(delivered).toHaveLength(2), WAIT);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "arms the restore-stall diagnostic only for a blocked boundary, and its report names the silent stream",
+    async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const stallArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === RESTORE_STALL_LOG_AFTER_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // Reach ready once so the reconnect below exercises the RESTORE path.
+        // The first attach arms its own diagnostic (its boundary waits on
+        // this stream's snapshot too); the boundary then clears it, so only
+        // the CALL record remains - count relatively from here.
+        const [seedFirst, seedLast] = buildChunkFrames(
+          relay.subscribeStreamIds[0],
+        );
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const armsAtBaseline = stallArms().length;
+
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        // The reattach completed with the boundary blocked: exactly one more
+        // diagnostic armed, on its own distinct delay.
+        await vi.waitFor(
+          () => expect(stallArms()).toHaveLength(armsAtBaseline + 1),
+          WAIT,
+        );
+        const armedStall = stallArms()[armsAtBaseline][0] as () => void;
+
+        // Fire the armed callback directly (the suite's idiom for timers too
+        // long to wait out): still blocked, so it reports - naming the method.
+        // Counted from a clean slate: the forced drop above legitimately
+        // warns through other components (the dial-failure log), and this
+        // assertion is about the STALL line only.
+        warnSpy.mockClear();
+        armedStall();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const line = String(warnSpy.mock.calls[0][0]);
+        expect(line).toContain("not ready");
+        expect(line).toContain(
+          `cursor.subscribe#${relay.subscribeStreamIds[1]}`,
+        );
+
+        // Restore evidence ends the episode: once a chunk flips the boundary,
+        // the same callback is inert - the diagnostic cannot cry wolf about a
+        // session that recovered.
+        warnSpy.mockClear();
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[1]);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        armedStall();
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
         session.close();
       }
     },

@@ -68,6 +68,7 @@ import {
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
   RELAY_WAKE_PROBE_TIMEOUT_MS,
+  RESTORE_STALL_LOG_AFTER_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -560,6 +561,17 @@ export class RemoteSession<
    * connection loss so a flapping host never collects partial credit.
    */
   private stableResetTimer: TimerHandle | null = null;
+  /**
+   * Armed when an attach completes with the ready boundary still unreached,
+   * cleared by the boundary or by connection loss. If it fires, some stream's
+   * restore has produced no evidence at all for the whole window - no
+   * delivered frame and no in-flight chunk - and the session is sitting
+   * not-ready on a live mux. That state is otherwise invisible: the surfaces
+   * above can only say "still can't connect", which misattributes it. One
+   * line naming the unrestored methods is what lets a field report of a stuck
+   * banner be attributed to the stream that caused it.
+   */
+  private restoreStallTimer: TimerHandle | null = null;
   /**
    * Whether this session has EVER reached its ready boundary.
    *
@@ -1759,6 +1771,22 @@ export class RemoteSession<
         throw error;
       }
       if (message === null) {
+        // A chunk was accepted for a message still in flight. For a stream
+        // subscription that is all the proof "restored" asks for: the host
+        // accepted the subscribe and its data is arriving on the mux, so the
+        // SESSION-level ready boundary must not stay hostage to the transfer
+        // finishing. A large snapshot (tens of MB through the relay) can take
+        // minutes on a slow link, during which every connection-plane surface
+        // - the connectivity banner, availability recovery, the backoff
+        // stable-reset - would otherwise report an outage on a link that is
+        // demonstrably carrying frames, inviting the exact retry/redial that
+        // restarts the transfer from zero. The stream's own consumer still
+        // waits for the completed message; only the session verdict moves
+        // early. Per-stream reopen escalation is deliberately NOT reset here
+        // - a delivered frame remains its only proof (see the dispatch path).
+        if (frame.type === MuxFrameType.STREAM_FRAME) {
+          this.markStreamRestored(frame.streamId);
+        }
         return;
       }
       this.dispatchInbound(generation, connection, message);
@@ -2232,9 +2260,57 @@ export class RemoteSession<
     this.startReauthLoop();
     this.armStandingTimer();
     this.maybeReachReadyBoundary();
+    this.armRestoreStallTimer(generation);
     // The session can carry frames from here: release every `sendUnary`
     // caller parked through this attach.
     this.settleReadyWaiters(true);
+  }
+
+  /**
+   * Arms the restore-stall diagnostic for this attach: a no-op when the
+   * boundary was already reached above, one line if any stream is still
+   * producing zero restore evidence a full window after the attach completed.
+   * See the field doc for why that state must be named rather than inferred.
+   */
+  private armRestoreStallTimer(generation: number): void {
+    this.clearRestoreStallTimer();
+    if (this.readyBoundaryGeneration === this.connectGeneration) {
+      return;
+    }
+    this.restoreStallTimer = setTimeout(() => {
+      this.restoreStallTimer = null;
+      if (
+        !this.isCurrent(generation) ||
+        this.phase !== "ready" ||
+        this.readyBoundaryGeneration === this.connectGeneration
+      ) {
+        return;
+      }
+      const unrestored: string[] = [];
+      for (const [streamId, stream] of this.subscriptions) {
+        if (
+          !this.restoredStreamIds.has(streamId) &&
+          !this.streamReopenAttempts.has(streamId)
+        ) {
+          unrestored.push(`${stream.method}#${streamId}`);
+        }
+      }
+      if (unrestored.length === 0) {
+        return;
+      }
+      console.warn(
+        `[remote-session] remote session (host ${this.options.hostId}) not ready ${RESTORE_STALL_LOG_AFTER_MS}ms after attach: ` +
+          `unrestored streams with no inbound evidence [${unrestored.join(", ")}], ` +
+          `reassembling=${this.pendingReassemblyCount}`,
+      );
+    }, RESTORE_STALL_LOG_AFTER_MS);
+  }
+
+  private clearRestoreStallTimer(): void {
+    if (this.restoreStallTimer !== null) {
+      clearTimeout(this.restoreStallTimer);
+      this.restoreStallTimer = null;
+    }
   }
 
   private openSubscription(
@@ -2390,6 +2466,10 @@ export class RemoteSession<
     // immediately every time, which is the exact behaviour the window exists
     // to prevent.
     this.clearStableResetTimer();
+    // The stall diagnostic reads "no restore evidence" as a fact about the
+    // stream; with the host absent that silence is the HOST's, so the line
+    // would misattribute. The reattach path arms a fresh window.
+    this.clearRestoreStallTimer();
     this.noteConnectionLost();
     // `isReady()` includes `hostAttached`, so it is already false here - this
     // is what tells anyone.
@@ -2529,6 +2609,9 @@ export class RemoteSession<
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
+    // The stall diagnostic speaks for ONE attach's restores; the drop ends
+    // that attach, and the next one arms its own.
+    this.clearRestoreStallTimer();
     // Guarded internally to once per outage, so a failed redial arriving here
     // again does not restart the clock.
     this.noteConnectionLost();
@@ -3459,6 +3542,7 @@ export class RemoteSession<
       }
     }
     this.readyBoundaryGeneration = this.connectGeneration;
+    this.clearRestoreStallTimer();
     // A force recorded against this generation is satisfied by reaching
     // ready: a fresh attach is everything it could have bought. Consumed
     // unspent, so it cannot leak onto a later, unrelated loss.
@@ -3823,6 +3907,7 @@ export class RemoteSession<
     this.clearReauthTimer();
     this.clearStandingTimer();
     this.clearStableResetTimer();
+    this.clearRestoreStallTimer();
     this.clearAllStreamReopens();
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
