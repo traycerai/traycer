@@ -55,6 +55,11 @@ export interface ForegroundStartModeInput {
    */
   readonly serviceManaged: boolean;
   readonly json: boolean;
+  /**
+   * `--quiet`. Suppresses HUMAN output only - it does not gate the `--json`
+   * lifecycle event, matching the runner, whose JSON progress path checks
+   * `noProgress` alone. `--no-progress` is the flag for that.
+   */
   readonly quiet: boolean;
   /**
    * `--no-progress`. The only structured thing this command emits IS a

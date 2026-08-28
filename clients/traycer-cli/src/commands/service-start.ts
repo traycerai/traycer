@@ -7,6 +7,9 @@ import {
   type ServiceStatus,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
+import type { Environment } from "../runner/environment";
+import { readHostPidMetadata } from "../host/pid-metadata";
+import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 
 // `traycer host service start` - ask the OS service manager to start the
 // already-registered host in the BACKGROUND and return.
@@ -32,13 +35,40 @@ import { withCliLock } from "../store/cli-lock";
 // `cli-lock` for the same reason `host stop` takes it: a start must not land
 // inside another actor's install/apply critical section and race the process
 // that section is about to swap out.
+/**
+ * Is the process pid metadata names actually the one that published it?
+ *
+ * `dead` / `mismatch` (a recycled pid) and an unreadable record all answer
+ * "no", so the caller starts the service rather than trusting a `running`
+ * status derived from a bare liveness check. An indeterminate OS probe also
+ * answers "no": attempting a start that turns out to be unnecessary is
+ * recoverable, leaving a stopped host down is not.
+ */
+async function isPublishedHostCurrent(
+  environment: Environment,
+): Promise<boolean> {
+  try {
+    const metadata = await readHostPidMetadata(environment);
+    if (metadata === null) return false;
+    if (!Number.isInteger(metadata.pid) || metadata.pid <= 0) return false;
+    const verdict = await getPublishedProcessIdentityVerdict(
+      metadata.pid,
+      metadata.processStartIdentity,
+    );
+    return verdict === "current";
+  } catch {
+    return false;
+  }
+}
+
 export const serviceStartCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
   ctx.runtime.logger.info("Service start command started", {
     environment: ctx.runtime.environment,
   });
-  const label = serviceLabelFor(ctx.runtime.environment);
+  const environment = ctx.runtime.environment;
+  const label = serviceLabelFor(environment);
   const controller = createServiceController();
   return withCliLock(
     {
@@ -71,7 +101,17 @@ export const serviceStartCommand: CommandFn = async (
       // launchctl kickstart and `systemctl --user start` genuinely do no-op,
       // so returning early costs those platforms nothing and gives all three
       // one answer.
-      if (before.state === "running") {
+      // `running` is not enough on its own. Every platform's `statusService`
+      // derives it from `isProcessAlive(pid)` over pid metadata, so stale
+      // metadata naming a RECYCLED pid - or an indeterminate OS probe - reports
+      // a running host that is not there. Skipping the start on that leaves a
+      // genuinely stopped host down until someone repairs the metadata, which
+      // is the opposite of what this command was asked to do. Confirm the
+      // recorded process is the one that published before taking the shortcut.
+      const runningConfirmed =
+        before.state === "running" &&
+        (await isPublishedHostCurrent(environment));
+      if (runningConfirmed) {
         ctx.runtime.logger.info("Service start command found a running host", {
           environment: ctx.runtime.environment,
           label: label.id,
