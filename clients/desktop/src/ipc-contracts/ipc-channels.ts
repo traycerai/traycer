@@ -111,6 +111,7 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
+  browserHandoffsDrained: "runnerHost:appLifecycle:browserHandoffsDrained",
   // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
   // holds only its own Epic session registry, while `appUpdateInstall`
   // restarts the whole app and its quit path deliberately skips the
@@ -140,7 +141,7 @@ export const RunnerHostInvoke = {
   supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
   supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
   supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
-  // Per-install report ledger (T3.5). Read-only surface for the dialog's
+  // Per-install report ledger. Read-only surface for the dialog's
   // "Nth time on this install" strip; sightings write via freezeEvidence,
   // filed reports write on delivered submit - neither is renderer-writable.
   supportGetFingerprintOccurrence:
@@ -320,6 +321,39 @@ export const RunnerHostInvoke = {
   zoomStepIn: "runnerHost:zoom:stepIn",
   zoomStepOut: "runnerHost:zoom:stepOut",
   zoomReset: "runnerHost:zoom:reset",
+  browserViewEnsureTab: "runnerHost:browserView:nativeTab:ensure",
+  browserViewAcceptTab: "runnerHost:browserView:nativeTab:accept",
+  browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
+  browserViewDetachSurface: "runnerHost:browserView:nativeTab:detachSurface",
+  browserViewReleaseTab: "runnerHost:browserView:nativeTab:release",
+  browserViewControlElectronTab: "runnerHost:browserView:nativeTab:control",
+  browserViewElectronTabCdpDispatch:
+    "runnerHost:browserView:nativeTab:cdp:dispatch",
+  browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
+  browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
+  browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
+  browserViewFindInPage: "runnerHost:browserView:findInPage",
+  browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",
+  browserViewCancelDownload: "runnerHost:browserView:cancelDownload",
+  browserViewTrustCertificate: "runnerHost:browserView:trustCertificate",
+  browserViewOccludeForOverlay: "runnerHost:browserView:occludeForOverlay",
+  browserViewReleaseOverlay: "runnerHost:browserView:releaseOverlay",
+  browserViewCapturePage: "runnerHost:browserView:capturePage",
+  browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
+  browserViewPrimaryProfileCapture:
+    "runnerHost:browserView:primaryProfile:capture",
+  browserViewCookieCryptoStateGet:
+    "runnerHost:browserView:cookieCryptoState:get",
+  browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
+  browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
+  browserViewSetAnnotationTargetChatLabel:
+    "runnerHost:browserView:annotation:setTargetChatLabel",
+  browserViewAnnotationAttachResult:
+    "runnerHost:browserView:annotation:attachResult",
+  // Native-tab PiP capture (agent-browser-pip ticket 02). Rides the existing
+  // debugger attach; frames are pushed on `pipCaptureFrame`.
+  pipCaptureStart: "runnerHost:pipCapture:start",
+  pipCaptureStop: "runnerHost:pipCapture:stop",
 } as const;
 
 export const RunnerHostEvent = {
@@ -344,6 +378,7 @@ export const RunnerHostEvent = {
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   quitRequested: "runnerHost:event:quitRequested",
   getFreshUnsyncedSnapshot: "runnerHost:event:getFreshUnsyncedSnapshot",
+  drainBrowserHandoffs: "runnerHost:event:drainBrowserHandoffs",
   windowsChange: "runnerHost:event:windows:change",
   ownershipChange: "runnerHost:event:windows:ownership:change",
   perWindowStateChange: "runnerHost:event:windows:perWindowState:change",
@@ -373,6 +408,21 @@ export const RunnerHostEvent = {
   // (browser/dev, the single-window topology D16 names).
   registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
+  browserViewNativeTabStatusChange:
+    "runnerHost:event:browserView:nativeTab:statusChange",
+  browserViewElectronTabHandoff:
+    "runnerHost:event:browserView:electronTab:handoff",
+  browserViewFindChange: "runnerHost:event:browserView:findChange",
+  browserViewDownloadChange: "runnerHost:event:browserView:downloadChange",
+  browserViewCertificateError: "runnerHost:event:browserView:certificateError",
+  browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
+  browserViewSnapshotInvalidated:
+    "runnerHost:event:browserView:snapshotInvalidated",
+  browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
+  browserViewAnnotationAttached:
+    "runnerHost:event:browserView:annotationAttached",
+  // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
+  pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",
   // Selection-authority broadcasts. THREE kinds, each emission carrying its
   // own unique authority revision, so one high-water mark per client totally
@@ -398,11 +448,11 @@ export const RunnerHostSync = {
   selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
 } as const;
 
-export type RunnerHostInvokeChannel =
+type RunnerHostInvokeChannel =
   (typeof RunnerHostInvoke)[keyof typeof RunnerHostInvoke];
-export type RunnerHostEventChannel =
+type RunnerHostEventChannel =
   (typeof RunnerHostEvent)[keyof typeof RunnerHostEvent];
-export type RunnerHostSyncChannel =
+type RunnerHostSyncChannel =
   (typeof RunnerHostSync)[keyof typeof RunnerHostSync];
 
 /**

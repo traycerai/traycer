@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import type { PropsWithChildren, ReactNode } from "react";
 import type {
   WorktreeBindingSelectorRowV12,
   WorktreeIntent,
@@ -21,6 +22,7 @@ const spies = vi.hoisted(() => ({
   createTuiAgent: vi.fn(),
   refreshHostDirectory: vi.fn(() => Promise.resolve([])),
   toast: vi.fn(),
+  openBrowserTab: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: spies.toast }));
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
@@ -391,7 +393,13 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
+import { useBrowserOpenerItems } from "@/lib/commands/sources/open/browser-subpage";
+import { BrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
+import {
+  DEFAULT_BROWSER_TILE_URL,
+  DEFAULT_BROWSER_VIEWPORT_PRESET,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
@@ -439,6 +447,29 @@ function renderItems(
 ): ReadonlyArray<CommandItem> {
   return renderHook<ReadonlyArray<CommandItem>, unknown>(() => hook(CTX)).result
     .current;
+}
+
+function renderBrowserItems(): ReadonlyArray<CommandItem> {
+  function Wrapper({ children }: PropsWithChildren): ReactNode {
+    return (
+      <BrowserSessionsContext.Provider
+        value={{
+          hostId: "default-host",
+          lifecycle: "live",
+          inventoryReady: true,
+          items: [],
+          errorMessage: null,
+          retry: () => undefined,
+          openTab: spies.openBrowserTab,
+          closeTab: () => Promise.resolve(),
+        }}
+      >
+        {children}
+      </BrowserSessionsContext.Provider>
+    );
+  }
+  return renderHook(() => useBrowserOpenerItems(CTX), { wrapper: Wrapper })
+    .result.current;
 }
 
 function runById(items: ReadonlyArray<CommandItem>, id: string): void {
@@ -960,6 +991,39 @@ describe("Terminals opener sub-page", () => {
     expect(opened.ref.lifecycleOwner).toBe("registry");
     expect(opened.ref.origin).toBe("setup");
     expect(isHostEpicTerminalRef(opened.ref)).toBe(false);
+  });
+});
+
+describe("Browser opener sub-page", () => {
+  it("opens New browser through the host and places its session pointer", async () => {
+    spies.openBrowserTab.mockResolvedValueOnce({
+      sessionId: "session-new",
+      tabId: "tab-new",
+    });
+    const items = renderBrowserItems();
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe("open:browser:new");
+    expect(items[0].label).toBe("New browser");
+
+    act(() => runById(items, "open:browser:new"));
+
+    expect(spies.openBrowserTab).toHaveBeenCalledWith(
+      null,
+      DEFAULT_BROWSER_TILE_URL,
+    );
+    await waitFor(() => {
+      expect(spies.openTileIntoTargetGroup).toHaveBeenCalledOnce();
+    });
+    const opened = lastTileOpen();
+    expect(opened.groupId).toBe("group-1");
+    expect(opened.tabId).toBe("tab-1");
+    expect(opened.ref).toMatchObject({
+      type: "browser-session",
+      hostId: "default-host",
+      sessionId: "session-new",
+      tabId: "tab-new",
+      viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
+    });
   });
 });
 

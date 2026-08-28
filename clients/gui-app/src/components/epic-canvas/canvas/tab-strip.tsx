@@ -71,16 +71,11 @@ import type {
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import {
-  isBlankTileRef,
-  isCommGraphTileRef,
-  isPublishedChatTileRef,
-  isDiffTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
-  isPrDetailTileRef,
-  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
+import { isEpicNodeTileRef } from "@/stores/epics/canvas/tile-schema";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
@@ -121,6 +116,11 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
+import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
+import {
+  useBrowserTabPresentation,
+  type BrowserTabPresentation,
+} from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 /**
@@ -574,16 +574,13 @@ function useTabRenameControl(args: {
     epicId,
     terminalHostClient,
   );
+  const browserPresentation = useBrowserTabPresentation(tab);
   const displayTitle =
-    terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
+    browserPresentation?.title ??
+    (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
-      : fallbackDisplayTitle;
-  const canRename =
-    canRenameTabs &&
-    (isOpenableEpicNodeKind(tab.type) || tab.type === "terminal") &&
-    (terminalControl === null ||
-      terminalControl.mode === "legacy" ||
-      (terminalControl.mode === "capable" && terminalControl.canMutate));
+      : fallbackDisplayTitle);
+  const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
   const handleRename = (next: string) => {
@@ -605,7 +602,22 @@ function useTabRenameControl(args: {
     canEdit: canRename,
     onCommit: handleRename,
   });
-  return { displayTitle, canRename, rename };
+  return { displayTitle, browserPresentation, canRename, rename };
+}
+
+function canRenameCanvasTab(
+  tab: EpicCanvasTileRef,
+  canRenameTabs: boolean,
+  terminalControl: TerminalTabControl | null,
+): boolean {
+  if (!canRenameTabs) return false;
+  if (!isOpenableEpicNodeKind(tab.type) && tab.type !== "terminal") {
+    return false;
+  }
+  if (terminalControl === null || terminalControl.mode === "legacy") {
+    return true;
+  }
+  return terminalControl.mode === "capable" && terminalControl.canMutate;
 }
 
 function TabItemBody(
@@ -680,14 +692,15 @@ function TabItemBody(
     disabled: isDragging,
   });
   const { onRename } = menuProps;
-  const { displayTitle, canRename, rename } = useTabRenameControl({
-    tab,
-    epicId,
-    groupId,
-    canRenameTabs,
-    terminalControl: props.terminalControl,
-    onRename,
-  });
+  const { displayTitle, browserPresentation, canRename, rename } =
+    useTabRenameControl({
+      tab,
+      epicId,
+      groupId,
+      canRenameTabs,
+      terminalControl: props.terminalControl,
+      onRename,
+    });
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
@@ -773,7 +786,11 @@ function TabItemBody(
           modifier: leaderModifier,
           hint: leaderHint(leaderDigitFor(index), "to switch to", displayTitle),
         };
-  const tooltipContent = tabTooltipContent(tab, displayTitle);
+  const tooltipContent = tabTooltipContent(
+    tab,
+    displayTitle,
+    browserPresentation,
+  );
 
   return (
     <ContextMenu>
@@ -821,6 +838,7 @@ function TabItemBody(
               epicId={epicId}
               tab={tab}
               titleGenerationPending={titleGenerationPending}
+              browserPresentation={browserPresentation}
             />
             <TabItemLabelSlot
               displayTitle={displayTitle}
@@ -985,7 +1003,18 @@ function TabDisplayTitle(props: {
 function tabTooltipContent(
   tab: EpicCanvasTileRef,
   displayTitle: string,
+  browserPresentation: BrowserTabPresentation | null,
 ): ReactNode {
+  if (browserPresentation !== null) {
+    return (
+      <div className="flex min-w-0 flex-col gap-0.5 text-left">
+        <div className="truncate font-medium">{displayTitle}</div>
+        <div className="truncate text-ui-xs text-muted-foreground">
+          {browserPresentation.url}
+        </div>
+      </div>
+    );
+  }
   if (!isGitDiffTileRef(tab)) return displayTitle;
   const context = tab.repositoryContext;
   const repositoryLabel =
@@ -1165,6 +1194,38 @@ function TabStripEndDropIndicator(props: { readonly visible: boolean }) {
   );
 }
 
+function renderFixedTabIcon(
+  tab: EpicCanvasTileRef,
+  managedCommandMonitoring: boolean,
+): ReactNode {
+  switch (tab.type) {
+    case "git-diff":
+    case "snapshot-diff":
+    case "pr-diff":
+      return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+    case "pr-detail":
+      return (
+        <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+      );
+    case "blank":
+      return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+    case "managed-command-output":
+      return (
+        <ManagedCommandMonitorIcon
+          monitoring={managedCommandMonitoring}
+          decorative
+          className="size-3.5"
+        />
+      );
+    case "comm-graph":
+      return <CommGraphTileIcon className="size-3.5" />;
+    case "published-chat":
+      return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+    default:
+      return null;
+  }
+}
+
 /**
  * Live tile icon (chat progress spinner / harness brand / static kind glyph,
  * with diff + blank fallbacks). Exported so the mobile current-tile bar
@@ -1175,6 +1236,7 @@ export function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
+  readonly browserPresentation: BrowserTabPresentation | null;
 }): ReactNode {
   // Unconditional so hook order holds across tab kinds; the placeholder
   // answers "reachable", which keeps every non-chat tab on its normal glyph.
@@ -1191,38 +1253,21 @@ export function TabIcon(props: {
     hostId: isManagedCommandOutputTileRef(props.tab) ? props.tab.hostId : "",
     commandId: isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
   });
-  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
-    return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
-  }
-  if (isPrDetailTileRef(props.tab)) {
+  if (props.tab.type === "browser-session") {
     return (
-      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
-    );
-  }
-  if (isBlankTileRef(props.tab)) {
-    return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
-  }
-  if (isManagedCommandOutputTileRef(props.tab)) {
-    // A tab opened for a shell whose chat has no live session yet resolves to
-    // nothing; the quiet glyph is the honest guess, since a watcher announces
-    // itself the moment its record lands.
-    return (
-      <ManagedCommandMonitorIcon
-        monitoring={managedCommand !== null && managedCommand.monitoring}
-        decorative
+      <BrowserFavicon
+        faviconUrl={props.browserPresentation?.faviconUrl ?? null}
+        isolated={props.browserPresentation?.isolated ?? false}
         className="size-3.5"
       />
     );
   }
-  if (isCommGraphTileRef(props.tab)) {
-    return <CommGraphTileIcon className="size-3.5" />;
-  }
-  // A published copy carries the lock rather than a chat glyph: the tab is
-  // readable but cannot be steered, and that is the one thing about it that
-  // differs from the chat tab beside it.
-  if (isPublishedChatTileRef(props.tab)) {
-    return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
-  }
+  const fixedIcon = renderFixedTabIcon(
+    props.tab,
+    managedCommand?.monitoring === true,
+  );
+  if (fixedIcon !== null) return fixedIcon;
+  if (!isEpicNodeTileRef(props.tab)) return null;
   // A live chat tab whose bound host is unreachable renders the published
   // copy (see tab-group-view's fallback), so its strip icon must say the same
   // thing the surface does: locked, not steerable, exactly like a copy tab.

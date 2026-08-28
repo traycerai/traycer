@@ -36,6 +36,96 @@ const jsonContentSchema = getRecordSchema(
   "latest",
 );
 
+/**
+ * Browser-annotations ticket 05. One attached annotation bundle: structured
+ * fields only (no pixels). The crop rides the existing `imageAttachment`
+ * content atom, paired by `imageFileName` / `annotationId`.
+ *
+ * Lives on its own array (`browserAnnotations`) rather than folded into
+ * `content`. Adding a new content-block kind would be a breaking persist
+ * change and would leak onto every frozen `chat.subscribe` send/snapshot
+ * line.
+ */
+export const browserAnnotationCountsSchema = z.object({
+  elements: z.number().int().nonnegative(),
+  regions: z.number().int().nonnegative(),
+  strokes: z.number().int().nonnegative(),
+});
+export type BrowserAnnotationCounts = z.infer<
+  typeof browserAnnotationCountsSchema
+>;
+
+export const browserViewElementBoundingBoxSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  top: z.number(),
+  right: z.number(),
+  bottom: z.number(),
+  left: z.number(),
+});
+export type BrowserViewElementBoundingBox = z.infer<
+  typeof browserViewElementBoundingBoxSchema
+>;
+
+export const browserViewElementAttributeSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+});
+export type BrowserViewElementAttribute = z.infer<
+  typeof browserViewElementAttributeSchema
+>;
+
+export const browserViewElementStyleSchema = z.object({
+  property: z.string(),
+  value: z.string(),
+});
+export type BrowserViewElementStyle = z.infer<
+  typeof browserViewElementStyleSchema
+>;
+
+export const browserViewElementCaptureSchema = z.object({
+  selector: z.string(),
+  tagName: z.string(),
+  elementId: z.string().nullable(),
+  classNames: z.array(z.string()),
+  attributes: z.array(browserViewElementAttributeSchema),
+  outerHtml: z.string(),
+  outerHtmlTruncated: z.boolean(),
+  textPreview: z.string().nullable(),
+  ariaRole: z.string().nullable(),
+  accessibleName: z.string().nullable(),
+  boundingBox: browserViewElementBoundingBoxSchema,
+  computedStyles: z.array(browserViewElementStyleSchema),
+});
+export type BrowserViewElementCapture = z.infer<
+  typeof browserViewElementCaptureSchema
+>;
+
+export const browserAnnotationRecordSchema = z.object({
+  kind: z.literal("browser-annotation"),
+  annotationId: z.string().min(1),
+  tabId: z.string().min(1),
+  sessionId: z.string().min(1),
+  origin: z.string(),
+  pageUrl: z.string(),
+  pageTitle: z.string(),
+  capturedAt: z.number(),
+  comment: z.string(),
+  counts: browserAnnotationCountsSchema,
+  elements: z.array(browserViewElementCaptureSchema),
+  imageFileName: z.string().min(1),
+  imageHash: z.string().min(1),
+  // Element marks outlined on the crop that did not survive capture-budget
+  // trim. 0 when every marked element was delivered. Live 1.7 only.
+  // `.default(0)` so records written before this field parse cleanly.
+  droppedElementCount: z.number().int().nonnegative().default(0),
+});
+export type BrowserAnnotationRecord = z.infer<
+  typeof browserAnnotationRecordSchema
+>;
+
 export const agentUserMessageSchema = z.object({
   kind: z.literal("agent"),
   content: jsonContentSchema,
@@ -53,10 +143,43 @@ export const agentUserMessageSchema = z.object({
   ]),
 });
 
-export const userAuthoredMessageSchema = z.object({
+const userAuthoredMessagePreTicket13Fields = {
   kind: z.literal("user"),
   content: jsonContentSchema,
+} as const;
+
+/**
+ * Frozen user-authored payload as shipped on `chat.subscribe@1.0–1.6`
+ * (main's 1.6 freeze). Ticket 05's `browserAnnotations` is live-1.7-only: it
+ * must not leak onto a released snapshot / `messageAccepted` / queue item.
+ */
+export const userAuthoredMessageSchemaPreAnnotation = z.object(
+  userAuthoredMessagePreTicket13Fields,
+);
+
+export const userAuthoredMessageSchema = z.object({
+  ...userAuthoredMessagePreTicket13Fields,
+  /**
+   * Browser-annotations ticket 05. Empty for every message before this
+   * shipped and for one with no annotation attached. `.default([])` so
+   * already-persisted records parse cleanly.
+   *
+   * Persisted here rather than kept as transient send-time state (contrast
+   * `worktreeIntent`, a wire-only "send" field the host consumes and
+   * discards): a queued send re-derives its prompt from THIS persisted
+   * message at drain time, not from the original `send` frame, so dropping
+   * the field here would silently lose the user's annotation for any
+   * message that sits in the queue before its turn starts.
+   *
+   * Wire: live `chat.subscribe@1.7` only. Frozen 1.0–1.6 copies omit it.
+   */
+  browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
 });
+
+export const userMessagePayloadSchemaPreAnnotation = z.discriminatedUnion(
+  "kind",
+  [userAuthoredMessageSchemaPreAnnotation, agentUserMessageSchema],
+);
 
 export const userMessagePayloadSchema = z.discriminatedUnion("kind", [
   userAuthoredMessageSchema,
@@ -64,6 +187,18 @@ export const userMessagePayloadSchema = z.discriminatedUnion("kind", [
 ]);
 export type UserMessagePayload = z.infer<typeof userMessagePayloadSchema>;
 export type AgentUserMessage = z.infer<typeof agentUserMessageSchema>;
+
+const userMessageSenderKindRefine = (
+  message: { sender: { type: string }; message: { kind: string } },
+  ctx: z.RefinementCtx,
+): void => {
+  if (message.sender.type === message.message.kind) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["message", "kind"],
+    message: "User message sender.type must match message.kind.",
+  });
+};
 
 export const userMessageSchema = z
   .object({
@@ -74,15 +209,24 @@ export const userMessageSchema = z
     timestamp: z.number(),
     sessionAnchor: chatSessionAnchorSchema.nullable(),
   })
-  .superRefine((message, ctx) => {
-    if (message.sender.type === message.message.kind) return;
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["message", "kind"],
-      message: "User message sender.type must match message.kind.",
-    });
-  });
+  .superRefine(userMessageSenderKindRefine);
 export type UserMessage = z.infer<typeof userMessageSchema>;
+
+/**
+ * Live sender/anchor, pre-annotation payload. Bound to
+ * `chat.subscribe@1.4–1.5` `messageAccepted` / common frames so those
+ * released lines never declare `browserAnnotations`.
+ */
+export const userMessageSchemaPreAnnotation = z
+  .object({
+    role: z.literal("user"),
+    messageId: z.string(),
+    sender: userMessageSenderSchema,
+    message: userMessagePayloadSchemaPreAnnotation,
+    timestamp: z.number(),
+    sessionAnchor: chatSessionAnchorSchema.nullable(),
+  })
+  .superRefine(userMessageSenderKindRefine);
 
 // Terminal outcome of one markdown-referenced image the host tried to
 // resolve. `resolved` ⇒ `attachmentHash`/`mediaType` are present; every other
@@ -221,6 +365,21 @@ export const userMessageSchemaPreReasonix = z
     });
   });
 
+/**
+ * Exact user-message branch released on `chat.subscribe@1.6`: live session
+ * anchors, but neither Reasonix sender ids nor browser payload fields.
+ */
+export const userMessageSchemaV16 = z
+  .object({
+    role: z.literal("user"),
+    messageId: z.string(),
+    sender: userMessageSenderSchemaPreReasonix,
+    message: userMessagePayloadSchemaPreAnnotation,
+    timestamp: z.number(),
+    sessionAnchor: chatSessionAnchorSchemaPreReasonix.nullable(),
+  })
+  .superRefine(userMessageSenderKindRefine);
+
 export const assistantMessageSchemaPreReasonix = z.object({
   role: z.literal("assistant"),
   messageId: z.string().min(1),
@@ -256,18 +415,11 @@ export const userMessageSchemaPreInReplyTo = z
     role: z.literal("user"),
     messageId: z.string(),
     sender: userMessageSenderSchemaPreInReplyTo,
-    message: userMessagePayloadSchema,
+    message: userMessagePayloadSchemaPreAnnotation,
     timestamp: z.number(),
     sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
   })
-  .superRefine((message, ctx) => {
-    if (message.sender.type === message.message.kind) return;
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["message", "kind"],
-      message: "User message sender.type must match message.kind.",
-    });
-  });
+  .superRefine(userMessageSenderKindRefine);
 
 export const assistantMessageSchemaPreInReplyTo = z.object({
   role: z.literal("assistant"),
@@ -333,18 +485,11 @@ export const userMessageSchemaPreTurnTail = z
     // Pre-Reasonix sender: an agent-as-user (A2A) row carries the sending
     // agent's harness id onto this released line.
     sender: userMessageSenderSchemaPreReasonix,
-    message: userMessagePayloadSchema,
+    message: userMessagePayloadSchemaPreAnnotation,
     timestamp: z.number(),
     sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
   })
-  .superRefine((message, ctx) => {
-    if (message.sender.type === message.message.kind) return;
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["message", "kind"],
-      message: "User message sender.type must match message.kind.",
-    });
-  });
+  .superRefine(userMessageSenderKindRefine);
 
 // The user branch is the pre-turn-tail freeze, not the live `userMessageSchema`:
 // user messages carry no image fields (nothing changed for them at the
@@ -389,9 +534,9 @@ export const assistantMessageSchemaPreSettlement = z.object({
 // The user branch keeps every live field EXCEPT the harness enum: the Claude
 // anchor's `turnTailUuid` predates the `1.6` cut so a real `1.6` peer does
 // observe it, but that peer's `sessionAnchor` union has no Reasonix variant and
-// its A2A sender enum has no Reasonix id - hence `userMessageSchemaPreReasonix`
-// rather than the live `userMessageSchema` this freeze originally bound.
+// its A2A sender enum has no Reasonix id. Browser payload fields also arrived
+// after 1.6, so the user branch binds the exact combined freeze.
 export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
-  userMessageSchemaPreReasonix,
+  userMessageSchemaV16,
   assistantMessageSchemaPreSettlement,
 ]);

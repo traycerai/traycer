@@ -225,6 +225,50 @@ export const RELAY_AWAITING_PING_INTERVAL_MS = 5_000;
 export const RELAY_AWAITING_PONG_TIMEOUT_MS = 12_000;
 
 /**
+ * How long after a completed attach the session waits before logging that its
+ * ready boundary is still blocked by streams with NO restore evidence (no
+ * delivered frame and no in-flight chunk).
+ *
+ * Sized well past a healthy resubscribe fan-out round trip and well under the
+ * point a person gives up on a stuck surface: a stream that has produced
+ * nothing for this long is not slow, it is silent, and the session-level
+ * verdict the surfaces render ("still can't connect") cannot name it. The
+ * log line is the only artifact that attributes that state to a method.
+ *
+ * Deliberately NOT equal to any other NAMED timeout in this file (see the
+ * collision warning on {@link RECONNECT_STABLE_RESET_MS}): the session suite
+ * identifies timers by their delay, so sharing the dial or attach-ack budget
+ * would make this timer indistinguishable to a spy assertion. Distinctness
+ * covers the named constants only - a jittered backoff/reopen rung can still
+ * land on any value - so a test filtering by this delay must also keep its
+ * scenario free of concurrent jittered timers.
+ */
+export const RESTORE_STALL_LOG_AFTER_MS = 8_000;
+
+/**
+ * Progress deadline for one stream's IN-FLIGHT chunk reassembly: the longest
+ * acceptable gap between two accepted chunks of the same message. Reset by
+ * every accepted chunk; expiry treats that stream's transfer as stopped and
+ * reopens it on a fresh stream id through the per-stream reopen backoff.
+ *
+ * This is the ONLY deadline that speaks for a partial transfer. The ready
+ * boundary deliberately accepts the first chunk as restore evidence, so
+ * completion no longer bounds anything; the socket's awaiting-response fast
+ * deadline is cleared by the very chunk that opened the sequence (any inbound
+ * frame does); and the relay answers keepalive pings at its edge, so a
+ * host-side forwarding stall on one stream keeps both keepalive deadlines fed
+ * indefinitely while that stream silently never completes. Without this bound
+ * such a stream stays `reconnecting` - dropping writes - forever, on a
+ * session every surface reports as healthy.
+ *
+ * Sized generously above healthy inter-chunk cadence (a slow relay path
+ * measured ~0.5 MB/s still yields several 64 KiB chunks per second) and
+ * distinct from every other named constant here (same spy-identification
+ * rule and jitter caveat as {@link RESTORE_STALL_LOG_AFTER_MS}).
+ */
+export const REASSEMBLY_PROGRESS_TIMEOUT_MS = 20_000;
+
+/**
  * Bounded terminal-stream tombstone frontier, mirroring the host's invariant
  * (R-2 / `r2-host-stream-tombstone`): once a stream fails or closes, its
  * streamId is remembered so a relay-delayed genuine frame for that same

@@ -70,16 +70,8 @@ import type {
   TilePane,
 } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import {
-  isBlankTileRef,
-  isCommGraphTileRef,
-  isPublishedChatTileRef,
-  isDiffTileRef,
-  isManagedCommandOutputTileRef,
-  isPrDetailTileRef,
-  isPrDiffTileRef,
-  isWorkspaceFileRef,
-} from "@/stores/epics/canvas/types";
+import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
+import { isWorkspaceFileRef } from "@/stores/epics/canvas/types";
 import { requestFileTreeReveal } from "@/stores/file-tree/file-tree-reveal-store";
 import { requestSidebarNodeReveal } from "@/stores/epics/sidebar-node-reveal-store";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
@@ -95,6 +87,7 @@ import {
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
+
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
 import {
@@ -821,15 +814,7 @@ function usePublishedChatFallbackRef(args: {
             hostId: readingHostId,
           })
         : null,
-    [
-      substitute,
-      activeTab.id,
-      activeTab.name,
-      activeTab.hostId,
-      ownerUserId,
-      readingHostId,
-      epicId,
-    ],
+    [substitute, activeTab, ownerUserId, readingHostId, epicId],
   );
   return {
     fallbackRef,
@@ -918,36 +903,25 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         )
       : s.pendingCreateArtifactIds.has(activeTab.id),
   );
-  // Terminals, git-diff tiles, the PR detail/diff pair, workspace files, output
-  // windows, the comm graph, and blank tabs are renderer-only - no cloud-backed
-  // projection, so a lookup miss isn't deletion. (A blank tab's content id is a
-  // throwaway uuid; the comm graph's is derived from the epic id; an output
-  // window's is a managed-command id, which the epic doc never carries at all -
-  // its own stream reports the command's death instead. Without this guard the
-  // artifact lookup would miss and wrongly mark them deleted.)
-  const isRemoteDeleted =
-    activeTab.type === "terminal" ||
-    isDiffTileRef(activeTab) ||
-    isPrDetailTileRef(activeTab) ||
-    isPrDiffTileRef(activeTab) ||
-    isBlankTileRef(activeTab) ||
-    isManagedCommandOutputTileRef(activeTab) ||
-    isCommGraphTileRef(activeTab) ||
-    isPublishedChatTileRef(activeTab) ||
-    activeTab.type === WORKSPACE_FILE_TAB_KIND
-      ? false
-      : computeIsRemoteDeleted({
-          snapshotLoaded,
-          leafArtifact: activeTab,
-          liveArtifact,
-          isSelfDeleted,
-          isPendingCreate,
-          projectionHostId: activeHostIdForRecordGate,
-          isCloudKnown,
-          cloudListAuthorizesChatAbsence,
-          recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
-          retractedAsDeleted: chatRetraction === "deleted",
-        });
+  // Terminals, browser surfaces, diff/PR tiles, workspace files, output
+  // windows, the comm graph, and blank tabs are renderer-only, so a cloud
+  // artifact lookup miss is not deletion. A blank id is throwaway, the comm
+  // graph id is epic-derived, and an output id belongs to a managed command;
+  // each surface owns its own lifecycle instead.
+  const isRemoteDeleted = !isTileRefRecordBacked(activeTab)
+    ? false
+    : computeIsRemoteDeleted({
+        snapshotLoaded,
+        leafArtifact: activeTab,
+        liveArtifact,
+        isSelfDeleted,
+        isPendingCreate,
+        projectionHostId: activeHostIdForRecordGate,
+        isCloudKnown,
+        cloudListAuthorizesChatAbsence,
+        recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
+        retractedAsDeleted: chatRetraction === "deleted",
+      });
   const isActive = role !== null && props.selected && props.globallyActive;
 
   // Reports the SAME isRemoteDeleted value this render already uses for the

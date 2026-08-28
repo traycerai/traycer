@@ -1,4 +1,5 @@
 import { app, nativeImage } from "electron";
+import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
@@ -120,6 +121,7 @@ import {
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
+import { resolveBrowserCookieCryptoStateAtReady } from "../browser-view/storage/browser-cookie-crypto";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,
@@ -385,6 +387,9 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "user-agent", () => configureUserAgent()),
     timed("on-ready", "host-resolver-doh", () => configureHostResolverDoH()),
     timed("on-ready", "harden-session", () => hardenDefaultSession()),
+    timed("on-ready", "browser-cookie-crypto", () => {
+      resolveBrowserCookieCryptoStateAtReady();
+    }),
     timed("on-ready", "spell-check", () => enableSpellCheck()),
     timed("on-ready", "notification-handler", () =>
       installNotificationActivationHandler(),
@@ -427,8 +432,43 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const windowGeometryStore = createWindowGeometryStore();
   const windowGeometryPersistence =
     createWindowGeometryPersistence(windowGeometryStore);
+  // Set on the first before-quit pass. Ordinary window close remains a
+  // separate lifecycle and hands native browser sessions to the host first.
+  const shellQuitState = new ShellQuitState();
+  const closingWindowIds = new Set<string>();
   let zoomController: WindowZoomController | null = null;
   let windowRegistry: WindowRegistry | null = null;
+  /**
+   * Read `state.bridge` / `windowRegistry` at call time: a window can close
+   * before the bridge exists, and a `close` listener captured at window
+   * construction must not silently skip the browser handoff in that gap.
+   */
+  function onWindowClose(windowId: string, event: ElectronEvent): void {
+    const bridge = state.bridge;
+    const registry = windowRegistry;
+    if (bridge === null || registry === null) return;
+    if (
+      shellQuitState.isQuitting() ||
+      !bridge.canHandoffBrowserTabsForWindow(windowId)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (closingWindowIds.has(windowId)) return;
+    closingWindowIds.add(windowId);
+    void bridge
+      .prepareBrowserWindowClose(windowId)
+      .catch((error: unknown) => {
+        log.warn("[desktop] browser handoff failed during window close", {
+          windowId,
+          error,
+        });
+      })
+      .finally(() => {
+        closingWindowIds.delete(windowId);
+        void registry.forceCloseById(windowId);
+      });
+  }
   windowRegistry = new WindowRegistry({
     createWindow: (request) => {
       const zoomFactor =
@@ -463,6 +503,9 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
           },
         );
       }
+      createdWindow.on("close", (event) => {
+        onWindowClose(request.windowId, event);
+      });
       return createdWindow;
     },
     loadWindow: (createdWindow) => loadMainWindow(createdWindow),
@@ -566,11 +609,6 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
-
-  // Flipped once `before-quit` fires (any quit path). The windows registry-change
-  // listener reads it so a `closed` event that is part of a quit never prunes the
-  // per-window restore snapshot.
-  const shellQuitState = new ShellQuitState();
 
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
@@ -1102,10 +1140,27 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   };
 
   const authorizeQuitAfterFlush = (): void => {
-    void flushShellState().finally(() => {
-      quitAuthorized = true;
-      app.quit();
-    });
+    const browserHandoffDrain =
+      state.bridge?.drainBrowserHandoffs() ?? Promise.resolve();
+    void Promise.all([
+      flushShellState(),
+      browserHandoffDrain.catch((error) => {
+        log.warn(
+          "[desktop] browser handoff drain failed - quitting anyway",
+          error,
+        );
+      }),
+    ])
+      .then(() => {
+        quitAuthorized = true;
+        app.quit();
+      })
+      .catch((error) => {
+        log.error(
+          "[desktop] failed to authorize quit after state flush",
+          error,
+        );
+      });
   };
 
   app.on("before-quit", (event) => {
