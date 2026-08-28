@@ -5045,6 +5045,88 @@ describe("RemoteSession reassembly progress watchdog", () => {
   );
 
   it(
+    "moves the stall license through a retryable-FATAL re-key - the verdict answers one attempt, not the stream's proven stall",
+    async () => {
+      // stall -> licensed replacement B -> host answers B with a retryable
+      // FATAL -> replacement C. The FATAL proves attempt B was heard; it
+      // says nothing about C, and the stream's stall provenance (its
+      // resolver emitted, then stopped) is the stronger prior fact - so C's
+      // subscribe must still carry the first-evidence deadline, and zero
+      // evidence on C is judged like any other stall hop.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [firstChunk] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
+        const dialsBefore = relay.openBearers.length;
+
+        // Stall verdict: original id -> licensed replacement B.
+        (watchdogArms()[0][0] as () => void)();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const idB = relay.subscribeStreamIds[1];
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
+
+        // The host ANSWERS B with a retryable FATAL: re-key to C, license
+        // moving with it - C's subscribe arms.
+        await relay.sendStreamFatal(idB, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        const idC = relay.subscribeStreamIds[2];
+        expect(idC).not.toBe(idB);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(3), WAIT);
+
+        // Zero evidence on C: judged - CLOSE(C), fresh D - session ready and
+        // undialed throughout.
+        (watchdogArms()[2][0] as () => void)();
+        await vi.waitFor(() => expect(relay.closesSent).toContain(idC), WAIT);
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(4),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[3]).not.toBe(idC);
+        expect(session.isReady()).toBe(true);
+        expect(relay.openBearers).toHaveLength(dialsBefore);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "judges only the silent stream - a sibling's completed transfer retires its arm, and firing that stale arm is inert",
     async () => {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

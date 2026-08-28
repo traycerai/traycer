@@ -1954,6 +1954,7 @@ export class RemoteSession<
       this.subscriptions.delete(frame.streamId);
       this.restoredStreamIds.delete(frame.streamId);
       this.outboundSeq.delete(frame.streamId);
+      this.stallReopenedStreamIds.delete(frame.streamId);
       this.maybeReachReadyBoundary();
     }
     return true;
@@ -2131,11 +2132,18 @@ export class RemoteSession<
         this.subscriptions.delete(message.streamId);
         const reopenAttempts = this.streamReopenAttempts.get(message.streamId);
         this.streamReopenAttempts.delete(message.streamId);
-        // The verdict is an ANSWER: a responding host has disproven the
-        // silent-stall premise, so the stall provenance does not carry to
-        // the fresh id and its subscribe earns no first-evidence deadline.
-        this.stallReopenedStreamIds.delete(message.streamId);
         const freshStreamId = this.allocateStreamId();
+        // The verdict answers THIS attempt; it says nothing about the next
+        // one. A stall license the stream already held is the stronger prior
+        // fact - its resolver provably emitted and then stopped - and a
+        // retryable refusal of one re-subscribe does not disprove it, so the
+        // license MOVES with the re-key exactly as the attempt count does. A
+        // stream that entered the reopen regime through this verdict alone
+        // never held one, so an event-only method still re-subscribes
+        // unarmed.
+        if (this.stallReopenedStreamIds.delete(message.streamId)) {
+          this.stallReopenedStreamIds.add(freshStreamId);
+        }
         stream.adoptStreamIdForReopen(freshStreamId);
         this.subscriptions.set(freshStreamId, stream);
         if (reopenAttempts !== undefined) {
@@ -2524,6 +2532,7 @@ export class RemoteSession<
         : compat.details;
       stream.goFatal(details);
       this.subscriptions.delete(stream.streamId);
+      this.stallReopenedStreamIds.delete(stream.streamId);
       return;
     }
     // No tombstone to lift here - deliberately. A tombstoned id is dead on
