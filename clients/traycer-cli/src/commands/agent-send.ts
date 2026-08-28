@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -42,7 +42,8 @@ export function buildAgentSendCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.sendMessage", request),
     );
-    const { responseId } = parseHostResponse(
+    const { responseId } = parseCanonicalHostResponse(
+      "agent.sendMessage",
       sendAgentMessageResponseSchema,
       result,
     );
