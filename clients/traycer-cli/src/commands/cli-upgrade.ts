@@ -716,8 +716,9 @@ async function publishAcrossFilesystems(opts: {
 // `cli re-anchor` records the version it is told rather than the one in
 // the filename, so `manifest.version != targetVersion` while
 // `basename(binaryPath) == <staging template>` is reachable. The leading
-// dot plus the explicit inequality check below make the collision
-// impossible rather than merely unlikely.
+// dot plus the explicit alias check below take the collision from
+// "unlikely" to "not reachable by naming", within the limit stated on
+// `pathsMayAlias`.
 function resolveStagingPath(opts: {
   readonly installDir: string;
   readonly targetVersion: string;
@@ -739,9 +740,30 @@ function resolveStagingPath(opts: {
   // so the next attempt reuses it. The other ends in `.tmp` (see
   // `publishAcrossFilesystems`) and is always cleaned up. Match on the
   // suffix, never on the shared prefix.
-  return resolve(candidate) === resolve(opts.livePath)
+  return pathsMayAlias(candidate, opts.livePath)
     ? `${candidate}.staged`
     : candidate;
+}
+
+// Whether two paths might name the SAME file, for the purpose of refusing
+// to stage onto the live binary.
+//
+// A plain string comparison is not enough: Windows filesystems are
+// case-insensitive (and macOS is by default), so a re-anchored live
+// binary differing from the staging name only in letter case IS that
+// file, while `===` says otherwise - and the cost of getting it wrong is
+// `downloadToFile` resuming from or truncating the working CLI. Either an
+// exact or a case-folded match counts as an alias: a needless `.staged`
+// suffix on a case-sensitive filesystem is harmless, a missed alias is
+// not.
+//
+// LIMIT, stated rather than implied: this catches naming and casing, NOT
+// every filesystem alias. Symlinks, hardlinks and Windows 8.3 short names
+// can still make two spellings the same file and are not detected here.
+function pathsMayAlias(a: string, b: string): boolean {
+  const ra = resolve(a);
+  const rb = resolve(b);
+  return ra === rb || ra.toLowerCase() === rb.toLowerCase();
 }
 
 // Codes that mean "the live binary is held open / not replaceable right

@@ -1,7 +1,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { finalizePendingCliUpgrade } from "./cli-upgrade";
-import { createCliLogger } from "../logger";
+import { createCliLogger, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -91,7 +91,28 @@ export async function runFinalizeUpgradeSwap(opts: {
     status: swap.status,
   });
 
+  // The service was stopped by the `host restart` that scheduled this
+  // helper, and on Windows that restart deliberately skips its own
+  // relaunch (`helperOwnsServiceStart`) - so THIS process owns bringing
+  // the host back, on every path, not just the one where the swap
+  // succeeded. Any outcome that returns without starting it leaves the
+  // machine with no running host because a CLI self-upgrade did not
+  // complete, which is a strictly worse failure than the un-upgraded CLI
+  // it was trying to avoid.
+  //
+  // This holds even for `no-pending`: the restart stops the service and
+  // schedules the helper WITHOUT first checking that there will still be
+  // something to finalize, so "nothing pending" here means another actor
+  // cleared it in between - not that the service is up. The only
+  // production callers are the two helper scripts in
+  // `upgrade/finalize-helper.ts`, both of which run in exactly that
+  // state; the command is hidden and has no other invocation path.
+  //
+  // The single exception is `lock-timeout` (handled by the caller):
+  // another actor holds the CLI lock, and it owns the service lifecycle
+  // for the duration of its own critical section.
   if (swap.status === "no-pending" || swap.status === "no-manifest") {
+    await startServiceBestEffort(opts.environment, logger);
     return { status: "no-pending" };
   }
 
@@ -111,13 +132,17 @@ export async function runFinalizeUpgradeSwap(opts: {
     // still-LIVE older binary reads it), and an unrecognised status
     // reads as `marker-invalid` on every already-installed CLI. The
     // errorMessage carries the distinction that matters.
+    const serviceStartError = await startServiceBestEffort(
+      opts.environment,
+      logger,
+    );
     await writePostFinalizeMarkerFile(markerPath, {
       status: "swap-failed",
       attemptedAt: new Date().toISOString(),
       livePath: "",
       stagedBinaryPath: swap.stagedBinaryPath,
       errorMessage: `staged binary for ${swap.stagedVersion} is missing at ${swap.stagedBinaryPath}`,
-      serviceStartError: null,
+      serviceStartError,
     });
     return {
       status: "staged-binary-missing",
@@ -126,44 +151,30 @@ export async function runFinalizeUpgradeSwap(opts: {
     };
   }
 
-  if (swap.status === "publish-failed") {
-    // Same marker status as a still-locked swap: publication did not
-    // happen, the live binary is untouched, and `pendingUpgrade` stands.
-    // The errorMessage carries what actually went wrong.
+  // `publish-failed` and `still-locked` are the same shape of outcome:
+  // the swap did not happen, the live binary is untouched, and
+  // `pendingUpgrade` stands. Both must still hand the host back.
+  if (swap.status === "publish-failed" || swap.status === "still-locked") {
+    const serviceStartError = await startServiceBestEffort(
+      opts.environment,
+      logger,
+    );
     await writePostFinalizeMarkerFile(markerPath, {
       status: "swap-failed",
       attemptedAt: new Date().toISOString(),
       livePath: swap.livePath,
       stagedBinaryPath: swap.stagedBinaryPath,
       errorMessage: swap.errorMessage,
-      serviceStartError: null,
-    });
-    return { status: "swap-failed", errorMessage: swap.errorMessage };
-  }
-
-  if (swap.status === "still-locked") {
-    await writePostFinalizeMarkerFile(markerPath, {
-      status: "swap-failed",
-      attemptedAt: new Date().toISOString(),
-      livePath: swap.livePath,
-      stagedBinaryPath: swap.stagedBinaryPath,
-      errorMessage: swap.errorMessage,
-      serviceStartError: null,
+      serviceStartError,
     });
     return { status: "swap-failed", errorMessage: swap.errorMessage };
   }
 
   // swap.status === "finalised"
-  let serviceStartError: string | null = null;
-  try {
-    await createServiceController().start(serviceLabelFor(opts.environment));
-  } catch (err) {
-    serviceStartError = err instanceof Error ? err.message : String(err);
-    logger.warn("Finalize-upgrade service start failed after binary swap", {
-      environment: opts.environment,
-      errorMessage: serviceStartError,
-    });
-  }
+  const serviceStartError = await startServiceBestEffort(
+    opts.environment,
+    logger,
+  );
   await writePostFinalizeMarkerFile(markerPath, {
     status: "swapped",
     attemptedAt: new Date().toISOString(),
@@ -178,6 +189,28 @@ export async function runFinalizeUpgradeSwap(opts: {
     version: swap.version,
     serviceStartError,
   };
+}
+
+// Hand the host back. Best-effort by design: this runs on paths that are
+// already reporting a failure, and a service-start error must be recorded
+// rather than replace the outcome the caller needs to see. The returned
+// message goes into the marker's `serviceStartError` so the next CLI
+// invocation's reconcile can surface it.
+async function startServiceBestEffort(
+  environment: Environment,
+  logger: ILogger,
+): Promise<string | null> {
+  try {
+    await createServiceController().start(serviceLabelFor(environment));
+    return null;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.warn("Finalize-upgrade service start failed", {
+      environment,
+      errorMessage,
+    });
+    return errorMessage;
+  }
 }
 
 async function writePostFinalizeMarkerFile(

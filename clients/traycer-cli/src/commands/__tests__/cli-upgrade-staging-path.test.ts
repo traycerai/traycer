@@ -317,5 +317,59 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
     expect(readdirSync(installDir)).not.toContain(
       `traycer-1.5.0-${platformKey}${binaryExtension()}`,
     );
+    // No gratuitous `.staged` fallback when there's nothing to alias -
+    // that suffix must only ever appear when it's actually needed.
+    expect(stagedName.endsWith(".staged")).toBe(false);
+  });
+
+  it("a live binary differing from the staging template only by LETTER CASE still gets a distinct staging path (Codex P1: Windows/macOS are case-insensitive)", async () => {
+    // `pathsMayAlias` runs its case-folded comparison unconditionally -
+    // it is not gated on `process.platform` in production, so this test
+    // exercises the real code path on whatever OS this suite happens to
+    // run on (this repo's CI is Linux/macOS) rather than needing an
+    // actual case-insensitive filesystem to prove the guard works.
+    const installDir = join(workHome, "bin");
+    mkdirSync(installDir, { recursive: true });
+    const platformKey = await currentPlatformKey();
+
+    const candidateName = `.traycer-upgrade-1.5.0-${platformKey}.download${binaryExtension()}`;
+    // Same name, different case throughout - e.g.
+    // ".TRAYCER-UPGRADE-1.5.0-<PLATFORM>.DOWNLOAD". A plain `===` guard
+    // would call this a different file; `pathsMayAlias` must not.
+    const liveBinaryPath = join(installDir, candidateName.toUpperCase());
+    writeFileSync(liveBinaryPath, "original-live-bytes-case-alias");
+    mocks.liveBinaryPathForCapture = liveBinaryPath;
+
+    writeManifest({
+      version: "1.4.0",
+      installedAt: "2026-04-01T00:00:00Z",
+      binaryPath: liveBinaryPath,
+      source: "manual",
+      pendingUpgrade: null,
+    });
+
+    mocks.versionsManifest = await makeVersionsManifest(platformKey);
+
+    const { buildCliUpgradeCommand } = await import("../cli-upgrade");
+    await buildCliUpgradeCommand({
+      dryRun: false,
+      targetVersion: null,
+    })(fakeCtx());
+
+    expect(mocks.downloadCalls).toHaveLength(1);
+    const destPath = mocks.downloadCalls[0]?.destPath ?? "";
+
+    // Neither an exact nor a case-folded match against the live path.
+    expect(destPath).not.toBe(liveBinaryPath);
+    expect(destPath.toLowerCase()).not.toBe(liveBinaryPath.toLowerCase());
+
+    // The alias branch actually fired: the `.staged` fallback suffix is
+    // present on top of the plain candidate name.
+    expect(basename(destPath)).toBe(`${candidateName}.staged`);
+
+    // The live binary was untouched at the moment staging began.
+    expect(mocks.liveContentAtDownloadStart).toBe(
+      "original-live-bytes-case-alias",
+    );
   });
 });

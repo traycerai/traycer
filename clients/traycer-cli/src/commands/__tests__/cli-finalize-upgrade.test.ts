@@ -268,7 +268,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(marker.serviceStartError).toBe("schtasks /Run failed");
   });
 
-  it("on still-locked, writes a 'swap-failed' marker and never starts the service", async () => {
+  it("on still-locked, writes a 'swap-failed' marker AND starts the service (Codex P1: the helper owns handing the host back on every path)", async () => {
     mocks.finalizeResult = {
       status: "still-locked",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
@@ -280,7 +280,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       await import("../cli-finalize-upgrade");
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-    expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
       status: "swap-failed",
       errorMessage: "binary still held by another process",
@@ -289,10 +289,11 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(marker).toMatchObject({
       status: "swap-failed",
       errorMessage: "binary still held by another process",
+      serviceStartError: null,
     });
   });
 
-  it("on publish-failed, writes a 'swap-failed' marker carrying the errorMessage, collapses to the swap-failed outcome, and never starts the service (Codex P1 #2)", async () => {
+  it("on publish-failed, writes a 'swap-failed' marker carrying the errorMessage, collapses to the swap-failed outcome, AND starts the service (Codex P1 #2, then the follow-up P1 that generalised it to every failure path)", async () => {
     // `finalizePendingCliUpgrade` now catches publication failures
     // (full disk, unwritable dir, digest mismatch) instead of throwing,
     // so `restartWithPendingCliUpgradeFinalize` can still relaunch the
@@ -300,7 +301,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     // `swap-failed` marker/status a still-locked swap gets - the live
     // binary is untouched and pendingUpgrade stands either way, so
     // readers of the marker (Doctor, a cross-version finalize helper)
-    // don't need a new status to react to.
+    // don't need a new status to react to. And because THIS command is
+    // the one that owns handing the host back on Windows (the restart
+    // that scheduled it deliberately skips its own relaunch), a failed
+    // swap must not also leave the service down.
     mocks.finalizeResult = {
       status: "publish-failed",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
@@ -312,7 +316,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       await import("../cli-finalize-upgrade");
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-    expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
       status: "swap-failed",
       errorMessage: "cross-device copy hash mismatch",
@@ -328,7 +332,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   it.each(["no-pending", "no-manifest"])(
-    "on %s, writes no marker and never starts the service",
+    "on %s, writes no marker but still starts the service (this command only ever runs after a restart that stopped it and skipped its own relaunch)",
     async (status) => {
       mocks.finalizeResult = { status };
 
@@ -336,13 +340,13 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
         await import("../cli-finalize-upgrade");
       const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-      expect(mocks.controllerCalls).toEqual([]);
+      expect(mocks.controllerCalls).toEqual(["start"]);
       expect(result.data).toEqual({ status: "no-pending" });
       expect(existsSync(markerPath())).toBe(false);
     },
   );
 
-  it("on staged-binary-missing, keeps the distinct status, writes a 'swap-failed' marker naming the missing staged path, and never starts the service", async () => {
+  it("on staged-binary-missing, keeps the distinct status, writes a 'swap-failed' marker naming the missing staged path, AND starts the service", async () => {
     mocks.finalizeResult = {
       status: "staged-binary-missing",
       stagedVersion: "1.5.0",
@@ -353,7 +357,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       await import("../cli-finalize-upgrade");
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-    expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toEqual({
       status: "staged-binary-missing",
       stagedVersion: "1.5.0",
@@ -370,6 +374,56 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       serviceStartError: null,
     });
   });
+
+  it.each([
+    ["still-locked", "swap-failed"],
+    ["staged-binary-missing", "staged-binary-missing"],
+    ["no-pending", "no-pending"],
+  ] as const)(
+    "on %s, a service-start failure never masks the swap outcome - it's recorded as the marker's/outcome's serviceStartError instead",
+    async (finalizeStatus, expectedOutcomeStatus) => {
+      // The point: a failure ALREADY on the table (or a clean no-op) must
+      // not be swallowed or overwritten just because handing the host
+      // back also failed. `startServiceBestEffort` is best-effort by
+      // design - see its doc comment - so this pins that contract for
+      // every branch that calls it, not just the "swapped" happy path
+      // `cli-finalize-upgrade.test.ts` already covered before this round.
+      mocks.finalizeResult =
+        finalizeStatus === "still-locked"
+          ? {
+              status: "still-locked",
+              stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+              livePath: "/opt/traycer/cli/traycer",
+              errorMessage: "binary still held by another process",
+            }
+          : finalizeStatus === "staged-binary-missing"
+            ? {
+                status: "staged-binary-missing",
+                stagedVersion: "1.5.0",
+                stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+              }
+            : { status: "no-pending" };
+      mocks.serviceStartThrows = new Error("schtasks /Run failed");
+
+      const { cliFinalizeUpgradeCommand } =
+        await import("../cli-finalize-upgrade");
+      const result = await cliFinalizeUpgradeCommand(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["start"]);
+      expect(result.data).toMatchObject({ status: expectedOutcomeStatus });
+
+      if (finalizeStatus === "no-pending") {
+        // No marker is written on this path either way - a failed
+        // service start has nowhere to be recorded except the log.
+        expect(existsSync(markerPath())).toBe(false);
+      } else {
+        const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
+        expect(marker.serviceStartError).toBe("schtasks /Run failed");
+        // The original failure reason survives alongside it.
+        expect(marker.errorMessage.length).toBeGreaterThan(0);
+      }
+    },
+  );
 
   it("on a cli-lock timeout, writes no marker, never runs the swap, and does not throw", async () => {
     // `cli-finalize-upgrade.ts` checks `err instanceof CliError` against
