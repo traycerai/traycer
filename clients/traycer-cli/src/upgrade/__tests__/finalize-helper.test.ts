@@ -317,6 +317,65 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(reread.pendingUpgrade).toBeNull();
   });
 
+  // The corruption this correlation exists to prevent. A helper that swapped
+  // 1.5.0 can leave its marker behind unconsumed; a later `cli upgrade` then
+  // records pendingUpgrade 1.6.0 next to it. Applying the stale marker would
+  // promote 1.6.0 to installed and clear the pending record without 1.6.0's
+  // staged binary ever reaching the live path - the manifest would claim a
+  // version the bytes on disk are not, with nothing left to detect it from.
+  //
+  // Doctor refuses the same stale marker and routes the user to `host
+  // restart`, i.e. straight into this function, so the read side alone would
+  // not have been enough.
+  it("on a 'swapped' marker for a DIFFERENT staged upgrade, discards it without touching the manifest", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const pendingStagedPath = join(workHome, "bin", "traycer-1.6.0");
+    const staleStagedPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(pendingStagedPath, "staged-1.6.0-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath: pendingStagedPath,
+      version: "1.6.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        // Belongs to the PRIOR 1.5.0 swap, not the pending 1.6.0 one.
+        stagedBinaryPath: staleStagedPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerStagedBinaryPath).toBe(staleStagedPath);
+      expect(outcome.pendingStagedBinaryPath).toBe(pendingStagedPath);
+    }
+    // The pending 1.6.0 upgrade is untouched and still pending - the whole
+    // point, since it genuinely has not been applied.
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.version).toBe("1.4.0");
+    expect(reread.pendingUpgrade?.version).toBe("1.6.0");
+    // The stale marker is removed: it describes a swap nobody is waiting on,
+    // and leaving it would re-pose the same question to every future caller.
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it("on 'swap-failed' marker, preserves pendingUpgrade and returns the helper's error message", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");

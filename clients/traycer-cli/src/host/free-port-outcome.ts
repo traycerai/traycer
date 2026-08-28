@@ -80,6 +80,29 @@ export function portRepairFailure(opts: {
     });
   }
 
+  // Two very different situations share the `still-held` verdict, and they
+  // need different advice. If the port is held by a DIFFERENT pid than the one
+  // we signalled, the original process is already gone - telling the reader to
+  // "stop pid <original>" names a process that no longer exists, so following
+  // the advertised recovery cannot possibly free the port. That is the
+  // supervised-listener case: something respawned it, and killing the new pid
+  // by hand just yields another one.
+  const replacementHolder =
+    result.holderPid !== null && result.holderPid !== pid
+      ? result.holderPid
+      : null;
+  if (replacementHolder !== null) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_PORT_STILL_HELD,
+      message:
+        `${commandName}: pid ${pid} released port ${port}, but pid ${replacementHolder} is now listening on it - ${result.releaseDetail}.` +
+        restartNote +
+        ` The port is still occupied, so the conflict is unresolved. pid ${replacementHolder} is most likely a supervised process being restarted automatically ` +
+        "(killing it by hand will just produce another one) - stop whatever supervises it, or reconfigure that service off this port, then re-run 'traycer host doctor'.",
+      details,
+      exitCode: 1,
+    });
+  }
   return cliError({
     code: CLI_ERROR_CODES.HOST_PORT_STILL_HELD,
     message:

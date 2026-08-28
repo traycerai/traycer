@@ -247,6 +247,39 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(mocks.controllerCalls).toEqual([]);
   });
 
+  // Same `still-held` verdict, different situation, and the recovery advice
+  // has to differ: the pid we signalled is gone, so "stop pid <original>"
+  // names a process that no longer exists and cannot free the port. The
+  // holder is almost always something being restarted by a supervisor.
+  it("names the replacement holder - not the dead original - when a new pid took the port", async () => {
+    mocks.controllerCalls = [];
+    mocks.killResult = {
+      killed: true,
+      killError: null,
+      release: "still-held",
+      releaseDetail:
+        "pid 4242 released port 51820, but pid 7777 is now listening on it",
+      holderPid: 7777,
+    };
+
+    const command = buildHostFreePortAndRestartCommand({
+      pid: 4242,
+      port: 51820,
+    });
+    const rejection = await command(fakeCtx()).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(rejection).toMatchObject({ code: "E_HOST_PORT_STILL_HELD" });
+    const message = (rejection as { message: string }).message;
+    expect(message).toContain("7777");
+    // The dead original must NOT be the thing the user is told to stop.
+    expect(message).not.toMatch(/Stop pid 4242 yourself/);
+    expect(message).toMatch(/supervis/i);
+    expect(mocks.controllerCalls).toEqual([]);
+  });
+
   it("release: unverified throws E_HOST_PORT_RELEASE_UNVERIFIED and never calls restart", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];

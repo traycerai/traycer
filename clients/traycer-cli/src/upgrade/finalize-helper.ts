@@ -537,7 +537,16 @@ export type ReconcileOutcome =
       readonly status: "applied-swap-failed";
       readonly errorMessage: string;
     }
-  | { readonly status: "applied-parent-still-alive" };
+  | { readonly status: "applied-parent-still-alive" }
+  // The marker on disk describes a DIFFERENT staged upgrade than the one the
+  // manifest is currently pending, so it was not evidence about this
+  // operation and nothing was applied from it. The marker is removed, because
+  // it refers to a swap nobody is waiting on any more.
+  | {
+      readonly status: "stale-marker-discarded";
+      readonly markerStagedBinaryPath: string;
+      readonly pendingStagedBinaryPath: string;
+    };
 
 // Read any pending post-finalize marker the detached helper wrote and
 // fold its outcome into the CLI install manifest. Idempotent - the
@@ -608,6 +617,38 @@ export async function reconcilePostFinalizeMarker(opts: {
       : { status: "applied-parent-still-alive" };
   }
   const pending = manifest.pendingUpgrade;
+
+  // CORRELATE BEFORE ACTING - this path MUTATES, so getting it wrong is worse
+  // here than in doctor's read.
+  //
+  // A marker names the two paths it operated on and no version, so it is only
+  // evidence about the upgrade it was actually written for. Nothing guarantees
+  // it was consumed: a helper that swapped 1.5.0 can leave its marker behind,
+  // and a later `cli upgrade` then records `pendingUpgrade` 1.6.0 alongside
+  // it. The `swapped` branch below would promote 1.6.0 to installed and clear
+  // the pending record on the strength of the 1.5.0 marker - stamping the
+  // manifest with a version whose staged binary was never swapped onto the
+  // live path. The CLI would report itself as 1.6.0 while running 1.5.0
+  // bytes, with nothing left on disk to detect it from.
+  //
+  // Doctor now refuses the same stale marker when reporting (doctor/engine.ts)
+  // and routes the user to `traycer host restart` - i.e. straight into this
+  // function - so leaving the correlation out on this side would have made the
+  // diagnostic a delivery mechanism for the corruption.
+  //
+  // `stagedBinaryPath` discriminates because `cli upgrade` stamps the target
+  // version into the staged filename (`traycer-<version>-<platform>`). A
+  // mismatched marker is DISCARDED rather than applied: it describes a
+  // completed operation nobody is waiting on, and leaving it would re-pose the
+  // same question to every future caller.
+  if (parsed.stagedBinaryPath !== pending.stagedBinaryPath) {
+    await safeUnlink(markerPath);
+    return {
+      status: "stale-marker-discarded",
+      markerStagedBinaryPath: parsed.stagedBinaryPath,
+      pendingStagedBinaryPath: pending.stagedBinaryPath,
+    };
+  }
 
   if (parsed.status === "swapped") {
     // The helper completed the swap; promote the manifest's
