@@ -10,6 +10,30 @@ export interface BrowserViewTileKey {
   readonly pageSessionId: string;
 }
 
+export interface BrowserAnnotationTheme {
+  readonly appearance: "light" | "dark";
+  readonly background: string;
+  readonly foreground: string;
+  readonly popover: string;
+  readonly popoverForeground: string;
+  readonly mutedForeground: string;
+  readonly border: string;
+  readonly input: string;
+  readonly ring: string;
+  readonly primary: string;
+  readonly primaryForeground: string;
+  readonly accent: string;
+  readonly accentForeground: string;
+  readonly destructive: string;
+  readonly warning: string;
+  readonly warningForeground: string;
+  readonly fontFamily: string;
+}
+
+export interface BrowserAnnotationStartInput extends BrowserViewTileKey {
+  readonly theme: BrowserAnnotationTheme;
+}
+
 export type BrowserAnnotationMode = "select" | "region" | "draw" | "erase";
 
 export type BrowserAnnotationAttachPayload = Omit<

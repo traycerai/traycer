@@ -1,17 +1,18 @@
-import type { ComponentType, SyntheticEvent } from "react";
+import { useState, type ComponentType } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   Bug,
-  Info,
+  Minus,
   Monitor,
-  PenLine,
+  MoreHorizontal,
   PictureInPicture2,
+  Plus,
+  RotateCcw,
   RotateCw,
+  SquareMousePointer,
   Smartphone,
   Tablet,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
@@ -21,15 +22,17 @@ import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { browserCookieDegradedMessage } from "@/lib/browser-view/browser-cookie-degraded-message";
 import type {
   BrowserCookieCryptoState,
@@ -45,7 +48,10 @@ const BROWSER_VIEWPORT_PRESETS: ReadonlyArray<{
   readonly id: BrowserViewViewportPresetId;
   readonly label: string;
   readonly description: string;
-  readonly Icon: ComponentType<{ readonly className?: string }>;
+  readonly Icon: ComponentType<{
+    readonly className?: string;
+    readonly "aria-hidden"?: boolean;
+  }>;
 }> = [
   {
     id: "responsive",
@@ -81,22 +87,22 @@ export function BrowserTileToolbar(props: {
   const capabilities = controller.capabilities;
   const showNav =
     capabilities.back || capabilities.forward || capabilities.reload;
-  const showAddress = capabilities.navigate || capabilities.siteInfo;
-  const showZoom = capabilities.zoom;
-  const showTrailing =
+  const showAddress = capabilities.navigate;
+  const showAdvanced =
+    capabilities.zoom ||
     capabilities.viewportPreset ||
-    capabilities.annotate ||
     capabilities.devtools ||
-    props.pictureInPicture !== null;
-  if (!showNav && !showAddress && !showZoom && !showTrailing) return null;
+    capabilities.siteInfo;
+  const showTrailing =
+    capabilities.annotate || props.pictureInPicture !== null || showAdvanced;
+  if (!showNav && !showAddress && !showTrailing) return null;
 
   return (
-    <div className="flex min-h-0 items-center gap-2 border-b border-border px-2 py-1.5 text-ui-sm">
+    <div className="flex min-h-0 min-w-0 items-center gap-2 border-b border-border px-2 py-1.5 text-ui-sm">
       {showNav ? <BrowserTileToolbarNav controller={controller} /> : null}
       {showAddress ? (
         <BrowserTileToolbarAddress controller={controller} />
       ) : null}
-      {showZoom ? <BrowserTileToolbarZoom controller={controller} /> : null}
       {showTrailing ? (
         <BrowserTileToolbarTrailing
           controller={controller}
@@ -156,71 +162,23 @@ function BrowserTileToolbarAddress(props: {
   readonly controller: TileController;
 }) {
   const controller = props.controller;
-  const capabilities = controller.capabilities;
   return (
     <form
-      className="flex min-w-0 flex-1 items-center gap-2"
-      onSubmit={capabilities.navigate ? controller.onNavigate : preventSubmit}
+      className="flex min-w-0 flex-1 items-center"
+      onSubmit={controller.onNavigate}
     >
-      {capabilities.siteInfo ? (
-        <BrowserSiteInfoButton
-          url={controller.url}
-          cookieCryptoState={controller.cookieCryptoState}
-        />
-      ) : null}
-      {capabilities.navigate ? (
-        <Input
-          aria-label="Browser address"
-          value={controller.addressValue}
-          onChange={(event) => {
-            controller.onAddressChange(event.target.value);
-          }}
-          onFocus={() => controller.onAddressFocusChange(true)}
-          onBlur={() => controller.onAddressFocusChange(false)}
-          className="h-7 min-w-0 flex-1 truncate font-mono text-ui-sm"
-          spellCheck={false}
-        />
-      ) : null}
+      <Input
+        aria-label="Browser address"
+        value={controller.addressValue}
+        onChange={(event) => {
+          controller.onAddressChange(event.target.value);
+        }}
+        onFocus={() => controller.onAddressFocusChange(true)}
+        onBlur={() => controller.onAddressFocusChange(false)}
+        className="h-7 min-w-0 flex-1 truncate font-mono text-ui-sm"
+        spellCheck={false}
+      />
     </form>
-  );
-}
-
-function BrowserTileToolbarZoom(props: {
-  readonly controller: TileController;
-}) {
-  const controller = props.controller;
-  return (
-    <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Zoom out"
-        disabled={controller.disabled || controller.zoomLocked}
-        onClick={controller.onZoomOut}
-      >
-        <ZoomOut />
-      </Button>
-      <button
-        type="button"
-        aria-label="Reset zoom"
-        className="w-12 rounded-sm px-1 py-1 text-center text-ui-xs tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-        disabled={controller.disabled || controller.zoomLocked}
-        onClick={controller.onResetZoom}
-      >
-        {controller.zoomPercent}%
-      </button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Zoom in"
-        disabled={controller.disabled || controller.zoomLocked}
-        onClick={controller.onZoomIn}
-      >
-        <ZoomIn />
-      </Button>
-    </div>
   );
 }
 
@@ -232,34 +190,135 @@ function BrowserTileToolbarTrailing(props: {
   const capabilities = controller.capabilities;
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-      {capabilities.viewportPreset ? (
-        <BrowserViewportPresetMenu
-          value={controller.viewportPreset}
-          disabled={controller.disabled}
-          onChange={controller.onViewportPresetChange}
-        />
-      ) : null}
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
       {props.pictureInPicture === null ? null : (
         <BrowserPictureInPictureButton control={props.pictureInPicture} />
       )}
-      {capabilities.devtools ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-ui-xs"
-          aria-label="Open browser DevTools"
-          disabled={controller.disabled}
-          onClick={controller.onOpenDevTools}
-        >
-          <Bug className="size-3.5" />
-          DevTools
-        </Button>
+      {capabilities.zoom ||
+      capabilities.viewportPreset ||
+      capabilities.devtools ||
+      capabilities.siteInfo ? (
+        <BrowserMoreMenu controller={controller} />
       ) : null}
     </div>
+  );
+}
+
+function BrowserMoreMenu(props: { readonly controller: TileController }) {
+  const controller = props.controller;
+  const capabilities = controller.capabilities;
+  return (
+    <DropdownMenu>
+      <TooltipWrapper
+        label="More browser controls"
+        side="top"
+        sideOffset={6}
+        align="center"
+      >
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="More browser controls"
+            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          >
+            <MoreHorizontal aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </TooltipWrapper>
+      <DropdownMenuContent
+        align="end"
+        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
+      >
+        {capabilities.viewportPreset ? (
+          <BrowserViewportPresetMenu
+            value={controller.viewportPreset}
+            disabled={controller.disabled}
+            onChange={controller.onViewportPresetChange}
+          />
+        ) : null}
+        {capabilities.zoom ? (
+          <BrowserZoomControls controller={controller} />
+        ) : null}
+        {capabilities.siteInfo ? (
+          <BrowserSiteInfoMenu
+            url={controller.url}
+            cookieCryptoState={controller.cookieCryptoState}
+          />
+        ) : null}
+        {capabilities.devtools ? (
+          <>
+            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
+              Developer
+            </DropdownMenuLabel>
+            <DropdownMenuItem
+              aria-label="Open browser DevTools"
+              disabled={controller.disabled}
+              onSelect={controller.onOpenDevTools}
+            >
+              <Bug aria-hidden />
+              Open DevTools
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function BrowserZoomControls(props: { readonly controller: TileController }) {
+  const controller = props.controller;
+  const disabled = controller.disabled || controller.zoomLocked;
+  return (
+    <DropdownMenuGroup
+      aria-label={`Zoom controls, current zoom ${String(controller.zoomPercent)}%`}
+      className="-mx-1 my-1 flex items-center gap-1.5 border-y border-border px-2 py-2"
+    >
+      <span className="me-auto text-ui-sm">Zoom</span>
+      <DropdownMenuItem
+        aria-label="Zoom out"
+        className="size-7 shrink-0 justify-center border border-border p-0"
+        disabled={disabled}
+        onSelect={(event) => {
+          event.preventDefault();
+          controller.onZoomOut();
+        }}
+      >
+        <Minus aria-hidden />
+      </DropdownMenuItem>
+      <span
+        aria-atomic="true"
+        aria-live="polite"
+        className="min-w-10 text-center text-ui-sm tabular-nums text-muted-foreground"
+      >
+        {controller.zoomPercent}%
+      </span>
+      <DropdownMenuItem
+        aria-label="Zoom in"
+        className="size-7 shrink-0 justify-center border border-border p-0"
+        disabled={disabled}
+        onSelect={(event) => {
+          event.preventDefault();
+          controller.onZoomIn();
+        }}
+      >
+        <Plus aria-hidden />
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        aria-label="Reset zoom"
+        className="size-7 shrink-0 justify-center p-0 text-muted-foreground"
+        disabled={disabled}
+        onSelect={(event) => {
+          event.preventDefault();
+          controller.onResetZoom();
+        }}
+      >
+        <RotateCcw aria-hidden />
+      </DropdownMenuItem>
+    </DropdownMenuGroup>
   );
 }
 
@@ -309,16 +368,10 @@ function BrowserAnnotateToggle(props: {
         onClick={controller.toggle}
         className={cn(controller.isActive && "bg-primary/15 text-primary")}
       >
-        <PenLine />
+        <SquareMousePointer aria-hidden />
       </Button>
     </TooltipWrapper>
   );
-}
-
-function preventSubmit(
-  event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
-): void {
-  event.preventDefault();
 }
 
 function BrowserViewportPresetMenu(props: {
@@ -326,86 +379,98 @@ function BrowserViewportPresetMenu(props: {
   readonly disabled: boolean;
   readonly onChange: (preset: BrowserViewViewportPresetId) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const current =
     BROWSER_VIEWPORT_PRESETS.find((preset) => preset.id === props.value) ??
     BROWSER_VIEWPORT_PRESETS[0];
-  const CurrentIcon = current.Icon;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-ui-xs"
-          aria-label="Browser viewport preset"
-          disabled={props.disabled}
-        >
-          <CurrentIcon className="size-3.5" />
-          <span className="hidden sm:inline">{current.label}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[min(80vw,13rem)]">
-        {BROWSER_VIEWPORT_PRESETS.map((preset) => {
-          const Icon = preset.Icon;
-          return (
-            <DropdownMenuItem
-              key={preset.id}
-              className="gap-2"
-              onSelect={() => props.onChange(preset.id)}
-            >
-              <Icon className="size-4" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-ui-sm">
-                  {preset.label}
+    <DropdownMenuSub open={open} onOpenChange={setOpen}>
+      <DropdownMenuSubTrigger
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
+        disabled={props.disabled}
+        onClick={() => setOpen(true)}
+      >
+        <span className="min-w-0 truncate">Viewport</span>
+        <span className="min-w-0 truncate text-end text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+          {current.label}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        sideOffset={8}
+        alignOffset={-4}
+        className="w-[min(80vw,13rem)] min-w-0"
+      >
+        <DropdownMenuRadioGroup value={props.value}>
+          {BROWSER_VIEWPORT_PRESETS.map((preset) => {
+            const Icon = preset.Icon;
+            return (
+              <DropdownMenuRadioItem
+                key={preset.id}
+                value={preset.id}
+                className="gap-2"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  props.onChange(preset.id);
+                }}
+              >
+                <Icon className="size-4" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-ui-sm">
+                    {preset.label}
+                  </span>
+                  <span className="block truncate text-ui-xs text-muted-foreground">
+                    {preset.description}
+                  </span>
                 </span>
-                <span className="block truncate text-ui-xs text-muted-foreground">
-                  {preset.description}
-                </span>
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 
-function BrowserSiteInfoButton(props: {
+function BrowserSiteInfoMenu(props: {
   readonly url: string;
   readonly cookieCryptoState: BrowserCookieCryptoState | null;
 }) {
+  const [open, setOpen] = useState(false);
   const isWebOrigin = isWebOriginUrl(props.url);
+  const originTitle = isWebOrigin ? "Web page" : "Local page";
+  const originDetail = isWebOrigin
+    ? "Served over the network from this page's origin."
+    : "Not loaded from a web address (for example, a blank tab or an internal page).";
+  const cookieDetail =
+    props.cookieCryptoState === null
+      ? null
+      : `${cookieCryptoHeadline(props.cookieCryptoState)}. ${cookieCryptoDetail(props.cookieCryptoState)}`;
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Site information"
-          className="shrink-0"
-        >
-          <Info />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-3 text-ui-sm">
-        <BrowserSiteInfoRow
-          title={isWebOrigin ? "Web page" : "Local page"}
-          detail={
-            isWebOrigin
-              ? "Served over the network from this page's origin."
-              : "Not loaded from a web address (for example, a blank tab or an internal page)."
-          }
-        />
+    <DropdownMenuSub open={open} onOpenChange={setOpen}>
+      <DropdownMenuSubTrigger
+        aria-label={`Site information. ${originTitle}. ${originDetail}${cookieDetail === null ? "" : ` ${cookieDetail}`}`}
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
+        onClick={() => setOpen(true)}
+      >
+        <span className="min-w-0 truncate">Site information</span>
+        <span className="min-w-0 truncate text-end text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+          {originTitle}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        sideOffset={8}
+        alignOffset={-4}
+        className="w-[min(80vw,18rem)] min-w-0 space-y-3 p-3 text-ui-sm"
+      >
+        <BrowserSiteInfoRow title={originTitle} detail={originDetail} />
         {props.cookieCryptoState === null ? null : (
           <BrowserSiteInfoRow
             title={cookieCryptoHeadline(props.cookieCryptoState)}
             detail={cookieCryptoDetail(props.cookieCryptoState)}
           />
         )}
-      </PopoverContent>
-    </Popover>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 

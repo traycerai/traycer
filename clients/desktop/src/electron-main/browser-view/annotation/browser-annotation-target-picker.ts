@@ -18,16 +18,17 @@ export interface AnnotationTargetPicker {
 }
 
 export const ANNOTATION_TARGET_PICKER_CSS = [
-  ".target-picker{position:relative;max-width:42%;flex:none;}",
-  ".target-trigger{display:inline-flex;min-height:34px;max-width:100%;align-items:center;gap:8px;background:#635bff;color:#fff;border:0;border-radius:8px;padding:7px 10px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.24);}",
+  ".target-picker{position:relative;min-width:0;width:fit-content;max-width:100%;justify-self:end;}",
+  ".target-trigger{display:grid;grid-template-columns:minmax(0,1fr) auto;min-height:32px;max-width:100%;align-items:center;gap:8px;background:var(--annotation-primary);color:var(--annotation-primary-foreground);border:0;border-radius:var(--annotation-radius);padding:7px 10px;font-size:13px;font-weight:600;line-height:1.25;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.16);}",
   ".target-trigger::after{content:'';width:7px;height:7px;flex:none;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);}",
-  ".target-trigger:hover,.target-trigger[aria-expanded='true']{background:#766fff;}",
-  ".target-trigger:focus-visible,.target-option:focus-visible{outline:2px solid #fff;outline-offset:2px;}",
+  ".target-trigger[aria-expanded='true']{background:color-mix(in srgb,var(--annotation-primary) 88%,var(--annotation-background));}",
+  ".target-trigger:focus-visible,.target-option:focus-visible{outline:2px solid var(--annotation-ring);outline-offset:2px;}",
   ".target-trigger:disabled{opacity:.45;cursor:default;}",
-  ".target-menu{position:fixed;inset:auto;z-index:2147483647;width:max-content;min-width:160px;max-width:min(320px,calc(100vw - 24px));max-height:min(40vh,240px);overflow:auto;margin:0;padding:4px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:#2c2c31;color:#e7e7ec;box-shadow:0 10px 28px rgba(0,0,0,.42);}",
+  ".target-menu{position:fixed;inset:auto;z-index:2147483647;width:max-content;min-width:min(20ch,calc(100vw - 24px));max-width:min(40ch,calc(100vw - 24px));max-height:min(40vh,240px);overflow:auto;margin:0;padding:4px;border:1px solid var(--annotation-border);border-radius:calc(var(--annotation-radius) + 3px);background:var(--annotation-popover);color:var(--annotation-popover-foreground);box-shadow:0 10px 28px rgba(0,0,0,.24);}",
   ".target-menu::backdrop{background:transparent;}",
-  ".target-option{display:flex;width:100%;min-height:28px;align-items:center;overflow:hidden;text-overflow:ellipsis;border:0;border-radius:6px;background:none;color:inherit;padding:5px 8px;font:inherit;font-size:13px;font-weight:500;line-height:1.35;text-align:left;white-space:nowrap;cursor:pointer;}",
-  ".target-option:hover,.target-option:focus-visible{background:#45454d;}",
+  ".target-option{display:block;width:100%;min-height:28px;overflow:hidden;text-overflow:ellipsis;border:0;border-radius:var(--annotation-radius);background:transparent;color:inherit;padding:5px 8px;font:inherit;font-size:13px;font-weight:500;line-height:1.35;text-align:start;white-space:nowrap;cursor:pointer;}",
+  ".target-option:focus-visible{background:var(--annotation-accent);color:var(--annotation-accent-foreground);}",
+  "@media (hover:hover){.target-trigger:hover{background:color-mix(in srgb,var(--annotation-primary) 88%,var(--annotation-background));}.target-option:hover{background:var(--annotation-accent);color:var(--annotation-accent-foreground);}}",
 ].join("");
 
 export function createAnnotationTargetPicker(input: {
@@ -50,6 +51,7 @@ export function createAnnotationTargetPicker(input: {
   menu.id = "traycer-annotation-target-menu";
   menu.popover = "auto";
   menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Annotation destination");
   trigger.popoverTargetElement = menu;
   trigger.popoverTargetAction = "toggle";
   trigger.setAttribute("aria-controls", menu.id);
@@ -119,12 +121,10 @@ export function createAnnotationTargetPicker(input: {
       option.className = "target-option";
       option.setAttribute("role", "menuitem");
       option.setAttribute("data-chat-id", target.chatId);
-      option.textContent = "Send to " + (target.label || "Untitled agent");
+      option.textContent = target.label || "Untitled chat";
+      option.title = option.textContent;
       menu.appendChild(option);
     }
-    const selected = targets.find((target) => target.chatId === defaultChatId);
-    trigger.textContent =
-      selected === undefined ? "Send to chat" : "Send to " + selected.label;
     trigger.disabled = targets.length === 0;
     close(false);
   }

@@ -98,14 +98,24 @@ const CHROME_QUERIES: ReadonlyArray<{
   { name: "Forward", role: "button" },
   { name: "Reload", role: "button" },
   { name: "Browser address", role: "textbox" },
-  { name: "Zoom out", role: "button" },
-  { name: "Reset zoom", role: "button" },
-  { name: "Zoom in", role: "button" },
-  { name: "Browser viewport preset", role: "button" },
-  { name: "Open browser DevTools", role: "button" },
-  { name: "Site information", role: "button" },
   { name: "Annotate page", role: "button" },
 ];
+
+const ADVANCED_MENU_ITEMS = [
+  /^Site information/,
+  /^Zoom out/,
+  /^Reset zoom/,
+  /^Zoom in/,
+  /^Viewport/,
+  "Open browser DevTools",
+] as const;
+
+function openMoreMenu(): void {
+  fireEvent.pointerDown(
+    screen.getByRole("button", { name: "More browser controls" }),
+    { button: 0 },
+  );
+}
 
 function queryChrome(query: {
   readonly name: string;
@@ -125,6 +135,25 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     for (const query of CHROME_QUERIES) {
       expect(queryChrome(query)).not.toBeNull();
     }
+    expect(
+      screen.queryByRole("button", { name: "More browser controls" }),
+    ).not.toBeNull();
+    for (const name of ADVANCED_MENU_ITEMS) {
+      expect(screen.queryByRole("menuitem", { name })).toBeNull();
+    }
+
+    openMoreMenu();
+    expect(
+      screen.getByRole("group", {
+        name: "Zoom controls, current zoom 100%",
+      }),
+    ).not.toBeNull();
+    for (const name of ADVANCED_MENU_ITEMS) {
+      expect(screen.queryByRole("menuitem", { name })).not.toBeNull();
+    }
+    expect(screen.getByRole("menuitem", { name: "Zoom out" })).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Reset zoom" })).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Zoom in" })).not.toBeNull();
   });
 
   it("renders no chrome when every capability is false", () => {
@@ -133,6 +162,9 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     for (const query of CHROME_QUERIES) {
       expect(queryChrome(query)).toBeNull();
     }
+    expect(
+      screen.queryByRole("button", { name: "More browser controls" }),
+    ).toBeNull();
   });
 
   it("renders the explicit picture-in-picture conversion action", () => {
@@ -152,6 +184,51 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     expect(convert).toHaveBeenCalledOnce();
   });
 
+  it("keeps viewport presets open for quick switching", () => {
+    const onViewportPresetChange = vi.fn();
+    const controller = {
+      ...makeController(
+        { ...DISABLED_CAPABILITIES, viewportPreset: true },
+        null,
+      ),
+      onViewportPresetChange,
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+      </TooltipProvider>,
+    );
+
+    openMoreMenu();
+    expect(screen.queryByRole("menuitemradio", { name: /^Mobile/ })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Viewport/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Mobile/ }));
+    expect(onViewportPresetChange).toHaveBeenCalledWith("mobile");
+    expect(screen.getByRole("menuitem", { name: /^Viewport/ })).not.toBeNull();
+    expect(
+      screen.getByRole("menuitemradio", { name: /^Mobile/ }),
+    ).not.toBeNull();
+  });
+
+  it("progressively discloses site information from the More menu", () => {
+    renderToolbar({ ...DISABLED_CAPABILITIES, siteInfo: true }, null);
+
+    expect(screen.queryByText("Web page")).toBeNull();
+    openMoreMenu();
+    expect(
+      screen.getByRole("menuitem", {
+        name: /Served over the network from this page's origin/,
+      }),
+    ).not.toBeNull();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /^Site information/ }),
+    );
+
+    expect(
+      screen.getByText("Served over the network from this page's origin."),
+    ).not.toBeNull();
+  });
+
   it.each([
     { flag: "back" as const, name: "Back", role: "button" as const },
     { flag: "forward" as const, name: "Forward", role: "button" as const },
@@ -160,24 +237,6 @@ describe("<BrowserTileToolbar /> capability gating", () => {
       flag: "navigate" as const,
       name: "Browser address",
       role: "textbox" as const,
-    },
-    { flag: "zoom" as const, name: "Zoom out", role: "button" as const },
-    { flag: "zoom" as const, name: "Reset zoom", role: "button" as const },
-    { flag: "zoom" as const, name: "Zoom in", role: "button" as const },
-    {
-      flag: "viewportPreset" as const,
-      name: "Browser viewport preset",
-      role: "button" as const,
-    },
-    {
-      flag: "devtools" as const,
-      name: "Open browser DevTools",
-      role: "button" as const,
-    },
-    {
-      flag: "siteInfo" as const,
-      name: "Site information",
-      role: "button" as const,
     },
     {
       flag: "annotate" as const,
@@ -191,5 +250,22 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     );
 
     expect(screen.queryByRole(role, { name })).toBeNull();
+  });
+
+  it.each([
+    { flag: "zoom" as const, names: [/^Zoom/] },
+    { flag: "viewportPreset" as const, names: [/^Viewport/] },
+    { flag: "devtools" as const, names: ["Open browser DevTools"] },
+    { flag: "siteInfo" as const, names: [/^Site information/] },
+  ])("hides advanced controls when $flag is false", ({ flag, names }) => {
+    renderToolbar(
+      { ...PRIMARY_TILE_CHROME_CAPABILITIES, [flag]: false },
+      ANNOTATION,
+    );
+
+    openMoreMenu();
+    for (const name of names) {
+      expect(screen.queryByRole("menuitem", { name })).toBeNull();
+    }
   });
 });

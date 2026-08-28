@@ -5,6 +5,7 @@ import type {
   BrowserAnnotationEndReason,
   BrowserAnnotationSessionEvent,
   BrowserAnnotationStartResult,
+  BrowserAnnotationTheme,
 } from "../../../ipc-contracts/browser-annotation-types";
 import { describeLogError, log } from "../../app/logger";
 import {
@@ -51,6 +52,7 @@ interface BrowserAnnotationAttachedResult {
 interface BrowserAnnotationSessionOptions {
   readonly webContents: BrowserAnnotationWebContents;
   readonly debugSession: BrowserDebugSession;
+  readonly theme: BrowserAnnotationTheme;
   readonly identity: BrowserAnnotationSessionIdentity;
   readonly onEvent: (event: BrowserAnnotationSessionEvent) => void;
   readonly onAttached: (
@@ -67,6 +69,7 @@ interface BrowserAnnotationSessionOptions {
 export class BrowserAnnotationSession {
   private readonly webContents: BrowserAnnotationWebContents;
   private readonly debugSession: BrowserDebugSession;
+  private readonly theme: BrowserAnnotationTheme;
   private readonly identity: BrowserAnnotationSessionIdentity;
   private readonly onEvent: (event: BrowserAnnotationSessionEvent) => void;
   private readonly onAttached: (
@@ -82,6 +85,7 @@ export class BrowserAnnotationSession {
   constructor(options: BrowserAnnotationSessionOptions) {
     this.webContents = options.webContents;
     this.debugSession = options.debugSession;
+    this.theme = options.theme;
     this.identity = options.identity;
     this.onEvent = options.onEvent;
     this.onAttached = options.onAttached;
@@ -121,10 +125,16 @@ export class BrowserAnnotationSession {
       this.contextId = contextId;
       if (this.ended) return this.abortStart("inject-failed");
       this.attachMessageListener();
+      const guestExpression =
+        "(function(){if(!(" +
+        ANNOTATION_OVERLAY_GUEST_SOURCE +
+        "))return false;return " +
+        callGuestHook("__traycerAnnotationSetTheme", [this.theme]) +
+        ";})()";
       const evaluation = await this.debugSession.sendCommand(
         "Runtime.evaluate",
         {
-          expression: ANNOTATION_OVERLAY_GUEST_SOURCE,
+          expression: guestExpression,
           contextId,
           awaitPromise: false,
           returnByValue: true,
@@ -204,6 +214,7 @@ export class BrowserAnnotationSession {
       | "no-main-frame"
       | "no-isolated-world",
   ): BrowserAnnotationStartResult {
+    this.sendCancel();
     this.teardownListeners();
     this.removeBinding();
     this.contextId = null;

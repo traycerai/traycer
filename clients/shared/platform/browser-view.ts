@@ -12,6 +12,7 @@ import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
   BrowserAnnotationSetTargetChatLabelInput,
+  BrowserAnnotationStartInput,
   BrowserAnnotationStartResult,
   BrowserViewTileKey,
 } from "./browser-annotation";
@@ -316,7 +317,7 @@ export interface BrowserViewBridge {
     input: BrowserViewTileKey,
   ): Promise<BrowserViewDebugSnapshot>;
   startAnnotation(
-    input: BrowserViewTileKey,
+    input: BrowserAnnotationStartInput,
   ): Promise<BrowserAnnotationStartResult>;
   cancelAnnotation(input: BrowserViewTileKey): Promise<void>;
   setAnnotationTargetChatLabel(

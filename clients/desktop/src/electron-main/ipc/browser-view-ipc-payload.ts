@@ -7,6 +7,7 @@ import {
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
+  BrowserAnnotationStartInput,
 } from "../../ipc-contracts/browser-annotation-types";
 import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "@traycer-clients/shared/platform/browser-view";
 import type {
@@ -32,6 +33,25 @@ const tileKeySchema = z.object({
   paneId: nonEmptyStringSchema,
   tileInstanceId: nonEmptyStringSchema,
   pageSessionId: nonEmptyStringSchema,
+});
+const annotationThemeSchema = z.object({
+  appearance: z.enum(["light", "dark"]),
+  background: nonEmptyStringSchema,
+  foreground: nonEmptyStringSchema,
+  popover: nonEmptyStringSchema,
+  popoverForeground: nonEmptyStringSchema,
+  mutedForeground: nonEmptyStringSchema,
+  border: nonEmptyStringSchema,
+  input: nonEmptyStringSchema,
+  ring: nonEmptyStringSchema,
+  primary: nonEmptyStringSchema,
+  primaryForeground: nonEmptyStringSchema,
+  accent: nonEmptyStringSchema,
+  accentForeground: nonEmptyStringSchema,
+  destructive: nonEmptyStringSchema,
+  warning: nonEmptyStringSchema,
+  warningForeground: nonEmptyStringSchema,
+  fontFamily: nonEmptyStringSchema,
 });
 const nativeTabKeySchema = z.object({
   hostId: nonEmptyStringSchema,
@@ -64,6 +84,8 @@ const electronTabControlActionSchema = z.discriminatedUnion("kind", [
 
 const boundsUpdateSchema: z.ZodType<BrowserViewBoundsUpdate> =
   tileKeySchema.extend({ bounds: boundsSchema });
+const annotationStartSchema: z.ZodType<BrowserAnnotationStartInput> =
+  tileKeySchema.extend({ theme: annotationThemeSchema });
 const annotationTargetChatLabelSchema: z.ZodType<BrowserAnnotationSetTargetChatLabelInput> =
   tileKeySchema.extend({
     targets: z.preprocess(
@@ -131,6 +153,7 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
+  annotationStart: annotationStartSchema,
   annotationTargetChatLabel: annotationTargetChatLabelSchema,
   attachSurface: attachSurfaceSchema,
   boundsUpdate: boundsUpdateSchema,

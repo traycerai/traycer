@@ -4,10 +4,13 @@ import { toast } from "sonner";
 import { useAnnotationRoute } from "@/hooks/browser/use-annotation-route";
 import { attachBrowserAnnotation } from "@/lib/browser-view/annotation/browser-annotation-attach";
 import { browserViewTileKeyId } from "@/lib/browser-view/tiles/browser-view-keys";
+import { resolveCssColor } from "@/lib/css-color";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { getResolvedTheme } from "@/lib/theme-applier";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
+  BrowserAnnotationTheme,
 } from "@traycer-clients/shared/platform/browser-annotation";
 import type {
   BrowserViewBridge,
@@ -96,7 +99,10 @@ export function useBrowserAnnotationSession(
   const start = useCallback(() => {
     if (browserView === null || status !== "ready") return;
     void browserView
-      .startAnnotation(tileKey)
+      .startAnnotation({
+        ...tileKey,
+        theme: buildBrowserAnnotationTheme(document),
+      })
       .then((result) => {
         if (!result.ok) {
           toast.error("Couldn't start annotation.", {
@@ -132,6 +138,47 @@ export function useBrowserAnnotationSession(
     canStart,
     zoomLocked: isActive && markCount > 0,
     toggle,
+  };
+}
+
+function buildBrowserAnnotationTheme(doc: Document): BrowserAnnotationTheme {
+  const appearance = getResolvedTheme();
+  const dark = appearance === "dark";
+  const background = dark ? "#292929" : "#fafafa";
+  const foreground = dark ? "#fafafa" : "#252525";
+  const rootStyle = getComputedStyle(doc.documentElement);
+  return {
+    appearance,
+    background: resolveCssColor(doc, "--background", background),
+    foreground: resolveCssColor(doc, "--foreground", foreground),
+    popover: resolveCssColor(doc, "--popover", background),
+    popoverForeground: resolveCssColor(doc, "--popover-foreground", foreground),
+    mutedForeground: resolveCssColor(
+      doc,
+      "--muted-foreground",
+      dark ? "#a3a3a3" : "#737373",
+    ),
+    border: resolveCssColor(doc, "--border", dark ? "#ffffff1a" : "#e5e5e5"),
+    input: resolveCssColor(doc, "--input", dark ? "#ffffff26" : "#e5e5e5"),
+    ring: resolveCssColor(doc, "--ring", dark ? "#737373" : "#a3a3a3"),
+    primary: resolveCssColor(doc, "--primary", foreground),
+    primaryForeground: resolveCssColor(doc, "--primary-foreground", background),
+    accent: resolveCssColor(doc, "--accent", dark ? "#404040" : "#f5f5f5"),
+    accentForeground: resolveCssColor(doc, "--accent-foreground", foreground),
+    destructive: resolveCssColor(
+      doc,
+      "--destructive",
+      dark ? "#f87171" : "#dc2626",
+    ),
+    warning: resolveCssColor(doc, "--warning", dark ? "#fbbf24" : "#d97706"),
+    warningForeground: resolveCssColor(
+      doc,
+      "--warning-foreground",
+      dark ? "#fde68a" : "#78350f",
+    ),
+    fontFamily:
+      rootStyle.fontFamily.trim() ||
+      "-apple-system, BlinkMacSystemFont, sans-serif",
   };
 }
 

@@ -27,6 +27,7 @@ import type { PipCaptureIpcPayload } from "../../../ipc-contracts/pip-capture-ty
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
+  BrowserAnnotationTheme,
 } from "../../../ipc-contracts/browser-annotation-types";
 import { ANNOTATION_BINDING_NAME } from "../annotation/browser-annotation-overlay-script";
 import type {
@@ -40,11 +41,36 @@ type BrowserViewManagerOptions = ConstructorParameters<
 >[0];
 type ManagedContentView = BrowserViewWindow["contentView"];
 
-const BASE_KEY: BrowserViewTileKey = {
+const TEST_ANNOTATION_THEME: BrowserAnnotationTheme = {
+  appearance: "dark",
+  background: "#111111",
+  foreground: "#eeeeee",
+  popover: "#222222",
+  popoverForeground: "#eeeeee",
+  mutedForeground: "#aaaaaa",
+  border: "#444444",
+  input: "#333333",
+  ring: "#888888",
+  primary: "#ffffff",
+  primaryForeground: "#000000",
+  accent: "#555555",
+  accentForeground: "#ffffff",
+  destructive: "#ff0000",
+  warning: "#ffaa00",
+  warningForeground: "#000000",
+  fontFamily: "Inter",
+};
+
+const BASE_TILE_KEY: BrowserViewTileKey = {
   viewTabId: "view-tab-1",
   paneId: "pane-1",
   tileInstanceId: "tile-1",
   pageSessionId: "page-1",
+};
+
+const BASE_KEY = {
+  ...BASE_TILE_KEY,
+  theme: TEST_ANNOTATION_THEME,
 };
 
 class FakeDebugger implements BrowserViewDebugger {
@@ -2162,6 +2188,15 @@ describe("BrowserViewManager annotation session", () => {
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
+    expect(
+      harness.views[0]?.webContents.debugger.commands.some(
+        (command) =>
+          command.method === "Runtime.evaluate" &&
+          String(command.params.expression).includes(
+            TEST_ANNOTATION_THEME.background,
+          ),
+      ),
+    ).toBe(true);
     expect(annotationBindingCommands(view)).toEqual(["Runtime.addBinding"]);
     expect(annotationEventTypes(harness)).toEqual([]);
   });
@@ -2185,7 +2220,7 @@ describe("BrowserViewManager annotation session", () => {
     expect(annotationEventTypes(harness)).toEqual([
       { type: "ended", reason: "replaced" },
     ]);
-    expect(harness.annotationEvents[0]).toMatchObject(BASE_KEY);
+    expect(harness.annotationEvents[0]).toMatchObject(BASE_TILE_KEY);
   });
 
   it("tears down on reload, navigation, crash, debugger detach, release, and cancel", async () => {
@@ -2369,7 +2404,7 @@ describe("BrowserViewManager annotation session", () => {
     expect(attached?.targetChatId).toBe(TARGET_CHAT_ID);
     expect(attached?.payload.annotationId.startsWith("ann-")).toBe(true);
     expect(attached?.pngBytes.byteLength).toBeGreaterThan(0);
-    expect(attached).toMatchObject(BASE_KEY);
+    expect(attached).toMatchObject(BASE_TILE_KEY);
   });
 
   it("emits no annotationAttached on empty capture and leaves the session cancellable", async () => {

@@ -1,5 +1,13 @@
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
 import type { AnnotationRoute } from "@/lib/browser-view/annotation/browser-annotation-router";
@@ -65,6 +73,7 @@ function createBridge(): {
     (change: BrowserAnnotationAttachedIpcEvent) => void
   >;
   readonly report: BrowserViewBridge["reportAnnotationAttachResult"];
+  readonly start: Mock<BrowserViewBridge["startAnnotation"]>;
 } {
   const attachedHandlers: Array<
     (change: BrowserAnnotationAttachedIpcEvent) => void
@@ -72,10 +81,13 @@ function createBridge(): {
   const report = vi.fn<BrowserViewBridge["reportAnnotationAttachResult"]>(() =>
     Promise.resolve(),
   );
+  const start = vi.fn<BrowserViewBridge["startAnnotation"]>(() =>
+    Promise.resolve({ ok: true }),
+  );
   const browserView = Object.assign(createFakeRunnerHost({}), {
     browserView: new Proxy<Record<string, unknown>>(
       {
-        startAnnotation: () => Promise.resolve({ ok: true }),
+        startAnnotation: start,
         cancelAnnotation: () => Promise.resolve(),
         setAnnotationTargetChatLabel: () => Promise.resolve(),
         reportAnnotationAttachResult: report,
@@ -95,7 +107,7 @@ function createBridge(): {
       },
     ),
   }).browserView;
-  return { browserView, attachedHandlers, report };
+  return { browserView, attachedHandlers, report, start };
 }
 
 beforeEach(() => {
@@ -107,6 +119,24 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useComposerDraftStore.setState({ drafts: {} });
+  document.documentElement.style.removeProperty("--primary");
+});
+
+it("sends the active semantic theme when annotation starts", async () => {
+  document.documentElement.style.setProperty("--primary", "rgb(12, 34, 56)");
+  const { browserView, start } = createBridge();
+  const { result } = renderHook(() =>
+    useBrowserAnnotationSession(sessionArgs(browserView)),
+  );
+
+  act(() => {
+    result.current.toggle();
+  });
+
+  await waitFor(() => {
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+  expect(start.mock.calls[0]?.[0].theme.primary).toBe("rgb(12, 34, 56)");
 });
 
 describe("useBrowserAnnotationSession attach ack", () => {

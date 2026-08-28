@@ -11,8 +11,10 @@ export type {
   BrowserAnnotationMode,
   BrowserAnnotationSessionIpcEvent,
   BrowserAnnotationSetTargetChatLabelInput,
+  BrowserAnnotationStartInput,
   BrowserAnnotationStartFailureReason,
   BrowserAnnotationStartResult,
+  BrowserAnnotationTheme,
   BrowserAnnotationTargetOption,
 } from "@traycer-clients/shared/platform/browser-annotation";
 

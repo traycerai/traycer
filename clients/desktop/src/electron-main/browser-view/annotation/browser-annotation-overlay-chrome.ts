@@ -49,33 +49,41 @@ export function createOverlayChrome(input: {
   const shadow = host.attachShadow({ mode: "closed" });
   const style = D.createElement("style");
   style.textContent = [
-    ":host{all:initial;}",
-    '*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}',
-    ".pill{position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;gap:2px;background:#2c2c31;border-radius:10px;padding:4px;pointer-events:auto;z-index:4;box-shadow:0 8px 24px rgba(0,0,0,.28);}",
-    ".pill button{border:0;background:none;color:#c9c9d1;font-size:13px;padding:6px 14px;border-radius:7px;cursor:pointer;}",
-    '.pill button[aria-pressed="true"]{background:#4a4a55;color:#8ab4ff;}',
+    ":host{all:initial;--annotation-background:#fafafa;--annotation-foreground:#252525;--annotation-popover:#fff;--annotation-popover-foreground:#252525;--annotation-muted-foreground:#737373;--annotation-border:#e5e5e5;--annotation-input:#e5e5e5;--annotation-ring:#a3a3a3;--annotation-primary:#252525;--annotation-primary-foreground:#fafafa;--annotation-accent:#f5f5f5;--annotation-accent-foreground:#252525;--annotation-destructive:#dc2626;--annotation-warning:#d97706;--annotation-warning-foreground:#78350f;--annotation-font:-apple-system,BlinkMacSystemFont,sans-serif;--annotation-radius:6px;--annotation-color-scheme:light;font-size:16px;color-scheme:var(--annotation-color-scheme);}",
+    "*{box-sizing:border-box;font-family:var(--annotation-font);}",
+    ".pill{position:fixed;top:12px;left:50%;transform:translateX(-50%);display:grid;grid-auto-flow:column;gap:2px;width:max-content;max-width:calc(100vw - 24px);padding:3px;background:color-mix(in srgb,var(--annotation-foreground) 8%,var(--annotation-popover));color:var(--annotation-popover-foreground);border:1px solid var(--annotation-border);border-radius:calc(var(--annotation-radius) + 3px);pointer-events:auto;z-index:4;box-shadow:0 8px 24px rgba(0,0,0,.18);}",
+    ".pill button{min-width:0;min-height:28px;border:0;background:transparent;color:var(--annotation-muted-foreground);font-size:13px;font-weight:500;line-height:1;padding:6px 10px;border-radius:var(--annotation-radius);cursor:pointer;}",
+    '.pill button[aria-pressed="true"]{background:var(--annotation-background);color:var(--annotation-foreground);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12);}',
+    ".pill button:focus-visible{outline:2px solid var(--annotation-ring);outline-offset:1px;}",
+    ".pill button:disabled{opacity:.5;cursor:default;}",
     ".layer{position:fixed;inset:0;pointer-events:none;z-index:1;}",
-    ".outline{position:fixed;pointer-events:none;border:2px solid #635bff;box-shadow:0 0 0 4px rgba(255,255,255,.85),0 0 0 5px rgba(17,17,22,.35);background:rgba(99,91,255,.06);border-radius:3px;}",
-    ".outline.region{border-color:#5b7cfa;background:rgba(91,124,250,.06);}",
-    ".outline.invalid{border-color:#d4a94e;box-shadow:0 0 0 4px rgba(255,255,255,.9),0 0 0 5px rgba(80,50,0,.35);background:rgba(212,169,78,.12);}",
-    ".hover{position:fixed;pointer-events:none;border:2px solid #8ab4ff;box-shadow:0 0 0 3px rgba(255,255,255,.7);background:rgba(138,180,255,.08);border-radius:3px;opacity:0;visibility:hidden;}",
-    ".hover-label{position:fixed;pointer-events:none;z-index:2;max-width:80vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:4px;background:#111827;color:#fff;padding:2px 6px;font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 1px 3px rgba(0,0,0,.4);opacity:0;visibility:hidden;}",
+    ".outline{position:fixed;pointer-events:none;border:2px solid var(--annotation-primary);box-shadow:0 0 0 4px rgba(255,255,255,.85),0 0 0 5px rgba(17,17,22,.35);background:color-mix(in srgb,var(--annotation-primary) 8%,transparent);border-radius:3px;}",
+    ".outline.region{background:color-mix(in srgb,var(--annotation-primary) 10%,transparent);}",
+    ".outline.invalid{border-color:var(--annotation-warning);box-shadow:0 0 0 4px rgba(255,255,255,.9),0 0 0 5px rgba(80,50,0,.35);background:color-mix(in srgb,var(--annotation-warning) 12%,transparent);}",
+    ".hover{position:fixed;pointer-events:none;border:2px solid var(--annotation-primary);box-shadow:0 0 0 3px rgba(255,255,255,.7);background:color-mix(in srgb,var(--annotation-primary) 8%,transparent);border-radius:3px;opacity:0;visibility:hidden;}",
+    ".hover-label{position:fixed;pointer-events:none;z-index:2;max-width:80vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:var(--annotation-radius);background:var(--annotation-popover);color:var(--annotation-popover-foreground);border:1px solid var(--annotation-border);padding:2px 6px;font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 1px 3px rgba(0,0,0,.2);opacity:0;visibility:hidden;}",
     ".hover.visible,.hover-label.visible{opacity:1;visibility:visible;}",
     "@media (prefers-reduced-motion:no-preference){.hover{transition-property:left,top,width,height,opacity;transition-duration:110ms,110ms,110ms,110ms,80ms;transition-timing-function:cubic-bezier(.2,0,0,1);}.hover-label{transition-property:left,top,opacity;transition-duration:110ms,110ms,80ms;transition-timing-function:cubic-bezier(.2,0,0,1);}}",
-    ".marquee{position:fixed;pointer-events:none;border:1.5px dashed #5b7cfa;box-shadow:0 0 0 3px rgba(255,255,255,.7);background:rgba(91,124,250,.08);display:none;}",
-    ".badge{position:fixed;pointer-events:none;background:#635bff;color:#fff;font-size:11px;padding:2px 7px;border-radius:6px;box-shadow:0 0 0 2px rgba(255,255,255,.9),0 1px 2px rgba(0,0,0,.25);z-index:2;white-space:nowrap;max-width:40vw;overflow:hidden;text-overflow:ellipsis;}",
-    ".badge.invalid{background:#d4a94e;color:#1a1204;}",
+    ".marquee{position:fixed;pointer-events:none;border:1.5px dashed var(--annotation-primary);box-shadow:0 0 0 3px rgba(255,255,255,.7);background:color-mix(in srgb,var(--annotation-primary) 8%,transparent);display:none;}",
+    ".badge{position:fixed;pointer-events:none;background:var(--annotation-primary);color:var(--annotation-primary-foreground);font-size:11px;padding:2px 7px;border-radius:var(--annotation-radius);box-shadow:0 0 0 2px rgba(255,255,255,.9),0 1px 2px rgba(0,0,0,.25);z-index:2;white-space:nowrap;max-width:40vw;overflow:hidden;text-overflow:ellipsis;}",
+    ".badge.invalid{background:var(--annotation-warning);color:var(--annotation-warning-foreground);}",
     ".ink{position:fixed;inset:0;width:100%;height:100%;overflow:visible;}",
     ".ink .halo-light{fill:#fff;opacity:.88;}",
     ".ink .halo-dark{fill:#111218;opacity:.42;}",
-    ".ink .pen{fill:#5b7cfa;}",
-    ".editor{position:fixed;background:#2c2c31;border-radius:12px;padding:8px 10px;width:min(430px,calc(100vw - 24px));pointer-events:auto;z-index:4;box-shadow:0 10px 28px rgba(0,0,0,.32);display:none;}",
-    ".row{display:flex;align-items:flex-end;gap:8px;}",
-    ".editor textarea{min-width:0;flex:1;background:none;border:0;color:#e7e7ec;font-size:13px;outline:none;resize:none;min-height:34px;max-height:120px;line-height:1.35;font-family:inherit;}",
+    ".ink .pen{fill:var(--annotation-primary);}",
+    ".editor{position:fixed;width:min(42ch,calc(100vw - 24px));padding:10px;background:var(--annotation-popover);color:var(--annotation-popover-foreground);border:1px solid var(--annotation-border);border-radius:calc(var(--annotation-radius) + 4px);pointer-events:auto;z-index:4;box-shadow:0 10px 28px rgba(0,0,0,.2);display:none;}",
+    ".row{display:grid;min-width:0;gap:8px;}",
+    ".comment-label{color:var(--annotation-popover-foreground);font-size:12px;font-weight:500;line-height:1.25;}",
+    ".editor textarea{width:100%;min-width:0;min-height:56px;max-height:120px;padding:8px 10px;background:var(--annotation-background);border:1px solid var(--annotation-input);border-radius:var(--annotation-radius);color:var(--annotation-foreground);font-size:13px;line-height:1.45;outline:none;resize:none;}",
+    ".editor textarea::placeholder{color:var(--annotation-muted-foreground);}",
+    ".editor textarea:focus-visible{border-color:var(--annotation-ring);box-shadow:0 0 0 2px color-mix(in srgb,var(--annotation-ring) 30%,transparent);}",
+    ".editor textarea:disabled{opacity:.5;}",
     ANNOTATION_TARGET_PICKER_CSS,
-    ".refuse{color:#d4a94e;font-size:11px;margin-top:5px;display:none;}",
-    ".refuse-banner{position:fixed;top:58px;left:50%;transform:translateX(-50%);background:#2c2c31;color:#d4a94e;font-size:12px;padding:6px 12px;border-radius:8px;pointer-events:none;z-index:4;display:none;box-shadow:0 8px 20px rgba(0,0,0,.28);}",
-    ".error{color:#f0b4b4;font-size:11px;margin-top:5px;display:none;}",
+    ".refuse{color:var(--annotation-warning-foreground);font-size:11px;margin-top:5px;display:none;}",
+    ".refuse-banner{position:fixed;top:58px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 24px);background:var(--annotation-popover);color:var(--annotation-warning-foreground);border:1px solid var(--annotation-border);font-size:12px;padding:6px 12px;border-radius:var(--annotation-radius);pointer-events:none;z-index:4;display:none;box-shadow:0 8px 20px rgba(0,0,0,.18);}",
+    ".error{color:var(--annotation-destructive);font-size:11px;margin-top:5px;display:none;}",
+    "@media (hover:hover){.pill button:hover{background:color-mix(in srgb,var(--annotation-accent) 70%,transparent);color:var(--annotation-accent-foreground);}}",
+    "@media (pointer:coarse){.pill button,.target-trigger,.target-option{min-height:44px;}}",
   ].join("");
 
   const layer = D.createElement("div");
@@ -111,18 +119,30 @@ export function createOverlayChrome(input: {
   editor.className = "editor";
   const row = D.createElement("div");
   row.className = "row";
+  const commentLabel = D.createElement("label");
+  commentLabel.className = "comment-label";
+  commentLabel.htmlFor = "traycer-annotation-comment";
+  commentLabel.textContent = "Describe the change";
   const comment = D.createElement("textarea");
+  comment.id = "traycer-annotation-comment";
   comment.rows = 1;
-  comment.placeholder = "Describe the change...";
-  comment.setAttribute("aria-label", "Annotation comment");
-  row.appendChild(comment);
-  row.appendChild(input.targetPickerRoot);
+  comment.placeholder = "Add details…";
+  comment.setAttribute(
+    "aria-describedby",
+    "traycer-annotation-refuse traycer-annotation-error",
+  );
+  row.append(commentLabel, comment, input.targetPickerRoot);
   const refuseLine = D.createElement("div");
+  refuseLine.id = "traycer-annotation-refuse";
   refuseLine.className = "refuse";
+  refuseLine.setAttribute("role", "status");
   const refuseBanner = D.createElement("div");
   refuseBanner.className = "refuse-banner";
+  refuseBanner.setAttribute("role", "status");
   const errorLine = D.createElement("div");
+  errorLine.id = "traycer-annotation-error";
   errorLine.className = "error";
+  errorLine.setAttribute("role", "alert");
   editor.appendChild(row);
   editor.appendChild(refuseLine);
   editor.appendChild(errorLine);

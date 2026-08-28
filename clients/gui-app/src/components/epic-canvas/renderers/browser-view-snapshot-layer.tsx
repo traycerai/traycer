@@ -16,7 +16,7 @@ export function BrowserViewSnapshotLayer(props: {
           src={snapshot.dataUrl}
           alt=""
           aria-hidden
-          className="h-full w-full object-fill"
+          className="h-full w-full object-contain"
           draggable={false}
         />
       )}

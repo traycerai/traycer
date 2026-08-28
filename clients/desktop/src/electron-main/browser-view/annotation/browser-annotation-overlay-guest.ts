@@ -6,6 +6,7 @@
  * `boot()` wires collaborators: the chrome (DOM + stylesheet), the mark store
  * (live marks and their nodes), and the draft stroke (freehand ink).
  */
+import type { BrowserAnnotationTheme } from "../../../ipc-contracts/browser-annotation-types";
 import {
   createMarkStore,
   type LiveMark,
@@ -53,6 +54,7 @@ interface GuestHooks {
   __traycerAnnotationHideChromeForCapture: () => void;
   __traycerAnnotationResetAfterAttach: () => void;
   __traycerAnnotationCaptureFailed: () => void;
+  __traycerAnnotationSetTheme: (theme: BrowserAnnotationTheme) => void;
   __traycerAnnotationSetTargetChatLabel: (
     targets: readonly { readonly chatId: string; readonly label: string }[],
     defaultChatId: string | null,
@@ -137,6 +139,41 @@ function boot(): boolean {
     } catch {
       // binding may be gone
     }
+  }
+
+  function setTheme(theme: BrowserAnnotationTheme): void {
+    host.style.setProperty("--annotation-background", theme.background);
+    host.style.setProperty("--annotation-foreground", theme.foreground);
+    host.style.setProperty("--annotation-popover", theme.popover);
+    host.style.setProperty(
+      "--annotation-popover-foreground",
+      theme.popoverForeground,
+    );
+    host.style.setProperty(
+      "--annotation-muted-foreground",
+      theme.mutedForeground,
+    );
+    host.style.setProperty("--annotation-border", theme.border);
+    host.style.setProperty("--annotation-input", theme.input);
+    host.style.setProperty("--annotation-ring", theme.ring);
+    host.style.setProperty("--annotation-primary", theme.primary);
+    host.style.setProperty(
+      "--annotation-primary-foreground",
+      theme.primaryForeground,
+    );
+    host.style.setProperty("--annotation-accent", theme.accent);
+    host.style.setProperty(
+      "--annotation-accent-foreground",
+      theme.accentForeground,
+    );
+    host.style.setProperty("--annotation-destructive", theme.destructive);
+    host.style.setProperty("--annotation-warning", theme.warning);
+    host.style.setProperty(
+      "--annotation-warning-foreground",
+      theme.warningForeground,
+    );
+    host.style.setProperty("--annotation-font", theme.fontFamily);
+    host.style.setProperty("--annotation-color-scheme", theme.appearance);
   }
 
   function emitState(): void {
@@ -639,6 +676,7 @@ function boot(): boolean {
       marks.entries.map((entry) => viewportBounds(entry)),
     );
     const box = editor.getBoundingClientRect();
+    const pillBox = pill.getBoundingClientRect();
     const placed = placeCommentBox({
       union,
       viewport: { width: W.innerWidth, height: W.innerHeight },
@@ -646,7 +684,7 @@ function boot(): boolean {
         width: box.width || 430,
         height: box.height || 72,
       },
-      pillBottom: 14 + 40,
+      pillBottom: pillBox.bottom || 54,
     });
     editor.style.left = String(placed.x) + "px";
     editor.style.top = String(placed.y) + "px";
@@ -927,6 +965,7 @@ function boot(): boolean {
     __traycerAnnotationHideChromeForCapture: hideChromeForCapture,
     __traycerAnnotationResetAfterAttach: resetAfterAttach,
     __traycerAnnotationCaptureFailed: captureFailed,
+    __traycerAnnotationSetTheme: setTheme,
     __traycerAnnotationSetTargetChatLabel: setTargetChatLabel,
   };
   Object.assign(W, HOOKS);

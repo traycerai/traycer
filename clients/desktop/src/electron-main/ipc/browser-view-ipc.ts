@@ -289,7 +289,7 @@ export function registerBrowserViewIpc(
       const windowId = readSenderWindowId(bridge, event);
       return manager.annotations.start(
         windowId,
-        browserViewIpcPayload.tileKey.parse(payload),
+        browserViewIpcPayload.annotationStart.parse(payload),
       );
     },
   );

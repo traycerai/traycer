@@ -3,6 +3,7 @@ import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationEndReason,
   BrowserAnnotationSetTargetChatLabelInput,
+  BrowserAnnotationStartInput,
   BrowserAnnotationStartResult,
 } from "../../../ipc-contracts/browser-annotation-types";
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
@@ -64,7 +65,7 @@ export class BrowserViewAnnotationHost {
 
   start(
     windowId: string,
-    input: BrowserViewTileKey,
+    input: BrowserAnnotationStartInput,
   ): Promise<BrowserAnnotationStartResult> {
     const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) {
@@ -78,6 +79,7 @@ export class BrowserViewAnnotationHost {
     const session = new BrowserAnnotationSession({
       webContents: entry.view.webContents,
       debugSession: this.debugSessions.ensure(entry),
+      theme: input.theme,
       identity: {
         tabId: entry.identity.key.tabId,
         sessionId: entry.identity.key.sessionId,

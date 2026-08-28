@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   BrowserAnnotationAttachPayload,
   BrowserAnnotationSessionEvent,
+  BrowserAnnotationTheme,
 } from "../../../../ipc-contracts/browser-annotation-types";
 import type { RecordedCommand } from "../../debug/__tests__/browser-debug-session-test-support";
 import {
@@ -12,6 +13,13 @@ import {
   ANNOTATION_WORLD_NAME,
   callGuestHook,
 } from "../browser-annotation-overlay-script";
+import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "../browser-annotation-overlay-guest.generated";
+import { BrowserAnnotationSession } from "../browser-annotation-session";
+import { BrowserDebugSession } from "../../debug/browser-debug-session";
+import type {
+  BrowserViewCapturedImage,
+  BrowserViewDebugger,
+} from "../../browser-view-port";
 
 const ANNOTATION_CANCEL_EXPRESSION = callGuestHook(
   "__traycerAnnotationCancel",
@@ -29,13 +37,26 @@ const ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION = callGuestHook(
   "__traycerAnnotationResetAfterAttach",
   [],
 );
-import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "../browser-annotation-overlay-guest.generated";
-import { BrowserAnnotationSession } from "../browser-annotation-session";
-import { BrowserDebugSession } from "../../debug/browser-debug-session";
-import type {
-  BrowserViewCapturedImage,
-  BrowserViewDebugger,
-} from "../../browser-view-port";
+
+const TEST_ANNOTATION_THEME: BrowserAnnotationTheme = {
+  appearance: "dark",
+  background: "#111111",
+  foreground: "#eeeeee",
+  popover: "#222222",
+  popoverForeground: "#eeeeee",
+  mutedForeground: "#aaaaaa",
+  border: "#444444",
+  input: "#333333",
+  ring: "#888888",
+  primary: "#ffffff",
+  primaryForeground: "#000000",
+  accent: "#555555",
+  accentForeground: "#ffffff",
+  destructive: "#ff0000",
+  warning: "#ffaa00",
+  warningForeground: "#000000",
+  fontFamily: "Inter",
+};
 
 type BrowserViewCropRect = Parameters<BrowserViewCapturedImage["crop"]>[0];
 
@@ -287,6 +308,7 @@ function createHarness(attached: boolean): SessionHarness {
   const session = new BrowserAnnotationSession({
     webContents,
     debugSession,
+    theme: TEST_ANNOTATION_THEME,
     identity: { tabId: "tab-1", sessionId: "session-1" },
     onEvent: (event) => {
       events.push(event);
@@ -373,6 +395,9 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const harness = createHarness(true);
     await expect(harness.session.start()).resolves.toEqual({ ok: true });
     expect(harness.session.isActive()).toBe(true);
+    expect(
+      evaluateExpressions(harness.webContents.debugger).join("\n"),
+    ).toContain(TEST_ANNOTATION_THEME.background);
 
     expect(harness.webContents.debugger.commandMethods()).toEqual([
       "Page.enable",
@@ -402,7 +427,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     expect(
       harness.webContents.debugger.find("Runtime.evaluate")?.params,
     ).toEqual({
-      expression: ANNOTATION_OVERLAY_GUEST_SOURCE,
+      expression: expect.stringContaining(ANNOTATION_OVERLAY_GUEST_SOURCE),
       contextId: 77,
       awaitPromise: false,
       returnByValue: true,
@@ -467,6 +492,9 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     });
     expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
     expect(harness.events).toEqual([]);
+    expect(evaluateExpressions(harness.webContents.debugger)).toContain(
+      ANNOTATION_CANCEL_EXPRESSION,
+    );
     expect(
       harness.webContents.debugger.find("Runtime.removeBinding")?.params,
     ).toEqual({
@@ -602,6 +630,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const session = new BrowserAnnotationSession({
       webContents,
       debugSession,
+      theme: TEST_ANNOTATION_THEME,
       identity: { tabId: "tab-1", sessionId: "session-1" },
       onEvent: () => undefined,
       onAttached: (result) => {
@@ -868,6 +897,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const first = new BrowserAnnotationSession({
       webContents,
       debugSession,
+      theme: TEST_ANNOTATION_THEME,
       identity: { tabId: "tab-1", sessionId: "session-1" },
       onEvent: (event) => {
         firstEvents.push(event);
@@ -883,6 +913,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const second = new BrowserAnnotationSession({
       webContents,
       debugSession,
+      theme: TEST_ANNOTATION_THEME,
       identity: { tabId: "tab-1", sessionId: "session-1" },
       onEvent: (event) => {
         secondEvents.push(event);
@@ -1030,6 +1061,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const retry = new BrowserAnnotationSession({
       webContents: first.webContents,
       debugSession: first.debugSession,
+      theme: TEST_ANNOTATION_THEME,
       identity: { tabId: "tab-1", sessionId: "session-1" },
       onEvent: (event) => {
         retryEvents.push(event);

@@ -114,6 +114,20 @@ describe("annotation overlay pointer and keyboard boundaries", () => {
       "requestAttach(targetChatId)",
     );
   });
+
+  it("keeps annotation chrome independent from guest root sizing", () => {
+    expect(ANNOTATION_OVERLAY_GUEST_SOURCE).toContain("font-size:16px");
+    expect(ANNOTATION_OVERLAY_GUEST_SOURCE).toContain("min-height:44px");
+    expect(ANNOTATION_OVERLAY_GUEST_SOURCE).not.toMatch(
+      /[0-9]+(?:\.[0-9]+)?rem/,
+    );
+    expect(ANNOTATION_OVERLAY_GUEST_SOURCE).toContain(
+      'setAttribute("aria-label", "Annotation destination")',
+    );
+    expect(ANNOTATION_OVERLAY_GUEST_SOURCE).toContain(
+      'setAttribute("role", "alert")',
+    );
+  });
 });
 
 describe("region drag geometry", () => {
