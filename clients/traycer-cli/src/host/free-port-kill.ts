@@ -72,6 +72,19 @@ export const PORT_RELEASE_VERIFY_TIMEOUT_MS = 5_000;
 // iterations is a reasonable ceiling for a process that is ignoring the
 // signal anyway.
 const PORT_RELEASE_POLL_INTERVAL_MS = 250;
+// How many CONSECUTIVE clean "nothing is listening" observations certify a
+// release. Two, not one, because a single sample cannot tell a freed port from
+// the gap between a supervised process exiting and its replacement binding -
+// and systemd's default `RestartSec` is 100ms, comfortably inside the window a
+// one-shot probe would call success.
+//
+// This NARROWS the race; it cannot close it, and pretending otherwise would be
+// the same overclaim this module exists to remove. A supervisor with a long
+// restart delay (launchd throttles to 10s) will still beat any bounded
+// observation, and the restart itself takes time after that. What the extra
+// sample buys is the common, fast-respawn case; what it costs is one poll
+// interval on the success path.
+const PORT_RELEASE_FREE_OBSERVATIONS_REQUIRED = 2;
 
 export interface KillConflictingPortOwnerOptions {
   readonly pid: number;
@@ -242,6 +255,7 @@ async function verifyPortReleased(
   // the first names a process for the user to deal with.
   let lastUnverifiedProbe: string | null = null;
   let lastHolderPid: number | null = null;
+  let consecutiveFreeObservations = 0;
   for (;;) {
     // `pidOwnsPort` re-throws genuine probe failures (exit 2+, unexpected
     // signal). Before the kill that is correct - the runner turns it into a
@@ -268,18 +282,32 @@ async function verifyPortReleased(
     ) {
       lastUnverifiedProbe = ownership.probe;
     } else if (ownership.probe === "no-listener") {
-      // The ONLY success verdict: the probe ran cleanly and found nothing
-      // listening on the port.
-      return {
-        release: "released",
-        releaseDetail: `port ${port} has no listener (pid ${pid} released it)`,
-        holderPid: null,
-      };
+      // The only success verdict - but it has to hold across an interval, not
+      // a single sample. One clean observation is equally consistent with "the
+      // port is free" and "we looked during a supervised process's respawn
+      // gap", and returning on the first would spend the rest of the
+      // verification budget on nothing while handing the caller a restart that
+      // races the replacement.
+      lastUnverifiedProbe = null;
+      lastHolderPid = null;
+      consecutiveFreeObservations += 1;
+      if (
+        consecutiveFreeObservations >= PORT_RELEASE_FREE_OBSERVATIONS_REQUIRED
+      ) {
+        return {
+          release: "released",
+          releaseDetail: `port ${port} had no listener across ${consecutiveFreeObservations} checks ${PORT_RELEASE_POLL_INTERVAL_MS}ms apart (pid ${pid} released it)`,
+          holderPid: null,
+        };
+      }
     } else {
       lastUnverifiedProbe = null;
       // Someone is still listening: either the target itself, or a
       // replacement. Both keep the conflict alive, so both keep polling and
-      // both end as `still-held` - they differ only in the message.
+      // both end as `still-held` - they differ only in the message. The free
+      // streak resets, so a port that flaps between free and taken can never
+      // accumulate its way to a release.
+      consecutiveFreeObservations = 0;
       lastHolderPid = ownership.owns ? pid : ownership.actualPid;
     }
     if (Date.now() >= deadline) break;
@@ -289,6 +317,18 @@ async function verifyPortReleased(
     return {
       release: "unverified",
       releaseDetail: `could not determine whether port ${port} was released (probe=${lastUnverifiedProbe})`,
+      holderPid: null,
+    };
+  }
+  // Ran out of budget having seen the port free, but never for long enough to
+  // certify it, and never having seen anyone holding it either. Reporting
+  // `still-held` here would name a holder that was never observed; reporting
+  // `released` would be the single-sample claim this loop exists to avoid.
+  // "We could not confirm it" is the only true statement available.
+  if (lastHolderPid === null && consecutiveFreeObservations > 0) {
+    return {
+      release: "unverified",
+      releaseDetail: `port ${port} appeared free but could not be observed free for ${PORT_RELEASE_FREE_OBSERVATIONS_REQUIRED} consecutive checks before the ${PORT_RELEASE_VERIFY_TIMEOUT_MS}ms deadline`,
       holderPid: null,
     };
   }

@@ -244,18 +244,42 @@ describe.skipIf(process.platform === "win32")(
       vi.useRealTimers();
     });
 
-    it("released: the port has no listener after SIGTERM", async () => {
-      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+    it("released: the port has no listener across consecutive checks after SIGTERM", async () => {
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = NO_LISTENER;
 
-      const result = await killConflictingPortOwner({
+      const pending = killConflictingPortOwner({
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
       });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS);
+      const result = await pending;
 
       expect(result.release).toBe("released");
       expect(result.releaseDetail).toContain("no listener");
       expect(result.holderPid).toBeNull();
+    });
+
+    // A SINGLE free observation is not a release. It is equally consistent
+    // with a supervised process's respawn gap, and returning on it hands the
+    // caller a restart that races the replacement.
+    it("does not certify a release from one free sample when the port is retaken", async () => {
+      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+      // The replacement binds immediately after the single free sample.
+      defaultResponse = ownsPort(7777);
+
+      const pending = killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
+      const result = await pending;
+
+      expect(result.release).not.toBe("released");
+      expect(result.release).toBe("still-held");
+      expect(result.holderPid).toBe(7777);
     });
 
     it("released: a dead target is confirmed by the port probe, not by process exit alone", async () => {
@@ -264,14 +288,17 @@ describe.skipIf(process.platform === "win32")(
       // dead here AND the probe reports no listener; the probe is what makes
       // it a release. The companion test below pins the case where those two
       // facts disagree.
-      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = NO_LISTENER;
       mocks.isProcessAliveMock.mockReturnValue(false);
 
-      const result = await killConflictingPortOwner({
+      const pending = killConflictingPortOwner({
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
       });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS);
+      const result = await pending;
 
       expect(result.release).toBe("released");
       expect(result.holderPid).toBeNull();
@@ -306,7 +333,8 @@ describe.skipIf(process.platform === "win32")(
     // resulting ESRCH as "still held" named a pid that no longer exists and
     // told the operator to terminate it, while the port was already free.
     it("released: the target exits before SIGTERM lands (ESRCH) but the port is free", async () => {
-      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = NO_LISTENER;
       killSpy.mockImplementation(
         (_pid: number, signal: string | number | undefined) => {
           // The pre-kill liveness probe (signal 0) still succeeds; only the
@@ -318,11 +346,13 @@ describe.skipIf(process.platform === "win32")(
         },
       );
 
-      const result = await killConflictingPortOwner({
+      const pending = killConflictingPortOwner({
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
       });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS);
+      const result = await pending;
 
       expect(result.release).toBe("released");
       expect(result.killed).toBe(false);
