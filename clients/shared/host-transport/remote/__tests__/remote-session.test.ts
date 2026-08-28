@@ -4649,11 +4649,12 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
   const buildChunkFrames = (
     streamId: number,
   ): [EncodeMuxFrameInput, EncodeMuxFrameInput] => {
-    const json = { kind: "snapshot", hasBinaryPayload: true, label: "resync" };
-    const binary = new TextEncoder().encode(
-      `resync-payload-${"x".repeat(256)}`,
-    );
-    const body = encodeMuxMessageBody(json, binary);
+    const json = {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      label: `resync-${"x".repeat(256)}`,
+    };
+    const body = encodeMuxMessageBody(json, null);
     const split = Math.ceil(body.length / 2);
     const shared = {
       type: MuxFrameType.STREAM_FRAME,
