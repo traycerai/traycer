@@ -292,6 +292,29 @@
         "vitest": "catalog:",
       },
     },
+    "clients/webapp": {
+      "name": "@traycer-clients/webapp",
+      "version": "0.0.0",
+      "dependencies": {
+        "react": "catalog:",
+        "react-dom": "catalog:",
+      },
+      "devDependencies": {
+        "@rolldown/plugin-babel": "catalog:",
+        "@tailwindcss/vite": "catalog:",
+        "@tanstack/router-plugin": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "@typescript-eslint/eslint-plugin": "catalog:",
+        "@typescript-eslint/parser": "catalog:",
+        "@vitejs/plugin-react": "catalog:",
+        "eslint": "catalog:",
+        "typescript": "catalog:",
+        "vite": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "protocol": {
       "name": "@traycer/protocol",
       "version": "0.1.0",
@@ -1570,6 +1593,8 @@
     "@traycer-clients/shared": ["@traycer-clients/shared@workspace:clients/shared"],
 
     "@traycer-clients/traycer-cli": ["@traycer-clients/traycer-cli@workspace:clients/traycer-cli"],
+
+    "@traycer-clients/webapp": ["@traycer-clients/webapp@workspace:clients/webapp"],
 
     "@traycer/protocol": ["@traycer/protocol@workspace:protocol"],
 

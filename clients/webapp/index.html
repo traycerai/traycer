@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No `maximum-scale=1`: that cap exists in the phone shell to stop iOS
+         zooming into sub-16px inputs, and it costs pinch-zoom precision. This
+         is a desktop-product surface in a browser the user already controls,
+         so the viewport stays fully zoomable.
+         viewport-fit=cover is what makes `env(safe-area-inset-*)` report real
+         values, which the shared renderer's safe-area tokens read; on a
+         desktop browser every inset is zero and this is inert. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <title>Traycer</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
