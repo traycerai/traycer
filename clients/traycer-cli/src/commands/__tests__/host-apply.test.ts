@@ -142,7 +142,8 @@ describe("host apply - activation", () => {
     // the prose making the claim `activation` had just stopped making - and it
     // can be flatly wrong, since a host nobody managed to stop keeps serving
     // the old bytes.
-    expect(result.human ?? "").toContain("did not come back after the swap");
+    expect(result.human ?? "").toContain("start/restart request failed");
+    expect(result.human ?? "").toContain("liveness was not checked");
     expect(result.human ?? "").toContain("traycer host status");
     expect(result.human ?? "").toContain("traycer host doctor");
     expect(result.human ?? "").not.toContain("NOT running");

@@ -1194,11 +1194,13 @@ function registerHostCommands(program: Command): void {
           "                       registry version. Prefer --release.",
           "",
           "Success contract:",
-          "  Exit 0 means the host is running the requested version - the update stages,",
-          "  applies, then health-checks. A host that commits cleanly but does not come",
-          "  back exits non-zero with E_HOST_UPDATE_HEALTH_CHECK_FAILED and is NOT rolled",
-          "  back. 'traycer host apply' is the lower-level half that reports an unconverged",
-          "  swap as a successful result instead.",
+          "  When an update is actually applied, exit 0 means the host came back healthy:",
+          "  it stages, applies, then health-checks, and a host that commits cleanly but",
+          "  does not come back exits non-zero with E_HOST_UPDATE_HEALTH_CHECK_FAILED and is",
+          "  NOT rolled back. An install already at the target version is a no-op that",
+          "  changes nothing and does NOT re-check the running host - use",
+          "  'traycer host status' if you need to know it is up. 'traycer host apply' is the",
+          "  lower-level half that reports an unconverged swap as a successful result.",
           "",
         ].join("\n"),
       ),
@@ -1549,7 +1551,7 @@ function registerServiceCommands(host: Command): void {
     service
       .command("uninstall")
       .description(
-        "Deregister the OS service for the current environment. Deregistration also stops the supervised host on every platform. The installed host bytes are kept - use 'traycer host uninstall' to remove those.",
+        "Deregister the OS service for the current environment. Deregistration also asks the supervised host to stop, but that is best-effort: on Linux and Windows the teardown commands tolerate their own failures, so a host can survive it - check with 'traycer host status'. The installed host bytes are kept; use 'traycer host uninstall' to remove those.",
       ),
     () => serviceUninstallCommand,
   );

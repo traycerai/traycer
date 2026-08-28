@@ -19,7 +19,8 @@ import { withCliLock } from "../store/cli-lock";
 // Exit 0 here means THE SWAP COMMITTED - not that the host came back. A
 // post-swap service start that fails is reported as `postSwapError` on an
 // `applied` outcome, per `applyHost`'s explicit no-rollback contract, and
-// `runningActivated` says whether the new bytes are confirmed running.
+// `runningActivated` says whether a start was REQUESTED and accepted - not
+// that anything is serving. See `activationOf`.
 //
 // That is not an accident to be aligned away. `host apply` is the low-level
 // primitive whose committed/not-committed answer callers need SEPARATELY from
@@ -100,9 +101,9 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
  *   - `requested`      the post-swap start/restart was accepted. NOT proof the
  *                      host is serving; `traycer host update` health-probes,
  *                      and `traycer host status` answers it directly.
- *   - `failed`         the post-swap start/restart threw (`postSwapError`).
- *                      Bytes are committed and the host is not coming back on
- *                      its own.
+ *   - `failed`         the post-swap start/restart REQUEST threw
+ *                      (`postSwapError`). Bytes are committed; whether
+ *                      anything is still serving was not checked.
  *   - `not-attempted`  committed, but no start ran - `--no-service` (no
  *                      lifecycle at all), or a `postSwapAction` of "none",
  *                      which is what a non-bootstrap caller gets against an
@@ -138,7 +139,7 @@ function humanSummary(outcome: ApplyHostOutcome): string {
   // bytes-only swap under a host nobody managed to stop leaves that host
   // serving the old bytes, alive, while the start never ran.
   if (outcome.postSwapError !== null) {
-    return `applied host ${outcome.record.version}, but the service did not come back after the swap: ${outcome.postSwapError} - run 'traycer host status' to see what is running, then 'traycer host doctor'`;
+    return `applied host ${outcome.record.version}, but the post-swap start/restart request failed: ${outcome.postSwapError} - liveness was not checked; run 'traycer host status' to see what is running, then 'traycer host doctor'`;
   }
   if (!outcome.runningActivated) {
     return `applied host ${outcome.record.version}, but no start was run, so the new bytes are not active yet - run 'traycer host status' to see what is running`;

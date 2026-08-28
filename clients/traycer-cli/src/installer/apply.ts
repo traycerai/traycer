@@ -76,8 +76,11 @@ export type ApplyHostOutcome =
       readonly record: HostInstallRecord;
       readonly previous: HostInstallRecord | null;
       // False whenever `--no-service` was set (no start was even
-      // attempted) or the post-swap start/restart failed - true only when
-      // the newly-committed bytes are confirmed running.
+      // attempted) or the post-swap start/restart failed. True means the
+      // start was REQUESTED and the request was accepted - NOT that the host
+      // is serving: `launchctl kickstart` returns as soon as launchd accepts,
+      // so an unspawnable job answers success. Nothing here probes health;
+      // `host update` does, and `host status` answers it directly.
       readonly runningActivated: boolean;
       // The attested, committed canonical install-generation fingerprint -
       // read from the record this call itself just wrote, never a later

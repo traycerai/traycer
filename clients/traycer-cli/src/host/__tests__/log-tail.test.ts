@@ -217,6 +217,57 @@ describe("startLogTail", () => {
     }
   });
 
+  // The window BEFORE the first poll. Recording only the size at construction
+  // left the identity unknown, so a replacement that landed before the first
+  // tick had nothing to compare against and resumed at the old offset.
+  it("re-reads a replacement that landed before the first poll", async () => {
+    writeFileSync(logPath, `${"o".repeat(200)}\n`);
+    const { onBytes, text } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: () => undefined,
+      pollIntervalMs: 10_000, // no tick will fire on its own
+      maxMissingRetries: 60,
+    });
+
+    // Swap in a different, LONGER file before any poll has run.
+    unlinkSync(logPath);
+    const replacement = `${"n".repeat(400)}\nNEW-PREFIX-MUST-SURVIVE\n`;
+    writeFileSync(logPath, replacement);
+    tail.drainSync();
+
+    expect(text()).toBe(replacement);
+  });
+
+  // The window AFTER the final poll: `drainSync` runs on the exit path, with
+  // no later tick to correct it, so it has to apply the same replacement rule.
+  it("re-reads a replacement in drainSync rather than resuming at the old offset", async () => {
+    writeFileSync(logPath, "");
+    const { onBytes, text } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: () => undefined,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      maxMissingRetries: 60,
+    });
+
+    appendFileSync(logPath, `${"a".repeat(150)}\n`);
+    await waitFor(() => text().length > 150, 2_000);
+    tail.stop();
+
+    const replacement = `${"b".repeat(300)}\nDRAIN-PREFIX-MUST-SURVIVE\n`;
+    unlinkSync(logPath);
+    writeFileSync(logPath, replacement);
+    tail.drainSync();
+
+    expect(text()).toContain("DRAIN-PREFIX-MUST-SURVIVE");
+    expect(text().endsWith(replacement)).toBe(true);
+  });
+
   // `stop()` can land while a tick is inside open/stat/read/close, past its
   // only entry check. Emitting then breaks the documented guarantee, lets
   // `host logs --follow` keep writing after its signal cleanup resolved, and

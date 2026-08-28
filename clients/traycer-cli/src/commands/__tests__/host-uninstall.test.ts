@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { noopLogger } from "../../logger";
 import { serviceLabelFor, type ServiceStatus } from "../../service";
+import type { PublishedProcessIdentityVerdict } from "../../store/process-identity";
 import type { UninstallHostOptions } from "../../installer";
 import {
   runHostUninstall,
@@ -19,12 +20,20 @@ function commandDeps(args: {
   readonly stop: () => Promise<void>;
   readonly receivedOptions: UninstallHostOptions[];
   readonly status: () => Promise<ServiceStatus>;
-  // Defaults to "nothing is serving" so the existing cases read as a
-  // confirmed teardown; the cases that care override it.
-  readonly findLiveHost: (() => Promise<unknown | null>) | null;
+  // Defaults to a published host that is positively dead, so the existing
+  // cases read as a confirmed teardown; the cases that care override it.
+  readonly liveness: PublishedProcessIdentityVerdict | "unpublished" | null;
 }): RunHostUninstallDeps {
+  const liveness = args.liveness ?? "dead";
   return {
-    findLiveHost: args.findLiveHost ?? (async () => null),
+    readPublishedHost: async () =>
+      liveness === "unpublished"
+        ? null
+        : { pid: 4242, startIdentity: "start-identity" },
+    probeProcessExited: async () => {
+      if (liveness === "unpublished") throw new Error("unreachable");
+      return liveness;
+    },
     createServiceController: () => ({
       uninstall: async () => undefined,
       stop: args.stop,
@@ -95,7 +104,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 
@@ -117,7 +126,7 @@ describe("runHostUninstall", () => {
         },
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 
@@ -145,7 +154,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined, // resolves, proving nothing
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: async () => ({ pid: 4242 }),
+        liveness: "current",
       }),
     );
 
@@ -175,7 +184,7 @@ describe("runHostUninstall", () => {
           listenUrl: null,
           pid: null,
         }),
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 
@@ -194,9 +203,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: async () => {
-          throw new Error("pid metadata unreadable");
-        },
+        liveness: "indeterminate",
       }),
     );
 
@@ -219,7 +226,7 @@ describe("runHostUninstall", () => {
           listenUrl: "ws://127.0.0.1:1234",
           pid: 4242,
         }),
-        findLiveHost: async () => ({ pid: 4242 }),
+        liveness: "current",
       }),
     );
 
@@ -241,7 +248,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 
@@ -268,7 +275,7 @@ describe("runHostUninstall", () => {
         status: async () => {
           throw new Error("launchctl unavailable");
         },
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 
@@ -300,7 +307,7 @@ describe("runHostUninstall", () => {
         },
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 
@@ -325,7 +332,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
-        findLiveHost: null,
+        liveness: null,
       }),
     );
 

@@ -75,7 +75,13 @@ export interface LogTail {
  * first (`host logs`) or deliberately do not (`host start`).
  */
 export function startLogTail(options: LogTailOptions): LogTail {
-  let offset = initialOffset(options.path);
+  // Size AND identity together. Recording the size alone left `fileIdentity`
+  // null through the first poll, so a replacement that landed BEFORE that poll
+  // had no signal to compare against and resumed at the old offset - the same
+  // dropped-prefix bug this identity tracking exists to close, in the one
+  // window it did not cover.
+  const start = initialPosition(options.path);
+  let offset = start.size;
   let stopped = false;
   let missingRetries = 0;
   let timer: NodeJS.Timeout | null = null;
@@ -94,8 +100,25 @@ export function startLogTail(options: LogTailOptions): LogTail {
   //     Narrower than "any error on purpose": an EACCES or a locked handle
   //     must NOT rewind, which is the whole point of preserving the offset
   //     across transient failures.
-  let fileIdentity: number | null = null;
+  let fileIdentity: number | null = start.identity;
   let sawFileMissing = false;
+
+  /**
+   * Shared replacement rule, so the poll and the synchronous drain cannot
+   * disagree about what "same file" means. A drain that skipped this check
+   * re-read a post-final-poll replacement from the old offset and dropped its
+   * prefix - the identical defect, on the exit path.
+   */
+  const rewindIfReplaced = (identity: number | null, size: number): void => {
+    const replaced =
+      sawFileMissing ||
+      (identity !== null && fileIdentity !== null && identity !== fileIdentity);
+    // Truncated in place, or replaced: re-read from the top either way. Size
+    // is still the right signal for truncation - same file, fewer bytes.
+    if (replaced || size < offset) offset = 0;
+    fileIdentity = identity;
+    sawFileMissing = false;
+  };
 
   const schedule = (): void => {
     if (stopped) return;
@@ -112,20 +135,7 @@ export function startLogTail(options: LogTailOptions): LogTail {
       try {
         const stats = await handle.stat();
         missingRetries = 0;
-        const identity = stats.ino > 0 ? stats.ino : null;
-        // Replacement, established rather than guessed: a different inode, or
-        // the path having genuinely vanished since the last read.
-        const replaced =
-          sawFileMissing ||
-          (identity !== null &&
-            fileIdentity !== null &&
-            identity !== fileIdentity);
-        // Truncated in place, or a replacement: re-read from the top either
-        // way. Size is still the right signal for truncation - same file,
-        // fewer bytes.
-        if (replaced || stats.size < offset) offset = 0;
-        fileIdentity = identity;
-        sawFileMissing = false;
+        rewindIfReplaced(stats.ino > 0 ? stats.ino : null, stats.size);
         if (stats.size > offset) {
           const length = Math.min(stats.size - offset, MAX_TICK_READ_BYTES);
           const buffer = Buffer.alloc(length);
@@ -183,8 +193,13 @@ export function startLogTail(options: LogTailOptions): LogTail {
     let chunk: Buffer | null = null;
     try {
       fd = openSync(options.path, "r");
-      const size = fstatSync(fd).size;
-      if (size < offset) offset = 0;
+      const stats = fstatSync(fd);
+      const size = stats.size;
+      // Same replacement rule the poll uses - see `rewindIfReplaced`. A file
+      // swapped out between the final poll and this drain is otherwise read
+      // from the old offset, silently dropping the new file's prefix on the
+      // one path that has no later poll to correct it.
+      rewindIfReplaced(stats.ino > 0 ? stats.ino : null, size);
       if (size > offset) {
         // Read the TAIL of the backlog, not its head. This runs immediately
         // before `process.exit`, so whatever it does not emit is lost - and
@@ -241,10 +256,14 @@ function isFileMissingError(cause: unknown): boolean {
   );
 }
 
-function initialOffset(path: string): number {
+function initialPosition(path: string): {
+  readonly size: number;
+  readonly identity: number | null;
+} {
   try {
-    return statSync(path).size;
+    const stats = statSync(path);
+    return { size: stats.size, identity: stats.ino > 0 ? stats.ino : null };
   } catch {
-    return 0;
+    return { size: 0, identity: null };
   }
 }
