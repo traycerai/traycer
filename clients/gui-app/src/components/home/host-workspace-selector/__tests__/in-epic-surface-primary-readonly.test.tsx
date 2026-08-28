@@ -68,6 +68,9 @@ const folderActionsMocks = vi.hoisted(() => ({
       Promise.resolve(null),
   ),
 }));
+const toastMocks = vi.hoisted(() => ({
+  reportableErrorToast: vi.fn(),
+}));
 
 const RECENT_FOLDER: PreparedWorkspaceFolder = {
   workspacePath: "/repo/recent",
@@ -270,6 +273,15 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useIsMutating: () => 0,
 }));
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: (
+    message: unknown,
+    options: unknown,
+    context: unknown,
+  ): void => {
+    toastMocks.reportableErrorToast(message, options, context);
+  },
+}));
 // Always-open passthrough so Location menu items are queryable without
 // fighting Radix pointer-open in jsdom (same mock as folder-controls).
 vi.mock("@/components/ui/dropdown-menu", () => {
@@ -339,11 +351,19 @@ const BINDING: WorktreeBinding = {
     bindingEntry({ workspacePath: "/repo/beta", isPrimary: true }),
   ],
 };
+const THREE_FOLDER_BINDING: WorktreeBinding = {
+  entries: [
+    bindingEntry({ workspacePath: "/repo/alpha", isPrimary: false }),
+    bindingEntry({ workspacePath: "/repo/gamma", isPrimary: false }),
+    bindingEntry({ workspacePath: "/repo/beta", isPrimary: true }),
+  ],
+};
 
 function BoundSurfaceTree(props: {
   readonly kind: "chat" | "terminal-agent";
   readonly bindingResolved: boolean;
   readonly onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null;
+  readonly binding: WorktreeBinding;
   readonly nonce: number;
 }) {
   void props.nonce;
@@ -357,7 +377,7 @@ function BoundSurfaceTree(props: {
           epicId: "epic-1",
           tabId: "tab-1",
           ownerId: "owner-1",
-          binding: BINDING,
+          binding: props.binding,
           isOwnerActive: false,
           hasActiveTurn: false,
           ownerLabel: "Owner",
@@ -375,6 +395,7 @@ function renderBoundSurface(
   kind: "chat" | "terminal-agent",
   bindingResolved: boolean,
   onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null = null,
+  binding: WorktreeBinding = BINDING,
 ): { rerenderSurface: () => void } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -386,6 +407,7 @@ function renderBoundSurface(
         kind={kind}
         bindingResolved={bindingResolved}
         onBindingCommitted={onBindingCommitted}
+        binding={binding}
         nonce={nextNonce}
       />
     </QueryClientProvider>
@@ -426,6 +448,7 @@ afterEach(() => {
   mutationMocks.createPending = false;
   folderActionsMocks.pickAndPrepareFolders.mockReset();
   folderActionsMocks.pickAndPrepareFolders.mockResolvedValue(null);
+  toastMocks.reportableErrorToast.mockReset();
   recentMocks.prepareRecent.mockReset();
   recentMocks.recordRecentAsync.mockReset();
   useWorktreeIntentStagingStore.getState().resetForTests();
@@ -1426,4 +1449,92 @@ it("discards a staged folder removal without a host RPC", async () => {
   fireEvent.click(await screen.findByTestId("folder-discard-staged"));
   expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Remove alpha" })).toBeTruthy();
+});
+
+async function openThreeFolderTerminalPopover(
+  onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null = null,
+): Promise<void> {
+  renderBoundSurface(
+    "terminal-agent",
+    true,
+    onBindingCommitted,
+    THREE_FOLDER_BINDING,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  await screen.findAllByTestId("folder-row");
+}
+
+async function stageTwoFolderRemovalsAndUpdate(): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "Remove alpha" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove gamma" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+}
+
+it("settles and keeps both staged removals when the first folder rejects", async () => {
+  const onBindingCommitted = vi.fn();
+  mutationMocks.removeBindingFolder.mockRejectedValueOnce(
+    new Error("folder in use"),
+  );
+  await openThreeFolderTerminalPopover(onBindingCommitted);
+  await stageTwoFolderRemovalsAndUpdate();
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(toastMocks.reportableErrorToast).toHaveBeenCalled();
+  });
+  expect(onBindingCommitted).not.toHaveBeenCalled();
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+  const firstToast = toastMocks.reportableErrorToast.mock.calls[0];
+  expect(String(firstToast[0])).toContain("alpha");
+  expect(firstToast[2]).toMatchObject({
+    title: "Workspace update incomplete",
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const discard = await screen.findByTestId("folder-discard-staged");
+  expect(discard.getAttribute("aria-disabled")).toBeNull();
+  const update = screen.getByTestId("folder-update");
+  expect(update instanceof HTMLButtonElement && update.disabled).toBe(false);
+  mutationMocks.removeBindingFolder.mockClear();
+  mutationMocks.removeBindingFolder.mockResolvedValue({});
+  fireEvent.click(update);
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledTimes(2);
+  });
+});
+
+it("acknowledges a committed earlier removal when a later folder rejects", async () => {
+  const onBindingCommitted = vi.fn();
+  mutationMocks.removeBindingFolder
+    .mockResolvedValueOnce({})
+    .mockRejectedValueOnce(new Error("folder in use"));
+  await openThreeFolderTerminalPopover(onBindingCommitted);
+  await stageTwoFolderRemovalsAndUpdate();
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledTimes(2);
+  });
+  await waitFor(() => {
+    expect(onBindingCommitted).toHaveBeenCalledWith(["/repo/alpha"]);
+  });
+  expect(toastMocks.reportableErrorToast).toHaveBeenCalled();
+  const laterToast = toastMocks.reportableErrorToast.mock.calls[0];
+  expect(String(laterToast[0])).toContain("gamma");
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const discard = await screen.findByTestId("folder-discard-staged");
+  expect(discard.getAttribute("aria-disabled")).toBeNull();
+  const update = screen.getByTestId("folder-update");
+  expect(update instanceof HTMLButtonElement && update.disabled).toBe(false);
+  mutationMocks.removeBindingFolder.mockClear();
+  mutationMocks.removeBindingFolder.mockResolvedValue({});
+  fireEvent.click(update);
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledTimes(1);
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "terminal-agent",
+      workspacePath: "/repo/gamma",
+    });
+  });
 });

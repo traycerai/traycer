@@ -2309,6 +2309,31 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             return;
           }
           createThenResume();
+        })
+        .catch((error: unknown) => {
+          if (committedRemovalPaths.length > 0) {
+            handleBindingCommitted(committedRemovalPaths);
+            for (const path of committedRemovalPaths) {
+              dispatchEditor({ type: "unstageRemoval", workspacePath: path });
+            }
+          }
+          settleRun();
+          if (isCancelled()) return;
+          if (committedRemovalPaths.length >= removedWorkspacePaths.length) {
+            return;
+          }
+          const failedPath =
+            removedWorkspacePaths[committedRemovalPaths.length];
+          reportableErrorToast(
+            folderRemovalFailureMessage(failedPath, error),
+            undefined,
+            {
+              title: "Workspace update incomplete",
+              message: null,
+              code: null,
+              source: "Worktree update",
+            },
+          );
         });
     },
     [
@@ -3312,6 +3337,17 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 // default (new worktree); a non-git folder can only be Local. The seeding effect
 // stages a pick shortly after mount, so this is the transient pre-seed state. A
 // supported staged entry's own kind wins.
+function folderRemovalFailureMessage(
+  workspacePath: string,
+  error: unknown,
+): string {
+  const folder = workspaceFolderName(workspacePath);
+  const hostMessage =
+    error instanceof Error && error.message.length > 0 ? error.message : null;
+  const detail = hostMessage === null ? "" : ` (${hostMessage})`;
+  return `Couldn't update "${folder}"${detail}. The change is still staged - press Update to retry.`;
+}
+
 function stagedCommitRefusalReason(input: {
   readonly capture: WorktreeCommitCapture;
   readonly stagedKey: WorktreeStagingKey;
