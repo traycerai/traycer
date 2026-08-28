@@ -53,6 +53,15 @@ export interface SetupCardWindow {
    */
   readonly isActive: boolean;
   /**
+   * The stamp of the event that closed this window, or `null` while it is open.
+   *
+   * Derivable only from the WHOLE log: the closing event is either not a setup
+   * event (`worktree.missing`) or the opening event of the next lifecycle, so a
+   * client holding a slice of setup rows has nothing that implies it. Published
+   * on the wire identity for exactly that reason.
+   */
+  readonly closedAt: number | null;
+  /**
    * Whether the window holds a `setup.creating` event. Its PRESENCE marks a
    * live mid-conversation creation (trustworthy `createdAt`); its absence marks
    * the back-filled genesis worktree, whose stamp can land after the first
@@ -89,14 +98,24 @@ export function partitionSetupCardWindows(
   events: readonly ChatEvent[],
 ): readonly SetupCardWindow[] {
   const windows: ChatEvent[][] = [];
+  // The stamp of the event that CLOSED each window, by window index. The
+  // boundary is not part of the window it ends - it is either not a setup event
+  // at all (`worktree.missing`) or the first event of the NEXT lifecycle - so a
+  // client re-partitioning a slice can never derive it. See `closedAt` on the
+  // wire identity for what it settles.
+  const closedAt: (number | null)[] = [];
   let current: ChatEvent[] | null = null;
+  const closeCurrent = (at: number): void => {
+    if (current !== null) closedAt[windows.length - 1] = at;
+    current = null;
+  };
 
   for (const event of events) {
     // `worktree.missing` is the lifecycle boundary: not a setup event itself,
     // but it marks the binding reset separating two lifecycles. Covers a
     // re-bind to a different path.
     if (event.type === "worktree.missing") {
-      current = null;
+      closeCurrent(event.timestamp);
       continue;
     }
     if (!SETUP_EVENT_TYPES.has(event.type)) continue;
@@ -109,11 +128,13 @@ export function partitionSetupCardWindows(
     if (workspacePath === null || workspacePath.length === 0) continue;
 
     if (current !== null && closesWindow(current, event, workspacePath)) {
-      current = null;
+      // Closed BY this event, which belongs to the window it opens.
+      closeCurrent(event.timestamp);
     }
     if (current === null) {
       current = [];
       windows.push(current);
+      closedAt.push(null);
     }
     current.push(event);
   }
@@ -121,8 +142,8 @@ export function partitionSetupCardWindows(
   // `current` is non-null only when the final window is still open, and it
   // always references the last-pushed window - so an identity check marks
   // exactly the one live lifecycle active.
-  return windows.map((windowEvents) =>
-    describeWindow(windowEvents, windowEvents === current),
+  return windows.map((windowEvents, index) =>
+    describeWindow(windowEvents, windowEvents === current, closedAt[index]),
   );
 }
 
@@ -176,6 +197,7 @@ function windowHasForPath(
 function describeWindow(
   windowEvents: readonly ChatEvent[],
   isActive: boolean,
+  closedAt: number | null,
 ): SetupCardWindow {
   const createdAt = windowEvents.reduce(
     (earliest, event) => Math.min(earliest, event.timestamp),
@@ -190,6 +212,7 @@ function describeWindow(
     events: windowEvents,
     createdAt,
     isActive,
+    closedAt,
     hasCreatingEvent: creatingEvent !== undefined,
     triggeringMessageId:
       creatingEvent === undefined

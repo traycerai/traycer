@@ -894,6 +894,94 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     expect(rows[0].createdAt).toBe(1_000);
   });
 
+  it("opens a NEW lifecycle for a live event past the last window's closedAt", () => {
+    // The case the empty-bucket inference gets wrong, and cannot not get wrong:
+    // when every event of the last host window is cold, a genuinely new
+    // lifecycle leaves exactly the same empty bucket as that window's tail.
+    // `closedAt` is the boundary the slice never carries - `worktree.missing`
+    // forms no row - so the host publishes it.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: 3_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    // Numbered PAST the host's list: a lifecycle it has not published yet.
+    expect(rows[0].windowIndex).toBe(1);
+    expect(rows[0].createdAt).toBe(9_000);
+  });
+
+  it("still anchors a cold-opening tail that precedes closedAt", () => {
+    // The other direction on the same field - round six's finding must stay
+    // fixed. This event falls INSIDE the closed window's span.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 2_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: 3_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].windowIndex).toBe(0);
+    expect(rows[0].createdAt).toBe(1_000);
+  });
+
+  it("treats an event stamped exactly AT closedAt as past the boundary", () => {
+    // The tie, pinned. `closedAt` is the closing event's own stamp and the
+    // window's events all strictly precede it, so equality is the boundary's
+    // contemporary - not the closed window's. Undefined edges are how this kind
+    // of comparison gets reopened.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 3_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: 3_000,
+          windowIndex: 0,
+          isActive: false,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows[0].windowIndex).toBe(1);
+  });
+
+  it("joins an OPEN window, which bounds nothing", () => {
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 9_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: null,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    expect(rows[0].windowIndex).toBe(0);
+  });
+
   it("does not leak the merged window's triggering message onto the second half", () => {
     // The anchor a card pins to. Carried over from the merged local window it
     // would pin the SECOND card above the FIRST card's message - above a

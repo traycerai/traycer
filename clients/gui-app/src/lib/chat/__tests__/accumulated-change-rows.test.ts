@@ -7,6 +7,7 @@ import {
   rowFromAccumulatedChange,
   rowFromAccumulatedChangeSummary,
   undeliveredHostChangeCount,
+  accumulatedSummarySetComplete,
 } from "@/lib/chat/accumulated-change-rows";
 import type {
   ChatMessage,
@@ -563,3 +564,72 @@ function summary(input: {
     counts: input.counts,
   };
 }
+
+describe("accumulatedSummarySetComplete", () => {
+  it("is INCOMPLETE after a rebuild until a chunk of the new generation lands", () => {
+    // The case a length comparison structurally cannot see. A rebuild retains
+    // the previous stream's array on purpose, so between the generation reset
+    // and the first replacement chunk those entries - and their digests - are
+    // the OLD generation's. When the replacement's authoritative total happens
+    // to equal the retained length, "delivered === authoritative" is true over
+    // entries this generation never sent.
+    //
+    // Certain rather than incidental whenever the whole set fits one chunk and
+    // that chunk is the one dropped: there is no later chunk to expose the gap.
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 3,
+        deliveredSummaryCount: 3, // lengths agree, and mean nothing
+        generationSeated: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is complete once this generation has delivered and the counts agree", () => {
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 3,
+        deliveredSummaryCount: 3,
+        generationSeated: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("still reports a genuine shortfall as incomplete", () => {
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 5,
+        deliveredSummaryCount: 3,
+        generationSeated: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is complete on an EMPTY set even before a chunk arrives", () => {
+    // The bound. A host with nothing accumulated streams no chunks at all, so
+    // gating on a chunk that will never come would hold every consumer of an
+    // empty set open forever.
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 0,
+        deliveredSummaryCount: 0,
+        generationSeated: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("is complete on the legacy line, which has no stream", () => {
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: false,
+        hostChangeCount: 4,
+        deliveredSummaryCount: 0,
+        generationSeated: false,
+      }),
+    ).toBe(true);
+  });
+});

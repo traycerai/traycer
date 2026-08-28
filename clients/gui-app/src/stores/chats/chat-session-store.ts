@@ -744,6 +744,22 @@ export interface ChatSessionState {
    * fetched by digest only by the diff tile a row click opens.
    */
   readonly accumulatedFileChangeSummaries: ReadonlyArray<ChatAccumulatedFileChangeSummary>;
+  /**
+   * Whether any chunk of the CURRENT summary generation has been accepted.
+   *
+   * The array above is deliberately retained across a rebuild (see the
+   * generation reset), so between the reset and the first replacement chunk it
+   * holds the PREVIOUS generation's entries - with the previous digests. A
+   * length comparison cannot see that: when the replacement stream's total
+   * happens to equal the retained length, which is the common case for a set
+   * that has not changed and the certain case for a set that fits one chunk,
+   * "delivered === authoritative" is true over entries no chunk of this
+   * generation ever sent.
+   *
+   * So completeness is answered by GENERATION, not by length: false here means
+   * the retained array cannot vouch for anything, whatever its length.
+   */
+  readonly accumulatedSummaryGenerationSeated: boolean;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
    * The shells this chat created, whatever state they are in - not a subset
@@ -2705,6 +2721,17 @@ export function createChatSessionStoreWithNotificationDependencies(
     const chunkedDeliveryIncomplete = (): boolean => {
       const state = get();
       if (!state.transcriptWindow.skeletonComplete) return true;
+      // A rebuild is in flight and its replacement stream has not landed. The
+      // length check below cannot answer this: the retained array is the
+      // previous generation's, and when the counts coincide it reads as a
+      // finished delivery over stale digests - so the watchdog would disarm on
+      // the one state it exists to notice.
+      if (
+        !state.accumulatedSummaryGenerationSeated &&
+        state.accumulatedFileChangeCount > 0
+      ) {
+        return true;
+      }
       return (
         state.accumulatedFileChangeSummaries.length !==
         state.accumulatedFileChangeCount
@@ -3375,6 +3402,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
             jumpTargetOrdinal: null,
             accumulatedFileChangeSummaries: [],
+            accumulatedSummaryGenerationSeated: false,
           },
           // A downgrade frame is a LEGACY snapshot - full records - so the
           // scan is again the whole-transcript answer.
@@ -3532,6 +3560,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // as the summaries themselves, below.
         if (frame.snapshot.indexRevision === null) {
           accumulatedSummaryGeneration = -1;
+          // The retained array is now the PREVIOUS generation's, so it vouches
+          // for nothing until a replacement chunk lands - including when its
+          // length already equals the authoritative count.
+          set({ accumulatedSummaryGenerationSeated: false });
         }
         // The window and the snapshot's aux ride the fold's own `set` (or the
         // deferral's single `set`) rather than being published here first - a
@@ -3793,7 +3825,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             ...assembled.slice(0, frame.chunk.fromIndex),
             ...frame.chunk.summaries,
           ];
-          return { accumulatedFileChangeSummaries: summaries };
+          return {
+            accumulatedFileChangeSummaries: summaries,
+            accumulatedSummaryGenerationSeated: true,
+          };
         });
         // The gap check above only fires when a LATER chunk exposes the hole,
         // so it cannot see the stream simply stopping. Armed after the `set`
@@ -4883,6 +4918,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       jumpTargetOrdinal: null,
       accumulatedFileChangeSummaries: [],
+      accumulatedSummaryGenerationSeated: false,
       backgroundItems: undefined,
       managedCommands: [],
       heldUpdates: [],
@@ -7349,12 +7385,27 @@ function applyContentBlockDelta(
       detachedTarget.ownerBlockId,
     );
     if (routed !== null) return routed;
-    // A parented (subagent-child) event whose owning message is gone must NOT
-    // fall through to the active turn: the accumulator would append its
-    // terminal as a duplicate top-level card on an unrelated turn. The settled
-    // subagent owner is its only legitimate target, so drop it (identity =
-    // no-op) instead.
-    if (detachedTarget.mandatory) return state;
+    // A detached event whose owning message is gone must NOT fall through to
+    // the active turn: the accumulator would append its terminal as a duplicate
+    // top-level card on an unrelated turn. The owner is its only legitimate
+    // target, so drop it (identity = no-op) instead.
+    //
+    // Unconditional now, and `mandatory` no longer gates it. That flag divides
+    // events by how their owner is NAMED - `parentBlockId` versus their own
+    // `blockId` - which was a sound proxy for "the owner must exist" only while
+    // the transcript was whole. On the windowed line it is not: a
+    // `subagent.started/progress/completed` names its own card's block
+    // (`detachedSubagentOwnerTarget` returns `mandatory: false` for exactly
+    // those three), and that card's row is EVICTABLE. A background subagent
+    // outliving its spawning turn then finds its owner gone for a reason that
+    // has nothing to do with the event - and synthesizes its progress or
+    // completion under whatever turn happens to be active.
+    //
+    // Dropping is safe precisely because eviction is recoverable: the row is
+    // re-served whole by the range that re-hydrates it, carrying this update
+    // already folded in. Falling through is not - it writes a card under a turn
+    // that never spawned it, and no later frame corrects that.
+    return state;
   }
   // Steer-split carryover: a block that was still STREAMING when a steered
   // user message split the turn lives in an EARLIER assistant row of the SAME

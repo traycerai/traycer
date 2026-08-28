@@ -216,10 +216,25 @@ export function accumulatedSummarySetComplete(input: {
   readonly windowed: boolean;
   readonly hostChangeCount: number;
   readonly deliveredSummaryCount: number;
+  /**
+   * Whether any chunk of the CURRENT generation has been accepted - see
+   * `ChatSessionState.accumulatedSummaryGenerationSeated`.
+   */
+  readonly generationSeated: boolean;
 }): boolean {
   // The legacy line ships the whole set on the snapshot; there is no stream to
   // be mid-way through.
   if (!input.windowed) return true;
+  // GENERATION before length, because length cannot see this state at all. A
+  // rebuild resets the generation while the previous stream's array is
+  // deliberately retained, so until a replacement chunk lands that array is the
+  // OLD generation's - with the old digests. When the replacement's
+  // authoritative total happens to equal the retained length, the equality
+  // below is true over entries this generation never sent: every content fetch
+  // then returns `stale`, and no length-based check can distinguish it from a
+  // finished delivery. Certain, not incidental, whenever the whole set fits one
+  // chunk and that chunk is the one dropped.
+  if (!input.generationSeated && input.hostChangeCount > 0) return false;
   return input.hostChangeCount === input.deliveredSummaryCount;
 }
 

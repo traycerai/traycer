@@ -998,6 +998,28 @@ export function applyWindowedSnapshot(
     readonly tail: ChatTranscriptWindow;
   },
 ): TranscriptWindow {
+  // A snapshot from an epoch this window has already LEFT describes a
+  // coordinate space whose ordinals were renumbered by the very change that
+  // moved this window on. Taken as a rebase - which `!==` does - it replaces
+  // the skeleton, the spans and the epoch with obsolete coordinates, and on an
+  // idle chat nothing later repairs that. `applyIndexChange` has compared the
+  // epoch DIRECTIONALLY since the delta path was fixed; this path had not.
+  //
+  // But only for a CONCRETE revision, and that qualifier is the whole guard.
+  // The host stamps `transcriptEpoch: view.epoch` - always its current epoch -
+  // while `indexRevision` comes from the subscriber's index state
+  // (`chat-session-manager.ts:34710-34717`). For a snapshot's epoch to be BELOW
+  // this client's, the host's own epoch must have gone backwards, which happens
+  // only on a fresh `TranscriptViewCache` - and a fresh cache means a fresh
+  // subscriber, whose state is not `held`, so that frame necessarily carries
+  // `indexRevision: null`.
+  //
+  // So: older epoch + non-null revision is unreachable except by reordering,
+  // and is discarded. Older epoch + null revision is a host restart announcing
+  // itself, and discarding THAT strands the client at a dead epoch for the life
+  // of the connection - the same failure refusing a lower revision would cause,
+  // one field over. See {@link TranscriptWindow.indexRevisionRebuilding}.
+  if (input.indexRevision !== null && input.epoch < window.epoch) return window;
   const rebased = input.epoch !== window.epoch;
   const clock = window.clock + 1;
   // A same-epoch snapshot whose revision RAN AHEAD of this client's is proof

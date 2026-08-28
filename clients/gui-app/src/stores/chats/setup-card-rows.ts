@@ -212,6 +212,57 @@ interface AlignedSetupCardWindow {
  * so that pair stays merged exactly as it was before this alignment existed,
  * which is a degradation and not a loss.
  */
+/**
+ * Does this unmatched local window belong to the host window just behind it?
+ *
+ * The question the equality match cannot answer, and the two cases look
+ * identical in every other input: a lifecycle whose OPENING events are still
+ * cold is stamped at its later events (so it matches no host `createdAt`), and
+ * so is a genuinely NEW lifecycle the host has not published yet.
+ *
+ * ## `closedAt` answers it outright
+ *
+ * A window closed at T contains no event stamped at or after T - that is what
+ * closing means - so a local window anchored there opens a new lifecycle, while
+ * one anchored before T is that window's cold-opening tail. An OPEN window
+ * (`closedAt: null`) has no such bound, so a later event joins it.
+ *
+ * The TIE is `>=`, i.e. an event stamped exactly at `closedAt` is treated as
+ * past the boundary. `closedAt` is the closing event's own timestamp and a
+ * window's events all strictly precede it, so equality means the local event is
+ * the boundary's contemporary rather than the closed window's - and on this
+ * seam the costly direction is the other one, which re-attaches a new lifecycle
+ * to a historical row.
+ *
+ * The comparison is host-stamped on BOTH sides, which is load-bearing because
+ * this seam's previous defect was exactly a local stamp passing for a host one.
+ * Verified rather than assumed: live events reach the window only through
+ * `onEventAppended`, which seats `frame.event` - the host's persisted record,
+ * `eventAppended` carrying a `chatEvent` on the wire - and the one other
+ * `appendLiveRecords` caller passes `events: []`. No client-minted timestamp
+ * can reach here.
+ *
+ * ## Without it, the legacy inference stands
+ *
+ * A host predating `closedAt` omits it, and `precedingBucketEmpty` is what this
+ * file did before: an empty preceding bucket reads as "the tail of that
+ * window". That inference is genuinely ambiguous - a new lifecycle arriving
+ * after a window whose events are ALL cold leaves the same empty bucket - and
+ * it is retained only as skew behaviour for old hosts, never as a claim that it
+ * is sound.
+ */
+function belongsToPrecedingWindow(input: {
+  readonly window: SetupCardWindow;
+  readonly preceding: SetupCardWindowIdentity;
+  readonly precedingBucketEmpty: boolean;
+}): boolean {
+  const closedAt = input.preceding.closedAt;
+  // An OPEN window bounds nothing, so a later local window is its tail.
+  if (closedAt === null) return true;
+  if (closedAt !== undefined) return input.window.createdAt < closedAt;
+  return input.precedingBucketEmpty;
+}
+
 function bucketWindowEvents(input: {
   readonly window: SetupCardWindow;
   readonly wholeLog: ReadonlyArray<SetupCardWindowIdentity>;
@@ -292,7 +343,13 @@ function alignToWholeLog(
     // Not `hasCreatingEvent`: a lifecycle can legitimately open on
     // `setup.running`, so its absence does not mean the opening is missing.
     const orphanAnchor =
-      !exactMatch && cursor > 0 && held[cursor - 1].length === 0
+      !exactMatch &&
+      cursor > 0 &&
+      belongsToPrecedingWindow({
+        window,
+        preceding: wholeLog[cursor - 1],
+        precedingBucketEmpty: held[cursor - 1].length === 0,
+      })
         ? cursor - 1
         : null;
     if (!exactMatch && orphanAnchor === null) {

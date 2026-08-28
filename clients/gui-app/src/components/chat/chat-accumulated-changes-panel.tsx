@@ -120,14 +120,23 @@ export function ChatAccumulatedChangesPanel(
   // set - not the prefix of it that has arrived. The rows below fill in as
   // their summaries land.
   const undelivered = restore.undeliveredChangeCount;
-  // A non-zero `undelivered` means the host holds files this control WOULD
-  // revert, whatever the delivered prefix contains. Reading only `changes`
-  // renders the panel with the button disabled under "Nothing here can be
-  // reverted." while `undelivered` files sit behind it - and Line 255 already
-  // treats the same non-zero value as "the set is a prefix", so the two
-  // controls contradicted each other about one state.
-  const hasUndoable =
-    changes.some((change) => change.undoable) || undelivered > 0;
+  // Known-undoable rows only. A non-zero `undelivered` is NOT evidence of
+  // undoability: that count includes summaries whose `undoable` is false -
+  // denied, binary, otherwise non-intercepted - so enabling the control on it
+  // offers a revert confirmation that can revert nothing, and the same set
+  // correctly disables the control once its summaries arrive.
+  const hasUndoable = changes.some((change) => change.undoable);
+  // What a prefix DOES change is what the disabled state may claim. "Nothing
+  // here can be reverted." is a statement about the whole set, and while
+  // summaries are still arriving this side does not know the whole set - the
+  // host may well hold undoable files behind the count. So the copy says what
+  // is actually true in that state, and only the settled set makes the
+  // stronger claim. (Line 255 already treats a non-zero `undelivered` as "the
+  // set is a prefix"; this keeps the two controls saying one thing about it.)
+  const undoableTooltip =
+    undelivered > 0
+      ? "Still loading the full list of changes."
+      : "Nothing here can be reverted.";
   const fileCount = changes.length + undelivered;
   const artifactCount = useMemo(
     () => changes.filter((change) => change.artifact && change.undoable).length,
@@ -195,9 +204,7 @@ export function ChatAccumulatedChangesPanel(
               </Button>
             )}
             <TooltipWrapper
-              label={
-                hasUndoable ? gate.tooltip : "Nothing here can be reverted."
-              }
+              label={hasUndoable ? gate.tooltip : undoableTooltip}
               side="top"
               sideOffset={undefined}
               align={undefined}

@@ -330,6 +330,9 @@ export function publishedChatSessionState(
     jumpTargetOrdinal: null,
     requestTranscriptOrdinal: () => undefined,
     accumulatedFileChangeSummaries: [],
+    // A published transcript is not on the windowed line and streams no
+    // chunks, so there is no generation to be waiting on.
+    accumulatedSummaryGenerationSeated: true,
     backgroundItems: undefined,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,

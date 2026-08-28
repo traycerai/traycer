@@ -252,7 +252,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     expect(screen.queryByTestId("accumulated-review-all")).not.toBeNull();
   });
 
-  it("does not claim nothing is revertible while the host holds undelivered files", () => {
+  it("does not claim nothing is revertible while the host holds undelivered files", async () => {
     // The panel mounts on the COUNT, so it can render with an empty delivered
     // prefix. `hasUndoable` read only the delivered rows, so in that state the
     // button was disabled under "Nothing here can be reverted." while "Undo
@@ -266,8 +266,23 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
       undeliveredChangeCount: 4,
     });
 
-    const undoAll = screen.getByTestId("accumulated-undo-all");
-    expect(undoAll.getAttribute("disabled")).toBeNull();
+    // The control stays DISABLED - no delivered row is undoable, and the
+    // undelivered count is not evidence that any of them will be: it includes
+    // denied and binary changes too. What must not survive is the CLAIM.
+    expect(await undoAllTooltipText()).toBe(
+      "Still loading the full list of changes.",
+    );
+  });
+
+  it("makes the stronger claim only once the set has settled", async () => {
+    renderPanel({
+      changes: [{ ...fileChange("/repo/src/app.ts"), undoable: false }],
+      activeTurnStatus: null,
+      opener: null,
+      undeliveredChangeCount: 0,
+    });
+
+    expect(await undoAllTooltipText()).toBe("Nothing here can be reverted.");
   });
 
   it("drops the artifact count from Undo all while the set is a prefix", () => {
@@ -292,6 +307,19 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     expect(dialog.textContent).not.toMatch(/also revert \d+ artifact/i);
   });
 });
+
+/**
+ * The Undo-all tooltip's text.
+ *
+ * Radix mounts tooltip content only while open, so the label cannot be read
+ * from the resting DOM - the trigger has to be focused first. The harness
+ * already provides `delayDuration={0}`, so no timers are involved.
+ */
+async function undoAllTooltipText(): Promise<string> {
+  fireEvent.focus(screen.getByTestId("accumulated-undo-all"));
+  const tip = await screen.findByRole("tooltip");
+  return tip.textContent;
+}
 
 function renderPanel(input: {
   readonly changes: ReadonlyArray<AccumulatedChangeRow>;

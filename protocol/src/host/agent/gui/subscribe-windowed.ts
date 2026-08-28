@@ -488,6 +488,27 @@ export const setupCardWindowIdentitySchema = z.object({
    */
   isActive: z.boolean(),
   /**
+   * The timestamp of the event that CLOSED this window, or `null` while it is
+   * still open.
+   *
+   * The boundary a slice cannot see, published because the client cannot derive
+   * it. A lifecycle ends either at a `worktree.missing` - which is not a setup
+   * event, so a range serving only setup rows never carries it - or at one of
+   * `closesWindow`'s defensive re-bind boundaries. Either way the host holds
+   * that stamp at partition time and the client holds nothing that implies it.
+   *
+   * What it settles: whether a live setup event stamped after the last known
+   * window belongs to that window or opens a new lifecycle. Both look identical
+   * from timestamps and window contents alone, and the client had been
+   * inferring it - a guess with a counterexample either way.
+   *
+   * OPTIONAL, so a host that predates this field simply omits it and the client
+   * degrades to that inference, with the ambiguity documented as a skew
+   * limitation. Additive and optional, and the `1.8` line is unreleased, so no
+   * version bump is owed.
+   */
+  closedAt: z.number().nullable().optional(),
+  /**
    * Whether the window holds a `setup.creating` event, which is what
    * distinguishes a live mid-conversation creation from the back-filled genesis
    * worktree the transcript pins to the top.

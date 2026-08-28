@@ -1417,6 +1417,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingInterviews: s.pendingInterviews,
       accumulatedFileChanges: s.accumulatedFileChanges,
       accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
+      accumulatedSummaryGenerationSeated: s.accumulatedSummaryGenerationSeated,
       accumulatedFileChangeCount: s.accumulatedFileChangeCount,
       backgroundItems: s.backgroundItems,
       pendingBackgroundStops: s.pendingBackgroundStops,
@@ -1743,6 +1744,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     windowed: windowedTranscript,
     hostChangeCount: state.accumulatedFileChangeCount,
     deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
+    generationSeated: state.accumulatedSummaryGenerationSeated,
   });
   const restoreContext = useMemo(
     () => ({

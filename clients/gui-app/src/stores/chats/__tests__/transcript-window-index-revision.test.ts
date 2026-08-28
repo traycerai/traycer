@@ -466,6 +466,47 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     ).toBe(resynced);
   });
 
+  it("EPOCH: discards an older-epoch snapshot carrying a concrete revision", () => {
+    // A reordered straggler from a coordinate space this client has already
+    // left. Treated as a rebase it replaces the skeleton, the spans and the
+    // epoch with obsolete ordinals, and on an idle chat nothing repairs that.
+    const window = windowAtRevision(5);
+    expect(window.spans.length).toBeGreaterThan(0);
+
+    const result = applyWindowedSnapshot(window, {
+      epoch: 3, // below the window's epoch of 4
+      rowCount: 2,
+      indexRevision: 9,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+
+    // Referential identity: nothing of the older space was taken.
+    expect(result).toBe(window);
+  });
+
+  it("EPOCH: ACCEPTS an older-epoch snapshot announcing a rebuild", () => {
+    // The other direction, and the reason the guard is not a bare epoch
+    // comparison. A fresh `TranscriptViewCache` restarts `epoch` AND
+    // `indexRevision` together, so a host restart hands a client sitting at
+    // epoch 4 a snapshot at epoch 0 - and a fresh cache means a fresh
+    // subscriber, so that frame necessarily carries `indexRevision: null`
+    // (`chat-session-manager.ts:34710-34717`). Discarding it would strand this
+    // client on a dead epoch for the life of the connection.
+    const window = windowAtRevision(5);
+
+    const result = applyWindowedSnapshot(window, {
+      epoch: 0,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+
+    expect(result).not.toBe(window);
+    expect(result.epoch).toBe(0);
+    // Rebased, so the held coordinate space is replaced rather than merged.
+    expect(result.spans).toEqual([]);
+  });
+
   it("RE-ARMS at a void, so the resnapshot that follows can resync downward", () => {
     // Checked rather than assumed: a void takes its shape from
     // `emptyTranscriptWindow()`, which is armed - so the client comes out of an
