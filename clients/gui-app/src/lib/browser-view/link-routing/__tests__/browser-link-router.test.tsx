@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/link-routing/browser-link-router";
 import { BrowserLinkRoutingContext } from "@/lib/browser-view/link-routing/browser-link-routing-context";
 import type { BrowserLinkSource } from "@/lib/browser-view/link-routing/browser-link-routing-core";
@@ -131,6 +132,25 @@ describe("useBrowserLinkRouterForRunnerHost", () => {
         "https://example.test/docs",
       );
     });
+  });
+
+  it("does not claim the link landed when the fallback fails too", async () => {
+    const runnerHost = {
+      openExternalLink: vi.fn(() => Promise.reject(new Error("no handler"))),
+    };
+    sessionsState.value = liveSessions(() =>
+      Promise.reject(new Error("no runtime")),
+    );
+    const { result } = renderRouter(runnerHost);
+
+    result.current("markdown", "https://example.test/docs", null);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Couldn't open this link.");
+    });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "Couldn't open the browser tab. Opened it outside Traycer instead.",
+    );
   });
 
   it("leaves a successful open alone", async () => {

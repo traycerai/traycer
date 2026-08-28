@@ -8,8 +8,20 @@ import {
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
-/** Opens a fresh browser tab on the panel's host and focuses it in the tab. */
-export function useAddBrowserAction(epicId: string, tabId: string): () => void {
+/**
+ * Opens a fresh browser tab on the panel's host and focuses it in the tab.
+ *
+ * `onOpened` runs only once the tile is on the canvas, never on the refusals
+ * that report themselves with a toast and open nothing. A surface that
+ * dismisses itself on create has to key that on the tile, or a refusal takes
+ * away the very list the error is about - including its Retry. `null` for the
+ * surfaces that outlive the tab they opened.
+ */
+export function useAddBrowserAction(
+  epicId: string,
+  tabId: string,
+  onOpened: (() => void) | null,
+): () => void {
   const sessions = useBrowserSessionsContext();
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpen = useEpicCanvasStore(
@@ -34,11 +46,12 @@ export function useAddBrowserAction(epicId: string, tabId: string): () => void {
             }),
           ),
         );
+        onOpened?.();
       })
       .catch((cause: unknown) => {
         toast.error(
           cause instanceof Error ? cause.message : "Couldn't open a browser.",
         );
       });
-  }, [epicId, navigateNested, prepareOpen, sessions, tabId]);
+  }, [epicId, navigateNested, onOpened, prepareOpen, sessions, tabId]);
 }

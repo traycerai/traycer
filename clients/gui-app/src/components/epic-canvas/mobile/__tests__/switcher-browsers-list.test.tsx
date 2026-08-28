@@ -256,14 +256,47 @@ describe("SwitcherBrowsersList", () => {
     expect(screen.getByTestId("switcher-browser-row-tab-2")).toBeTruthy();
   });
 
-  it("offers Add browser on a list that already has rows", async () => {
+  it("offers Add browser on a list that already has rows, and closes on the tile", async () => {
     const user = userEvent.setup();
+    const onClose = vi.fn();
     openTab.mockResolvedValue({ sessionId: "sess-2", tabId: "tab-9" });
-    renderList();
+    renderList(onClose);
 
     await user.click(screen.getByLabelText("Add browser"));
 
     expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps the sheet open when a browser cannot be created", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    replaceSessions([], "failed");
+    renderList(onClose);
+
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
+
+    // Nothing opened, so there is nothing for the sheet to get out of the way
+    // of - and leaving would take this state's Retry with it.
+    expect(openTab).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("keeps the sheet open when the host refuses the new tab", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    openTab.mockRejectedValue(new Error("no runtime"));
+    renderList(onClose);
+
+    await user.click(screen.getByLabelText("Add browser"));
+
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalled();
+    });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("closes a tab from the row's own action", async () => {

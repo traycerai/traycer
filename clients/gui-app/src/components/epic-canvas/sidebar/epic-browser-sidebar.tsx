@@ -96,7 +96,7 @@ function BrowsersPanelBodyLive(props: {
   const prepareFocus = useEpicCanvasStore(
     (state) => state.prepareSetActiveTileTabFocusTarget,
   );
-  const addBrowser = useAddBrowserAction(props.epicId, props.tabId);
+  const addBrowser = useAddBrowserAction(props.epicId, props.tabId, null);
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {

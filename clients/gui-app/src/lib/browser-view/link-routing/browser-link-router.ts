@@ -57,10 +57,20 @@ export function useBrowserLinkRouterForRunnerHost(
           // reported by returning false any more. Sending the link where it
           // would have gone had the session never been live keeps a failed
           // open from swallowing the navigation outright.
-          toast.error(
-            "Couldn't open the browser tab. Opened it outside Traycer instead.",
-          );
-          void runnerHost.openExternalLink(url);
+          //
+          // The claim waits for the fallback to land: a shell that cannot open
+          // the URL either leaves the user nowhere, and saying otherwise is
+          // worse than saying nothing happened.
+          void runnerHost
+            .openExternalLink(url)
+            .then(() => {
+              toast.error(
+                "Couldn't open the browser tab. Opened it outside Traycer instead.",
+              );
+            })
+            .catch(() => {
+              toast.error("Couldn't open this link.");
+            });
         });
       return true;
     },

@@ -104,13 +104,11 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
     () => filterBrowserTabRows(tabs, searchQuery),
     [searchQuery, tabs],
   );
-  const addBrowser = useAddBrowserAction(epicId, tabId);
-  const handleAdd = useCallback(() => {
-    addBrowser();
-    // The new tab lands as the shown tile, so the sheet has nothing left to
-    // show; the same rule every other category's create affordance follows.
-    onClose();
-  }, [addBrowser, onClose]);
+  // Dismissing on the tile rather than on the tap: a refusal reports itself
+  // with a toast and opens nothing, and a sheet that left anyway would take the
+  // unavailable state's Retry with it. Same rule the Terminals row follows,
+  // which closes on `onLaunched`.
+  const handleAdd = useAddBrowserAction(epicId, tabId, onClose);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

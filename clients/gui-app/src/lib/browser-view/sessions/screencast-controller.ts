@@ -142,6 +142,13 @@ interface ActiveTouch {
   scrolling: boolean;
 }
 
+/** Scroll travelled while the host had not yet answered the arm request. */
+interface PendingTouchWheel {
+  readonly pointer: PointerLike;
+  readonly deltaX: number;
+  readonly deltaY: number;
+}
+
 /**
  * The non-React half of a screencast tile: the arm/disarm epoch protocol, the
  * input queues and their encoding dispatch, pointer capture, click counting,
@@ -169,6 +176,7 @@ export function createScreencastController(options: {
   let frameSize: ScreencastFrameSize | null = null;
   let capturedPointer: CapturedPointer | null = null;
   let activeTouch: ActiveTouch | null = null;
+  let pendingTouchWheel: PendingTouchWheel | null = null;
   let suppressPointerId: number | null = null;
   let pendingMove: ScreencastPointerInput | null = null;
   let moveRaf: number | null = null;
@@ -256,6 +264,7 @@ export function createScreencastController(options: {
   const resetTransientInput = (): void => {
     armBuffer.drop();
     activeTouch = null;
+    pendingTouchWheel = null;
     pendingNav = [];
     forwardedKeyDowns.clear();
     claimedLocalCodes.clear();
@@ -318,9 +327,31 @@ export function createScreencastController(options: {
     sendDiscretePointer(gesture.up);
   };
 
+  /**
+   * The scroll a finger travelled while the arm request was in flight, sent as
+   * one wheel frame now that there is an epoch to stamp it with. Without this
+   * the whole first swipe of a freshly-opened tile is dropped: arming is a
+   * round trip, and on a relay it easily outlasts the gesture.
+   */
+  const flushPendingTouchWheel = (): void => {
+    const pending = pendingTouchWheel;
+    pendingTouchWheel = null;
+    if (pending === null || activeArmEpoch === null) return;
+    const frame = buildPointerFrame({
+      event: pending.pointer,
+      type: "wheel",
+      clampToEdge: true,
+      deltaX: pending.deltaX,
+      deltaY: pending.deltaY,
+    });
+    if (frame === null) return;
+    sendDiscretePointer(frame);
+  };
+
   const noteArmed = (armEpoch: number): void => {
     activeArmEpoch = armEpoch;
     deliverArmBuffer();
+    flushPendingTouchWheel();
     const pending = pendingNav;
     pendingNav = [];
     for (const frame of pending) sendInput(frame);
@@ -569,10 +600,18 @@ export function createScreencastController(options: {
     }
     touch.lastX = event.clientX;
     touch.lastY = event.clientY;
-    if (activeArmEpoch === null) return;
     // Inverted: the page follows the finger, so dragging up scrolls down. The
     // deltas are already client pixels, the same unit `handleWheel` converts
     // its own into.
+    if (activeArmEpoch === null) {
+      // Accumulated rather than dropped, and flushed by `noteArmed`.
+      pendingTouchWheel = {
+        pointer: touchPointerLike(event, 0),
+        deltaX: (pendingTouchWheel?.deltaX ?? 0) - deltaX,
+        deltaY: (pendingTouchWheel?.deltaY ?? 0) - deltaY,
+      };
+      return;
+    }
     const frame = buildPointerFrame({
       event: touchPointerLike(event, 0),
       type: "wheel",
@@ -634,8 +673,16 @@ export function createScreencastController(options: {
     });
   };
 
-  const onTouchPointerCancel = (): void => {
+  const onTouchPointerCancel = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    // Only the finger that owns the gesture may end it. An ignored second
+    // touch cancels routinely - the browser reclaims it - and tearing down on
+    // that would strand the primary finger's scroll mid-drag.
+    const touch = activeTouch;
+    if (touch === null || touch.pointerId !== event.pointerId) return;
     activeTouch = null;
+    pendingTouchWheel = null;
     armBuffer.drop();
     releaseCapturedPointer();
   };
@@ -840,7 +887,7 @@ export function createScreencastController(options: {
       },
       onPointerCancel: (event) => {
         if (event.pointerType === "touch") {
-          onTouchPointerCancel();
+          onTouchPointerCancel(event);
           return;
         }
         onPointerCancel();
