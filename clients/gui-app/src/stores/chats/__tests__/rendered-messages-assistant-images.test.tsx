@@ -75,7 +75,6 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
     message: {
       kind: "user",
       content: CONTENT,
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     timestamp: 1000,
@@ -430,7 +429,6 @@ describe("useRenderedMessages assistant image echo dedup", () => {
       message: {
         kind: "user",
         content,
-        browserContextAttachments: [],
         browserAnnotations: [],
       },
       timestamp: 2002,

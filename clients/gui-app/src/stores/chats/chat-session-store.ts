@@ -66,14 +66,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
-import type {
-  Attachment,
-  BrowserContextAttachment,
-} from "@/lib/composer/types";
+import type { Attachment } from "@/lib/composer/types";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
-import { browserContextAttachmentToWire } from "@/lib/browser-view/browser-context-attachments";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import type {
   RuntimeApprovalDecision,
@@ -3146,17 +3142,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         };
         if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
-        // Ticket 13: the ONLY attachment kind this frame carries off of
-        // `input.attachments` - image/mention attachments are already
-        // embedded in `input.content` and need no separate wire field.
-        const browserContextAttachments = input.attachments
-          .filter(
-            (attachment): attachment is BrowserContextAttachment =>
-              attachment.kind === "browser-context",
-          )
-          .map((attachment) =>
-            browserContextAttachmentToWire(attachment.payload),
-          );
         const browserAnnotations = input.attachments.filter(
           (attachment): attachment is BrowserAnnotationRecord =>
             attachment.kind === "browser-annotation",
@@ -3174,7 +3159,6 @@ export function createChatSessionStoreWithNotificationDependencies(
           accountContext: useAccountContextStore.getState().accountContext,
           deliveryPolicy: input.deliveryPolicy,
           worktreeIntent,
-          browserContextAttachments,
           browserAnnotations,
         };
         // Consume before dispatch so the pending action captures precisely the
@@ -3316,8 +3300,6 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The landing handoff carries its worktree intent via `epic.create`,
           // not the send frame.
           worktreeIntent: null,
-          // The landing page's composer has no browser tile to attach from.
-          browserContextAttachments: [],
           browserAnnotations: [],
         };
         const sentClientActionId = sendAction({
@@ -4639,9 +4621,8 @@ function optimisticQueuedItemForSend(
     message: {
       kind: "user",
       content: input.content,
-      // Optimistic local echo only - the real `queue.added` event (carrying
-      // the host-minted handles) reconciles this row once it arrives.
-      browserContextAttachments: [],
+      // Optimistic local echo only - the real `queue.added` event reconciles
+      // this row once it arrives.
       browserAnnotations: [],
     },
     sender: input.sender,

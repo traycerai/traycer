@@ -18,7 +18,6 @@ import type {
   TodoItem,
   AgentUserMessage,
   BrowserAnnotationRecord,
-  BrowserContextAttachmentRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AgentMessageSend,
@@ -594,7 +593,6 @@ export interface ChatMessage {
   segments: ReadonlyArray<MessageSegment>;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
-  browserContextAttachments?: ReadonlyArray<BrowserContextAttachmentRecord>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   settings: ChatRunSettings | null;
   createdAt: number;

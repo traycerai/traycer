@@ -218,8 +218,6 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
-import { BrowserComposerContextChip } from "./browser-composer-context-chip";
-import { useBrowserContextAttachmentHandler } from "./browser-context-attachment-handler";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
@@ -1630,10 +1628,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
   });
-  useBrowserContextAttachmentHandler({
-    chatId: node.id,
-    viewTabId,
-  });
   useChatSetupFailureRestoreDriver({
     handle,
     nodeId: node.id,
@@ -2382,16 +2376,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       activationQueries.discoverCompactSlashCommands,
     ],
   );
-  const browserContextChip = useMemo(
-    () => (
-      <BrowserComposerContextChip
-        chatId={node.id}
-        chatInstanceId={node.instanceId}
-        viewTabId={viewTabId}
-      />
-    ),
-    [node.id, node.instanceId, viewTabId],
-  );
   // Composer v3 cluster: host select + Workspace rail picker on the left, with
   // the context-usage leaf owning its trailing chip and optional full-width
   // pinned strip. Per-folder Environment config lives inside the selected
@@ -2407,14 +2391,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       <>
         <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           {hostWorkspaceSelector}
-          <div className="flex shrink-0 items-center gap-2">
-            {browserContextChip}
-          </div>
         </div>
         {usageChip}
       </>
     ),
-    [hostWorkspaceSelector, usageChip, browserContextChip],
+    [hostWorkspaceSelector, usageChip],
   );
 
   const lowerRuntime = useMemo(

@@ -26,7 +26,6 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
     message: {
       kind: "user",
       content: CONTENT,
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     timestamp: 1000 + messageId.length,

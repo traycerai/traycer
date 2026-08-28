@@ -123,7 +123,6 @@ function createQueueItem(
     message: {
       kind: "user",
       content,
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     sender: SENDER,
@@ -333,7 +332,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -569,7 +567,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -642,7 +639,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -699,7 +695,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -771,7 +766,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -1157,7 +1151,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -1190,7 +1183,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,
@@ -1276,7 +1268,6 @@ describe("chat-queue-reconciler", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 1000,

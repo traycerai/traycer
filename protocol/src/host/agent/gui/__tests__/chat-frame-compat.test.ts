@@ -87,7 +87,6 @@ function sendFrame(): ChatSubscribeClientFrame {
       agentMode: "epic",
     },
     accountContext: { type: "PERSONAL" },
-    browserContextAttachments: [],
     browserAnnotations: [],
   });
 }
@@ -160,7 +159,6 @@ describe("projectChatClientFrameForVersion", () => {
     const frame = sendFrame();
     for (const version of legacyLines()) {
       const projected = projectChatClientFrameForVersion(frame, version);
-      expect(Object.hasOwn(projected, "browserContextAttachments")).toBe(false);
       expect(Object.hasOwn(projected, "browserAnnotations")).toBe(false);
       expect(chatSubscribeV16.clientFrameSchema.parse(projected).kind).toBe(
         "send",
@@ -559,7 +557,6 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
     ]);
     const user = userMessage();
     const userPayload = asRecord(user.message, "user payload");
-    userPayload.browserContextAttachments = [{ unvalidated: true }];
     userPayload.browserAnnotations = [{ unvalidated: true }];
     const messages: unknown[] = [user, message];
     const originalText = asRecord(message, "message").blocks;
@@ -572,7 +569,6 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
     normalizeV16MessagesInShallowSnapshot(messages);
 
     expect(messages[0]).toBe(user);
-    expect(userPayload.browserContextAttachments).toEqual([]);
     expect(userPayload.browserAnnotations).toEqual([]);
     expect(originalText[0]).toBe(textRef);
     expect(originalText[2]).toBe(populatedRef);
@@ -663,14 +659,14 @@ describe("normalizeV16MessagesInShallowSnapshot", () => {
  * schemas leave it structural. The queue is the opposite: the frozen `1.6`
  * schema DEEP-parses it (so a browser payload on a `1.6` queue item is
  * stripped as an unknown key), and the live shallow re-parse then supplies
- * `browserContextAttachments: []` / `browserAnnotations: []` from the live
- * payload schema's `.default([])`. Same for `messageAccepted`, which is not a
- * snapshot and so takes the live deep parse directly.
+ * `browserAnnotations: []` from the live payload schema's `.default([])`.
+ * Same for `messageAccepted`, which is not a snapshot and so takes the live
+ * deep parse directly.
  *
- * Net effect on a `1.6` peer: these arrays read as `[]`, never as `undefined`.
- * That is load-bearing for consumers typed as if both are present, and it rests
- * entirely on those `.default([])`s - swapping either for `.optional()` breaks
- * this line silently, which is what these tests exist to catch.
+ * Net effect on a `1.6` peer: the array reads as `[]`, never as `undefined`.
+ * That is load-bearing for consumers typed as if it is present, and it rests
+ * entirely on that `.default([])` - swapping it for `.optional()` breaks this
+ * line silently, which is what these tests exist to catch.
  *
  * SMUGGLED payloads on `messageAccepted` / `queueChanged` are a separate
  * matter: those frames get no frozen parse, so `normalizeV16BrowserPayloadsInFrame`
@@ -732,11 +728,10 @@ describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
   }
 
   function expectBrowserPayloadEmpty(payload: Record<string, unknown>): void {
-    expect(payload.browserContextAttachments).toEqual([]);
     expect(payload.browserAnnotations).toEqual([]);
   }
 
-  it("defaults both browser arrays on a queue prompt item that carries neither", () => {
+  it("defaults the browser annotations array on a queue prompt item that carries none", () => {
     // The frozen 1.6 shape: a user-authored payload with no browser keys.
     const { queuePayload } = receiveV16Snapshot(
       v16SnapshotWithQueueItem({
@@ -755,14 +750,13 @@ describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
       v16SnapshotWithQueueItem({
         kind: "user",
         content: { type: "doc", content: [] },
-        browserContextAttachments: [{ unvalidated: true }],
         browserAnnotations: [{ unvalidated: true }],
       }),
     );
     expectBrowserPayloadEmpty(queuePayload);
   });
 
-  it("defaults both browser arrays on a 1.6 messageAccepted user message", () => {
+  it("defaults the browser annotations array on a 1.6 messageAccepted user message", () => {
     // Non-snapshot frames on the 1.6 line take the live deep parse, so the
     // defaults - not a normalizer pass - are what keep this off `undefined`.
     const frame = chatSubscribeServerFrameSchema.parse({
@@ -801,9 +795,6 @@ describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
     normalizeV16BrowserPayloadsInFrame(agentFrame);
     // An agent payload has no such fields on ANY line; inventing them would
     // make the payload fail its own schema.
-    expect(Object.hasOwn(agentPayload, "browserContextAttachments")).toBe(
-      false,
-    );
     expect(Object.hasOwn(agentPayload, "browserAnnotations")).toBe(false);
 
     const managedItem: Record<string, unknown> = { kind: "managed_command" };
@@ -815,29 +806,29 @@ describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
 
     // Every other frame kind is left alone, so a caller can hand it each
     // parsed frame unconditionally.
-    const carried = [{ tabId: "tab-1" }];
+    const carried = [{ annotationId: "ann-1" }];
     const other = {
       kind: "blockDelta",
       message: {
         role: "user",
-        message: { kind: "user", browserContextAttachments: carried },
+        message: { kind: "user", browserAnnotations: carried },
       },
     };
     normalizeV16BrowserPayloadsInFrame(other);
-    expect(other.message.message.browserContextAttachments).toBe(carried);
+    expect(other.message.message.browserAnnotations).toBe(carried);
   });
 
   it("deep-validates the same browser payload on the live line instead of defaulting it away", () => {
     // The mirror of the neutralizing case above, and why the `1.6` result is
-    // not merely "zod happened to strip something": on the live line these
-    // arrays are validated content, so an unvalidatable record is a parse
+    // not merely "zod happened to strip something": on the live line this
+    // array is validated content, so an unvalidatable record is a parse
     // error rather than a silently emptied field.
     expect(() =>
       chatSubscribeSnapshotServerFrameShallowSchema.parse(
         v16SnapshotWithQueueItem({
           kind: "user",
           content: { type: "doc", content: [] },
-          browserContextAttachments: [{ unvalidated: true }],
+          browserAnnotations: [{ unvalidated: true }],
         }),
       ),
     ).toThrow();
@@ -1029,7 +1020,6 @@ function userMessage(): Record<string, unknown> {
     message: {
       kind: "user",
       content: { type: "doc", content: [] },
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     timestamp: 5,
@@ -1040,7 +1030,6 @@ function userMessage(): Record<string, unknown> {
 function expectBrowserPayloadStripped(value: unknown): void {
   const message = asRecord(value, "user message");
   const payload = asRecord(message.message, "user payload");
-  expect(Object.hasOwn(payload, "browserContextAttachments")).toBe(false);
   expect(Object.hasOwn(payload, "browserAnnotations")).toBe(false);
 }
 
@@ -1288,7 +1277,6 @@ describe("projectChatServerFrameForVersion", () => {
       if (!Array.isArray(queue.items)) throw new Error("expected queue items");
       const item = asRecord(queue.items[0], "queue item");
       const payload = asRecord(item.message, "queue payload");
-      expect(Object.hasOwn(payload, "browserContextAttachments")).toBe(false);
       expect(Object.hasOwn(payload, "browserAnnotations")).toBe(false);
       expect(chatSubscribeV16.serverFrameSchema.parse(projected).kind).toBe(
         "queueChanged",

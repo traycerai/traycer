@@ -6,11 +6,6 @@ import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
-import { createBrowserConsoleAttachment } from "@/lib/browser-view/browser-context-attachments";
-import type {
-  BrowserViewConsoleEntry,
-  BrowserViewTileKey,
-} from "@traycer-clients/shared/platform/browser-view";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { markLandingDraftsReady } from "@/lib/composer/landing-image-gc";
 import {
@@ -42,24 +37,6 @@ vi.mock("idb-keyval", async () => {
 const EMPTY_DOC: DraftState["content"] = {
   type: "doc",
   content: [{ type: "paragraph" }],
-};
-
-const TILE: BrowserViewTileKey = {
-  viewTabId: "view-tab",
-  paneId: "pane",
-  tileInstanceId: "tile",
-  pageSessionId: "page",
-};
-
-const CONSOLE_ENTRY: BrowserViewConsoleEntry = {
-  id: "console-1",
-  timestamp: 1000,
-  source: "console-api",
-  level: "error",
-  text: "boom",
-  url: "https://example.com/app.js",
-  lineNumber: 4,
-  columnNumber: 2,
 };
 
 let urlCounter = 0;
@@ -414,14 +391,6 @@ describe("composer draft store browserAnnotations", () => {
       sessionId: "session-epoch",
       comment: "no document change",
     });
-    useComposerDraftStore.getState().addBrowserContextAttachment(
-      "chat-epoch",
-      createBrowserConsoleAttachment({
-        tile: TILE,
-        pageUrl: "https://example.com/page",
-        entry: CONSOLE_ENTRY,
-      }),
-    );
     expect(draftOf("chat-epoch").browserAnnotations).toHaveLength(1);
     expect(draftOf("chat-epoch").resetEpoch).toBe(before.resetEpoch);
 
@@ -436,7 +405,7 @@ describe("composer draft store browserAnnotations", () => {
   it("Sidecar mutations DO bump revision (the prompt-stash clear-if-unchanged token)", async () => {
     // A stash captures {content, revision}, saves to IndexedDB, then clears
     // the draft only if the revision still matches - and `clearDraft` wipes
-    // the sidecars the stash never captured. Without a bump here, an
+    // the sidecar the stash never captured. Without a bump here, an
     // annotation attached during that save is destroyed with nothing holding
     // it.
     useComposerDraftStore
@@ -452,51 +421,29 @@ describe("composer draft store browserAnnotations", () => {
     });
     expect(draftOf("chat-cas").revision).toBe(captured + 1);
 
-    useComposerDraftStore.getState().addBrowserContextAttachment(
-      "chat-cas",
-      createBrowserConsoleAttachment({
-        tile: TILE,
-        pageUrl: "https://example.com/page",
-        entry: CONSOLE_ENTRY,
-      }),
-    );
-    expect(draftOf("chat-cas").revision).toBe(captured + 2);
-
     useComposerDraftStore
       .getState()
       .removeBrowserAnnotation("chat-cas", "ann-cas");
-    expect(draftOf("chat-cas").revision).toBe(captured + 3);
+    expect(draftOf("chat-cas").revision).toBe(captured + 2);
   });
 
-  it("Accepted send: clearDraft clears browserAnnotations and browserContextAttachments", async () => {
+  it("Accepted send: clearDraft clears browserAnnotations", async () => {
     const attached = await attachNamed("chat-send", {
       annotationId: "ann-send",
       tabId: "tab-send",
       sessionId: "session-send",
       comment: "goes out with the message",
     });
-    const context = createBrowserConsoleAttachment({
-      tile: TILE,
-      pageUrl: "https://example.com/page",
-      entry: CONSOLE_ENTRY,
-    });
-    useComposerDraftStore
-      .getState()
-      .addBrowserContextAttachment("chat-send", context);
     useComposerDraftStore
       .getState()
       .setSnapshot("chat-send", EMPTY_DOC, { from: 1, to: 1 });
     const before = draftOf("chat-send");
     expect(before.browserAnnotations).toHaveLength(1);
-    expect(before.browserContextAttachments).toEqual([context]);
 
     useComposerDraftStore.getState().clearDraft("chat-send");
 
     const after = draftOf("chat-send");
     expect(after.browserAnnotations).toEqual([]);
-    // Submit folds these into the outgoing attachments, so a surviving entry
-    // re-attaches the same capture on every later message in the chat.
-    expect(after.browserContextAttachments).toEqual([]);
     expect(after.content).toEqual(EMPTY_DOC);
     expect(after.resetEpoch).toBe(before.resetEpoch + 1);
     expect(after.revision).toBe(before.revision + 1);

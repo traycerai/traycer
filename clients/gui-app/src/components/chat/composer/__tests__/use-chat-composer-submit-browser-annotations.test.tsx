@@ -11,11 +11,6 @@ import { useChatComposerDraft } from "@/components/chat/composer/use-chat-compos
 import type { ModelOption } from "@/components/home/data/landing-options";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
-import { createBrowserConsoleAttachment } from "@/lib/browser-view/browser-context-attachments";
-import type {
-  BrowserViewConsoleEntry,
-  BrowserViewTileKey,
-} from "@traycer-clients/shared/platform/browser-view";
 import { selectedModelRejectsImageAttachments } from "@/lib/composer/chat-run-settings";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -56,24 +51,6 @@ const EMPTY_DOC: JsonContent = {
 const TYPED_DOC: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "x" }] }],
-};
-
-const TILE: BrowserViewTileKey = {
-  viewTabId: "view-tab",
-  paneId: "pane",
-  tileInstanceId: "tile",
-  pageSessionId: "page",
-};
-
-const CONSOLE_ENTRY: BrowserViewConsoleEntry = {
-  id: "console-1",
-  timestamp: 1000,
-  source: "console-api",
-  level: "error",
-  text: "boom",
-  url: "https://example.com/app.js",
-  lineNumber: 4,
-  columnNumber: 2,
 };
 
 const CROP_BYTES = new Uint8Array([
@@ -499,101 +476,7 @@ describe("useChatComposerSubmit browser annotations", () => {
     expect(input.attachments).toContainEqual(late);
     expect(input.restore.browserAnnotations).toEqual([first, late]);
   });
-
-  it("sends a browser context capture attached while crop bytes resolve", async () => {
-    const taskId = "chat-ctx-late-attach";
-    const context = createBrowserConsoleAttachment({
-      tile: TILE,
-      pageUrl: "https://example.com/page",
-      entry: CONSOLE_ENTRY,
-    });
-    useComposerDraftStore
-      .getState()
-      .addBrowserAnnotation(taskId, annotationRecord(null));
-    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
-    let release: (() => void) | null = null;
-    imageStoreMocks.getImageBytes.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve(CROP_BYTES);
-        }),
-    );
-    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
-    const { result } = mountSubmit({
-      taskId,
-      editor: fakeEditor(TYPED_DOC),
-      imagesUnsupported: false,
-      onSubmitMessage: submit,
-    });
-
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-    act(() => {
-      useComposerDraftStore
-        .getState()
-        .addBrowserContextAttachment(taskId, context);
-    });
-    await act(async () => {
-      release?.();
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(submit).toHaveBeenCalledTimes(1);
-    });
-
-    expect(browserContextKinds(submit.mock.calls[0][0])).toEqual([
-      { kind: "browser-context", payload: context },
-    ]);
-  });
 });
-
-describe("browser context attachments", () => {
-  it("does not re-attach a browser context capture on the next message", () => {
-    const taskId = "chat-ctx-reattach";
-    const context = createBrowserConsoleAttachment({
-      tile: TILE,
-      pageUrl: "https://example.com/page",
-      entry: CONSOLE_ENTRY,
-    });
-    useComposerDraftStore
-      .getState()
-      .addBrowserContextAttachment(taskId, context);
-
-    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
-    const { result } = mountSubmit({
-      taskId,
-      editor: fakeEditor(TYPED_DOC),
-      imagesUnsupported: false,
-      onSubmitMessage: submit,
-    });
-
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-
-    expect(submit).toHaveBeenCalledTimes(2);
-    expect(browserContextKinds(submit.mock.calls[0][0])).toEqual([
-      { kind: "browser-context", payload: context },
-    ]);
-    expect(browserContextKinds(submit.mock.calls[1][0])).toEqual([]);
-    expect(
-      useComposerDraftStore.getState().drafts[taskId]
-        ?.browserContextAttachments,
-    ).toEqual([]);
-  });
-});
-
-function browserContextKinds(
-  input: ChatComposerSubmitInput,
-): ReadonlyArray<unknown> {
-  return input.attachments.filter(
-    (attachment) => attachment.kind === "browser-context",
-  );
-}
 
 describe("browser annotation image gating", () => {
   it("annotation-only draft sets draftHasImages so an image-rejecting model blocks send", async () => {

@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   browserAnnotationRecordSchema,
-  browserContextAttachmentRecordSchema,
   userAuthoredMessageSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
-import {
-  browserContextAttachmentWireSchema,
-  chatSubscribeClientFrameSchema,
-} from "@traycer/protocol/host/agent/gui/subscribe";
+import { chatSubscribeClientFrameSchema } from "@traycer/protocol/host/agent/gui/subscribe";
 
 const FULL_ANNOTATION = {
   kind: "browser-annotation" as const,
@@ -48,23 +44,6 @@ const FULL_ANNOTATION = {
   imageFileName: "browser-annotation-ann-7f3a.png",
   imageHash: "abc123def456",
   droppedElementCount: 0,
-};
-
-const BROWSER_ELEMENT_RECORD = {
-  kind: "browser-element" as const,
-  origin: "https://example.com",
-  pageUrl: "https://example.com/docs",
-  composerText: "Selected the submit button",
-  sessionId: "session-abc",
-  tabId: "tab-abc",
-};
-
-const BROWSER_ELEMENT_WIRE = {
-  kind: "browser-element" as const,
-  origin: "https://example.com",
-  pageUrl: "https://example.com/docs",
-  composerText: "Selected the submit button",
-  tabId: "tab-abc",
 };
 
 function sendFrameWithoutAnnotations(): Record<string, unknown> {
@@ -124,20 +103,6 @@ describe("browserAnnotationRecordSchema", () => {
   });
 });
 
-describe("browser-element remains parseable", () => {
-  it("parses the old browser-element kind on the persist record schema", () => {
-    expect(
-      browserContextAttachmentRecordSchema.parse(BROWSER_ELEMENT_RECORD),
-    ).toEqual(BROWSER_ELEMENT_RECORD);
-  });
-
-  it("parses the old browser-element kind on the wire schema", () => {
-    expect(
-      browserContextAttachmentWireSchema.parse(BROWSER_ELEMENT_WIRE),
-    ).toEqual(BROWSER_ELEMENT_WIRE);
-  });
-});
-
 describe("live user message browserAnnotations default", () => {
   it("accepts an omitted browserAnnotations field and defaults to []", () => {
     const parsed = userAuthoredMessageSchema.parse({
@@ -145,7 +110,6 @@ describe("live user message browserAnnotations default", () => {
       content: { type: "doc", content: [] },
     });
     expect(parsed.browserAnnotations).toEqual([]);
-    expect(parsed.browserContextAttachments).toEqual([]);
   });
 
   it("keeps a supplied browser-annotation record on the live user message", () => {

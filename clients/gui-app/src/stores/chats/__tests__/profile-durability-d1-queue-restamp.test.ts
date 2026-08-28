@@ -146,7 +146,6 @@ function queuedItem(
     message: {
       kind: "user" as const,
       content: CONTENT,
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     sender: { type: "user" as const, userId: OWNER_ID },

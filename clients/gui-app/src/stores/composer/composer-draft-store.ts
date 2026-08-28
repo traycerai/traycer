@@ -3,7 +3,6 @@ import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import type { BrowserContextAttachmentPayload } from "@/lib/browser-view/browser-context-attachments";
 import {
   collectDraftAnnotationImageHashes,
   mergeBrowserAnnotationRecords,
@@ -21,11 +20,6 @@ export interface DraftSelection {
 export interface DraftState {
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
-  readonly browserContextAttachments: ReadonlyArray<BrowserContextAttachmentPayload>;
-  /**
-   * Attached annotation cards. Persisted and rehydrated (unlike the old
-   * `browserContextAttachments` array, which the merge path still drops).
-   */
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * Bumped only when the draft is replaced from outside the editor
@@ -33,11 +27,11 @@ export interface DraftState {
    * watches this counter to push the new content into Tiptap; routine
    * keystroke snapshots from the editor never bump it.
    *
-   * The sidecar arrays (`browserAnnotations`, `browserContextAttachments`)
-   * deliberately do NOT bump it: they are not the DOCUMENT, so a bump there
-   * would replay a stale content+selection into a live editor for a change
-   * the document does not contain. The attachment strip subscribes to
-   * `browserAnnotations` directly.
+   * The sidecar array (`browserAnnotations`) deliberately does NOT bump it:
+   * it is not the DOCUMENT, so a bump there would replay a stale
+   * content+selection into a live editor for a change the document does not
+   * contain. The attachment strip subscribes to `browserAnnotations`
+   * directly.
    */
   readonly resetEpoch: number;
   /**
@@ -48,11 +42,11 @@ export interface DraftState {
    * a stash only clears this draft when the revision it captured still
    * matches, so an edit made while the stash was durably saving is kept.
    *
-   * The sidecar mutations bump it too, unlike `resetEpoch`: the stash carries
+   * The sidecar mutation bumps it too, unlike `resetEpoch`: the stash carries
    * only the DOCUMENT, while the `clearDraft` it performs on a matching token
-   * wipes `browserAnnotations` and `browserContextAttachments` as well. An
-   * annotation attached while that IndexedDB save was in flight would
-   * otherwise be destroyed with nothing holding it.
+   * wipes `browserAnnotations` as well. An annotation attached while that
+   * IndexedDB save was in flight would otherwise be destroyed with nothing
+   * holding it.
    */
   readonly revision: number;
 }
@@ -82,10 +76,6 @@ interface ComposerDraftStore {
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
-  readonly addBrowserContextAttachment: (
-    taskId: string,
-    attachment: BrowserContextAttachmentPayload,
-  ) => void;
   readonly addBrowserAnnotation: (
     taskId: string,
     record: BrowserAnnotationRecord,
@@ -108,10 +98,7 @@ interface ComposerDraftStore {
    * resetEpoch/revision) instead of deleting the map entry. A delete can't
    * reliably notify every mounted composer for this `taskId` (split panes,
    * keep-alive tabs): a sibling's `resetEpoch` selector falls back to the same
-   * `?? 0` whether the entry never existed or was just removed. The old
-   * `browserContextAttachments` array is emptied too: submit folds it into the
-   * outgoing attachments, so leaving it re-attaches the same capture on every
-   * later message in the chat.
+   * `?? 0` whether the entry never existed or was just removed.
    */
   readonly clearDraft: (taskId: string) => void;
 }
@@ -124,7 +111,6 @@ const EMPTY_COMPOSER_SELECTION: DraftSelection = { from: 1, to: 1 };
 export const EMPTY_COMPOSER_DRAFT: DraftState = {
   content: EMPTY_COMPOSER_CONTENT,
   selection: null,
-  browserContextAttachments: [],
   browserAnnotations: [],
   resetEpoch: 0,
   revision: 0,
@@ -211,24 +197,6 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           };
         });
       },
-      addBrowserContextAttachment: (taskId, attachment) => {
-        set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
-          return {
-            drafts: {
-              ...state.drafts,
-              [taskId]: {
-                ...current,
-                browserContextAttachments: [
-                  ...current.browserContextAttachments,
-                  attachment,
-                ],
-                revision: current.revision + 1,
-              },
-            },
-          };
-        });
-      },
       addBrowserAnnotation: (taskId, record) => {
         set((state) => {
           const current = ensureDraft(state.drafts, taskId);
@@ -298,7 +266,6 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
                 ...current,
                 content: EMPTY_COMPOSER_CONTENT,
                 selection: EMPTY_COMPOSER_SELECTION,
-                browserContextAttachments: [],
                 browserAnnotations: [],
                 resetEpoch: current.resetEpoch + 1,
                 revision: current.revision + 1,
@@ -328,9 +295,6 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           drafts[taskId] = {
             content: value.content,
             selection: value.selection,
-            // Deliberately dropped on rehydrate (see `DraftState`): the
-            // captures they point at do not survive a reload.
-            browserContextAttachments: [],
             browserAnnotations: parseBrowserAnnotationRecords(
               value.browserAnnotations,
             ),

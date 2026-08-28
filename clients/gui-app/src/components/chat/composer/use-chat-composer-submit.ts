@@ -232,8 +232,7 @@ export function useChatComposerSubmit(
       // editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
       if (annotationPrepFlight.current) return;
-      const { annotationRecords, browserContextAttachments } =
-        readDraftSidecars(taskId);
+      const { annotationRecords } = readDraftSidecars(taskId);
       const editorContent = editor.getJSON();
       const contentText =
         extractPlainTextFromComposerJSONContent(editorContent);
@@ -241,7 +240,6 @@ export function useChatComposerSubmit(
         isEmptyComposerSubmit({
           contentText,
           editorContent,
-          browserContextAttachments,
           annotationRecords,
         })
       ) {
@@ -261,17 +259,15 @@ export function useChatComposerSubmit(
         const liveContent = editor.getJSON();
         const liveContentText =
           extractPlainTextFromComposerJSONContent(liveContent);
-        // Re-read the sidecar arrays for the same reason the document is
-        // re-read: an annotation or a browser capture attached while the crop
-        // bytes resolved is what the user is looking at, and the `clearDraft`
-        // below wipes it - the pre-flight capture would drop it silently.
-        // `annotationImages` still covers only the records captured BEFORE
-        // that read, so a late annotation sends its record without an inlined
-        // crop atom rather than not being sent at all.
-        const {
-          annotationRecords: liveAnnotationRecords,
-          browserContextAttachments: liveBrowserContextAttachments,
-        } = readDraftSidecars(taskId);
+        // Re-read the sidecar array for the same reason the document is
+        // re-read: an annotation attached while the crop bytes resolved is
+        // what the user is looking at, and the `clearDraft` below wipes it -
+        // the pre-flight capture would drop it silently. `annotationImages`
+        // still covers only the records captured BEFORE that read, so a late
+        // annotation sends its record without an inlined crop atom rather
+        // than not being sent at all.
+        const { annotationRecords: liveAnnotationRecords } =
+          readDraftSidecars(taskId);
         const settings = buildChatRunSettings({
           selection: toolbar.selection,
           permission: toolbar.permission,
@@ -287,7 +283,6 @@ export function useChatComposerSubmit(
         );
         const attachments: ReadonlyArray<Attachment> = [
           ...buildAttachmentsFromJSONContent(submittedContent),
-          ...liveBrowserContextAttachments,
           ...liveAnnotationRecords,
         ];
         const deliveryPolicy = resolveSubmitDeliveryPolicy({
@@ -449,34 +444,25 @@ export function useChatComposerSubmit(
 
 interface ComposerDraftSidecars {
   readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
-  /** Already wrapped as attachments, ready to concatenate onto a send. */
-  readonly browserContextAttachments: ReadonlyArray<Attachment>;
 }
 
 /**
- * The draft's two non-document arrays, read live. Both the pre-flight read and
- * the post-async finalize go through here so they can never diverge.
+ * The draft's non-document sidecar array, read live. Both the pre-flight read
+ * and the post-async finalize go through here so they can never diverge.
  */
 function readDraftSidecars(taskId: string): ComposerDraftSidecars {
   const draft = readComposerDraftSnapshot(taskId);
-  return {
-    annotationRecords: draft.browserAnnotations,
-    browserContextAttachments: draft.browserContextAttachments.map(
-      (payload) => ({ kind: "browser-context" as const, payload }),
-    ),
-  };
+  return { annotationRecords: draft.browserAnnotations };
 }
 
 function isEmptyComposerSubmit(input: {
   readonly contentText: string;
   readonly editorContent: JsonContent;
-  readonly browserContextAttachments: ReadonlyArray<Attachment>;
   readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
 }): boolean {
   return (
     input.contentText.trim().length === 0 &&
     !containsImageAtoms(input.editorContent) &&
-    input.browserContextAttachments.length === 0 &&
     input.annotationRecords.length === 0
   );
 }

@@ -17,7 +17,6 @@ import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   browserAnnotationRecordSchema,
-  browserContextAttachmentRecordSchema,
   chatEventSchema,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
@@ -1280,23 +1279,6 @@ const activeProfileUpdateClientFrameSchema = z.object({
   profileId: z.string().nullable(),
 });
 
-/**
- * Shared-browser-runtime ticket 01. The wire-only shape a `browser-context`
- * chat attachment sends: origin/pageUrl/composerText the model will
- * eventually see verbatim, plus `tabId` - the host-minted durable tab id
- * once the GUI's registration has settled, with a tile-id fallback during
- * that narrow race. The host's `send` handler resolves `tabId` to its owning
- * session (if one is registered) and forwards
- * `{sessionId, tabId}` onto the persisted `browserContextAttachmentRecordSchema`
- * (`persistence/epic/messages.ts`) and into the prompt - never a raw
- * Chromium target id, and never anything the host must keep secret.
- */
-export const browserContextAttachmentWireSchema =
-  browserContextAttachmentRecordSchema.omit({ sessionId: true });
-export type BrowserContextAttachmentWire = z.infer<
-  typeof browserContextAttachmentWireSchema
->;
-
 // The client-frame options that precede the two interview actions. Split out
 // (rather than written inline in one array) because `1.7` swaps ONLY the
 // interview pair: keeping the surrounding options in their own consts lets the
@@ -1631,11 +1613,8 @@ export const chatSubscribeClientFrameSchemaV16 = z.discriminatedUnion(
 const chatSubscribeClientFrameSchemaOptions = [
   chatSubscribeClientFrameSchemaOptionsBeforeInterview[0].extend({
     worktreeIntent: worktreeIntentSchema.nullable().default(null),
-    // Browser context entered on the unreleased live line. Every released
-    // 1.0–1.6 union above stays frozen without these fields.
-    browserContextAttachments: z
-      .array(browserContextAttachmentWireSchema)
-      .default([]),
+    // Browser annotations entered on the unreleased live line. Every
+    // released 1.0–1.6 union above stays frozen without this field.
     browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
   }),
   deleteMessageSuffixClientFrameSchema,

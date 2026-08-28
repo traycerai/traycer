@@ -32,7 +32,10 @@ import {
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { BrowserSessionsContext } from "./browser-sessions-context";
+import {
+  BrowserSessionsContext,
+  BrowserSessionsCoordinatorKeyContext,
+} from "./browser-sessions-context";
 
 function browserSessionsOwnerIdentityKey(
   hostClient: HostClient<HostRpcRegistry> | null,
@@ -68,16 +71,18 @@ export function BrowserSessionsHostProvider(props: {
 }) {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
-  const sessions = useBrowserSessions({
+  const { state: sessions, coordinatorKey } = useBrowserSessions({
     hostId: props.hostId,
     hostClient: props.hostClient,
     epicId: props.epicId,
     browserView,
   });
   return (
-    <BrowserSessionsContext.Provider value={sessions}>
-      {props.children}
-    </BrowserSessionsContext.Provider>
+    <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
+      <BrowserSessionsContext.Provider value={sessions}>
+        {props.children}
+      </BrowserSessionsContext.Provider>
+    </BrowserSessionsCoordinatorKeyContext.Provider>
   );
 }
 
@@ -119,9 +124,14 @@ interface UseBrowserSessionsArgs {
   readonly browserView: BrowserViewBridge | null;
 }
 
+interface BrowserSessionsHookResult {
+  readonly state: BrowserSessionsState;
+  readonly coordinatorKey: string | null;
+}
+
 function useBrowserSessions(
   args: UseBrowserSessionsArgs,
-): BrowserSessionsState {
+): BrowserSessionsHookResult {
   const { hostId, epicId, browserView } = args;
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
@@ -186,7 +196,7 @@ function useBrowserSessions(
     () => unavailableBrowserSessionsState(hostId),
     [hostId],
   );
-  return state ?? unavailableState;
+  return { state: state ?? unavailableState, coordinatorKey };
 }
 
 function unavailableBrowserSessionsState(

@@ -522,48 +522,6 @@ export const epicSchemaSurfaceBaseline = {
                               "content": {
                                 "$ref": "#/$defs/__schema0"
                               },
-                              "browserContextAttachments": {
-                                "default": [],
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "kind": {
-                                      "type": "string",
-                                      "enum": [
-                                        "browser-console-entry",
-                                        "browser-network-request",
-                                        "browser-screenshot",
-                                        "browser-element",
-                                        "browser-debug-context"
-                                      ]
-                                    },
-                                    "origin": {
-                                      "type": "string"
-                                    },
-                                    "pageUrl": {
-                                      "type": "string"
-                                    },
-                                    "composerText": {
-                                      "type": "string"
-                                    },
-                                    "sessionId": {
-                                      "type": "string"
-                                    },
-                                    "tabId": {
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "kind",
-                                    "origin",
-                                    "pageUrl",
-                                    "composerText",
-                                    "sessionId",
-                                    "tabId"
-                                  ]
-                                }
-                              },
                               "browserAnnotations": {
                                 "default": [],
                                 "type": "array",
@@ -8623,49 +8581,6 @@ export const epicSchemaSurfaceBaseline = {
                               "content": {
                                 "$ref": "#/$defs/__schema0"
                               },
-                              "browserContextAttachments": {
-                                "default": [],
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "kind": {
-                                      "type": "string",
-                                      "enum": [
-                                        "browser-console-entry",
-                                        "browser-network-request",
-                                        "browser-screenshot",
-                                        "browser-element",
-                                        "browser-debug-context"
-                                      ]
-                                    },
-                                    "origin": {
-                                      "type": "string"
-                                    },
-                                    "pageUrl": {
-                                      "type": "string"
-                                    },
-                                    "composerText": {
-                                      "type": "string"
-                                    },
-                                    "sessionId": {
-                                      "type": "string"
-                                    },
-                                    "tabId": {
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "kind",
-                                    "origin",
-                                    "pageUrl",
-                                    "composerText",
-                                    "sessionId",
-                                    "tabId"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              },
                               "browserAnnotations": {
                                 "default": [],
                                 "type": "array",
@@ -8926,7 +8841,6 @@ export const epicSchemaSurfaceBaseline = {
                             "required": [
                               "kind",
                               "content",
-                              "browserContextAttachments",
                               "browserAnnotations"
                             ],
                             "additionalProperties": false

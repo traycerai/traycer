@@ -18,3 +18,22 @@ export function useBrowserSessionsContext(): BrowserSessionsState {
   }
   return value;
 }
+
+/**
+ * The coordinator's registry key, set once per host/epic/owner and STABLE
+ * across every sessions-stream frame - unlike `BrowserSessionsContext`, whose
+ * value is a fresh object every frame (`browser-sessions-coordinator.ts`'s
+ * `patchState` spreads state on each server frame). A consumer that only
+ * needs to read the coordinator's state passively (not on every render) reads
+ * it via this key against `browserSessionsCoordinatorState` /
+ * `subscribeToBrowserSessionsCoordinator` at query time, instead of
+ * subscribing through the churning context value. See
+ * `use-mention-items.ts`'s browser-tab source for the consumer.
+ */
+export const BrowserSessionsCoordinatorKeyContext = createContext<
+  string | null
+>(null);
+
+export function useMaybeBrowserSessionsCoordinatorKey(): string | null {
+  return useContext(BrowserSessionsCoordinatorKeyContext);
+}

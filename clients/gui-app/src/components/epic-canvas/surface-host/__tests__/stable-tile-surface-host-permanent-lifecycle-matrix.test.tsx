@@ -418,7 +418,6 @@ function buildUserSnapshotMessage(
           },
         ],
       },
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     timestamp: index + 1,

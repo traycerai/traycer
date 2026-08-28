@@ -49,7 +49,6 @@ const chat: Chat = {
       message: {
         kind: "user",
         content: { type: "doc", content: [] },
-        browserContextAttachments: [],
         browserAnnotations: [],
       },
       timestamp: 1000,

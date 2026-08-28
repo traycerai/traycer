@@ -414,7 +414,6 @@ function UserMessageDisplayView({
             align="start"
           />
           <BrowserReferenceChips
-            references={message.browserContextAttachments ?? []}
             annotations={message.browserAnnotations ?? []}
           />
           <div

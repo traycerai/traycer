@@ -898,7 +898,7 @@ describe("ChatStreamClient.sendAction interview projection", () => {
  *
  * Both directions are pinned here: neutralized to `[]` on `1.6`, passed through
  * on the live line. `[]` and not `undefined` matters as much as the stripping -
- * consumers are typed as if both arrays are present.
+ * consumers are typed as if the array is present.
  */
 function smuggledBrowserPayload(): Record<string, unknown> {
   return {
@@ -906,16 +906,6 @@ function smuggledBrowserPayload(): Record<string, unknown> {
     content: { type: "doc", content: [] },
     // Deliberately VALID records: the point is that they survive the live
     // parse, so only a normalize pass can keep them off a 1.6 consumer.
-    browserContextAttachments: [
-      {
-        kind: "browser-console-entry",
-        origin: "https://example.com",
-        pageUrl: "https://example.com/app",
-        composerText: "console row",
-        sessionId: "session-1",
-        tabId: "tab-1",
-      },
-    ],
     browserAnnotations: [
       {
         kind: "browser-annotation",
@@ -994,14 +984,12 @@ function queueChangedFrame(
 }
 
 function browserPayloadArrays(value: unknown): {
-  readonly attachments: unknown;
   readonly annotations: unknown;
 } {
   if (!isRecord(value)) {
     throw new Error("expected user-authored payload");
   }
   return {
-    attachments: value.browserContextAttachments,
     annotations: value.browserAnnotations,
   };
 }
@@ -1077,50 +1065,41 @@ describe("ChatStreamClient pre-1.7 browser payload neutralization", () => {
 
     expect(accepted).toHaveLength(1);
     expect(queued).toHaveLength(1);
-    // Empty, not absent: consumers are typed as if both arrays are present.
+    // Empty, not absent: consumers are typed as if the array is present.
     expect(browserPayloadArrays(acceptedPayload(accepted[0]))).toEqual({
-      attachments: [],
       annotations: [],
     });
     expect(browserPayloadArrays(queuedPayload(queued[0]))).toEqual({
-      attachments: [],
       annotations: [],
     });
   });
 
-  it("empties them on a pre-1.6 line too - every line below 1.7 predates the fields", () => {
+  it("empties it on a pre-1.6 line too - every line below 1.7 predates the field", () => {
     const { accepted, queued } = runBrowserPayloadSession({
       major: 1,
       minor: 2,
     });
 
     expect(browserPayloadArrays(acceptedPayload(accepted[0]))).toEqual({
-      attachments: [],
       annotations: [],
     });
     expect(browserPayloadArrays(queuedPayload(queued[0]))).toEqual({
-      attachments: [],
       annotations: [],
     });
   });
 
   it("passes the same validated browser payload through on the live line", () => {
     // Default handshake negotiates the client's canonical version (1.7), where
-    // these arrays are legal, deep-validated content rather than smuggled.
+    // this array is legal, deep-validated content rather than smuggled.
     const { accepted, queued } = runBrowserPayloadSession(null);
 
     const acceptedArrays = browserPayloadArrays(acceptedPayload(accepted[0]));
     const queuedArrays = browserPayloadArrays(queuedPayload(queued[0]));
     for (const arrays of [acceptedArrays, queuedArrays]) {
-      if (
-        !Array.isArray(arrays.attachments) ||
-        !Array.isArray(arrays.annotations)
-      ) {
-        throw new Error("expected browser payload arrays");
+      if (!Array.isArray(arrays.annotations)) {
+        throw new Error("expected browser payload array");
       }
-      expect(arrays.attachments).toHaveLength(1);
       expect(arrays.annotations).toHaveLength(1);
-      expect(arrays.attachments[0]).toMatchObject({ tabId: "tab-1" });
       // `.default(0)` on a live-only field, applied by the deep parse -
       // proof this really is the validated live shape, not a pass-through.
       expect(arrays.annotations[0]).toMatchObject({

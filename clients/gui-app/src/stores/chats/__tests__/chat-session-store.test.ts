@@ -643,7 +643,6 @@ function emitSnapshotWithQueuedSend(
           message: {
             kind: "user",
             content: CONTENT,
-            browserContextAttachments: [],
             browserAnnotations: [],
           },
           sender: { type: "user", userId: OWNER_ID },
@@ -860,7 +859,6 @@ function persistedUserMessage(
     message: {
       kind: "user",
       content: CONTENT,
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     timestamp: 4,
@@ -2023,7 +2021,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,
@@ -3462,7 +3459,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -3554,7 +3550,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,
@@ -3624,7 +3619,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,
@@ -3732,7 +3726,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: SECOND_CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,
@@ -3803,7 +3796,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -6182,7 +6174,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: SECOND_CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 4,
@@ -6338,7 +6329,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: SECOND_CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 3,
@@ -6356,7 +6346,6 @@ describe("createChatSessionStore", () => {
           message: {
             kind: "user",
             content: SECOND_CONTENT,
-            browserContextAttachments: [],
             browserAnnotations: [],
           },
           timestamp: 3,
@@ -6569,7 +6558,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,
@@ -6612,7 +6600,6 @@ describe("createChatSessionStore", () => {
           message: {
             kind: "user",
             content: CONTENT,
-            browserContextAttachments: [],
             browserAnnotations: [],
           },
           timestamp: 2,
@@ -6761,7 +6748,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -6983,7 +6969,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -7054,7 +7039,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -7127,7 +7111,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -7558,7 +7541,6 @@ describe("createChatSessionStore", () => {
       message: {
         kind: "user" as const,
         content: CONTENT,
-        browserContextAttachments: [],
         browserAnnotations: [],
       },
       sender: { type: "user" as const, userId: OWNER_ID },
@@ -8392,7 +8374,6 @@ describe("createChatSessionStore", () => {
             message: {
               kind: "user",
               content: CONTENT,
-              browserContextAttachments: [],
               browserAnnotations: [],
             },
             sender: { type: "user", userId: OWNER_ID },
@@ -9549,7 +9530,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 5,
@@ -10312,7 +10292,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,
@@ -10386,7 +10365,6 @@ describe("createChatSessionStore", () => {
         message: {
           kind: "user",
           content: CONTENT,
-          browserContextAttachments: [],
           browserAnnotations: [],
         },
         timestamp: 2,

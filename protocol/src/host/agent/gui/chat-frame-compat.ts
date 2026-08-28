@@ -69,8 +69,8 @@ export function supportsInterviewSettlementActions(
  *
  * On `1.7` this is the identity. Below it:
  *
- * - `send` loses browser context and annotations, which do not exist on the
- *   released lines.
+ * - `send` loses browser annotations, which do not exist on the released
+ *   lines.
  * - `interviewAnswer` answers lose `selection`. `values` is untouched, so the
  *   answer the provider receives is byte-for-byte what it always was.
  * - `interviewError` loses its Skip intent and saved drafts, and degrades to
@@ -99,11 +99,7 @@ export function projectChatClientFrameForVersion(
 
   switch (frame.kind) {
     case "send": {
-      const {
-        browserContextAttachments: _browserContextAttachments,
-        browserAnnotations: _browserAnnotations,
-        ...rest
-      } = frame;
+      const { browserAnnotations: _browserAnnotations, ...rest } = frame;
       return rest;
     }
     case "interviewAnswer": {
@@ -145,7 +141,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function normalizeUserAuthoredPayload(payload: unknown): void {
   if (!isRecord(payload) || payload.kind !== "user") return;
-  payload.browserContextAttachments = [];
   payload.browserAnnotations = [];
 }
 
@@ -315,17 +310,8 @@ function projectBlocks(value: unknown): unknown {
 
 function projectUserAuthoredPayload(value: unknown): unknown {
   if (!isRecord(value) || value.kind !== "user") return value;
-  if (
-    !Object.hasOwn(value, "browserContextAttachments") &&
-    !Object.hasOwn(value, "browserAnnotations")
-  ) {
-    return value;
-  }
-  const {
-    browserContextAttachments: _browserContextAttachments,
-    browserAnnotations: _browserAnnotations,
-    ...rest
-  } = value;
+  if (!Object.hasOwn(value, "browserAnnotations")) return value;
+  const { browserAnnotations: _browserAnnotations, ...rest } = value;
   return rest;
 }
 
@@ -403,7 +389,7 @@ function projectSnapshot(
  * to miss because they are several levels below the frame kind:
  *
  * - `snapshot` → `chat.messages[].blocks[]` interview blocks;
- * - `messageAccepted` → browser context and annotations on its user message;
+ * - `messageAccepted` → browser annotations on its user message;
  * - `blockDelta` → `interview.resolved` answers;
  * - `eventAppended` and the snapshot's `chat.events` → interview settlement
  *   metadata on durable chat events (see `INTERVIEW_SETTLEMENT_METADATA_KEY`);

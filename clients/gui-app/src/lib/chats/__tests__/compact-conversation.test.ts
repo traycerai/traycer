@@ -33,7 +33,6 @@ function queuedItem(queueItemId: string, messageId: string): ChatQueuedItem {
     message: {
       kind: "user",
       content: { type: "doc", content: [] },
-      browserContextAttachments: [],
       browserAnnotations: [],
     },
     sender: { type: "user", userId: "u1" },

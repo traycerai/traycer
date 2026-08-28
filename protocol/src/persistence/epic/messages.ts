@@ -37,48 +37,14 @@ const jsonContentSchema = getRecordSchema(
 );
 
 /**
- * Shared-browser-runtime ticket 01. A browser tile's context the user
- * attached to a chat message (composer attach, console row, screenshot,
- * element - see `browser-context-attachments.ts` in gui-app), carried
- * alongside `content` rather than embedded in it. `sessionId`/`tabId` name
- * the tab directly - the chip is disambiguation ("I mean this tab"), not
- * authorization, since the model reaches any epic tab through discovery
- * regardless; the opaque `handle` ticket 13 minted (`browser-tile-handle.ts`,
- * retired by this ticket) no longer serves a purpose.
- */
-export const browserContextAttachmentKindSchema = z.enum([
-  "browser-console-entry",
-  "browser-network-request",
-  "browser-screenshot",
-  "browser-element",
-  "browser-debug-context",
-]);
-export type BrowserContextAttachmentKind = z.infer<
-  typeof browserContextAttachmentKindSchema
->;
-
-export const browserContextAttachmentRecordSchema = z.object({
-  kind: browserContextAttachmentKindSchema,
-  origin: z.string(),
-  pageUrl: z.string(),
-  composerText: z.string(),
-  sessionId: z.string(),
-  tabId: z.string(),
-});
-export type BrowserContextAttachmentRecord = z.infer<
-  typeof browserContextAttachmentRecordSchema
->;
-
-/**
  * Browser-annotations ticket 05. One attached annotation bundle: structured
  * fields only (no pixels). The crop rides the existing `imageAttachment`
  * content atom, paired by `imageFileName` / `annotationId`.
  *
- * Lives on its own array (`browserAnnotations`) rather than as a new value
- * of `browserContextAttachmentKindSchema`. Adding an enum value would be a
- * breaking persist change and would leak onto every frozen
- * `chat.subscribe` send/snapshot line that shares the live kind schema.
- * The old `browser-element` kind stays parseable on that enum.
+ * Lives on its own array (`browserAnnotations`) rather than folded into
+ * `content`. Adding a new content-block kind would be a breaking persist
+ * change and would leak onto every frozen `chat.subscribe` send/snapshot
+ * line.
  */
 export const browserAnnotationCountsSchema = z.object({
   elements: z.number().int().nonnegative(),
@@ -184,9 +150,8 @@ const userAuthoredMessagePreTicket13Fields = {
 
 /**
  * Frozen user-authored payload as shipped on `chat.subscribe@1.0–1.6`
- * (main's 1.6 freeze). Ticket 13's `browserContextAttachments` and ticket
- * 05's `browserAnnotations` are live-1.7-only: they must not leak onto a
- * released snapshot / `messageAccepted` / queue item.
+ * (main's 1.6 freeze). Ticket 05's `browserAnnotations` is live-1.7-only: it
+ * must not leak onto a released snapshot / `messageAccepted` / queue item.
  */
 export const userAuthoredMessageSchemaPreAnnotation = z.object(
   userAuthoredMessagePreTicket13Fields,
@@ -195,29 +160,18 @@ export const userAuthoredMessageSchemaPreAnnotation = z.object(
 export const userAuthoredMessageSchema = z.object({
   ...userAuthoredMessagePreTicket13Fields,
   /**
-   * Empty for every message before ticket 13 and for one with no browser
-   * tile attached - `.default([])` rather than `.optional()` so an already-
-   * persisted record written before this field existed parses cleanly.
+   * Browser-annotations ticket 05. Empty for every message before this
+   * shipped and for one with no annotation attached. `.default([])` so
+   * already-persisted records parse cleanly.
    *
    * Persisted here rather than kept as transient send-time state (contrast
    * `worktreeIntent`, a wire-only "send" field the host consumes and
    * discards): a queued send re-derives its prompt from THIS persisted
    * message at drain time, not from the original `send` frame, so dropping
-   * the field here would silently lose the user's attachment for any
-   * message that sits in the queue before its turn starts. This is also why
-   * the handle inside each record is minted once, at accept time, and never
-   * re-derived at drain - see `mintBrowserContextAttachmentRecords`.
+   * the field here would silently lose the user's annotation for any
+   * message that sits in the queue before its turn starts.
    *
    * Wire: live `chat.subscribe@1.7` only. Frozen 1.0–1.6 copies omit it.
-   */
-  browserContextAttachments: z
-    .array(browserContextAttachmentRecordSchema)
-    .default([]),
-  /**
-   * Browser-annotations ticket 05. Empty for every message before this
-   * shipped and for one with no annotation attached. `.default([])` so
-   * already-persisted records parse cleanly. Same drain-time reason as
-   * `browserContextAttachments`. Wire: live `chat.subscribe@1.7` only.
    */
   browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
 });

@@ -28,7 +28,6 @@ import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
-import { browserContextAttachmentToRecord } from "@/lib/browser-view/browser-context-attachments";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
 import {
   isTransientLiveAssistantMessageId,
@@ -2928,10 +2927,6 @@ function renderUserMessage(
         : [],
     structuredContent: message.message.content,
     attachments: buildAttachmentsFromJSONContent(message.message.content),
-    browserContextAttachments:
-      message.message.kind === "user"
-        ? message.message.browserContextAttachments
-        : [],
     browserAnnotations:
       message.message.kind === "user" ? message.message.browserAnnotations : [],
     settings: null,
@@ -2975,11 +2970,6 @@ function renderPendingUserMessage(
         : [],
     structuredContent: message.content,
     attachments: message.attachments,
-    browserContextAttachments: message.attachments.flatMap((attachment) => {
-      if (attachment.kind !== "browser-context") return [];
-      const record = browserContextAttachmentToRecord(attachment.payload);
-      return record === null ? [] : [record];
-    }),
     browserAnnotations: message.attachments.filter(
       (attachment) => attachment.kind === "browser-annotation",
     ),
