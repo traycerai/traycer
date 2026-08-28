@@ -532,10 +532,7 @@ async function startLegacyFallback(): Promise<{
   readonly legacy: FakeSession;
 }> {
   hoisted.state.methodSupport = "unsupported";
-  const pending = buildWorktreeDeleteCommand({
-    worktreePath: "/wt/x",
-    readonlySurface: false,
-  })(ctx);
+  const pending = buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(ctx);
 
   await waitForSessions(1);
   commandSession().statusHandler?.("closed", {
