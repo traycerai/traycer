@@ -1652,10 +1652,18 @@ function LandingTerminalHeaderToggle(props: {
 }
 
 /**
- * Publishes the reveal toggle into the mobile header while the landing terminal
- * panel is mounted, and clears it on unmount so it cannot leak into History,
- * Settings or the epic view. Rendered from the panel contents, so it inherits
- * the availability guard above - no toggle appears where no terminal can run.
+ * Publishes the reveal toggle into the mobile header while the landing surface
+ * is the one on screen. Rendered from the panel contents, so it inherits the
+ * availability guard above - no toggle appears where no terminal can run.
+ *
+ * Gated on the surface rather than on being mounted, because the panel
+ * deliberately OUTLIVES its page's activation: its existence follows the
+ * hosting page's pane anchor, not tab focus, so it stays mounted behind an epic
+ * tab, History or Settings to keep its PTYs warm. The header belongs to the
+ * surface the phone is presenting, so a toggle published from behind one of
+ * those would act on a terminal panel the user cannot see - the same reason the
+ * panel's other outward-facing behavior (chords, focus grabs) gates on this
+ * selector instead of on being rendered.
  */
 function MobileLandingTerminalActionBinder(props: {
   readonly landingPageId: string;
@@ -1666,8 +1674,10 @@ function MobileLandingTerminalActionBinder(props: {
   const clearRightActions = useMobileHeaderStore(
     (state) => state.clearRightActions,
   );
+  const surfaceActive = useLandingTerminalSurfaceActive();
   const owner = `landing-terminal:${props.landingPageId}`;
   useEffect(() => {
+    if (!surfaceActive) return;
     // Re-baked whenever the focused landing page changes, so the slotted node
     // always toggles the layout of the page actually on screen.
     setRightActions(
@@ -1677,7 +1687,13 @@ function MobileLandingTerminalActionBinder(props: {
     return () => {
       clearRightActions(owner);
     };
-  }, [clearRightActions, owner, setRightActions, props.landingPageId]);
+  }, [
+    clearRightActions,
+    owner,
+    setRightActions,
+    surfaceActive,
+    props.landingPageId,
+  ]);
   return null;
 }
 
