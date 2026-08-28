@@ -1048,7 +1048,8 @@ describe("landing workspace summary empty state", () => {
     expect(screen.getByTestId("folder-row-loading").textContent).toContain(
       "Loading folder metadata",
     );
-    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
+    expect(screen.getByTestId("folder-location-trigger")).toBeTruthy();
+    expect(screen.getByTestId("folder-location-trigger").disabled).toBe(false);
 
     queryClient.clear();
   });

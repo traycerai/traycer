@@ -368,9 +368,6 @@ export function WorkspaceFolderSummaryControl(props: {
         // folder details" - an error toast the user never asked for, next to a
         // Refresh button correctly rendered disabled.
         if (open && canRefresh) triggerRefresh();
-        if (!open && props.onDiscardStaged !== null) {
-          props.onDiscardStaged();
-        }
       }}
     >
       {popoverTrigger}
@@ -405,6 +402,8 @@ export function WorkspaceFolderSummaryControl(props: {
             onUpdate={props.onUpdate === null ? null : handleUpdate}
             updateEnabled={props.updateEnabled}
             updatePending={props.updatePending}
+            onDiscardStaged={props.onDiscardStaged}
+            draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}
             nestedInPopover={dialogBoundaryEl !== null}

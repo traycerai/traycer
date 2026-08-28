@@ -38,6 +38,7 @@ const FAKE_CLIENT = {
 const mutationMocks = vi.hoisted(() => ({
   addBindingFolder: vi.fn(),
   createWorktree: vi.fn().mockResolvedValue({ perEntry: [] }),
+  createPending: false,
   recordRecent: vi.fn(),
   removeBindingFolder: vi.fn().mockResolvedValue({}),
 }));
@@ -57,6 +58,7 @@ const teardownStopMocks = vi.hoisted(() => ({
 }));
 const listByPathsMocks = vi.hoisted(() => ({
   workspaces: [] as WorktreeWorkspaceSummaryV15[],
+  isLoading: false,
 }));
 
 const RECENT_FOLDER: PreparedWorkspaceFolder = {
@@ -95,8 +97,8 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   useWorktreeListByWorkspacePathsForClient: () => ({
     data: { workspaces: listByPathsMocks.workspaces },
-    isFetching: false,
-    isLoading: false,
+    isFetching: listByPathsMocks.isLoading,
+    isLoading: listByPathsMocks.isLoading,
   }),
 }));
 vi.mock("@/hooks/worktree/use-owner-teardown-snapshot", () => ({
@@ -143,7 +145,7 @@ vi.mock("@/hooks/worktree/use-worktree-create-mutation", () => ({
   useWorktreeCreateForClient: () => ({
     mutate: mutationMocks.createWorktree,
     mutateAsync: mutationMocks.createWorktree,
-    isPending: false,
+    isPending: mutationMocks.createPending,
   }),
 }));
 vi.mock(
@@ -347,6 +349,8 @@ afterEach(() => {
   teardownStopMocks.stopAgent.mockReset();
   teardownMocks.snapshot.mockReset();
   listByPathsMocks.workspaces = [];
+  listByPathsMocks.isLoading = false;
+  mutationMocks.createPending = false;
   recentMocks.prepareRecent.mockReset();
   recentMocks.recordRecentAsync.mockReset();
   useWorktreeIntentStagingStore.getState().resetForTests();
@@ -1116,4 +1120,57 @@ it("restores a same-folder draft when a removal disclosure is dismissed", async 
     workspacePath: "/repo/alpha",
     branch: { name: "feat-a" },
   });
+});
+
+it("keeps location selection enabled while the workspace snapshot is loading", async () => {
+  seedResolvedBindingMetadata();
+  listByPathsMocks.isLoading = true;
+  await openTerminalFolderPopover();
+  const triggers = await screen.findAllByTestId("folder-location-trigger");
+  expect(triggers.length).toBeGreaterThan(0);
+  for (const trigger of triggers) {
+    expect((trigger as HTMLButtonElement).disabled).toBe(false);
+  }
+});
+
+it("keeps location selection enabled while a folder Update is in flight", async () => {
+  seedResolvedBindingMetadata();
+  mutationMocks.createPending = true;
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+  await openTerminalFolderPopover();
+  const update = await screen.findByTestId("folder-update");
+  expect((update as HTMLButtonElement).disabled).toBe(true);
+  const triggers = screen.getAllByTestId("folder-location-trigger");
+  expect(triggers.length).toBeGreaterThan(0);
+  for (const trigger of triggers) {
+    expect((trigger as HTMLButtonElement).disabled).toBe(false);
+  }
+});
+
+it("discards a staged location draft without a host RPC", async () => {
+  seedResolvedBindingMetadata();
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByTestId("folder-discard-staged"));
+  expect(
+    useWorktreeIntentStagingStore.getState().intentByKey[
+      worktreeStagingKeyString(TERMINAL_STAGING_KEY)
+    ],
+  ).toBeUndefined();
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("workspace-summary-draft")).toBeNull();
+});
+
+it("discards a staged folder removal without a host RPC", async () => {
+  await openTerminalFolderPopover();
+  fireEvent.click(screen.getByRole("button", { name: "Remove alpha" }));
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByTestId("folder-discard-staged"));
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Remove alpha" })).toBeTruthy();
 });

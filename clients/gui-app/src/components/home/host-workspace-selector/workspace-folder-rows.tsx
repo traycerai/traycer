@@ -32,6 +32,8 @@ export function WorkspaceFolderRows(props: {
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
+  readonly onDiscardStaged?: (() => void) | null;
+  readonly draftPending?: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly readOnly: boolean;
   readonly bindingResolved: boolean;
@@ -110,11 +112,26 @@ export function WorkspaceFolderRows(props: {
         pending={props.updatePending}
       />
     );
+  const discardStaged = props.onDiscardStaged;
+  const discardButton =
+    discardStaged === undefined ||
+    discardStaged === null ||
+    props.draftPending !== true ? null : (
+      <button
+        type="button"
+        data-testid="folder-discard-staged"
+        onClick={discardStaged}
+        className="inline-flex shrink-0 items-center rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+      >
+        Discard changes
+      </button>
+    );
 
   const workspaceActions = (
     <div className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
       {addFolder}
       {props.recentWorkspaces}
+      {discardButton}
       {updateButton === null ? null : (
         <div className="ml-auto shrink-0">{updateButton}</div>
       )}

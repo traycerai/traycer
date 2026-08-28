@@ -1385,10 +1385,8 @@ function workspaceRunItemForResolvedFolder(input: {
     makePrimaryDisabled: false,
     makePrimaryDisabledReason: null,
     hostClient: input.activeHostClient,
-    modeDisabled: !metadataResolved,
-    modeDisabledReason: metadataResolved
-      ? null
-      : "Waiting for the host to verify this folder.",
+    modeDisabled: false,
+    modeDisabledReason: null,
     removeDisabled: false,
     removeDisabledReason: null,
     removePending: false,
@@ -1592,27 +1590,13 @@ function removeDisabledReasonFor(
  * A row's facts are pending while the listing query's first fetch is in
  * flight, and also once it lands but the host has not resolved that row yet
  * (`resolvedAt === null` - cache-served schema defaults, not disk truth).
+ * Pending is a spinner on the chip only — it must not disable selection.
  */
 function isRowMetadataPending(
   metadataPending: boolean,
   resolvedAt: number | null,
 ): boolean {
   return metadataPending || resolvedAt === null;
-}
-
-/**
- * An unresolved row (`resolvedAt === null`) is served from cache before the
- * host has verified it, so mode switching stays disabled until the facts the
- * switch depends on land.
- */
-function modeDisabledReasonFor(
-  isOwnerActive: boolean,
-  activeRunNotice: string,
-  metadataPending: boolean,
-): string | null {
-  if (isOwnerActive) return activeRunNotice;
-  if (metadataPending) return "Waiting for the host to verify this folder.";
-  return null;
 }
 
 /**
@@ -1965,6 +1949,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const unstageWorktreeEntry = useWorktreeIntentStagingStore(
     (s) => s.unstageEntry,
   );
+  const clearStagedWorktreeIntent = useWorktreeIntentStagingStore(
+    (s) => s.clear,
+  );
   const releaseIntentForDispatch = useWorktreeIntentStagingStore(
     (s) => s.releaseIntentForDispatch,
   );
@@ -2271,6 +2258,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     },
     [stagedKey, unstageWorktreeEntry],
   );
+  const discardStagedFolders = useCallback((): void => {
+    clearStagedWorktreeIntent(stagedKey);
+    dispatchEditor({ type: "resumed" });
+  }, [clearStagedWorktreeIntent, stagedKey]);
   // Phase-1 GUI-composed teardown: stop disclosed owner-scoped holders
   // (managed-command stop, agent.stop) before removeBindingEntry /
   // worktree.create. create has no commitIntent (protocol frozen behind
@@ -2690,6 +2681,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         rowMetadataPending,
         rowIsGitRepo,
         branchLabel,
+        stagedEntry,
         emit: emitForFolder(ws),
       };
     },
@@ -2724,6 +2716,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             rowMetadataPending,
             rowIsGitRepo,
             branchLabel,
+            stagedEntry,
             emit,
           } = deriveInEpicRowState(ws);
           // Presence is per-(host, path) display state — never stored on the
@@ -2863,12 +2856,14 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             makePrimaryDisabled: false,
             makePrimaryDisabledReason: null,
             hostClient: props.hostClient,
-            modeDisabled: rowMetadataPending,
-            modeDisabledReason: modeDisabledReasonFor(
-              false,
-              activeRunNotice,
-              rowMetadataPending,
-            ),
+            // Snapshot fetch (isLoading / unresolved cache defaults) must
+            // never gate selection — the draft picker's first principle.
+            // Binding-derived mode/branch stay editable; the chip spinner
+            // is the only in-flight affordance. Commit controls (Update)
+            // may disable on their own pending flag.
+            modeDisabled: false,
+            modeDisabledReason: null,
+            hasStagedIntent: stagedEntry !== null,
             removeDisabled:
               activeRunLocksBinding ||
               removePending ||
@@ -2881,11 +2876,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onEmit: emit,
             onMakePrimary: () => undefined,
             onSelectMode: (nextMode) => {
-              // Unresolved rows (`resolvedAt === null`) have no verified git
-              // facts yet - the mode switch itself is disabled for them
-              // (`modeDisabled` above), but guard here too since this closure
-              // outlives that render.
-              if (ws.resolvedAt === null) return;
               emitRowMode({
                 currentBranch,
                 currentIntent,
@@ -3117,7 +3107,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               editor.pendingRemovedPaths.size > 0
             }
             updatePending={worktreeCreatePending}
-            onDiscardStaged={null}
+            onDiscardStaged={discardStagedFolders}
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
