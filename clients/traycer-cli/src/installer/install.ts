@@ -507,31 +507,32 @@ async function cleanupStagingArtifacts(
     // The verifier gates the destructive edge but must not THROW out of this
     // cleanup: it runs from `finally` blocks, where a capability loss would
     // replace the primary commit error (or a success) and abort the steps
-    // after it. Folding it into the same catch keeps the edge admitted-or-
-    // skipped while the primary outcome survives.
-    await opts
-      .verifyMutationCapability()
-      .then(() => release(opts.environment, opts.archivePath))
-      .catch((err) => {
-        logger.warn("Host install failed to release temporary archive", {
-          environment: opts.environment,
-          archiveConsumed: opts.archiveConsumed,
-          errorName: errorFromUnknown(err).name,
-          errorMessage: errorFromUnknown(err).message,
-        });
+    // after it. Sequential await-then-actuate inside one catch keeps the
+    // edge admitted-or-skipped while the primary outcome survives (and keeps
+    // the verifier→actuator domination visible to the architecture scan).
+    try {
+      await opts.verifyMutationCapability();
+      await release(opts.environment, opts.archivePath);
+    } catch (err) {
+      logger.warn("Host install failed to release temporary archive", {
+        environment: opts.environment,
+        archiveConsumed: opts.archiveConsumed,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
       });
+    }
   }
   if (!opts.swapped) {
-    await opts
-      .verifyMutationCapability()
-      .then(() => rm(opts.stagingDir, { recursive: true, force: true }))
-      .catch((err) => {
-        logger.warn("Host install failed to remove staging directory", {
-          environment: opts.environment,
-          errorName: errorFromUnknown(err).name,
-          errorMessage: errorFromUnknown(err).message,
-        });
+    try {
+      await opts.verifyMutationCapability();
+      await rm(opts.stagingDir, { recursive: true, force: true });
+    } catch (err) {
+      logger.warn("Host install failed to remove staging directory", {
+        environment: opts.environment,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
       });
+    }
   }
 }
 
