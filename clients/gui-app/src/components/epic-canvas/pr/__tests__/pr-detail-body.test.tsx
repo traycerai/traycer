@@ -313,21 +313,17 @@ describe("PrDetailBody", () => {
   }) => {
     return render(
       <QueryClientProvider client={queryClient}>
-        <StreamRuntimeContext.Provider
-          value={{ wsStreamClient: mockWsStreamClient, hostId: "host1" }}
-        >
-          <TabHostProvider hostId="host1">
-            <PrDetailBody
-              epicId={props.epicId}
-              viewTabId="tab-1"
-              githubHost={props.githubHost}
-              owner={props.owner}
-              repo={props.repo}
-              prNumber={props.prNumber}
-              isActive={props.isActive}
-            />
-          </TabHostProvider>
-        </StreamRuntimeContext.Provider>
+        <TabHostProvider hostId="host1">
+          <PrDetailBody
+            epicId={props.epicId}
+            viewTabId="tab-1"
+            githubHost={props.githubHost}
+            owner={props.owner}
+            repo={props.repo}
+            prNumber={props.prNumber}
+            isActive={props.isActive}
+          />
+        </TabHostProvider>
       </QueryClientProvider>,
     );
   };
