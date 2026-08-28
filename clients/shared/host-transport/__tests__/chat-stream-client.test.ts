@@ -187,7 +187,7 @@ function frozenPreImageAssistantMessage(): Record<string, unknown> {
  * A `chat.subscribe@1.6` assistant message carrying a pre-settlement
  * interview block: no outcome/drafts/settlement/diagnostics/delivery, and
  * answers without `selection`. A 1.6 shallow parse leaves those keys
- * absent; `normalizeInterviewBlocksInShallowSnapshot` is what fills them.
+ * absent; `normalizeV16MessagesInShallowSnapshot` is what fills them.
  * Also omits `imageResolutions` so the test can tell shallow from deep.
  */
 function frozenV16InterviewAssistantMessage(): Record<string, unknown> {
@@ -882,5 +882,230 @@ describe("ChatStreamClient.sendAction interview projection", () => {
     expect(sentError.reason).toBe("Not now");
 
     client.close();
+  });
+});
+
+/**
+ * Browser payloads on the frames that arrive OUTSIDE a snapshot.
+ *
+ * A snapshot from a `1.6` host is parsed against the FROZEN `1.6` schemas
+ * first, so a browser payload on it is stripped as an unknown key. Every other
+ * frame kind takes the LIVE union whatever line was negotiated - so without a
+ * normalize pass, a mislabeled, stale or hostile "1.6" peer's browser payload
+ * arrives VALIDATED on `messageAccepted` / `queueChanged` and is written into
+ * history as canonical. Same smuggling the snapshot path refuses, through the
+ * door beside it.
+ *
+ * Both directions are pinned here: neutralized to `[]` on `1.6`, passed through
+ * on the live line. `[]` and not `undefined` matters as much as the stripping -
+ * consumers are typed as if the array is present.
+ */
+function smuggledBrowserPayload(): Record<string, unknown> {
+  return {
+    kind: "user",
+    content: { type: "doc", content: [] },
+    // Deliberately VALID records: the point is that they survive the live
+    // parse, so only a normalize pass can keep them off a 1.6 consumer.
+    browserAnnotations: [
+      {
+        kind: "browser-annotation",
+        annotationId: "ann-1",
+        tabId: "tab-1",
+        sessionId: "session-1",
+        origin: "https://example.com",
+        pageUrl: "https://example.com/app",
+        pageTitle: "App",
+        capturedAt: 5,
+        comment: "look here",
+        counts: { elements: 0, regions: 0, strokes: 0 },
+        elements: [],
+        imageFileName: "shot.png",
+        imageHash: "hash-1",
+      },
+    ],
+  };
+}
+
+function messageAcceptedFrame(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    kind: "messageAccepted",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    message: {
+      role: "user",
+      messageId: "user-1",
+      sender: { type: "user", userId: "user-1" },
+      message: payload,
+      timestamp: 5,
+      sessionAnchor: null,
+    },
+  };
+}
+
+function queueChangedFrame(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    kind: "queueChanged",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    queue: {
+      status: "idle",
+      items: [
+        {
+          kind: "prompt",
+          queueItemId: "queue-1",
+          messageId: "user-1",
+          message: payload,
+          sender: { type: "user", userId: "user-1" },
+          settings: {
+            harnessId: "codex",
+            model: "gpt-5.4",
+            permissionMode: "supervised",
+            reasoningEffort: "high",
+            agentMode: "epic",
+          },
+          accountContext: { type: "PERSONAL" },
+          delivery: "next_turn",
+          status: "pending",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function browserPayloadArrays(value: unknown): {
+  readonly annotations: unknown;
+} {
+  if (!isRecord(value)) {
+    throw new Error("expected user-authored payload");
+  }
+  return {
+    annotations: value.browserAnnotations,
+  };
+}
+
+function acceptedPayload(value: unknown): unknown {
+  if (!isRecord(value)) {
+    throw new Error("expected messageAccepted frame");
+  }
+  if (!isRecord(value.message)) {
+    throw new Error("expected user message");
+  }
+  return value.message.message;
+}
+
+function queuedPayload(value: unknown): unknown {
+  if (!isRecord(value)) {
+    throw new Error("expected queueChanged frame");
+  }
+  if (!isRecord(value.queue) || !Array.isArray(value.queue.items)) {
+    throw new Error("expected queue items");
+  }
+  const [item] = value.queue.items;
+  if (!isRecord(item)) {
+    throw new Error("expected queue item");
+  }
+  return item.message;
+}
+
+function runBrowserPayloadSession(
+  schemaVersion: {
+    readonly major: number;
+    readonly minor: number;
+  } | null,
+): {
+  readonly accepted: unknown[];
+  readonly queued: unknown[];
+} {
+  const { factory, sockets } = makeFactory();
+  const accepted: unknown[] = [];
+  const queued: unknown[] = [];
+  const client = new ChatStreamClient({
+    wsStreamClient: makeWsStreamClient(factory),
+    epicId: "epic-1",
+    chatId: "chat-1",
+    callbacks: {
+      ...makeNoopCallbacks(() => undefined),
+      onMessageAccepted: (frame) => {
+        accepted.push(frame);
+      },
+      onQueueChanged: (frame) => {
+        queued.push(frame);
+      },
+    },
+  });
+  if (schemaVersion === null) {
+    completeHandshake(sockets[0]);
+  } else {
+    completeHandshakeAtVersion(sockets[0], schemaVersion);
+  }
+
+  sockets[0].fireText(messageAcceptedFrame(smuggledBrowserPayload()));
+  sockets[0].fireText(queueChangedFrame(smuggledBrowserPayload()));
+  client.close();
+  return { accepted, queued };
+}
+
+describe("ChatStreamClient pre-1.7 browser payload neutralization", () => {
+  it("empties smuggled browser arrays on messageAccepted and queueChanged from a 1.6 host", () => {
+    const { accepted, queued } = runBrowserPayloadSession({
+      major: 1,
+      minor: 6,
+    });
+
+    expect(accepted).toHaveLength(1);
+    expect(queued).toHaveLength(1);
+    // Empty, not absent: consumers are typed as if the array is present.
+    expect(browserPayloadArrays(acceptedPayload(accepted[0]))).toEqual({
+      annotations: [],
+    });
+    expect(browserPayloadArrays(queuedPayload(queued[0]))).toEqual({
+      annotations: [],
+    });
+  });
+
+  it("empties it on a pre-1.6 line too - every line below 1.7 predates the field", () => {
+    const { accepted, queued } = runBrowserPayloadSession({
+      major: 1,
+      minor: 2,
+    });
+
+    expect(browserPayloadArrays(acceptedPayload(accepted[0]))).toEqual({
+      annotations: [],
+    });
+    expect(browserPayloadArrays(queuedPayload(queued[0]))).toEqual({
+      annotations: [],
+    });
+  });
+
+  it("passes the same validated browser payload through on the live line", () => {
+    // Default handshake negotiates the client's canonical version (1.7), where
+    // this array is legal, deep-validated content rather than smuggled.
+    const { accepted, queued } = runBrowserPayloadSession(null);
+
+    const acceptedArrays = browserPayloadArrays(acceptedPayload(accepted[0]));
+    const queuedArrays = browserPayloadArrays(queuedPayload(queued[0]));
+    for (const arrays of [acceptedArrays, queuedArrays]) {
+      if (!Array.isArray(arrays.annotations)) {
+        throw new Error("expected browser payload array");
+      }
+      expect(arrays.annotations).toHaveLength(1);
+      // `.default(0)` on a live-only field, applied by the deep parse -
+      // proof this really is the validated live shape, not a pass-through.
+      expect(arrays.annotations[0]).toMatchObject({
+        annotationId: "ann-1",
+        droppedElementCount: 0,
+      });
+    }
   });
 });

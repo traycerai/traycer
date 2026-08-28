@@ -443,3 +443,35 @@ export const resourcesKillV10 = defineRpcContract({
   requestSchema: resourcesKillRequestSchema,
   responseSchema: resourcesKillResponseSchema,
 });
+
+// ── `resources.listLocalServers@1.0` — unary ───────────────────────────────
+// Lists listening TCP ports owned by process trees already attributed to one
+// epic. Discovery is intentionally on demand rather than part of the resource
+// stream: port scans are useful only while a blank browser tab is visible.
+export const resourcesListLocalServersRequestSchema = z.object({
+  epicId: z.string(),
+});
+export type ResourcesListLocalServersRequest = z.infer<
+  typeof resourcesListLocalServersRequestSchema
+>;
+
+export const localServerSchema = z.object({
+  pid: z.number().int().nonnegative(),
+  port: z.number().int().min(1).max(65_535),
+  processName: z.string(),
+});
+export type LocalServerWire = z.infer<typeof localServerSchema>;
+
+export const resourcesListLocalServersResponseSchema = z.object({
+  servers: z.array(localServerSchema),
+});
+export type ResourcesListLocalServersResponse = z.infer<
+  typeof resourcesListLocalServersResponseSchema
+>;
+
+export const resourcesListLocalServersV10 = defineRpcContract({
+  method: "resources.listLocalServers",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: resourcesListLocalServersRequestSchema,
+  responseSchema: resourcesListLocalServersResponseSchema,
+});

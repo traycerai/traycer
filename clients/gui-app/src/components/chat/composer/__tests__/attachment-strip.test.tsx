@@ -41,6 +41,44 @@ describe("AttachmentStrip", () => {
     expect(strip?.firstElementChild?.className).toContain("w-max");
     expect(strip?.firstElementChild?.className).not.toContain("flex-wrap");
   });
+
+  it("keeps leading annotation chips on the same one-row image scroller", () => {
+    render(
+      <AttachmentStrip
+        content={duplicateImageContent()}
+        onRemoveImage={() => undefined}
+        fetcher={() => Promise.reject(new Error("unused"))}
+        sessionObjectUrl={() => null}
+        leadingAttachments={
+          <div data-testid="browser-annotation-cards" className="contents">
+            <div
+              data-testid="browser-annotation-card"
+              className="h-14 shrink-0"
+            >
+              annotation chip
+            </div>
+          </div>
+        }
+      />,
+    );
+
+    const strip = document.querySelector("[data-composer-attachment-strip]");
+    const row = strip?.firstElementChild;
+    expect(row?.className).toContain("flex");
+    expect(row?.className).toContain("w-max");
+    expect(row?.className).not.toContain("flex-wrap");
+    expect(row?.contains(screen.getByTestId("browser-annotation-card"))).toBe(
+      true,
+    );
+    expect(
+      row?.contains(
+        screen.getByRole("button", { name: "Open Image#1: image.png" }),
+      ),
+    ).toBe(true);
+    expect(
+      strip?.querySelectorAll("[data-composer-attachment-strip]"),
+    ).toHaveLength(0);
+  });
 });
 
 function duplicateImageContent(): JsonContent {

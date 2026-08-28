@@ -354,6 +354,7 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     message: {
       kind: "user",
       content: content(text),
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,

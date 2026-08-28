@@ -6,10 +6,15 @@ import {
   buildAttachmentsFromJSONContent,
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
+  mentionAttachmentFromAttrs,
+  mentionAttrsFromAttachment,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { githubMentionToken } from "@/lib/composer/mentions/github-mention-display";
-import type { SlashCommand } from "@/lib/composer/types";
+import type {
+  BrowserTabMentionAttachment,
+  SlashCommand,
+} from "@/lib/composer/types";
 
 describe("extractPlainTextFromComposerJSONContent blockquote handling", () => {
   it("emits '> '-prefixed lines for a multi-paragraph quote", () => {
@@ -743,6 +748,69 @@ describe("GitHub mention attachment path rebuild delegates to the shared token b
       expect.objectContaining({
         path: "github-pr:GHE.Corp/Acme/Widgets#123",
       }),
+    ]);
+  });
+});
+
+describe("browser-tab mention attrs round-trip", () => {
+  function browserTabAttachment(): BrowserTabMentionAttachment {
+    return {
+      kind: "mention",
+      contextType: "browser-tab",
+      path: "browser-tab:tab-1",
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: "GitHub",
+      description: "https://github.com",
+      tabId: "tab-1",
+      sessionId: "session-1",
+      url: "https://github.com",
+    };
+  }
+
+  it("rebuilds the same attachment from the attrs it produced", () => {
+    const attachment = browserTabAttachment();
+    const attrs = mentionAttrsFromAttachment(attachment);
+    expect(mentionAttachmentFromAttrs(attrs)).toEqual(attachment);
+  });
+
+  it("re-derives `path` from `tabId` rather than trusting a stale `path` attr", () => {
+    const rebuilt = mentionAttachmentFromAttrs({
+      contextType: "browser-tab",
+      tabId: "tab-2",
+      sessionId: "session-1",
+      url: "https://example.com",
+      label: "Example",
+      path: "browser-tab:stale",
+    });
+    expect(rebuilt?.path).toBe("browser-tab:tab-2");
+  });
+
+  it("returns null when the node carries no tabId at all", () => {
+    expect(
+      mentionAttachmentFromAttrs({ contextType: "browser-tab", label: "x" }),
+    ).toBeNull();
+  });
+
+  it("collects a browser-tab mention through the full JSONContent walk", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "mention",
+              attrs: mentionAttrsFromAttachment(browserTabAttachment()),
+            },
+          ],
+        },
+      ],
+    };
+    expect(buildAttachmentsFromJSONContent(doc)).toEqual([
+      browserTabAttachment(),
     ]);
   });
 });

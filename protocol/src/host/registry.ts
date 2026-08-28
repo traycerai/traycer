@@ -470,6 +470,10 @@ import {
   terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  browserScreencastV1,
+  browserSessionsV1,
+} from "@traycer/protocol/host/browser/contracts";
+import {
   terminalPlainCloseDowngradeV21ToV10,
   terminalPlainCloseUpgradeV10ToV21,
   terminalPlainCloseV10,
@@ -539,6 +543,7 @@ import {
   resourcesSubscribeV13,
   resourcesSubscribeV14,
   resourcesKillV10,
+  resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -6717,6 +6722,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "resources.listLocalServers": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesListLocalServersV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
@@ -8338,10 +8356,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 /**
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
- * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
- * `terminal.subscribe@1.0`, `git.subscribeStatus@1.3`,
- * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
+ * One manifest per `/stream` WS: `epic.subscribe@1.1`,
+ * `chat.subscribe@1.6`, `notifications.subscribe@1.1`,
+ * `terminal.subscribe@1.6`, `git.subscribeStatus@1.3`,
+ * `browser.sessions@1.0`, `browser.screencast@1.0`,
+ * `resources.subscribe@1.4`, `agent.inbox.subscribe@1.2`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
  * `pr.subscribeListForEpic@1.0`, `pr.subscribeDetail@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
@@ -8546,6 +8565,31 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+      },
+    },
+  },
+  "browser.sessions": {
+    1: {
+      // Shared-browser-runtime ticket 01: `browser.sessions` never shipped,
+      // so its prior in-repo minor history (@1.0-@1.4) is collapsed into one
+      // fresh @1.0 baseline carrying every frame kind - see the doc comment
+      // on `browserSessionsV1` in `contracts.ts`. Agent-browser PiP ticket 01
+      // extends that same 1.0 in place.
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserSessionsV1,
+        },
+      },
+    },
+  },
+  "browser.screencast": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserScreencastV1,
         },
       },
     },

@@ -78,6 +78,7 @@ import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 export interface PublishedChatTileProps {
   readonly node: PublishedChatTileRef;
   readonly viewTabId: string;
+  readonly tileId: string;
   readonly isActive: boolean;
   readonly epicId: string;
 }
@@ -294,6 +295,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             name: node.name,
           }}
           viewTabId={props.viewTabId}
+          tileId={props.tileId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
           readOnlyNotice={replicaChatLockReason({
@@ -355,6 +357,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             name: node.name,
           }}
           viewTabId={props.viewTabId}
+          tileId={props.tileId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({

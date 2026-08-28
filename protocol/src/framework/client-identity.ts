@@ -124,7 +124,7 @@ export const clientHandshakeIdentitySchema: z.ZodType<ClientHandshakeIdentity> =
   });
 
 /** The client kinds first-party builds declare. */
-export type FirstPartyClientKind = "desktop" | "cli";
+export type FirstPartyClientKind = "desktop" | "cli" | "mobile";
 
 /**
  * What a FIRST-PARTY producer must hold, which is strictly stricter than the

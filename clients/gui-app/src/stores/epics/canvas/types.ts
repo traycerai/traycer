@@ -5,6 +5,7 @@ import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-id
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -12,6 +13,7 @@ import type {
 } from "./tile-tree";
 import {
   TILE_KIND_BLANK,
+  TILE_KIND_BROWSER_SESSION,
   TILE_KIND_COMM_GRAPH,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
@@ -60,6 +62,18 @@ export const isRecordBackedEpicNodeKind =
     review: true,
   });
 
+/**
+ * Per-epic remembered PiP position and size. Persisted with the canvas
+ * store so geometry survives GUI relaunch; everything else about the PiP
+ * is in-memory and resets.
+ */
+export interface EpicPipGeometry {
+  readonly anchorX: number;
+  readonly anchorY: number;
+  readonly previewWidth: number;
+  readonly previewHeight: number;
+}
+
 export const WORKSPACE_FILE_TAB_KIND = "workspace-file" as const;
 export type WorkspaceFileTabKind = typeof WORKSPACE_FILE_TAB_KIND;
 export type OpenableCanvasTabKind = OpenableEpicNodeKind | WorkspaceFileTabKind;
@@ -68,8 +82,8 @@ export type TerminalTitleSource = "default" | "manual";
 /**
  * Reference to a record-backed epic artifact as it lives inside a tab.
  * Stored as a flat shape (not a full record) so canvas state stays stable
- * when the underlying Y.Doc projection evolves. Terminal tabs use
- * `EpicTerminalRef` instead.
+ * when the underlying Y.Doc projection evolves. Renderer-local terminal and
+ * browser tabs use their own ref shapes instead.
  *
  * `hostId` is the host (== device) the artifact lives on. Per
  * CLAUDE.md, chat/terminal artifacts are bound to a host for life;
@@ -149,6 +163,18 @@ interface EpicTerminalRefBase {
    * come from an updated-host list.
    */
   readonly lifecycleOwner?: "registry" | "manager";
+}
+
+/** Renderer-local view pointer to one host-owned epic browser tab. */
+export interface BrowserSessionTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_BROWSER_SESSION;
+  readonly name: string;
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */
@@ -580,6 +606,7 @@ export interface PrDiffTileRef {
 
 export type EpicCanvasTileRef =
   | EpicNodeRef
+  | BrowserSessionTileRef
   | GitDiffTileRef
   | SnapshotDiffTileRef
   | ManagedCommandOutputTileRef
@@ -617,6 +644,12 @@ export function isGitDiffTileRef(
   value: EpicCanvasTileRef,
 ): value is GitDiffTileRef {
   return value.type === TILE_KIND_GIT_DIFF;
+}
+
+export function isBrowserSessionTileRef(
+  value: EpicCanvasTileRef,
+): value is BrowserSessionTileRef {
+  return value.type === TILE_KIND_BROWSER_SESSION;
 }
 
 export function isWorkspaceFileRef(

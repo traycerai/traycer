@@ -3,8 +3,7 @@ import {
   sniffImageMimeType,
   type CanonicalImageMimeType,
 } from "@/lib/composer/prompt-stash-image-signature";
-
-type ImageBytes = Uint8Array<ArrayBuffer>;
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 export const PROMPT_STASH_STATIC_IMAGE_MAX_BYTES = 975 * 1024;
 export const PROMPT_STASH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;

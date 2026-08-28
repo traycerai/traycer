@@ -7,6 +7,7 @@ import type {
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { MentionPathTree } from "@/lib/path";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
@@ -23,12 +24,21 @@ export type EntityMentionContextType =
  * them here would silently stop the serializer recognizing the chip.
  */
 export type GithubMentionContextType = "github_pull_request" | "github_issue";
+/**
+ * Wire spelling, not a local one: matches `ContextType.BrowserTab` in
+ * `@traycer/protocol`'s json-content serializer. A browser tab is readable but
+ * not itself an Agent, so it stays a sibling of `GithubMentionContextType`
+ * rather than folding into `EntityMentionContextType` (which carries
+ * epic-scoped entity fields a browser tab has no use for).
+ */
+export type BrowserTabMentionContextType = "browser-tab";
 export type MentionContextType =
   | PathKind
   | "git"
   | "worktree"
   | EntityMentionContextType
-  | GithubMentionContextType;
+  | GithubMentionContextType
+  | BrowserTabMentionContextType;
 
 export type ComposerPromptSegment =
   | { type: "text"; text: string }
@@ -130,10 +140,47 @@ export interface EpicTerminalMentionEntry {
 }
 
 export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
+
+/**
+ * One browser tab as the @-mention picker lists it - sourced live from
+ * `useMaybeBrowserSessionsContext()`, not a host RPC, so every field is
+ * already resolved when the entry is built.
+ *
+ * `coLocated` and `lastActivityAt` are ranking hints only, never rendered:
+ * the co-located-pane-group ranking the design calls for needs the chat's
+ * `viewTabId`/tile identity threaded into the mention context, which is
+ * disproportionately invasive here (see `providers.tsx`'s
+ * `rankBrowserTabEntries`). `coLocated` is `tab.viewed` - the session
+ * stream's own "currently viewed" hint - used as the closest cheap proxy:
+ * a real pane-group walk ranks a sibling-pane tab first regardless of which
+ * tab a person is looking at, while this ranks whichever tab the stream
+ * already marks as viewed, so the two agree only when that also happens to
+ * be the co-located one.
+ */
+export interface BrowserTabMentionEntry {
+  readonly kind: "browser-tab";
+  readonly id: string;
+  readonly tabId: string;
+  readonly sessionId: string;
+  readonly label: string;
+  readonly url: string;
+  readonly coLocated: boolean;
+  readonly lastActivityAt: number;
+  /**
+   * `tab.status === "dormant"` (the sidebar's own source of truth for its
+   * Moon glyph - `epic-browser-sidebar-row.tsx`). Dormant tabs ARE listed
+   * and mentionable: `page.attachTab` auto-wakes a dormant session before
+   * leasing it, so this is a display hint (renders the Moon glyph, demotes
+   * the row a notch in ranking) and never a filter.
+   */
+  readonly dormant: boolean;
+}
+
 export type MentionSuggestionEntry =
   | WorkspaceEntry
   | EpicMentionEntry
-  | EpicTerminalMentionEntry;
+  | EpicTerminalMentionEntry
+  | BrowserTabMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";
@@ -244,13 +291,44 @@ export type GithubMentionAttachment = {
   url: string;
 };
 
+/**
+ * A browser tab the composer references by identity, not by capturing its
+ * content - the coding agent reads it live through `page.attachTab({tabId})`.
+ * `path` is the durable `browser-tab:<tabId>` token (mirrors how Terminal's
+ * path is `terminal:<epicId>/<terminalId>`, not its title), so a rename never
+ * changes the identity the attachment carries. `label` is the tab's title at
+ * mention time and `url` its address at mention time, both display-only
+ * (the composer live decorator's tooltip fallback when the tab is gone),
+ * since the token round-trips through `tabId` alone. `description` is unused
+ * for this variant - kept at `""` only because `MentionAttachment` requires
+ * the field on every member.
+ */
+export type BrowserTabMentionAttachment = {
+  kind: "mention";
+  contextType: BrowserTabMentionContextType;
+  path: string;
+  pathKind: null;
+  relPath: null;
+  absolutePath: null;
+  workspacePath: null;
+  label: string;
+  description: string;
+  tabId: string;
+  sessionId: string;
+  url: string;
+};
+
 export type MentionAttachment =
   | FileMentionAttachment
   | WorktreeMentionAttachment
   | GitMentionAttachment
   | EntityMentionAttachment
-  | GithubMentionAttachment;
-export type Attachment = ImageAttachment | MentionAttachment;
+  | GithubMentionAttachment
+  | BrowserTabMentionAttachment;
+export type Attachment =
+  | ImageAttachment
+  | MentionAttachment
+  | BrowserAnnotationRecord;
 
 /**
  * Full, untruncated preview content for a picker row - the side preview panel
