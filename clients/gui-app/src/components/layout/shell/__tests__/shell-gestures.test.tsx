@@ -2129,6 +2129,31 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
+    // Precision-clamped event clocks hand samples dispatched together the
+    // SAME timestamp. Ground covered is ground covered regardless: the up's
+    // travel must count even at a tied clock, while the speed - underivable
+    // over zero elapsed - stands at the last real sample.
+    it("counts the up's travel even when its timestamp ties the last move", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      dispatchPointer("pointerup", {
+        clientX: 200,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 100,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      // Travel is the up's 192; velocity is the activation seed (52px/100ms),
+      // the last sample with real elapsed time behind it.
+      expect(probe.releases).toEqual([
+        { travelPx: 192, velocityPxPerS: 520, cancelled: false },
+      ]);
+    });
+
     // The hand does not stop moving when it leaves the glass: a fast swipe
     // covers real ground between the last delivered move and the up, and a
     // release judged on the move's numbers alone would refuse a flick that

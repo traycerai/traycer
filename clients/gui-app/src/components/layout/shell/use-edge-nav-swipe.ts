@@ -319,18 +319,24 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       // The release is a sample too: a fast swipe covers real ground between
       // the last delivered move and the up, and judging the release on the
       // move's numbers alone can refuse a flick that crossed a threshold on
-      // its way out. Folded in only when the up MOVED - a release at the last
-      // move's position carries no new motion, and deriving a velocity from
-      // it would replace the flick's real speed with zero.
+      // its way out. The two halves of the sample have different guards.
+      // TRAVEL is taken whenever the up moved - even at a tied timestamp,
+      // which precision-clamped event clocks produce for samples dispatched
+      // together. VELOCITY additionally needs positive elapsed time: derived
+      // over zero it is unbounded, and a release at the last move's position
+      // carries no new motion to derive it from at all - either way the last
+      // real sample stands.
       if (started.following) {
         const travelPx =
           started.direction === "back"
             ? event.clientX - started.x
             : started.x - event.clientX;
-        const elapsedMs = event.timeStamp - started.lastAt;
-        if (elapsedMs > 0 && travelPx !== started.travelPx) {
-          started.velocityPxPerS =
-            ((travelPx - started.travelPx) / elapsedMs) * 1000;
+        if (travelPx !== started.travelPx) {
+          const elapsedMs = event.timeStamp - started.lastAt;
+          if (elapsedMs > 0) {
+            started.velocityPxPerS =
+              ((travelPx - started.travelPx) / elapsedMs) * 1000;
+          }
           started.travelPx = travelPx;
         }
       }
