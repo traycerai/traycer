@@ -379,9 +379,18 @@ async function registerHostLoginItemUnserialized(
   // bootout the subsequent register hands launchd a stale CDHash and every
   // spawn is SIGKILL'd inside dyld init. See the docstring above for the
   // full mechanism.
-  if (!(await bootoutStaleAgent(HOST_AGENT_LABEL, revalidateBeforeBootout))) {
-    parkRegistrationAfterAuthorityLoss("primary launchctl bootout");
-    return "deferred-busy";
+  {
+    const bootout = await bootoutStaleAgent(
+      HOST_AGENT_LABEL,
+      revalidateBeforeBootout,
+    );
+    if (bootout === "authority-lost") {
+      parkRegistrationAfterAuthorityLoss("primary launchctl bootout");
+      return "deferred-busy";
+    }
+    // "bootout-failed" proceeds: this is the REGISTER cycle, where the
+    // docstring's best-effort promise holds — the worst case is the pre-fix
+    // behavior for this one call, and the register below re-derives state.
   }
 
   const clearedOk = await setLoginItemSettingsWithGuard(
@@ -514,8 +523,16 @@ async function retireLegacyLabelRegistrations(
   if (!(await removeCliLabelManifestProvably(revalidateBeforeMutation))) {
     return false;
   }
-  if (!(await bootoutStaleAgent(CLI_HOST_LABEL, revalidateBeforeMutation))) {
-    return false;
+  {
+    const bootout = await bootoutStaleAgent(
+      CLI_HOST_LABEL,
+      revalidateBeforeMutation,
+    );
+    if (bootout === "authority-lost") return false;
+    // "bootout-failed" proceeds: retirement's durable state is the manifest
+    // (removed provably above) and the SMAppService record (cleared below).
+    // A bootout failure leaves only the RUNNING legacy instance, which
+    // cannot return once both durable anchors are gone.
   }
   const unregistered = await setLoginItemSettingsWithGuard(
     false,
@@ -987,12 +1004,38 @@ async function unregisterHostLoginItemUnserialized(
   // builds; the CLI label covers machines mid-transition (a legacy/CLI job
   // still loaded, or an old-label SMAppService record not yet retired by a
   // register cycle).
-  if (!(await bootoutStaleAgent(HOST_AGENT_LABEL, revalidateBeforeMutation))) {
+  const primaryBootout = await bootoutStaleAgent(
+    HOST_AGENT_LABEL,
+    revalidateBeforeMutation,
+  );
+  if (primaryBootout === "authority-lost") {
     parkRegistrationAfterAuthorityLoss("primary uninstall bootout");
     return false;
   }
-  if (!(await bootoutStaleAgent(CLI_HOST_LABEL, revalidateBeforeMutation))) {
+  // A failed bootout on TEARDOWN is a failed teardown, not best-effort: on
+  // macOS 26+ bootout is the load-bearing BTM clear, so success here would
+  // claim a deregistration the BTM store may still contradict at next login.
+  // Not an authority loss — no park; the caller may retry.
+  if (primaryBootout === "bootout-failed") {
+    log.warn(
+      "[host-login-item] primary uninstall bootout failed - teardown is not complete",
+      { label: HOST_AGENT_LABEL },
+    );
+    return false;
+  }
+  const legacyBootout = await bootoutStaleAgent(
+    CLI_HOST_LABEL,
+    revalidateBeforeMutation,
+  );
+  if (legacyBootout === "authority-lost") {
     parkRegistrationAfterAuthorityLoss("legacy uninstall bootout");
+    return false;
+  }
+  if (legacyBootout === "bootout-failed") {
+    log.warn(
+      "[host-login-item] legacy uninstall bootout failed - teardown is not complete",
+      { label: CLI_HOST_LABEL },
+    );
     return false;
   }
   // A `not-found`/`not-supported` label has no SMAppService record to clear
@@ -1245,39 +1288,64 @@ const BOOTOUT_TIMEOUT_MS = 5_000;
  * non-zero with "not loaded" semantics (codes 3 / 5 / 113), which we
  * treat as success.
  *
- * Best-effort: a non-darwin host, an unavailable `getuid`, a spawn
- * that throws or errors, or a process that overruns the timeout each
- * log and return so the caller's register cycle still runs. The worst
- * case is we degrade to the pre-fix behavior for this one call.
+ * The outcome distinguishes WHY nothing was (or may not have been)
+ * cleared, because different callers owe different honesty:
+ *   - "authority-lost" — the revalidation refused; the caller must park.
+ *   - "bootout-failed" — launchctl errored, timed out, or exited with an
+ *     unexpected code, so the BTM entry may still be present. A register
+ *     cycle treats this as best-effort and proceeds (worst case is the
+ *     pre-fix behavior for one call); a TEARDOWN must not report success
+ *     over it — on macOS 26+ bootout is the load-bearing BTM clear, so a
+ *     swallowed failure here is exactly "the host returns at next login".
+ *   - "ok" — cleared, not loaded, or nothing to do on this platform.
  */
+type BootoutOutcome = "ok" | "authority-lost" | "bootout-failed";
+
+/**
+ * The spawn implementation `bootoutStaleAgent` hands to
+ * `runLaunchctlBootout`. Module state with a test-only setter rather
+ * than a parameter, because `bootoutStaleAgent` is reached only through
+ * the exported register/unregister flows and threading a spawn argument
+ * through every public signature would put a test-only concern on the
+ * production API. The seam exists for the same reason
+ * `runLaunchctlBootout` takes `spawnFn` (see `BootoutChildProcess`):
+ * vitest cannot reliably intercept `node:child_process` here, and a
+ * mock that silently fails to intercept does not fail a test — it runs
+ * a REAL `launchctl bootout` against the developer's live host agent.
+ */
+let bootoutSpawnOverrideForTests: BootoutSpawnFn | null = null;
+export function setBootoutSpawnFnForTests(fn: BootoutSpawnFn | null): void {
+  bootoutSpawnOverrideForTests = fn;
+}
+
 async function bootoutStaleAgent(
   labelId: string,
   revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
-): Promise<boolean> {
-  if (!(await mutationAllowed(revalidateBeforeBootout))) return false;
-  if (process.platform !== "darwin") return true;
-  if (typeof process.getuid !== "function") return true;
+): Promise<BootoutOutcome> {
+  if (!(await mutationAllowed(revalidateBeforeBootout)))
+    return "authority-lost";
+  if (process.platform !== "darwin") return "ok";
+  if (typeof process.getuid !== "function") return "ok";
   const uid = process.getuid();
   const target = `gui/${uid}/${labelId}`;
   // Wrap `spawn` so TypeScript resolves the (command, args, options)
   // overload here rather than against the `BootoutSpawnFn` alias.
   //
-  // `runLaunchctlBootout` catches async failures (error event, non-
+  // `runLaunchctlBootout` classifies async failures (error event, non-
   // zero exit, timeout); the try/catch here covers the synchronous
   // throw path from `spawn` itself (invalid arguments, no /bin/launchctl
-  // at all). Either way the register cycle continues — the docstring
-  // promises best-effort.
+  // at all) — the same "may still be registered" verdict.
   try {
-    await runLaunchctlBootout(target, (command, args, options) =>
-      spawn(command, args, options),
+    const cleared = await runLaunchctlBootout(
+      target,
+      bootoutSpawnOverrideForTests ??
+        ((command, args, options) => spawn(command, args, options)),
     );
+    return cleared ? "ok" : "bootout-failed";
   } catch (err) {
-    log.warn(
-      "[host-login-item] launchctl bootout threw — proceeding without bootout",
-      { target, err },
-    );
+    log.warn("[host-login-item] launchctl bootout threw", { target, err });
+    return "bootout-failed";
   }
-  return true;
 }
 
 /**
@@ -1327,17 +1395,17 @@ export type BootoutSpawnFn = (
 export function runLaunchctlBootout(
   target: string,
   spawnFn: BootoutSpawnFn,
-): Promise<void> {
+): Promise<boolean> {
   return new Promise((resolve) => {
     const child = spawnFn("/bin/launchctl", ["bootout", target], {
       stdio: "ignore",
     });
     let settled = false;
-    const settle = (): void => {
+    const settle = (cleared: boolean): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve();
+      resolve(cleared);
     };
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -1345,14 +1413,14 @@ export function runLaunchctlBootout(
         target,
         timeoutMs: BOOTOUT_TIMEOUT_MS,
       });
-      settle();
+      settle(false);
     }, BOOTOUT_TIMEOUT_MS);
     child.once("error", (err) => {
       log.warn("[host-login-item] launchctl bootout errored", {
         target,
         err,
       });
-      settle();
+      settle(false);
     });
     child.once("exit", (code) => {
       if (code === 0) {
@@ -1371,7 +1439,7 @@ export function runLaunchctlBootout(
           { target, code },
         );
       }
-      settle();
+      settle(code === 0 || code === 3 || code === 5 || code === 113);
     });
   });
 }

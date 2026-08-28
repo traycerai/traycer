@@ -28,6 +28,7 @@ import {
   __setBeforeHostStartAdoptionReadHookForTest,
   consumeHostStartAdoption,
   publishHostStartAdoption,
+  readHostStartAdoptionNonce,
 } from "../host-start-adoption";
 
 const roots: string[] = [];
@@ -588,6 +589,105 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
       reason: "host-start adoption is reserved for a service-labelled launch",
     });
   });
+
+  // Production change B: `adoptionGrantExpired` became SYMMETRIC
+  // (`Math.abs(now - issuedAtMs) > MAX_AGE`). Every test above only ever
+  // ages a proof into the PAST, which the old asymmetric predicate already
+  // handled — it does not exercise the actual fix. A FUTURE-dated
+  // `issuedAtMs` (a backwards clock step, or a corrupted publisher stamp)
+  // must read as expired too, exactly like a stale one, rather than reading
+  // as an outstanding grant forever.
+  it("a FUTURE-dated proof is ALSO treated as expired on the standalone path — the symmetric bound", async () => {
+    const hostHomeDir = await freshHome();
+    const serviceLabel = "ai.traycer.host.agent";
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-future-expiry-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+        );
+      },
+    );
+    const path = join(hostHomeDir, ".host-start-adoption.json");
+    // Age the REAL proof INTO THE FUTURE rather than hand-rolling one, so
+    // every other field stays exactly what the publisher wrote.
+    const proof = JSON.parse(await readFile(path, "utf8")) as {
+      issuedAtMs: number;
+    };
+    await writeFile(
+      path,
+      JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
+      "utf8",
+    );
+
+    expect(await consumeHostStartAdoption("production", null, null)).toEqual({
+      kind: "absent",
+    });
+  });
+});
+
+describe("readHostStartAdoptionNonce — production change B: the symmetric age bound", () => {
+  // Not previously covered by this suite at all - every existing assertion
+  // on this reader lived only in the doc-comment cross-references inside
+  // the two describe blocks below. `readHostStartAdoptionNonce` is the
+  // reader that steers a launch onto the labelled, nonce-less consume path
+  // once a proof expires (see that block's doc comment), so its own
+  // expiry behavior needs direct coverage, not just an inference from its
+  // downstream effect.
+  it("returns null for a future-dated proof, exactly as it already does for a past-dated one", async () => {
+    const hostHomeDir = await freshHome();
+    const serviceLabel = "ai.traycer.host.agent";
+    homeRef.current = hostHomeDir;
+    const path = join(hostHomeDir, ".host-start-adoption.json");
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-nonce-reader-future-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+        );
+
+        // Control, run INSIDE the contender's callback: the final step of
+        // `readHostStartAdoptionNonce` re-validates the parent capability is
+        // still live, which is only true while `withUpdateContender` still
+        // holds it. A fresh proof yields the real nonce.
+        await expect(
+          readHostStartAdoptionNonce("production", serviceLabel),
+        ).resolves.toEqual(expect.any(String));
+
+        const proof = JSON.parse(await readFile(path, "utf8")) as {
+          issuedAtMs: number;
+        };
+        await writeFile(
+          path,
+          JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
+          "utf8",
+        );
+        // Expiry short-circuits before the parent-capability re-check, so
+        // this arm's `null` is provably about the age bound, not about
+        // capability having lapsed.
+        await expect(
+          readHostStartAdoptionNonce("production", serviceLabel),
+        ).resolves.toBeNull();
+      },
+    );
+  });
 });
 
 describe("consumeHostStartAdoption — the LABELLED path applies the age bound too", () => {
@@ -683,6 +783,30 @@ describe("consumeHostStartAdoption — the LABELLED path applies the age bound t
     expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
       kind: "refused",
       reason: "host-start adoption is bound to a different service label",
+    });
+  });
+
+  // Production change B: the symmetric bound. `publishThenAge` computes
+  // `issuedAtMs: Date.now() - ageMs`, so a NEGATIVE `ageMs` lands the proof
+  // in the future - reused rather than duplicated, so a future-dated fixture
+  // is guaranteed to differ from the past-dated ones above only in sign.
+  it("a FUTURE-dated proof also admits on the labelled, nonce-less path — not just a past-dated one", async () => {
+    // `publishThenAge` only rewrites `issuedAtMs` for `ageMs > 0` (it is a
+    // past-dating helper), so a future date needs its own write rather than
+    // a negative `ageMs` reuse.
+    const hostHomeDir = await publishThenAge(0, LABEL);
+    const path = join(hostHomeDir, ".host-start-adoption.json");
+    const proof = JSON.parse(await readFile(path, "utf8")) as {
+      issuedAtMs: number;
+    };
+    await writeFile(
+      path,
+      JSON.stringify({ ...proof, issuedAtMs: Date.now() + 10 * 60_000 }),
+      "utf8",
+    );
+
+    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+      kind: "absent",
     });
   });
 });

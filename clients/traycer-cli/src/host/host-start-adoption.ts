@@ -14,6 +14,20 @@ import type { WithCliUpdateContenderOptions } from "./update-contender";
 
 const HOST_START_ADOPTION_FILENAME = ".host-start-adoption.json";
 const HOST_START_ADOPTION_MAX_AGE_MS = 60_000;
+
+// The ONE grant-expiry predicate, shared by every reader of `issuedAtMs`.
+//
+// Symmetric on purpose: `now - issuedAtMs > MAX_AGE` alone never fires for a
+// FUTURE-dated timestamp (the difference is negative), so a proof written
+// after a backwards clock step - or with a corrupted `issuedAtMs` - would
+// read as an outstanding grant until the wall clock caught up, refusing
+// every launch for that whole window. A publisher and consumer live on the
+// same machine within the same minute, so any timestamp more than the grant
+// window AWAY from now, in either direction, is not a grant anyone can
+// still use.
+function adoptionGrantExpired(issuedAtMs: number): boolean {
+  return Math.abs(Date.now() - issuedAtMs) > HOST_START_ADOPTION_MAX_AGE_MS;
+}
 const HOST_START_ADOPTION_ACK_WAIT_MS = 30_000;
 const HOST_START_ADOPTION_POLL_MS = 25;
 
@@ -219,7 +233,7 @@ export async function consumeHostStartAdoption(
     // admission; erasing is the labelled path's job, which already does it.
     if (
       pending.kind === "valid" &&
-      Date.now() - pending.file.issuedAtMs > HOST_START_ADOPTION_MAX_AGE_MS
+      adoptionGrantExpired(pending.file.issuedAtMs)
     ) {
       return { kind: "absent" };
     }
@@ -267,7 +281,7 @@ export async function consumeHostStartAdoption(
   // admission; erasing stays the job of the paths that hold the nonce.
   if (
     pending.kind === "valid" &&
-    Date.now() - pending.file.issuedAtMs > HOST_START_ADOPTION_MAX_AGE_MS
+    adoptionGrantExpired(pending.file.issuedAtMs)
   ) {
     return { kind: "absent" };
   }
@@ -337,10 +351,7 @@ export async function consumeHostStartAdoption(
       throw new Error("host-start adoption claim could not be read safely");
     }
     const parsed = parseAdoption(claimedRead.text);
-    if (
-      parsed === null ||
-      Date.now() - parsed.issuedAtMs > HOST_START_ADOPTION_MAX_AGE_MS
-    ) {
+    if (parsed === null || adoptionGrantExpired(parsed.issuedAtMs)) {
       await abandon();
       return {
         kind: "refused",
@@ -428,7 +439,7 @@ export async function readHostStartAdoptionNonce(
   if (pending.kind !== "valid") return null;
   if (
     pending.file.serviceLabel !== serviceLabel ||
-    Date.now() - pending.file.issuedAtMs > HOST_START_ADOPTION_MAX_AGE_MS ||
+    adoptionGrantExpired(pending.file.issuedAtMs) ||
     !isNonce(pending.file.nonce)
   ) {
     return null;

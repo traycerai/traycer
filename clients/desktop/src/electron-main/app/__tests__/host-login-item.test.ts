@@ -146,6 +146,17 @@ vi.mock("../../host/host-paths", async (importOriginal) => {
 const rmHook = vi.hoisted(() => ({
   afterRemoveRecreate: null as (() => void) | null,
 }));
+
+// `bootoutStaleAgent`'s spawn is injected via the production module's
+// `setBootoutSpawnFnForTests` seam (see the rationale on the seam itself),
+// NOT via `vi.mock("node:child_process")`: a mock of the builtin that
+// silently fails to intercept (the `default.spawn` CJS-interop gotcha the
+// `node:fs/promises` mock below documents) does not fail a test — it runs
+// a REAL `launchctl bootout` against the developer's live host agent. The
+// global `beforeEach` installs a throwing backstop so any test that
+// reaches the bootout spawn without arranging a stub surfaces loudly as
+// "bootout-failed" plus this error, never as a real launchctl invocation.
+
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const mockedRm = async (
@@ -209,7 +220,14 @@ const {
   hasPendingLoginItemRevision,
   hasUnappliedPendingLoginItemRevision,
   unregisterHostLoginItemGuarded,
+  setBootoutSpawnFnForTests,
 } = await import("../host-login-item");
+
+// Module state on the imported singleton — clear it when the file is done
+// so no stub outlives the suite.
+afterAll(() => {
+  setBootoutSpawnFnForTests(null);
+});
 
 // `registerHostLoginItem` clears the pending-login-item-revision marker via
 // `getHostFsLayout(config.environment)` (config is mocked to "production"
@@ -354,6 +372,17 @@ beforeEach(() => {
   getLoginItemSettings.mockReset();
   isHostRemovedByUserMock.mockReset().mockResolvedValue(false);
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-login-item-"));
+  // Throwing backstop, re-armed for every test: reaching the bootout spawn
+  // without an explicit stub is a test bug, and the ONLY acceptable failure
+  // mode for that bug is a loud error — never the real `launchctl`.
+  // (`bootoutStaleAgent` catches the throw and reports "bootout-failed".)
+  setBootoutSpawnFnForTests(() => {
+    throw new Error(
+      "test reached bootoutStaleAgent's spawn without arranging a stub — " +
+        "install one via setBootoutSpawnFnForTests before driving a darwin " +
+        "register/unregister flow",
+    );
+  });
 });
 
 afterEach(() => {
@@ -1012,6 +1041,12 @@ describe("runLaunchctlBootout", () => {
   // These tests pin the argv shape, the exit-code classification
   // (success / "not loaded" no-op / unexpected failure), and the
   // failure-mode safety net (timeout kill, error event).
+  //
+  // Production change A: `runLaunchctlBootout` now resolves `Promise<boolean>`
+  // (previously `Promise<void>`) so `bootoutStaleAgent` can distinguish "BTM
+  // is provably cleared/clean" from "the BTM entry may still be present" -
+  // the register cycle treats the latter as best-effort and proceeds, while
+  // the uninstall teardown treats it as a failed deregistration.
 
   it("invokes `/bin/launchctl bootout <target>` with `stdio: ignore` so output never leaks into the Electron main process", async () => {
     const fake = makeFakeChild();
@@ -1031,19 +1066,20 @@ describe("runLaunchctlBootout", () => {
     expect(spawnFn.mock.calls[0]?.[2]).toEqual({ stdio: "ignore" });
   });
 
-  it("resolves cleanly when launchctl exits 0 — agent was loaded and is now gone", async () => {
+  it("resolves true when launchctl exits 0 — agent was loaded and is now gone", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
       fake.fireExit();
     });
 
-    await runLaunchctlBootout("gui/501/test.label", spawnFn);
-
+    await expect(
+      runLaunchctlBootout("gui/501/test.label", spawnFn),
+    ).resolves.toBe(true);
     expect(fake.killCalls).toHaveLength(0);
   });
 
-  it("treats exit codes 3 / 5 / 113 as 'not loaded' no-ops — clean-machine bootout has nothing to clear and that's success", async () => {
+  it("treats exit codes 3 / 5 / 113 as 'not loaded' no-ops and resolves true — clean-machine bootout has nothing to clear and that's success", async () => {
     for (const code of [3, 5, 113]) {
       const fake = makeFakeChild();
       const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
@@ -1053,11 +1089,27 @@ describe("runLaunchctlBootout", () => {
 
       await expect(
         runLaunchctlBootout("gui/501/test.label", spawnFn),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe(true);
     }
   });
 
-  it("resolves (never throws) when the child emits an error event — degrades to the pre-fix behavior rather than failing the register cycle", async () => {
+  // New regression coverage (production change A): any OTHER exit code is a
+  // real launchctl failure - the BTM entry may still be present - and must
+  // resolve `false` so `bootoutStaleAgent` reports "bootout-failed" rather
+  // than silently claiming the clear succeeded.
+  it("resolves false on an unexpected exit code — the BTM entry may still be present", async () => {
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.child.emit("exit", 1, null);
+    });
+
+    await expect(
+      runLaunchctlBootout("gui/501/test.label", spawnFn),
+    ).resolves.toBe(false);
+  });
+
+  it("resolves false (never throws) when the child emits an error event — degrades to a bootout-failed verdict rather than failing the register cycle", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
@@ -1066,10 +1118,10 @@ describe("runLaunchctlBootout", () => {
 
     await expect(
       runLaunchctlBootout("gui/501/test.label", spawnFn),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 
-  it("kills the child with SIGTERM once the timeout elapses — a wedged launchctl cannot hold the register cycle hostage", async () => {
+  it("kills the child with SIGTERM once the timeout elapses and resolves false — a wedged launchctl cannot hold the register cycle hostage", async () => {
     vi.useFakeTimers();
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
@@ -1078,8 +1130,8 @@ describe("runLaunchctlBootout", () => {
     // Advance past the 5s bootout timeout; the child never fires
     // exit or error, so only the setTimeout path can resolve us.
     await vi.advanceTimersByTimeAsync(5_000);
-    await promise;
 
+    await expect(promise).resolves.toBe(false);
     expect(fake.killCalls).toContain("SIGTERM");
   });
 });
@@ -1612,5 +1664,124 @@ describe("unregisterHostLoginItemGuarded - removable-state entry guard", () => {
       openAtLogin: false,
       serviceName: "ai.traycer.host.agent.plist",
     });
+  });
+});
+
+// Production change A, items (2) and (3): `bootoutStaleAgent` now
+// distinguishes "ok" from "bootout-failed" by the REAL launchctl exit code
+// (not just the caller's revalidation guard, which the existing
+// "deferred-busy"/"authority-lost" tests above already cover). These
+// blocks exercise that distinction end to end through the production
+// module's `setBootoutSpawnFnForTests` seam: the register cycle's
+// best-effort proceed, and the uninstall teardown's hard failure.
+describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl bootout failure (production change A)", () => {
+  const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      writable: true,
+      configurable: true,
+    });
+    // A concrete UID resolver, independent of the machine running the
+    // suite: `bootoutStaleAgent` short-circuits to "ok" without one (see
+    // `withDarwinCodesignIdentity`, which relies on exactly that), and
+    // these tests need the bootout to RUN.
+    Object.defineProperty(process, "getuid", {
+      value: () => 501,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: "linux",
+      writable: true,
+      configurable: true,
+    });
+    if (originalGetuid === undefined) {
+      delete (process as { getuid?: () => number }).getuid;
+    } else {
+      Object.defineProperty(process, "getuid", originalGetuid);
+    }
+  });
+
+  // Every `runLaunchctlBootout` call this fixture drives gets its OWN fresh
+  // fake child that exits with the scripted code on the next microtask -
+  // two calls (one per label) must each observe an exit, not share one
+  // already-consumed EventEmitter. Returns the spy so tests can assert the
+  // bootouts actually RAN - a fixture that trips an earlier guard would
+  // produce the same return value with zero spawns, which is exactly the
+  // vacuous pass these counts exist to rule out.
+  function scriptBootoutExits(codes: ReadonlyArray<number>) {
+    let calls = 0;
+    const spawnStub = vi.fn(() => {
+      const code = codes[Math.min(calls, codes.length - 1)];
+      calls += 1;
+      const fake = makeFakeChild();
+      queueMicrotask(() => {
+        fake.child.emit("exit", code, null);
+      });
+      return fake.child;
+    });
+    setBootoutSpawnFnForTests(spawnStub);
+    return spawnStub;
+  }
+
+  it("register cycle: completes and reaches `enabled` even when both launchctl bootouts fail - best-effort, not a park", async () => {
+    // Every bootout exits 1 => "bootout-failed" at each edge.
+    const spawnStub = scriptBootoutExits([1]);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }) // post-clear read
+      .mockReturnValueOnce({ status: "enabled" }); // post-register (BTM committed)
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    // The agent-label clear/register pair (and the legacy-serviceName
+    // unregister) still ran despite both bootouts failing - the register
+    // cycle's docstring promise that bootout failure degrades to the
+    // pre-fix behavior for this one call, not a park.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
+    // Both bootout edges ran and failed: the legacy retirement's CLI-label
+    // bootout and the step-4 agent-label BTM flush.
+    expect(spawnStub).toHaveBeenCalledTimes(2);
+  });
+
+  it("unregister teardown: returns false (not parked) when the primary launchctl bootout exits with an unexpected code - teardown is incomplete", async () => {
+    const spawnStub = scriptBootoutExits([1]);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+    // A TEARDOWN must not report success over an unproven bootout: the
+    // primary bootout's failure short-circuits before either SMAppService
+    // clear or the legacy bootout ever runs, unlike the register cycle's
+    // best-effort proceed above.
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    // Exactly the primary (agent-label) bootout ran - proving the false
+    // came from ITS failure, not from the removable-state entry guard.
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("unregister teardown: still returns false when only the LEGACY bootout fails after a successful primary bootout", async () => {
+    // Primary bootout clears (0); legacy bootout fails (1).
+    const spawnStub = scriptBootoutExits([0, 1]);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+    // The legacy bootout's failure short-circuits before either
+    // SMAppService clear runs.
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    // Both bootouts ran: primary succeeded, legacy failed.
+    expect(spawnStub).toHaveBeenCalledTimes(2);
   });
 });

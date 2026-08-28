@@ -232,9 +232,14 @@ export function parseAttemptLockHolder(text: string): AttemptLockHolder | null {
         ? obj.processStartedAtMs
         : null,
     supervisedProcessGroupId:
+      // `> 1`, matching the canonical parser in
+      // clients/shared/host-lock/cross-process-lock.ts: probing group 1 asks
+      // `kill(-1, 0)` — "is there ANY signalable process" — so a record
+      // carrying 1 must read as carrying no group at all, or this reader and
+      // the contenders' reader disagree about the same lock's liveness.
       typeof obj.supervisedProcessGroupId === "number" &&
       Number.isSafeInteger(obj.supervisedProcessGroupId) &&
-      obj.supervisedProcessGroupId > 0
+      obj.supervisedProcessGroupId > 1
         ? obj.supervisedProcessGroupId
         : null,
     retainOnPublisherDeath: obj.retainOnPublisherDeath === true,
