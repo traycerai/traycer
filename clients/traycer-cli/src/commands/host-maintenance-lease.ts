@@ -18,6 +18,8 @@ import {
   type HostUninstallArgs,
 } from "./host-uninstall";
 import { uninstallHost } from "../installer";
+import { readHostPidMetadata } from "../host/pid-metadata";
+import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { createServiceController, serviceLabelFor } from "../service";
 import { withMacosMaintenanceServiceUid } from "../service/platforms/macos";
 import { stopHostServiceWithAttempt } from "../host/update-mutation";
@@ -727,7 +729,22 @@ async function executeAction(
         logger: createCliLogger(environment),
         progress: () => undefined,
       },
-      { createServiceController, uninstallHost },
+      {
+        createServiceController,
+        uninstallHost,
+        // Same wiring as `buildHostUninstallCommand`: liveness comes from
+        // process identity against the published pid metadata, never from a
+        // resolved teardown call.
+        readPublishedHost: async (env) => {
+          const metadata = await readHostPidMetadata(env);
+          if (metadata === null) return null;
+          return {
+            pid: metadata.pid,
+            startIdentity: metadata.processStartIdentity,
+          };
+        },
+        probeProcessExited: getPublishedProcessIdentityVerdict,
+      },
       capability,
     );
   });

@@ -480,6 +480,7 @@ interface UninstallResultShape {
   readonly removedInstallDir: boolean;
   readonly removedStagedDir: boolean;
   readonly serviceUninstalled: boolean;
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 // `all` mirrors the legacy IPC-layer `projectUninstallResult` leniency: an
@@ -497,6 +498,7 @@ function parseUninstallResult(
       removedInstallDir: false,
       removedStagedDir: false,
       serviceUninstalled: false,
+      serviceRegistrationRetained: null,
     };
   }
   return {
@@ -506,6 +508,16 @@ function parseUninstallResult(
     serviceUninstalled:
       raw.serviceUninstalled === true ||
       (all && raw.serviceUninstalled !== false),
+    // Additive tri-state from the CLI: `true` means its readback positively
+    // found the registration still there. Carried through rather than
+    // collapsed, because `serviceUninstalled` above cannot express "unknown"
+    // and no platform can verify absence - see `UninstallOk`.
+    serviceRegistrationRetained:
+      raw.serviceRegistrationRetained === true
+        ? true
+        : raw.serviceRegistrationRetained === false
+          ? false
+          : null,
   };
 }
 
@@ -4401,6 +4413,7 @@ export class HostController {
           value: {
             removedInstallDir: result.removedInstallDir,
             deregisteredService: result.serviceUninstalled,
+            serviceRegistrationRetained: result.serviceRegistrationRetained,
           },
         };
       },
@@ -4460,6 +4473,7 @@ export class HostController {
           value: {
             removedHost: result.removedInstallDir,
             deregisteredService: result.serviceUninstalled,
+            serviceRegistrationRetained: result.serviceRegistrationRetained,
             removedLoginItem,
           },
         };
