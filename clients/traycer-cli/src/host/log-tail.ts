@@ -79,6 +79,23 @@ export function startLogTail(options: LogTailOptions): LogTail {
   let stopped = false;
   let missingRetries = 0;
   let timer: NodeJS.Timeout | null = null;
+  // Identity of the file the current `offset` counts bytes in. Size alone
+  // cannot answer "same file or a replacement?": a follower that consumed N
+  // bytes, missed the file during a rotation, and returns to a REPLACEMENT
+  // already past N bytes sees `size > offset` and resumes at N - silently
+  // eating the new file's first N bytes. That is reachable whenever the log is
+  // rotated under a live `host logs --follow` and the host is reinstalled
+  // promptly.
+  //
+  // Two independent signals, because neither covers every platform:
+  //   - the inode, when the OS supplies a real one. Definitive on POSIX;
+  //     `fs.Stats.ino` is frequently 0 on Windows, hence the second.
+  //   - a CONFIRMED disappearance (ENOENT) since the last successful read.
+  //     Narrower than "any error on purpose": an EACCES or a locked handle
+  //     must NOT rewind, which is the whole point of preserving the offset
+  //     across transient failures.
+  let fileIdentity: number | null = null;
+  let sawFileMissing = false;
 
   const schedule = (): void => {
     if (stopped) return;
@@ -95,8 +112,20 @@ export function startLogTail(options: LogTailOptions): LogTail {
       try {
         const stats = await handle.stat();
         missingRetries = 0;
-        // Truncated or rotated under us: re-read the new file from the top.
-        if (stats.size < offset) offset = 0;
+        const identity = stats.ino > 0 ? stats.ino : null;
+        // Replacement, established rather than guessed: a different inode, or
+        // the path having genuinely vanished since the last read.
+        const replaced =
+          sawFileMissing ||
+          (identity !== null &&
+            fileIdentity !== null &&
+            identity !== fileIdentity);
+        // Truncated in place, or a replacement: re-read from the top either
+        // way. Size is still the right signal for truncation - same file,
+        // fewer bytes.
+        if (replaced || stats.size < offset) offset = 0;
+        fileIdentity = identity;
+        sawFileMissing = false;
         if (stats.size > offset) {
           const length = Math.min(stats.size - offset, MAX_TICK_READ_BYTES);
           const buffer = Buffer.alloc(length);
@@ -111,7 +140,12 @@ export function startLogTail(options: LogTailOptions): LogTail {
       } finally {
         await handle.close();
       }
-    } catch {
+    } catch (cause) {
+      // A CONFIRMED disappearance is the one error that licenses a rewind on
+      // the next successful open - see `sawFileMissing`. Everything else
+      // (EACCES, a Windows scanner lock, a failed close) leaves the offset and
+      // the recorded identity alone.
+      if (isFileMissingError(cause)) sawFileMissing = true;
       // ENOENT or transient. The supervisor recreates the log on the next
       // start, so a short gap during rotation is expected rather than fatal.
       //
@@ -132,6 +166,14 @@ export function startLogTail(options: LogTailOptions): LogTail {
         return;
       }
     }
+    // Re-checked AFTER the awaits, not just at entry. `stop()` can land while
+    // this tick is inside open/stat/read/close, and emitting here would break
+    // `stop()`'s stated guarantee that nothing arrives afterwards - which
+    // `host logs --follow` relies on to stop writing once its signal cleanup
+    // has resolved, and which would otherwise let a poll race the foreground
+    // console's synchronous drain. The bytes are simply dropped; the offset
+    // has already advanced, and a stopped follower has no one left to tell.
+    if (stopped) return;
     if (chunk !== null) options.onBytes(chunk);
     schedule();
   };
@@ -188,6 +230,15 @@ export function startLogTail(options: LogTailOptions): LogTail {
     },
     drainSync,
   };
+}
+
+function isFileMissingError(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as { readonly code: unknown }).code === "ENOENT"
+  );
 }
 
 function initialOffset(path: string): number {

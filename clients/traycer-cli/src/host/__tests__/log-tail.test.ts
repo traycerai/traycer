@@ -151,13 +151,14 @@ describe("startLogTail", () => {
     expect(text()).toBe(`${beforeRotation}short\n`);
   });
 
-  // The catch block cannot tell a deleted file from a one-poll Windows
-  // scanner lock or a momentary EACCES, so it must NOT rewind the offset:
-  // doing so re-emits the entire log from byte zero on the next successful
-  // tick, which for the foreground `host start` mirror floods a terminal with
-  // history it started at EOF precisely to avoid. Replacement and truncation
-  // stay handled where they can be OBSERVED - the `size < offset` check.
-  it("does not replay history after a transient read failure that leaves the file longer than the offset", async () => {
+  // A size-only "is this still the same file?" check is not enough. Consume N
+  // bytes, lose the file to a rotation, and come back to a REPLACEMENT that is
+  // already past N bytes: size > offset reads as an ordinary append and the
+  // follower resumes at N, silently eating the new file's first N bytes. That
+  // is reachable whenever the log is rotated under a live follower and the
+  // host is reinstalled promptly. Identity (inode, or a confirmed ENOENT) is
+  // what distinguishes it.
+  it("re-reads a replacement from the top even when it is already LONGER than the consumed offset", async () => {
     const head = `${"a".repeat(120)}\n`;
     writeFileSync(logPath, "");
     const { onBytes, text } = collector();
@@ -173,18 +174,17 @@ describe("startLogTail", () => {
     appendFileSync(logPath, head);
     await waitFor(() => text().includes(head), 2_000);
 
-    // Make several ticks fail, then restore a file that is LONGER than the
-    // consumed offset - the shape a transient failure leaves behind, as
-    // opposed to the shorter file a real rotation leaves.
+    // Replace the file with a different one that is LONGER than what was
+    // consumed - so nothing about its size betrays the replacement.
     unlinkSync(logPath);
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 6));
-    writeFileSync(logPath, `${head}tail-only\n`);
-    await waitFor(() => text().includes("tail-only"), 3_000);
+    const replacement = `${"b".repeat(200)}\nREPLACEMENT-PREFIX-KEPT\n`;
+    writeFileSync(logPath, replacement);
+    await waitFor(() => text().includes("REPLACEMENT-PREFIX-KEPT"), 3_000);
 
-    // Exactly one copy of the head: the follower resumed at its offset rather
-    // than re-reading from zero.
-    expect(text().split(head).length - 1).toBe(1);
-    expect(text()).toBe(`${head}tail-only\n`);
+    // The replacement's own prefix survived: it was read from byte 0, not
+    // from the old file's offset.
+    expect(text()).toBe(`${head}${replacement}`);
   });
 
   // `host.log` is unbounded within a host's lifetime and is written by another
@@ -215,6 +215,32 @@ describe("startLogTail", () => {
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(1024 * 1024);
     }
+  });
+
+  // `stop()` can land while a tick is inside open/stat/read/close, past its
+  // only entry check. Emitting then breaks the documented guarantee, lets
+  // `host logs --follow` keep writing after its signal cleanup resolved, and
+  // can race the foreground console's synchronous drain.
+  it("emits nothing from a read that was already in flight when stop() landed", async () => {
+    writeFileSync(logPath, "");
+    const { chunks, onBytes } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      onSkipped: () => undefined,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      maxMissingRetries: 60,
+    });
+
+    // Append, then stop DURING the window the tick is doing its async file
+    // work rather than before it starts.
+    appendFileSync(logPath, "written-then-stopped\n");
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    tail.stop();
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 6));
+    expect(chunks).toHaveLength(0);
   });
 
   it("stop() is idempotent and no bytes are emitted afterwards", async () => {

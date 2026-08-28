@@ -19,8 +19,12 @@ function commandDeps(args: {
   readonly stop: () => Promise<void>;
   readonly receivedOptions: UninstallHostOptions[];
   readonly status: () => Promise<ServiceStatus>;
+  // Defaults to "nothing is serving" so the existing cases read as a
+  // confirmed teardown; the cases that care override it.
+  readonly findLiveHost: (() => Promise<unknown | null>) | null;
 }): RunHostUninstallDeps {
   return {
+    findLiveHost: args.findLiveHost ?? (async () => null),
     createServiceController: () => ({
       uninstall: async () => undefined,
       stop: args.stop,
@@ -91,6 +95,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: null,
       }),
     );
 
@@ -112,6 +117,7 @@ describe("runHostUninstall", () => {
         },
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: null,
       }),
     );
 
@@ -121,23 +127,83 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });
 
-  it("does not probe the service on --all: the end state is unconditional", async () => {
-    let statusCalls = 0;
+  // The load-bearing one. A resolved `stop()` is NOT evidence the host
+  // exited: on Linux and Windows every teardown call passes
+  // `tolerateNonZeroExit: true`, and the runner resolves on any error under
+  // that flag - including its own timeout. So `systemctl --user disable
+  // --now` can time out, the unit file is removed, `stop()` returns, and a
+  // host is still serving. Inferring shutdown from that resolution purged the
+  // pid metadata and rotated the log of a LIVE host - exactly what the purge
+  // gate exists to prevent - and reported it as stopped.
+  it("withholds the purge and reports the host live when a resolved --all stop left one serving", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
 
-    await runHostUninstall(
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined, // resolves, proving nothing
+        receivedOptions,
+        status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: async () => ({ pid: 4242 }),
+      }),
+    );
+
+    expect(receivedOptions).toEqual([
+      { environment: "dev", purgeChannelRuntime: false },
+    ]);
+    expect(result.data).toMatchObject({
+      purgedRuntime: false,
+      hostStillRunning: true,
+    });
+    expect(result.human ?? "").toContain("could not confirm the host stopped");
+    expect(result.human ?? "").toContain("traycer host stop --force");
+  });
+
+  it("reads --all's registration back from the platform rather than assuming the deregister landed", async () => {
+    const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
       commandDeps({
         stop: async () => undefined,
         receivedOptions: [],
-        status: async () => {
-          statusCalls += 1;
-          return NOT_INSTALLED_STATUS;
+        // `uninstall()` resolved, but the unit is still registered - the
+        // Linux/Windows teardown calls tolerate their own failures.
+        status: async () => ({
+          state: "stopped",
+          version: "1.2.3",
+          listenUrl: null,
+          pid: null,
+        }),
+        findLiveHost: null,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      serviceUninstalled: true,
+      serviceRegistrationRetained: true,
+      retainedServiceState: "stopped",
+    });
+  });
+
+  it("reports liveness as null on --all when the probe itself cannot answer", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: async () => {
+          throw new Error("pid metadata unreadable");
         },
       }),
     );
 
-    expect(statusCalls).toBe(0);
+    expect(result.data).toMatchObject({
+      hostStillRunning: null,
+      purgedRuntime: false,
+    });
   });
 
   it("reports the retained registration and running host a default uninstall leaves behind", async () => {
@@ -153,6 +219,7 @@ describe("runHostUninstall", () => {
           listenUrl: "ws://127.0.0.1:1234",
           pid: 4242,
         }),
+        findLiveHost: async () => ({ pid: 4242 }),
       }),
     );
 
@@ -174,6 +241,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: null,
       }),
     );
 
@@ -200,6 +268,7 @@ describe("runHostUninstall", () => {
         status: async () => {
           throw new Error("launchctl unavailable");
         },
+        findLiveHost: null,
       }),
     );
 
@@ -207,20 +276,21 @@ describe("runHostUninstall", () => {
       { environment: "dev", purgeChannelRuntime: false },
     ]);
     expect(result.exitCode).toBe(0);
-    // NULL, not false. `false` is a claim about a registration and a process
-    // this command never observed and never touched - an automation consumer
-    // reading it would conclude the machine is clean when nothing checked.
+    // NULL for registration: `false` would be a claim about something this
+    // command never observed. Liveness is a SEPARATE instrument and answered
+    // fine, so it keeps its observed value rather than being dragged to null.
     expect(result.data).toMatchObject({
       serviceRegistrationRetained: null,
       retainedServiceState: null,
-      hostStillRunning: null,
+      hostStillRunning: false,
     });
   });
 
-  // `--all`'s stop is cooperative and best-effort: a host that denies or
-  // outlives the claim is left running while the bytes are removed anyway.
-  // Saying nothing is how an operator walks away believing it is down.
-  it("says the host may still be running when --all's cooperative stop is not confirmed", async () => {
+  // Both halves are required for the purge. A stop that THREW means the host
+  // was never asked/consented to die, so even a probe that finds nothing
+  // serving does not license deleting its runtime - the process may simply
+  // not be publishing yet.
+  it("withholds the purge when the stop threw, even with nothing serving", async () => {
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
@@ -230,22 +300,19 @@ describe("runHostUninstall", () => {
         },
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: null,
       }),
     );
 
     expect(result.data).toMatchObject({
       serviceUninstalled: true,
       purgedRuntime: false,
-      // NULL, not false. `--all` runs no probe, and its stop is best-effort -
-      // an unconfirmed stop leaves a host that may still be serving. `false`
-      // here made the machine envelope contradict the human summary below,
-      // which already says so, and an automation reading it would proceed as
-      // though the host were down.
-      hostStillRunning: null,
+      // The probe answered "nothing serving", so `false` is earned here. What
+      // is NOT earned is the purge: the stop threw, so the host was never
+      // asked to die and its runtime stays.
+      hostStillRunning: false,
       serviceRegistrationRetained: false,
     });
-    expect(result.human ?? "").toContain("did not confirm shutdown");
-    expect(result.human ?? "").toContain("traycer host stop --force");
   });
 
   // The other half of the same rule: a CONFIRMED stop is what gates the
@@ -258,6 +325,7 @@ describe("runHostUninstall", () => {
         stop: async () => undefined,
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
+        findLiveHost: null,
       }),
     );
 

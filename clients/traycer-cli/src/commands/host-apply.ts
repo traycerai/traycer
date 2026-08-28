@@ -103,9 +103,12 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
  *   - `failed`         the post-swap start/restart threw (`postSwapError`).
  *                      Bytes are committed and the host is not coming back on
  *                      its own.
- *   - `not-attempted`  committed, but no start ran - `--no-service`, or the
- *                      Desktop-managed macOS path, which defers activation to
- *                      Desktop's next SMAppService register cycle.
+ *   - `not-attempted`  committed, but no start ran - `--no-service` (no
+ *                      lifecycle at all), or a `postSwapAction` of "none",
+ *                      which is what a non-bootstrap caller gets against an
+ *                      unregistered service. NOT the Desktop-managed macOS
+ *                      case: that branch kickstarts the agent label and
+ *                      reports "start".
  *   - `null`           nothing was committed (`no-op`,
  *                      `stage-fingerprint-mismatch`), so there is no
  *                      activation to report. NOT `failed`: those outcomes
@@ -128,14 +131,17 @@ function humanSummary(outcome: ApplyHostOutcome): string {
   if (outcome.outcome === "stage-fingerprint-mismatch") {
     return "staged host changed after eligibility; retry against the current stage";
   }
-  // Both non-converged lines name the state the machine is actually in and
-  // what to do about it. "Applied" alone reads as done, and this command
-  // exits 0 either way, so the text is the only thing distinguishing them.
+  // These lines report the ACTIVATION, never liveness - the same distinction
+  // `activation` draws in the payload, and for the same reason: nothing here
+  // probes health. Saying "the host is NOT running" was the prose making the
+  // claim the field had just stopped making, and it can be flatly wrong - a
+  // bytes-only swap under a host nobody managed to stop leaves that host
+  // serving the old bytes, alive, while the start never ran.
   if (outcome.postSwapError !== null) {
-    return `applied host ${outcome.record.version}, but the host is NOT running: the service did not come back after the swap: ${outcome.postSwapError} - run 'traycer host doctor'`;
+    return `applied host ${outcome.record.version}, but the service did not come back after the swap: ${outcome.postSwapError} - run 'traycer host status' to see what is running, then 'traycer host doctor'`;
   }
   if (!outcome.runningActivated) {
-    return `applied host ${outcome.record.version}, but the host is NOT running yet: activation still required`;
+    return `applied host ${outcome.record.version}, but no start was run, so the new bytes are not active yet - run 'traycer host status' to see what is running`;
   }
   return `applied host ${outcome.record.version} (previous: ${outcome.previous?.version ?? "none"})`;
 }

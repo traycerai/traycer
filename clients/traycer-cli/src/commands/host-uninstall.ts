@@ -17,6 +17,7 @@ import {
   type UninstallServiceOptions,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
+import { findLiveIncumbentHost } from "../host/incumbent-check";
 
 // `traycer host uninstall [--all]`:
 //   default → remove the installed + staged host bytes and the install
@@ -28,8 +29,11 @@ import { withCliLock } from "../store/cli-lock";
 //             "optionally removes the OS service" suggests, so both the help
 //             text and this command's own output name it explicitly.
 //   --all   → deregister the OS service first, then cooperatively stop the
-//             host, then remove the bytes; environment runtime state (pid
-//             metadata, log) is purged only once the stop is confirmed.
+//             host, then remove the bytes. Environment runtime state (pid
+//             metadata, log) is purged only once the host is CONFIRMED gone -
+//             the stop call resolving is not that confirmation, because every
+//             Linux/Windows teardown call tolerates its own failure. Both the
+//             purge and the reported liveness come from an endpoint probe.
 // User data under ~/.traycer/ (chats, sqlite, downloaded models, credentials)
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
@@ -48,7 +52,23 @@ export interface HostUninstallServiceController extends RuntimePurgeStopControll
 export interface RunHostUninstallDeps {
   createServiceController(): HostUninstallServiceController;
   uninstallHost(options: UninstallHostOptions): Promise<UninstallHostResult>;
+  /**
+   * Is a host actually serving? The same instrument `withStopIntent`'s
+   * `retireIntentIfHostSurvived` uses to answer "did the kill land?", and for
+   * the same reason: a resolved `stop()` is NOT evidence that it did.
+   *
+   * Every Linux and Windows backend call on the teardown path passes
+   * `tolerateNonZeroExit: true`, and `runCommand` resolves on ANY error under
+   * that flag - a non-zero exit, an unavailable systemd user bus, or its own
+   * 15s timeout. So `systemctl --user disable --now` can time out, the unit
+   * file gets removed, `stop()` returns, and nothing that happened proves the
+   * host exited. Asking the endpoint is the only honest answer.
+   */
+  findLiveHost(environment: Environment): Promise<unknown | null>;
 }
+
+/** What the post-stop probe established, kept distinct from "it threw". */
+type LivenessObservation = "gone" | "live" | "unknown";
 
 export interface RunHostUninstallContext {
   readonly environment: Environment;
@@ -63,10 +83,11 @@ interface StopServiceBeforeRuntimePurgeArgs {
   readonly logger: ILogger;
 }
 
-// Runtime state belongs to the live host process, so deleting pid metadata or
-// rotating its active log is only safe after the service controller confirms
-// the process exited. Service deregistration/install removal remain
-// best-effort even when this confirmation fails.
+// Did the stop CALL resolve? Necessary for the runtime purge but not
+// sufficient - the caller pairs this with an endpoint probe, because on Linux
+// and Windows every teardown call tolerates its own failure and resolving
+// proves nothing about the process. Service deregistration and install removal
+// remain best-effort either way.
 export async function stopServiceBeforeRuntimePurge(
   args: StopServiceBeforeRuntimePurgeArgs,
 ): Promise<boolean> {
@@ -107,6 +128,7 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
           {
             createServiceController,
             uninstallHost,
+            findLiveHost: findLiveIncumbentHost,
           },
         ),
     );
@@ -120,11 +142,17 @@ export async function runHostUninstall(
 ): Promise<CommandResult> {
   let serviceUninstalled = false;
   let purgeChannelRuntime = false;
-  // Observed BEFORE anything is removed, and only on the default path: it is
-  // the only way this command can say what it is about to leave behind. On
-  // `--all` the end state is unconditional (nothing registered, nothing
-  // running) so there is nothing to report and no reason to pay for the
-  // platform probe.
+  let retainedAfterAll: ServiceStatus | null = null;
+  // Asked on both paths. The default path never stops anything, so this is
+  // simply "is a host still serving the bytes we are about to remove?" - the
+  // fact its own summary needs, and one `ServiceStatus.state` cannot supply.
+  let liveness: LivenessObservation = args.all
+    ? "unknown"
+    : await observeLiveHost(deps, ctx);
+  // Observed BEFORE anything is removed, on the default path: it is the only
+  // way this command can say what it is about to leave behind. `--all` reads
+  // its registration AFTER acting instead (see below), since what matters
+  // there is what the teardown actually left.
   const retainedService = args.all
     ? null
     : await readServiceStateBestEffort(deps, ctx);
@@ -160,14 +188,33 @@ export async function runHostUninstall(
       label: label.id,
     });
     // Install removal stays best-effort, but runtime files are preserved
-    // unless stop confirms the process is gone. A failed stop can leave
-    // the host actively writing its pid metadata and log.
-    purgeChannelRuntime = await stopServiceBeforeRuntimePurge({
+    // unless the process is confirmed GONE. A host that is still serving is
+    // still writing its pid metadata and rotating its log.
+    const stopResolved = await stopServiceBeforeRuntimePurge({
       controller,
       environment: ctx.environment,
       label,
       logger: ctx.logger,
     });
+    // The resolved `stop()` is necessary but NOT sufficient - see
+    // `findLiveHost`. Both halves are required: a stop that threw means the
+    // host was never asked/consented to die, and a probe that still finds one
+    // means the kill did not land. Only "asked, and nothing answers" earns the
+    // purge that deletes pid metadata and rotates the active log.
+    liveness = await observeLiveHost(deps, ctx);
+    purgeChannelRuntime = stopResolved && liveness === "gone";
+    if (!purgeChannelRuntime) {
+      ctx.logger.warn("Host uninstall withheld the runtime purge", {
+        environment: ctx.environment,
+        stopResolved,
+        liveness,
+      });
+    }
+    // Registration is verified too, for the same reason: on Linux the unit
+    // file is removed even when `disable --now` timed out, and on Windows
+    // `/Delete` tolerates failure. Ask the controller what is actually
+    // registered now rather than inferring it from a resolved call.
+    retainedAfterAll = await readServiceStateBestEffort(deps, ctx);
   }
   ctx.progress({
     stage: "uninstall",
@@ -190,30 +237,25 @@ export async function runHostUninstall(
     hadInstallRecord: result.removedRecord !== null,
     retainedServiceState: retainedService?.state ?? null,
   });
-  // Tri-state, deliberately, and the two fields do NOT share a rule.
+  // Both fields report only what was OBSERVED. Neither is derived from a
+  // backend call having resolved: on Linux and Windows every teardown call
+  // tolerates failure, so a resolved `uninstall()`/`stop()` is not evidence
+  // that the unit is gone or the process exited (see `findLiveHost`).
   //
-  // Registration is observed on both paths: `--all` deregisters and
-  // `controller.uninstall` returned, so nothing is retained; the default path
-  // reports what the probe saw, or null when it threw.
-  //
-  // Liveness is not. `--all` performs no probe, and its stop is cooperative
-  // and best-effort - `stopServiceBeforeRuntimePurge` returns false when the
-  // host denied or outlived the claim, and the removal proceeds anyway. Only
-  // a CONFIRMED stop (which is exactly what gates the runtime purge) proves
-  // the host is down; otherwise it may still be serving. Reporting `false`
-  // there would have the machine envelope contradict this command's own human
-  // summary, which already says the host may still be up.
+  // `--all` reads both back from the platform after acting; the default path
+  // reports its single pre-removal probe. Either probe failing yields null,
+  // never a negative fact about something this command did not observe.
+  const observedService = args.all ? retainedAfterAll : retainedService;
   const serviceRegistrationRetained =
-    args.all || retainedService !== null
-      ? retainedService !== null && retainedService.state !== "not-installed"
-      : null;
-  const hostStillRunning = args.all
-    ? purgeChannelRuntime
-      ? false
-      : null
-    : retainedService === null
-      ? null
-      : retainedService.state === "running";
+    observedService === null ? null : observedService.state !== "not-installed";
+  // Liveness comes from the endpoint probe on BOTH paths, never from
+  // `ServiceStatus.state`. That field is about REGISTRATION: `busy-check.ts`
+  // keys liveness off pid metadata instead, and `externally-managed` (the
+  // Desktop-owned macOS label) deliberately folds in no run state at all and
+  // reports no pid. Reading `state === "running"` therefore answered "false"
+  // for a Desktop-managed host that was still serving - after this command had
+  // just removed its bytes.
+  const hostStillRunning = liveness === "unknown" ? null : liveness === "live";
   return {
     data: {
       removedRecord: result.removedRecord,
@@ -226,7 +268,7 @@ export async function runHostUninstall(
       // `serviceUninstalled`. Both are `null` when the platform probe could
       // not answer - see the tri-state note above.
       serviceRegistrationRetained,
-      retainedServiceState: retainedService?.state ?? null,
+      retainedServiceState: observedService?.state ?? null,
       hostStillRunning,
     },
     human: humanSummary({
@@ -234,9 +276,31 @@ export async function runHostUninstall(
       serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       retainedServiceState: retainedService?.state ?? null,
+      hostStillRunning,
     }),
     exitCode: 0,
   };
+}
+
+// Best-effort like the status probe, and for the same reason: this exists to
+// DESCRIBE the end state, so an unreachable endpoint degrades to "unknown"
+// rather than failing a removal that already happened.
+async function observeLiveHost(
+  deps: RunHostUninstallDeps,
+  ctx: RunHostUninstallContext,
+): Promise<LivenessObservation> {
+  try {
+    return (await deps.findLiveHost(ctx.environment)) === null
+      ? "gone"
+      : "live";
+  } catch (err) {
+    ctx.logger.warn("Host uninstall could not probe for a live host", {
+      environment: ctx.environment,
+      errorName: err instanceof Error ? err.name : "Error",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    return "unknown";
+  }
 }
 
 // Never fails the uninstall: this read exists to DESCRIBE the end state, and
@@ -266,6 +330,7 @@ function humanSummary(args: {
   readonly serviceUninstalled: boolean;
   readonly purgedRuntime: boolean;
   readonly retainedServiceState: ServiceState | null;
+  readonly hostStillRunning: boolean | null;
 }): string {
   const parts: string[] = [];
   if (args.removedVersion === null) {
@@ -275,14 +340,14 @@ function humanSummary(args: {
   }
   if (args.serviceUninstalled) parts.push("deregistered OS service");
   if (args.purgedRuntime) {
-    parts.push("cleared environment runtime state");
+    parts.push("confirmed the host stopped and cleared its runtime state");
   } else if (args.serviceUninstalled) {
     // `--all`'s stop is cooperative and best-effort: `stopServiceBeforeRuntimePurge`
     // returns false when the host denied the claim or outlived it, and the
     // removal proceeds anyway. Saying nothing here is how an operator walks
     // away from `--all` believing the host is down while it keeps serving.
     parts.push(
-      "the host did not confirm shutdown, so it may still be running and its pid/log runtime was kept - run 'traycer host stop --force' if it is still up",
+      "could not confirm the host stopped, so it may still be running and its pid/log runtime was kept - run 'traycer host status', then 'traycer host stop --force' if it is still up",
     );
   }
   // The default path's end state, spelled out. Leaving a registered
@@ -290,7 +355,11 @@ function humanSummary(args: {
   // outcome of this command a user is most likely not to have intended, and
   // it is silent otherwise - nothing fails, and nothing else reports it until
   // the next start attempt.
-  if (args.retainedServiceState === "running") {
+  // Keyed on the LIVENESS probe, not on `ServiceStatus.state`: a
+  // Desktop-managed macOS registration reports `externally-managed` with no
+  // run state, so keying on the state read "not running" for a host that was
+  // still serving the bytes just removed.
+  if (args.hostStillRunning === true) {
     parts.push(
       "the OS service is still registered and the running host keeps serving until it exits, after which it cannot be started again - run 'traycer host uninstall --all' to stop and deregister it, or 'traycer host install' to reinstall",
     );

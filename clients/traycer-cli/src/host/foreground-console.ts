@@ -86,9 +86,10 @@ export function resolveForegroundStartMode(
  * Is a TTY on this platform sufficient evidence that a PERSON is watching?
  *
  * Everywhere but Windows, yes - for the definitions this CLI emits, under
- * default manager settings. launchd runs the supervisor under `/bin/sh -c`
- * with its output bound to a file, and systemd binds it to the journal socket,
- * so an ordinary start of either has no terminal to inherit.
+ * default manager settings. The macOS plist executes the per-label launcher
+ * directly and sets no `StandardOutPath`, so launchd gives the job its default
+ * (not a terminal); systemd binds stdout to the journal socket. An ordinary
+ * start of either has no terminal to inherit.
  *
  * That is a statement about Traycer's own definitions, NOT a universal
  * invariant, and the difference is worth naming. An operator can route a

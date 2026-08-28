@@ -138,8 +138,14 @@ describe("host apply - activation", () => {
       activation: "failed",
     });
     expect(result.exitCode).toBe(0);
-    expect(result.human ?? "").toContain("NOT running");
+    // Reports the ACTIVATION, never liveness. "the host is NOT running" was
+    // the prose making the claim `activation` had just stopped making - and it
+    // can be flatly wrong, since a host nobody managed to stop keeps serving
+    // the old bytes.
+    expect(result.human ?? "").toContain("did not come back after the swap");
+    expect(result.human ?? "").toContain("traycer host status");
     expect(result.human ?? "").toContain("traycer host doctor");
+    expect(result.human ?? "").not.toContain("NOT running");
   });
 
   // Committed, but nothing was started: `--no-service`, or the Desktop-managed
@@ -168,7 +174,11 @@ describe("host apply - activation", () => {
       activation: "not-attempted",
     });
     expect(result.exitCode).toBe(0);
-    expect(result.human ?? "").toContain("NOT running");
+    // Same rule: no start ran, which says nothing about what is serving. A
+    // bytes-only swap under a host nobody stopped leaves that host alive.
+    expect(result.human ?? "").toContain("no start was run");
+    expect(result.human ?? "").toContain("traycer host status");
+    expect(result.human ?? "").not.toContain("NOT running");
   });
 
   // A no-op commits nothing and never probes the running host, so `failed`
