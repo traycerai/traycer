@@ -28,6 +28,7 @@ export type SurfaceKind =
   | "git-diff"
   | "file-tree"
   | "new-terminal"
+  | "browsers"
   | "composer"
   | "new-conversation";
 
@@ -47,7 +48,10 @@ export function surfaceHostKey(kind: SurfaceKind, instanceId: string): string {
 
 /** Sidebar panel instance: the view tab id. */
 export function tabSurfaceKey(
-  kind: Extract<SurfaceKind, "git-diff" | "file-tree" | "new-terminal">,
+  kind: Extract<
+    SurfaceKind,
+    "git-diff" | "file-tree" | "new-terminal" | "browsers"
+  >,
   tabId: string,
 ): string {
   return surfaceHostKey(kind, tabId);

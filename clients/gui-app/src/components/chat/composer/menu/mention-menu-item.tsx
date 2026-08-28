@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Moon } from "lucide-react";
 import type { MentionMenuEntry } from "@/lib/composer/mentions";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -50,6 +51,26 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
         <span className="shrink-0 text-ui-xs font-semibold text-muted-foreground">
           Archived
         </span>
+      ) : null}
+      {entry.dormant ? (
+        // Mirrors the sidebar's dormant marker (`epic-browser-sidebar-row.tsx`'s
+        // `BrowserTabStateSlot`): a small muted Moon, same slot as `Archived`.
+        // The row stays fully mentionable while dormant (attach auto-wakes
+        // it) - this only sets the expectation that the first message pays a
+        // wake cost.
+        <TooltipWrapper
+          label="Browser asleep"
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span
+            aria-label="Browser asleep"
+            className="flex shrink-0 items-center"
+          >
+            <Moon className="size-3.5 text-muted-foreground" aria-hidden />
+          </span>
+        </TooltipWrapper>
       ) : null}
       {trailing ? (
         <TooltipWrapper

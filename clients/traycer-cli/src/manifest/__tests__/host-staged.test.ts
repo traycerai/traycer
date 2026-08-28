@@ -56,6 +56,9 @@ function sampleRecord(version: string): HostStagedRecord {
     executablePath: "traycer-host",
     platform: "darwin",
     arch: "arm64",
+    // Explicit so round-trip fixtures match the schema's normalized read:
+    // an absent digest is preprocessed to `null`, not left undefined.
+    executableSha256: null,
   };
 }
 
@@ -135,6 +138,25 @@ describe("host-staged sidecar (readHostStagedRecordAt / writeHostStagedRecordAt)
     };
     await writeHostStagedRecordAt(dir, record);
     expect(await readHostStagedRecordAt(dir)).toEqual(record);
+  });
+
+  it("round-trips a populated executableSha256", async () => {
+    const record: HostStagedRecord = {
+      ...sampleRecord("1.5.0"),
+      executableSha256: "b".repeat(64),
+    };
+    await writeHostStagedRecordAt(dir, record);
+    expect(await readHostStagedRecordAt(dir)).toEqual(record);
+  });
+
+  it("reads a pre-attestation sidecar without executableSha256 as null (tolerant read)", async () => {
+    const { executableSha256: _executableSha256, ...legacy } =
+      sampleRecord("1.5.0");
+    writeFileSync(join(dir, "staged.json"), JSON.stringify(legacy));
+
+    const read = await readHostStagedRecordAt(dir);
+    expect(read?.version).toBe("1.5.0");
+    expect(read?.executableSha256).toBeNull();
   });
 
   it("returns null when version is not valid SemVer", async () => {

@@ -128,6 +128,7 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
       return { forcedRecycle: false };
     }),
     relaunchAfterRestart,
+    hostStartAdoptionLabel: vi.fn(async (serviceLabel) => serviceLabel.id),
     retireCompetingRegistration,
     takeoverDesktopRegistration: vi.fn(async () => ({
       kind: "not-applicable" as const,
@@ -260,6 +261,69 @@ describe("service install lifecycle re-registration", () => {
       override: null,
       allowSelfInvocation: true,
     });
+  });
+
+  it("rechecks the mutation verifier at raw stop, start, and register actuators", async () => {
+    const lost = new Error("update attempt capability was lost");
+
+    // A running host must not be stopped after the lifecycle's verifier flips
+    // lost between admission and beforeSwap's raw controller.stop call.
+    const running = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(running.controller);
+    const runningHandle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    runningHandle.lifecycle.setMutationVerifier?.(async () => {
+      throw lost;
+    });
+    await expect(runningHandle.lifecycle.beforeSwap()).rejects.toBe(lost);
+    expect(running.stop).not.toHaveBeenCalled();
+
+    // A Desktop-managed host gets a post-swap competing-registration repair
+    // and kickstart. The second verifier call flips lost, so neither raw
+    // retire nor raw start/relaunch may run.
+    const externallyManaged = makeController("externally-managed");
+    mocks.createServiceControllerMock.mockReturnValue(
+      externallyManaged.controller,
+    );
+    const externalHandle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    let verifierCalls = 0;
+    externalHandle.lifecycle.setMutationVerifier?.(async () => {
+      verifierCalls += 1;
+      if (verifierCalls === 2) throw lost;
+    });
+    await withPlatformAsync("darwin", async () => {
+      await externalHandle.lifecycle.beforeSwap();
+      await expect(externalHandle.lifecycle.afterSwap()).rejects.toBe(lost);
+    });
+    expect(
+      externallyManaged.retireCompetingRegistration,
+    ).not.toHaveBeenCalled();
+    expect(externallyManaged.start).not.toHaveBeenCalled();
+    expect(externallyManaged.relaunchAfterRestart).not.toHaveBeenCalled();
+
+    // A clean bootstrap resolves its CLI before the final verifier. Loss at
+    // that boundary must leave the raw controller.install actuator untouched.
+    const notInstalled = makeController("not-installed");
+    mocks.createServiceControllerMock.mockReturnValue(notInstalled.controller);
+    const bootstrapHandle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
+      throw lost;
+    });
+    await bootstrapHandle.lifecycle.beforeSwap();
+    await expect(bootstrapHandle.lifecycle.afterSwap()).rejects.toBe(lost);
+    expect(notInstalled.install).not.toHaveBeenCalled();
+    expect(bootstrapHandle.state.postSwapError).toBeNull();
   });
 
   it("reloads an existing host-update registration with linger off and self-invocation permitted", async () => {

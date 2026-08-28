@@ -2,6 +2,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { useCallback, useId, useMemo, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import {
@@ -24,13 +25,23 @@ function nodeKindForSurface(surface: "gui" | "tui"): "chat" | "terminal-agent" {
   return surface === "gui" ? "chat" : "terminal-agent";
 }
 
-function ActivityDot(props: { readonly active: boolean }) {
-  if (props.active) {
+function ActivityDot(props: {
+  readonly activity: AgentRow["activity"];
+  readonly agentId: string;
+}) {
+  if (props.activity === "turn") {
     return (
       <AgentSpinningDots
         className="shrink-0 text-muted-foreground"
         testId={undefined}
         variant={undefined}
+      />
+    );
+  }
+  if (props.activity === "background") {
+    return (
+      <BackgroundActivityGlyph
+        testId={`active-agent-background-activity-${props.agentId}`}
       />
     );
   }
@@ -147,7 +158,7 @@ function AgentStopRow(props: {
             cursorClass,
           )}
         >
-          <ActivityDot active={agent.active} />
+          <ActivityDot activity={agent.activity} agentId={agent.id} />
           <span
             className={cn(
               "block min-w-0 flex-1 truncate text-ui-xs text-foreground/85",

@@ -679,7 +679,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const reopened = tileByContentId(tabId, SPEC_A.id);
     expect(reopened).toBeDefined();
     expect(reopened?.instanceId).toBe(SPEC_A.instanceId);
-    expect(reopened?.name).toBe(SPEC_A.name);
+    expect(reopened === undefined ? null : reopened.name).toBe(SPEC_A.name);
     // The cache entry is evicted now that the tile is live again.
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[

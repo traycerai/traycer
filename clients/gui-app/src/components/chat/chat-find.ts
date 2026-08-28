@@ -21,6 +21,7 @@ export {
 } from "@/components/chat/chat-find-projection";
 
 export {
+  chatFindCoverageMessage,
   createChatFindAdapter,
   type ChatFindAdapter,
   type ChatFindReconcileTarget,

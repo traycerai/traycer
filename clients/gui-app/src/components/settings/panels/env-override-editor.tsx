@@ -56,6 +56,68 @@ function isEnvMode(value: string): value is EnvMode {
   return value === "set" || value === "unset";
 }
 
+/**
+ * Whether a SET value carries leading or trailing whitespace.
+ *
+ * Surfaced rather than stripped, and the distinction is load-bearing. This
+ * value is handed to the spawned CLI byte for byte, and the providers each read
+ * it their own way: most treat `"   "` as SET and resolve a directory literally
+ * named three spaces under their own cwd, while a few (`claude-code`, `hermes`,
+ * reasonix's `REASONIX_HOME`) strip it themselves and treat it as unset. The
+ * host models each of those individually so a probe looks where the CLI looks.
+ * Normalizing here would make this editor disagree with all of them at once and
+ * hide the difference from the only person who can say which they meant - a
+ * pasted path with a stray space and a deliberately padded value look identical
+ * once trimmed. So: say what will happen, and put the fix one click away.
+ */
+function hasEdgeWhitespace(value: string): boolean {
+  return value !== value.trim();
+}
+
+/**
+ * The one line below a row: a blocking error if there is one, otherwise the
+ * whitespace notice. Shared by the edit row and the add row so the precedence
+ * is stated once.
+ */
+function EnvRowFooter(props: {
+  readonly draft: Draft;
+  readonly disabled: boolean;
+  readonly onTrim: () => void;
+}) {
+  const { draft, disabled, onTrim } = props;
+  if (draft.error !== null) {
+    return <p className="text-ui-xs text-destructive">{draft.error}</p>;
+  }
+  if (draft.mode !== "set" || !hasEdgeWhitespace(draft.value)) return null;
+  return <EnvValueWhitespaceNotice disabled={disabled} onTrim={onTrim} />;
+}
+
+function EnvValueWhitespaceNotice(props: {
+  readonly disabled: boolean;
+  readonly onTrim: () => void;
+}) {
+  const { disabled, onTrim } = props;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs text-[var(--term-ansi-yellow)]">
+      <span>
+        Leading or trailing spaces are part of this value — the CLI receives it
+        exactly as written.
+      </span>
+      <button
+        type="button"
+        disabled={disabled}
+        // Keep focus in the field: a blur here would commit the untrimmed value
+        // first and this would trim it in a second write.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onTrim}
+        className="underline underline-offset-2 hover:no-underline disabled:opacity-50"
+      >
+        Trim spaces
+      </button>
+    </p>
+  );
+}
+
 function draftError(key: string, otherKeys: readonly string[]): string | null {
   if (!ENV_KEY_PATTERN.test(key)) {
     return "Name must match /^[A-Za-z_][A-Za-z0-9_]*$/.";
@@ -189,9 +251,8 @@ function EnvOverrideRow(props: {
     onCommitRef.current = onCommit;
   }, [onCommit]);
 
-  const commit = (): void => {
+  const commitValue = (nextValue: string | null): void => {
     const nextKey = draft.key.trim();
-    const nextValue = draft.mode === "unset" ? null : draft.value;
     const error = draftError(nextKey, otherKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, key: entry.key, error }));
@@ -201,6 +262,15 @@ function EnvOverrideRow(props: {
     if (nextKey !== entry.key || nextValue !== entry.value) {
       onCommit(entry.key, nextKey, nextValue);
     }
+  };
+
+  const commit = (): void =>
+    commitValue(draft.mode === "unset" ? null : draft.value);
+
+  const trimValue = (): void => {
+    const nextValue = draft.value.trim();
+    setDraft((current) => ({ ...current, value: nextValue }));
+    commitValue(nextValue);
   };
 
   useEffect(() => {
@@ -261,9 +331,7 @@ function EnvOverrideRow(props: {
           <Trash2 className="size-4" />
         </button>
       </div>
-      {draft.error !== null ? (
-        <p className="text-ui-xs text-destructive">{draft.error}</p>
-      ) : null}
+      <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
     </li>
   );
 }
@@ -342,9 +410,13 @@ function EnvOverrideAddRow(props: {
           </Button>
         </div>
       </div>
-      {draft.error !== null ? (
-        <p className="text-ui-xs text-destructive">{draft.error}</p>
-      ) : null}
+      <EnvRowFooter
+        draft={draft}
+        disabled={disabled}
+        onTrim={() =>
+          setDraft((current) => ({ ...current, value: current.value.trim() }))
+        }
+      />
     </div>
   );
 }

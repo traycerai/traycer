@@ -91,6 +91,8 @@ export function installManagedCommandChatSession(args: {
             sendAction: () => undefined,
             close: () => undefined,
             sameTurnSteeringProtocolSupported: () => true,
+            requestTranscriptRange: () => undefined,
+            requestResnapshot: () => undefined,
           };
         },
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,

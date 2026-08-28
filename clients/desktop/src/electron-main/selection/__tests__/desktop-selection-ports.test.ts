@@ -1383,6 +1383,7 @@ function buildControllerStatus(
     updateReady: false,
     activation: "activated",
     reachable: true,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -1599,7 +1600,11 @@ class FakeHostController implements IpcHostController {
   async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
     return {
       kind: "ok",
-      value: { removedInstallDir: true, deregisteredService: true },
+      value: {
+        removedInstallDir: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+      },
     };
   }
   async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
@@ -1608,6 +1613,7 @@ class FakeHostController implements IpcHostController {
       value: {
         removedHost: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
         removedLoginItem: false,
       },
     };

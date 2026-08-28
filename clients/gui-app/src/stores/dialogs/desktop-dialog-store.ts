@@ -67,7 +67,7 @@ export interface DesktopDialogState {
   readonly openEpicInNewWindow: () => void;
   readonly openReportIssue: () => void;
   readonly openReportIssueWithContext: (context: ReportIssueContext) => void;
-  /** Used by surfaces that captured a structured private cause (T3 migration). */
+  /** Used by surfaces that captured a structured private cause. */
   readonly openReportIssueDraft: (draft: ReportIssueDraftContext) => void;
   readonly closeReportIssueDraft: (draftId: number) => void;
   readonly setReportIssueAvailable: (available: boolean) => void;

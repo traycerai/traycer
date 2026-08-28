@@ -59,6 +59,8 @@ vi.mock("../../service", async (importOriginal) => {
       relaunchAfterRestart: async () => {
         mocks.controllerCalls.push("relaunchAfterRestart");
       },
+      hostStartAdoptionLabel: async (label: { readonly id: string }) =>
+        label.id,
     }),
   };
 });
@@ -69,6 +71,13 @@ vi.mock("../../host/busy-check", () => ({
       throw Object.assign(new Error("host is busy"), { code: "E_HOST_BUSY" });
     }
   },
+}));
+
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => {},
+    cancel: async () => {},
+  }),
 }));
 
 // The barrier intentionally wraps the real attestation read. Pausing it
@@ -225,6 +234,7 @@ describe.skipIf(process.platform === "win32")(
         const command = buildHostRestartCommand({
           ifIdle: false,
           force: false,
+          deferIfParked: false,
         });
         const pending = command(fakeCtx());
 
@@ -270,7 +280,11 @@ describe.skipIf(process.platform === "win32")(
         await waitForFile(join(holdBarrierDir, "held"));
 
         const { buildHostRestartCommand } = await import("../host-restart");
-        const command = buildHostRestartCommand({ ifIdle: true, force: false });
+        const command = buildHostRestartCommand({
+          ifIdle: true,
+          force: false,
+          deferIfParked: false,
+        });
         const pending = command(fakeCtx());
 
         // The host was idle when this restart was requested, but an
@@ -312,6 +326,7 @@ describe.skipIf(process.platform === "win32")(
       const pendingRestart = buildHostRestartCommand({
         ifIdle: false,
         force: false,
+        deferIfParked: false,
       })(fakeCtx());
       await attestationStarted.promise;
       const { exited } = spawnLockWorker(WORKER_SCRIPT, {

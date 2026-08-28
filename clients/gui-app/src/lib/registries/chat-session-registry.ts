@@ -204,6 +204,9 @@ export function useChatSessionHandle(
         close: result.close,
         sameTurnSteeringProtocolSupported: () =>
           result.client.sameTurnSteeringProtocolSupported(),
+        requestTranscriptRange: (request) =>
+          result.client.requestTranscriptRange(request),
+        requestResnapshot: () => result.client.requestResnapshot(),
         interviewSettlementActionsProtocolSupported: () =>
           result.client.interviewSettlementActionsProtocolSupported(),
       };

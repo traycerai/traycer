@@ -214,9 +214,12 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     const labelled = script
       .split("\r\n")
       .filter((line) => line.trimStart().startsWith("commandLine ="));
-    // Two assignments: the default and the one inside the `If`.
-    expect(labelled).toHaveLength(2);
-    const inner = labelled[1] ?? "";
+    // Three assignments: the unlabelled default, the nonce-bearing current
+    // path, and the labelled/no-nonce compatibility fallback.
+    expect(labelled).toHaveLength(3);
+    expect(labelled[1]).toContain("--adoption-nonce");
+    expect(labelled[2]).toContain("--service-label");
+    const inner = labelled[2] ?? "";
     expect(
       commandLineToArgv(
         decodeVbsStringLiteral(inner.slice(inner.indexOf("=") + 1).trim()),
@@ -229,6 +232,8 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
       "--service-label",
       "ai.traycer.host.prod",
     ]);
+    expect(script).toContain("adoption-nonce");
+    expect(script).toContain("noncePattern.Pattern");
   });
 
   it("degrades to the unlabelled start when the probe cannot even be launched", () => {

@@ -17,6 +17,7 @@ import { ChatTimeline } from "@/components/chat/chat-timeline";
 import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -167,7 +168,7 @@ function renderTimeline(options: RenderTimelineOptions) {
       }}
     >
       <ChatTimeline
-        messages={messages}
+        rows={transcriptListRows({ window: null, rendered: messages })}
         taskTitle={options.taskTitle ?? "Test transcript"}
         backgroundToolBlockIds={backgroundToolBlockIds}
         getMessageActions={getMessageActions}
@@ -615,7 +616,7 @@ describe("ChatTimeline", () => {
     return (
       <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
         <ChatTimeline
-          messages={messages}
+          rows={transcriptListRows({ window: null, rendered: messages })}
           taskTitle="Test transcript"
           backgroundToolBlockIds={new Set<string>()}
           getMessageActions={() => null}

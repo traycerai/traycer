@@ -8,12 +8,11 @@ import type {
   PromptStashDecodedImage,
   PromptStashImageCodec,
 } from "@/lib/composer/prompt-stash-image-preparation";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
   encodedJpegBytesOfSize,
   encodedWebpBytesOfSize,
 } from "./prompt-stash-image-fixtures";
-
-export type ImageBytes = Uint8Array<ArrayBuffer>;
 
 export type EncodeArgs = {
   readonly image: PromptStashDecodedImage;
