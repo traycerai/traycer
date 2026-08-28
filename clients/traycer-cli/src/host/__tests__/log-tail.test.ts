@@ -1,6 +1,8 @@
 import {
   appendFileSync,
+  chmodSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   truncateSync,
   unlinkSync,
@@ -247,6 +249,96 @@ describe("startLogTail", () => {
 
     expect(text()).toBe(`${original}${replacement}`);
   });
+
+  // The `unreadable` start branch: a construction-time stat that fails for a
+  // reason OTHER than absence must not be read as "the file is empty". These
+  // pin both halves of that state - EOF is adopted on the first readable
+  // observation (no replay), and continuity is seeded then too (no dropped
+  // prefix one observation later). `chmod 000` is the portable way to make a
+  // real file unreadable; skipped when the test user can read anything.
+  const canDenyReads = (() => {
+    try {
+      const probe = join(tmpdir(), `traycer-log-tail-perm-${process.pid}`);
+      writeFileSync(probe, "x");
+      chmodSync(probe, 0o000);
+      let denied = false;
+      try {
+        readFileSync(probe);
+      } catch {
+        denied = true;
+      }
+      chmodSync(probe, 0o600);
+      rmSync(probe, { force: true });
+      return denied;
+    } catch {
+      return false;
+    }
+  })();
+
+  it.runIf(canDenyReads)(
+    "adopts EOF on the first readable observation after an unreadable start",
+    async () => {
+      const preexisting = `${"p".repeat(300)}\n`;
+      writeFileSync(logPath, preexisting);
+      chmodSync(logPath, 0o000);
+
+      const { onBytes, text } = collector();
+      tail = startLogTail({
+        path: logPath,
+        onBytes,
+        onExhausted: () => undefined,
+        onSkipped: () => undefined,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        maxMissingRetries: 60,
+      });
+
+      // Let the first readable poll adopt EOF before anything new is written -
+      // content that lands BEFORE that observation is deliberately not
+      // emitted, which is what "establish EOF" means.
+      chmodSync(logPath, 0o600);
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
+      appendFileSync(logPath, "after-readable\n");
+      await waitFor(() => text().includes("after-readable"), 3_000);
+
+      // The pre-existing content is NOT replayed: an unreadable start is not
+      // evidence the file was empty.
+      expect(text()).toBe("after-readable\n");
+    },
+  );
+
+  it.runIf(canDenyReads)(
+    "seeds continuity when establishing EOF, so a later in-place rewrite still re-reads",
+    async () => {
+      writeFileSync(logPath, `${"p".repeat(300)}\n`);
+      chmodSync(logPath, 0o000);
+
+      const { onBytes, text } = collector();
+      tail = startLogTail({
+        path: logPath,
+        onBytes,
+        onExhausted: () => undefined,
+        onSkipped: () => undefined,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        maxMissingRetries: 60,
+      });
+
+      chmodSync(logPath, 0o600);
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
+      appendFileSync(logPath, "seed\n");
+      await waitFor(() => text().includes("seed"), 3_000);
+
+      // Same inode, longer than the adopted offset - only seeded continuity
+      // can catch it.
+      const replacement = `${"n".repeat(500)}\nUNREADABLE-START-PREFIX-KEPT\n`;
+      writeFileSync(logPath, replacement);
+      await waitFor(
+        () => text().includes("UNREADABLE-START-PREFIX-KEPT"),
+        3_000,
+      );
+
+      expect(text()).toBe(`seed\n${replacement}`);
+    },
+  );
 
   // The reviewer's exact repro, and the one the unlink/create test missed:
   // rewrite IN PLACE between construction and the first read, so the inode is

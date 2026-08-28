@@ -36,11 +36,12 @@ import {
 //             host, then remove the bytes. Environment runtime state (pid
 //             metadata, log) is purged only once the host is CONFIRMED gone -
 //             the stop call resolving is not that confirmation, because every
-//             Linux/Windows teardown call tolerates its own failure. The purge
-//             needs FOUR things: the stop resolved, the captured child is
-//             positively dead, the registration is verifiably gone (a
-//             surviving one is a restart source), and nothing has published
-//             since. Reported liveness comes from process identity.
+//             Linux/Windows teardown call tolerates its own failure. Runtime
+//             state (pid metadata, log) is NEVER purged here: a `host start`
+//             supervisor outlives its child and keeps writing, and nothing
+//             available from this side proves it has stopped. Reported
+//             liveness comes from process identity, and after `--all` only a
+//             positive probe yields an answer at all.
 // User data under ~/.traycer/ (chats, sqlite, downloaded models, credentials)
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
@@ -194,7 +195,7 @@ export async function runHostUninstall(
     : await readServiceStateBestEffort(deps, ctx);
   if (args.all) {
     ctx.logger.warn(
-      "Host uninstall command will deregister service and purge runtime",
+      "Host uninstall command will deregister service and stop the host",
       {
         environment: ctx.environment,
       },
@@ -318,6 +319,19 @@ export async function runHostUninstall(
   // reports its single pre-removal probe. Either probe failing yields null,
   // never a negative fact about something this command did not observe.
   const observedService = args.all ? retainedAfterAll : retainedService;
+  // TRI-STATE, and the asymmetry is the point. A positive registration is a
+  // real observation - `launchctl print` naming a loaded label, a systemd unit
+  // reported active. A NEGATIVE one is not: Windows maps every
+  // `schtasks /Query` failure to `not-installed`, Linux re-reads the manifest
+  // this command just deleted, and macOS's `launchctl print` probe tolerates
+  // non-zero while an unloaded SMAppService record is invisible to it. So
+  // `not-installed` earns `null` (unverified), never `false`.
+  const registrationRetained: boolean | null =
+    observedService === null
+      ? null
+      : observedService.state === "not-installed"
+        ? null
+        : true;
   // NO platform can verify this today. macOS looked like the exception, but
   // `inspectLaunchdOwnership` tolerates non-zero too (a timeout collapses to
   // "not-loaded") and an unloaded SMAppService record is invisible to it -
@@ -332,8 +346,7 @@ export async function runHostUninstall(
   // for a different wrong answer. The observed truth is the additive
   // `serviceRegistrationRetained` beside it, and the human copy is keyed on
   // THAT, so the prose never claims what the readback contradicts.
-  const serviceRegistrationRetained =
-    observedService === null ? null : observedService.state !== "not-installed";
+  const serviceRegistrationRetained = registrationRetained;
   // Liveness comes from the endpoint probe on BOTH paths, never from
   // `ServiceStatus.state`. That field is about REGISTRATION: `busy-check.ts`
   // keys liveness off pid metadata instead, and `externally-managed` (the
@@ -359,13 +372,15 @@ export async function runHostUninstall(
       removedRecord: result.removedRecord,
       removedInstallDir: result.removedInstallDir,
       removedStagedDir: result.removedStagedDir,
-      // REQUEST semantics, deliberately - see the note above. Desktop's
+      // Request semantics, VETOED by a positive readback. Desktop's
       // `parseUninstallResult` projects this straight to
-      // `deregisteredService`, and no platform can verify the fact today, so
-      // narrowing it would have made that projection permanently false. Read
-      // `serviceRegistrationRetained` for what was actually observed; the
-      // human summary is keyed on that.
-      serviceUninstalled,
+      // `deregisteredService`, whose contract is "actually accomplished", so a
+      // readback that positively found the registration still there must not
+      // be published as success. Unknown (`null`) keeps the request answer:
+      // no platform can verify absence, and reporting failure for every
+      // uninstall would be a different wrong answer. See the tri-state note on
+      // `registrationRetained`.
+      serviceUninstalled: serviceUninstalled && registrationRetained !== true,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       // What the machine is left holding, so an automated caller does not
@@ -382,7 +397,8 @@ export async function runHostUninstall(
       // the same result reports `serviceRegistrationRetained: true` had the
       // prose and the payload contradicting each other in one breath, and an
       // unanswerable probe must not count as agreement either.
-      serviceUninstalled: serviceUninstalled && registrationClear,
+      // The prose never claims a deregistration nothing verified.
+      serviceUninstalled: false,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       serviceRegistrationRetained,
@@ -500,13 +516,11 @@ function humanSummary(args: {
   } else {
     parts.push(`removed host ${args.removedVersion}`);
   }
-  if (args.serviceUninstalled) {
-    parts.push("deregistered OS service");
-  } else if (args.deregisterRequested) {
+  if (args.deregisterRequested) {
     parts.push(
       args.serviceRegistrationRetained === true
         ? "requested OS service deregistration, but it is still registered"
-        : "requested OS service deregistration, but could not verify it - run 'traycer host service status'",
+        : "requested OS service deregistration (no platform can verify removal - run 'traycer host service status' to check)",
     );
   }
   // Keyed on the liveness evidence, not on the purge - the purge is now always

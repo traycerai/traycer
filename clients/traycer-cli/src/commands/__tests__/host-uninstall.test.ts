@@ -152,10 +152,44 @@ describe("runHostUninstall", () => {
       }),
     );
 
+    // `not-installed` earns NULL, not false: Windows maps every
+    // `schtasks /Query` failure to it, Linux re-reads the manifest this
+    // command just deleted, and macOS's probe tolerates non-zero while an
+    // unloaded SMAppService record is invisible to it. Unknown keeps the
+    // request answer on the legacy field, which Desktop projects.
     expect(result.data).toMatchObject({
       deregisterRequested: true,
       serviceUninstalled: true,
-      serviceRegistrationRetained: false,
+      serviceRegistrationRetained: null,
+    });
+  });
+
+  // A POSITIVE readback is a real observation, and it must veto the legacy
+  // field - Desktop projects that to `deregisteredService`, whose contract is
+  // "actually accomplished".
+  it("vetoes the legacy deregistration field when the readback still finds it registered", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => ({
+          state: "stopped",
+          version: "1.2.3",
+          listenUrl: null,
+          pid: null,
+        }),
+        liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      deregisterRequested: true,
+      serviceUninstalled: false,
+      serviceRegistrationRetained: true,
     });
   });
 
@@ -245,11 +279,9 @@ describe("runHostUninstall", () => {
     // the exact false outcome the readback had just caught.
     expect(result.data).toMatchObject({
       deregisterRequested: true,
+      serviceUninstalled: false,
       serviceRegistrationRetained: true,
       retainedServiceState: "stopped",
-      // A surviving registration is a restart source: `host start`
-      // supervisors outlive their children and relaunch them, so the purge
-      // that deletes pid metadata and rotates the log must not run.
       purgedRuntime: false,
     });
     expect(result.human ?? "").toContain("still registered");
@@ -280,7 +312,7 @@ describe("runHostUninstall", () => {
       serviceRegistrationRetained: null,
       purgedRuntime: false,
     });
-    expect(result.human ?? "").toContain("could not verify");
+    expect(result.human ?? "").toContain("no platform can verify removal");
     expect(result.human ?? "").not.toContain("deregistered OS service");
   });
 
@@ -397,7 +429,7 @@ describe("runHostUninstall", () => {
     );
 
     expect(result.data).toMatchObject({
-      serviceRegistrationRetained: false,
+      serviceRegistrationRetained: null,
       retainedServiceState: "not-installed",
       hostStillRunning: false,
     });
@@ -467,7 +499,7 @@ describe("runHostUninstall", () => {
       // successor, Windows having deleted the metadata during its own
       // teardown, an EACCES, or malformed JSON - none of which is death.
       hostStillRunning: null,
-      serviceRegistrationRetained: false,
+      serviceRegistrationRetained: null,
     });
   });
 
@@ -491,7 +523,7 @@ describe("runHostUninstall", () => {
       deregisterRequested: true,
       purgedRuntime: false,
       hostStillRunning: null,
-      serviceRegistrationRetained: false,
+      serviceRegistrationRetained: null,
     });
   });
 });

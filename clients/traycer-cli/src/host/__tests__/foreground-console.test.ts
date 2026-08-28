@@ -149,7 +149,7 @@ function makeTailStub(): {
 }
 
 describe("openForegroundConsole", () => {
-  it("mirror mode: writes a banner naming the log path, Ctrl-C, and the service-start pointer BEFORE any tail bytes, then forwards bytes verbatim; close() stops and drain-syncs", () => {
+  it("mirror mode: writes a banner naming the log path, Ctrl-C, and the service-start pointer BEFORE any tail bytes, then forwards bytes verbatim; close() stops WITHOUT draining", () => {
     const written: string[] = [];
     const byteChunks: Buffer[] = [];
     const onBytesCalls: Array<(chunk: Buffer) => void> = [];
@@ -188,7 +188,11 @@ describe("openForegroundConsole", () => {
 
     console.close();
     expect(tailControl.stopCalls).toBe(1);
-    expect(tailControl.drainSyncCalls).toBe(1);
+    // Deliberately NOT drained: the catch-up write would be a blocking
+    // syscall on the way to `process.exit`, and a flow-stopped terminal could
+    // hold it indefinitely. Losing up to one poll of mirrored output that
+    // host.log already holds is the cheaper failure.
+    expect(tailControl.drainSyncCalls).toBe(0);
   });
 
   // The Windows degradation. The banner is one-shot and a few lines long, so

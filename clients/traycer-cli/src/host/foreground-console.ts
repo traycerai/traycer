@@ -1,6 +1,6 @@
 import type { Environment } from "../runner/environment";
 import type { ProgressEvent } from "../runner/output";
-import { writeStdoutSync } from "../runner/std-write";
+import { writeStdoutBytes, writeStdoutSync } from "../runner/std-write";
 import { hostLogPath } from "../store/paths";
 import {
   LOG_TAIL_MAX_MISSING_RETRIES,
@@ -143,22 +143,32 @@ export interface ForegroundConsoleDeps {
 
 export const defaultForegroundConsoleDeps: ForegroundConsoleDeps = {
   logPath: hostLogPath,
-  // Synchronous, because this command exits with a bare `process.exit` and a
-  // queued write would be lost - see `writeStdoutSync`.
+  // The console's OWN small, one-shot lines (banner, the `--json` lifecycle
+  // event, skip/exhaustion notices) go out synchronously: they are written
+  // before the first long wait, they are the output a fast exit would
+  // otherwise lose, and each is far below a pipe buffer.
   writeText: (text) => writeStdoutSync(Buffer.from(text, "utf8")),
-  writeBytes: writeStdoutSync,
+  // Mirrored LOG bytes do not. `writeSync` blocks inside the syscall - a
+  // flow-stopped terminal (Ctrl-S) or a stalled reader can hold it
+  // indefinitely, and there is no retry count to bound that because JS never
+  // regains control. Doing it at exit would let a stuck terminal stop the
+  // supervisor from ever reaching `process.exit`, which is far worse than the
+  // problem it was solving: these bytes are a MIRROR, and every one of them is
+  // already durable in host.log.
+  writeBytes: writeStdoutBytes,
   startTail: startLogTail,
   now: () => new Date().toISOString(),
 };
 
 export interface ForegroundConsole {
   /**
-   * Stop mirroring and flush whatever landed since the last poll.
+   * Stop mirroring.
    *
    * Called from the supervisor's injected `exit`, which is deliberately a bare
-   * synchronous `process.exit` (see runner/exit.ts) - so the catch-up read has
-   * to be synchronous too or the last lines before shutdown never reach the
-   * terminal that was watching for them.
+   * synchronous `process.exit` (see runner/exit.ts). It does NOT drain: a
+   * synchronous catch-up write can block indefinitely on a flow-stopped
+   * terminal, and hanging the supervisor's exit is worse than losing up to one
+   * poll interval of mirrored output that host.log already holds.
    */
   close(): void;
 }
@@ -248,8 +258,12 @@ export function openForegroundConsole(
 
   return {
     close: (): void => {
+      // Stop, and deliberately do NOT drain. The catch-up read would have to
+      // write log bytes through a blocking syscall on the way to
+      // `process.exit` - see `writeBytes` above. At most one poll interval of
+      // mirrored output is lost, and it is still in host.log; a supervisor
+      // that cannot exit is not.
       tail.stop();
-      tail.drainSync();
     },
   };
 }
