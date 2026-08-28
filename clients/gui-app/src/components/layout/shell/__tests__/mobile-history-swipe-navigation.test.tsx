@@ -510,7 +510,7 @@ describe("useMobileHistorySwipes", () => {
 describe("the history the mobile app actually boots with", () => {
   function mobileAppHistory(): RouterHistory {
     setMobileApp(true);
-    return createAppRouter(null, null, null).history;
+    return createAppRouter(null, null, null, null).history;
   }
 
   /** The lightweight tree from this file's other suites, over a given history. */
@@ -533,7 +533,7 @@ describe("the history the mobile app actually boots with", () => {
 
     setMobileApp(false);
     expect(
-      getHistoryController(createAppRouter(null, null, null).history),
+      getHistoryController(createAppRouter(null, null, null, null).history),
     ).toBeNull();
   });
 

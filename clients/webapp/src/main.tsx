@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   TraycerApp,
@@ -15,6 +15,7 @@ import {
   webCryptoPkce,
 } from "./app-session-mint";
 import { RetireBootSurface } from "./boot-surface";
+import { NotFoundSurface } from "./not-found-surface";
 import { WebRunnerHost } from "./web-runner-host";
 import {
   createLocalStorageCredentialStorage,
@@ -22,6 +23,12 @@ import {
 } from "./web-token-store";
 
 const config = __TRAYCER_WEBAPP_CONFIG__;
+
+// Hoisted out of the render call so the reference is stable: the router is
+// memoized on its arguments, and a fresh closure per render would rebuild it.
+function notFoundSurface(): ReactNode {
+  return <NotFoundSurface homeHref={`${config.basePath}/`} />;
+}
 
 async function bootstrap(): Promise<void> {
   // NOT `setMobileApp(true)`. That flag is the PRODUCT signal for the
@@ -90,6 +97,11 @@ async function bootstrap(): Promise<void> {
         // no local host to inject, so that is the only path.
         remoteFetcher={null}
         basepath={config.basePath}
+        // An address bar can be sent anywhere, so this shell owns the answer
+        // for a URL that matches nothing. The home target is composed from
+        // the same baked prefix the router parses against, so the two cannot
+        // point at different roots.
+        notFoundComponent={notFoundSurface}
       />
     </StrictMode>,
   );

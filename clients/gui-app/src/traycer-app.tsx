@@ -125,6 +125,13 @@ export interface TraycerAppProps {
    */
   readonly basepath?: string | null;
   /**
+   * What to render for a URL that matches no route. Shells whose address bar
+   * a stranger can type into supply one; the rest omit it and keep the router
+   * library's bare fallback, which is unreachable where there is no address
+   * bar. See `createAppRouter`.
+   */
+  readonly notFoundComponent?: (() => ReactNode) | null;
+  /**
    * Dev-runner / test injection seam for the host messenger.
    *
    * Production shells (desktop, mobile) omit this prop so
@@ -158,8 +165,14 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
         props.initialRoute ?? null,
         desktopWindowId,
         props.basepath ?? null,
+        props.notFoundComponent ?? null,
       ),
-    [desktopWindowId, props.initialRoute, props.basepath],
+    [
+      desktopWindowId,
+      props.initialRoute,
+      props.basepath,
+      props.notFoundComponent,
+    ],
   );
   // Both escape hatches DECLARE themselves as user intent in history state.
   // They can be taken on a boot surface, before the app or the route bridge

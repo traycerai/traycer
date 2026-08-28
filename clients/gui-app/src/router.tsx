@@ -12,6 +12,7 @@ import { RoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
 import { routeTree } from "@/routeTree.gen";
+import type { ReactNode } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -43,11 +44,18 @@ export type AppRouter = Router<typeof routeTree>;
  * the prefix is a property of how the bundle is served, and one renderer
  * serves shells that disagree: the desktop's `app://` renderer has no path
  * prefix at all.
+ *
+ * `notFoundComponent` replaces the router library's bare fallback for a URL
+ * that matches no route. It is a shell argument for the same reason: only a
+ * shell whose URLs a stranger can type needs one, and only the shell knows
+ * where "back to the app" lives once its own prefix is in play. `null` keeps
+ * the library default, which is right where the address bar is unreachable.
  */
 export function createAppRouter(
   initialRoute: string | null,
   windowId: string | null,
   basepath: string | null,
+  notFoundComponent: (() => ReactNode) | null,
 ): AppRouter {
   const history = createAppHistory(initialRoute, windowId);
   const router = createRouter({
@@ -66,6 +74,9 @@ export function createAppRouter(
     // Without it an uncaught render error tears the whole tree down to a blank
     // canvas; with it the failure lands on the shared recovery card.
     defaultErrorComponent: RouteErrorComponent,
+    ...(notFoundComponent === null
+      ? {}
+      : { defaultNotFoundComponent: notFoundComponent }),
     context: {
       queryClient,
       getAuthSnapshot: () => useAuthStore.getState(),
@@ -204,7 +215,7 @@ function normalizeInitialRoute(initialRoute: string | null): string {
   return initialRoute;
 }
 
-export const router = createAppRouter(null, null, null);
+export const router = createAppRouter(null, null, null, null);
 
 declare module "@tanstack/react-router" {
   interface Register {
