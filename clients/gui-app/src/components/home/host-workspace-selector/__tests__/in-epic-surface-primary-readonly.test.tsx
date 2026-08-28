@@ -1260,7 +1260,7 @@ it("stages a location change from the last resolved snapshot while a refresh is 
   });
 });
 
-it("does not apply a captured create after Discard during the in-flight mutation", async () => {
+it("acknowledges a captured create that committed after Discard cancelled the run", async () => {
   seedResolvedBindingMetadata();
   const onBindingCommitted = vi.fn();
   let releaseCreate: ((value: { perEntry: readonly unknown[] }) => void) | null =
@@ -1300,12 +1300,70 @@ it("does not apply a captured create after Discard during the in-flight mutation
       ],
     });
   });
-  expect(onBindingCommitted).not.toHaveBeenCalled();
+  await waitFor(() => {
+    expect(onBindingCommitted).toHaveBeenCalledWith(["/repo/alpha"]);
+  });
   expect(
     useWorktreeIntentStagingStore.getState().intentByKey[
       worktreeStagingKeyString(TERMINAL_STAGING_KEY)
     ],
   ).toBeUndefined();
+});
+
+it("acknowledges a host-committed folder removal even if Discard cancelled the run", async () => {
+  seedResolvedBindingMetadata();
+  const onBindingCommitted = vi.fn();
+  let releaseRemove: ((value: unknown) => void) | null = null;
+  mutationMocks.removeBindingFolder.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        releaseRemove = resolve;
+      }),
+  );
+  renderBoundSurface("terminal-agent", true, onBindingCommitted);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Remove alpha" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "terminal-agent",
+      workspacePath: "/repo/alpha",
+    });
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(await screen.findByTestId("folder-discard-staged"));
+  act(() => {
+    releaseRemove?.({});
+  });
+  await waitFor(() => {
+    expect(onBindingCommitted).toHaveBeenCalledWith(["/repo/alpha"]);
+  });
+  expect(
+    useWorktreeIntentStagingStore.getState().intentByKey[
+      worktreeStagingKeyString(TERMINAL_STAGING_KEY)
+    ],
+  ).toBeUndefined();
+});
+
+it("disables Discard while a captured folder commit is in flight", async () => {
+  seedResolvedBindingMetadata();
+  mutationMocks.removeBindingFolder.mockImplementation(
+    () => new Promise(() => undefined),
+  );
+  await openTerminalFolderPopover();
+  fireEvent.click(screen.getByRole("button", { name: "Remove alpha" }));
+  expect(screen.getByTestId("folder-discard-staged")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalled();
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  await screen.findAllByTestId("folder-row");
+  const discard = screen.getByTestId("folder-discard-staged");
+  expect(discard.getAttribute("aria-disabled")).toBe("true");
+  expect(discard.className).toContain("pointer-events-none");
 });
 
 it("preserves dirty-without-resume after Discard of a staged overlay", async () => {

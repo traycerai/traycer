@@ -1894,6 +1894,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     readonly refusalReason?: string;
   } | null>(null);
   const [teardownCommitPending, setTeardownCommitPending] = useState(false);
+  const [commitRunPending, setCommitRunPending] = useState(false);
   const teardownRunIdRef = useRef(0);
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
@@ -2151,11 +2152,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       capture: WorktreeCommitCapture,
       isCancelled: () => boolean = () => false,
     ): void => {
-      if (isCancelled()) return;
+      const settleRun = (): void => {
+        setCommitRunPending(false);
+      };
+      if (isCancelled()) {
+        settleRun();
+        return;
+      }
       if (
         capture.draft !== null &&
         stagedWorktreeIntentIsSuspended(stagedKey)
       ) {
+        settleRun();
         return;
       }
       const stagedEntries = capture.draft?.entries ?? [];
@@ -2163,14 +2171,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       // A just-added git folder may still be waiting for metadata so the default
       // new-worktree seed can be staged. Keep Update enabled, but don't resume
       // until those pending defaults either stage or resolve as no-op.
-      if (pendingDefaultPathsRef.current.size > 0) return;
+      if (pendingDefaultPathsRef.current.size > 0) {
+        settleRun();
+        return;
+      }
       if (
         stagedEntries.length === 0 &&
         editor.dirtyPathsSinceResume.size === 0 &&
         removedWorkspacePaths.length === 0
       ) {
+        settleRun();
         return;
       }
+      setCommitRunPending(true);
       const changedWorkspacePaths = Array.from(
         new Set([
           ...editor.dirtyPathsSinceResume,
@@ -2178,18 +2191,39 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           ...removedWorkspacePaths,
         ]),
       );
+      const committedRemovalPaths: string[] = [];
       const finishAndResume = (): void => {
-        if (isCancelled()) return;
+        // Cancellation may suppress further staged intent from this run, never
+        // the acknowledgment of a host mutation that already committed.
         if (capture.draft !== null) {
           releaseIntentForDispatch(stagedKey, capture.revision);
         }
-        dispatchEditor({ type: "resumed" });
-        handleBindingCommitted(changedWorkspacePaths);
+        if (!isCancelled()) {
+          dispatchEditor({ type: "resumed" });
+          handleBindingCommitted(changedWorkspacePaths);
+          return;
+        }
+        const committed = Array.from(
+          new Set([
+            ...committedRemovalPaths,
+            ...stagedEntries.map((entry) => entry.workspacePath),
+          ]),
+        );
+        if (committed.length > 0) {
+          handleBindingCommitted(committed);
+        }
       };
       const createThenResume = (): void => {
-        if (isCancelled()) return;
+        if (isCancelled()) {
+          if (committedRemovalPaths.length > 0) {
+            handleBindingCommitted(committedRemovalPaths);
+          }
+          settleRun();
+          return;
+        }
         if (stagedEntries.length === 0) {
           finishAndResume();
+          settleRun();
           return;
         }
         void worktreeCreateMutation
@@ -2200,7 +2234,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             entries: worktreeCreateEntries(stagedEntries),
           })
           .then((result) => {
-            if (isCancelled()) return;
             applyWorktreeCreateResult({
               stagedEntries,
               changedWorkspacePaths,
@@ -2220,8 +2253,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               },
             });
             trackUserInitiatedWorktreeWrite(stagedEntries, result);
+            settleRun();
           })
           .catch((error: unknown) => {
+            settleRun();
             if (isCancelled()) return;
             if (!isWorktreeRebindBlocked(error)) return;
             const live = readLiveCommitCapture();
@@ -2258,15 +2293,21 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   workspacePath,
                 })
                 .then(() => {
-                  if (isCancelled()) return;
                   pendingDefaultPathsRef.current.delete(workspacePath);
                   unstageWorktreeEntry(stagedKey, workspacePath);
+                  committedRemovalPaths.push(workspacePath);
                 });
             }),
           Promise.resolve(),
         )
         .then(() => {
-          if (isCancelled()) return;
+          if (isCancelled()) {
+            if (committedRemovalPaths.length > 0) {
+              handleBindingCommitted(committedRemovalPaths);
+            }
+            settleRun();
+            return;
+          }
           createThenResume();
         });
     },
@@ -2370,6 +2411,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     const runId = ++teardownRunIdRef.current;
     setTeardownCommitPending(true);
+    setCommitRunPending(true);
     const isCancelled = (): boolean => teardownRunIdRef.current !== runId;
     const failures = await runGuiComposedTeardown({
       stopTargets: dialog.capture.stopTargets,
@@ -2388,10 +2430,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       isCancelled,
     });
     if (isCancelled()) {
+      setCommitRunPending(false);
       return;
     }
     setTeardownCommitPending(false);
     if (failures.length > 0) {
+      setCommitRunPending(false);
       setTeardownDialog({
         ...dialog,
         failures: failuresByHolderKey(failures),
@@ -3188,8 +3232,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               editor.dirtyPathsSinceResume.size > 0 ||
               editor.pendingRemovedPaths.size > 0
             }
-            updatePending={worktreeCreatePending}
+            updatePending={worktreeCreatePending || commitRunPending}
             onDiscardStaged={discardStagedFolders}
+            discardDisabled={commitRunPending || teardownCommitPending}
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
@@ -3227,6 +3272,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         onDefer={() => {
           teardownRunIdRef.current += 1;
           setTeardownCommitPending(false);
+          setCommitRunPending(false);
           const restore = teardownDialog?.restoreRemovalOnDismiss;
           if (restore !== null && restore !== undefined) {
             dispatchEditor({
@@ -3243,6 +3289,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         onDismiss={() => {
           teardownRunIdRef.current += 1;
           setTeardownCommitPending(false);
+          setCommitRunPending(false);
           const restore = teardownDialog?.restoreRemovalOnDismiss;
           if (restore !== null && restore !== undefined) {
             dispatchEditor({
