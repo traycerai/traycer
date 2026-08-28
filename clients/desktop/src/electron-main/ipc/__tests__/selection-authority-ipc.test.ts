@@ -294,7 +294,11 @@ class FakeHostController implements IpcHostController {
   async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
     return {
       kind: "ok",
-      value: { removedInstallDir: true, deregisteredService: true },
+      value: {
+        removedInstallDir: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+      },
     };
   }
   async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {

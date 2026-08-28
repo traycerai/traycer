@@ -1168,7 +1168,7 @@ function registerHostCommands(program: Command): void {
     host
       .command("update")
       .description(
-        "Update the installed host to a registry version (defaults to latest), then check that a host comes back healthy",
+        "Update the installed host to a registry version (defaults to latest); when an update is applied it also checks that a host is answering afterwards",
       )
       // A REAL registered option, spelled like `host install` / `host ensure`.
       // The version target used to exist only as free-form help text backed by
