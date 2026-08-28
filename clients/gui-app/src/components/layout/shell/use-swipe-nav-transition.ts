@@ -138,6 +138,19 @@ export function useSwipeNavTransition(
       if (from === undefined) return;
       const leaving = readHistoryEntryKey(from);
       if (leaving === null) return;
+      // A committed transition's own navigation reaches here with the overlay
+      // still mounted, and the screen being left is one this hook has ALREADY
+      // frozen - the outgoing copy taken when the drag began. Filing that copy
+      // is not merely cheaper than recapturing (a capture here deep-clones the
+      // live app AND both mounted frozen screens before the exclusion pass can
+      // drop them, on the pointer-up path where a stall is visible): it is
+      // also the truer record, since the screen the user last SAW is the one
+      // the drag froze, not whatever the live app did underneath the overlay.
+      const active = viewRef.current;
+      if (active !== null && committedRef.current) {
+        rememberScreenSnapshot(leaving, active.outgoing);
+        return;
+      }
       const source = findSnapshotSource();
       if (source === null) return;
       const snapshot = captureScreenSnapshot(source);
