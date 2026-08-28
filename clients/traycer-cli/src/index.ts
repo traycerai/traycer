@@ -1299,27 +1299,18 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
-      // Both or neither. The handler already refuses `--pid` without `--port`
-      // (it cannot verify ownership without the port), but `--port` alone used
-      // to fall through to a bare restart: no kill attempted, exit 0, and human
-      // output reporting a successful restart. That was survivable while this
-      // command was hidden and only Desktop's controller drove it - it passes
-      // both flags or neither - but `host doctor` now prints this spelling for
-      // a person to type, and a half-typed line must not report success for a
-      // repair it never attempted.
+      // The both-or-neither rule lives in the HANDLER
+      // (`buildHostFreePortAndRestartCommand`), not here. #1505 and #1506
+      // fixed the same `--port`-without-`--pid` hole independently and agreed
+      // to keep one: the handler's, because it also covers direct callers of
+      // `buildHostFreePortAndRestartCommand` rather than only the Commander
+      // path, and because it sits next to the `--pid`-alone guard that was
+      // always there. The registration-level copy is deleted here rather than
+      // left as harmless duplication - two guards for one rule drift, and the
+      // messages had already diverged.
       //
-      // Bare (neither flag) stays legal: Desktop's `HostController` appends
-      // `--pid`/`--port` conditionally, so `["host","free-port-and-restart"]`
-      // is a live machine call.
-      if (pid === null && port !== null) {
-        throw cliError({
-          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message:
-            "host free-port-and-restart: --port requires --pid - the PID is what gets terminated, and it is re-checked against the port first. Run 'traycer host doctor' for the filled-in command, or pass neither flag (or use 'traycer host restart') to restart without killing anything.",
-          details: { pid: null, port },
-          exitCode: 1,
-        });
-      }
+      // The `--pid <pid>` / `--port <port>` help above still states the rule,
+      // which is where a reader looks for it.
       return buildHostFreePortAndRestartCommand({
         pid,
         port,

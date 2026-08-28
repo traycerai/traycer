@@ -12,21 +12,17 @@ import { withCliLock } from "../store/cli-lock";
 // `traycer host free-port-and-restart --pid <pid> --port <port>` - the
 // CLI-owned mapping for Doctor's Free-Port-and-Restart fix.
 //
-// TREATED AS USER-FACING here, even though the registration in `index.ts` on
-// THIS branch still carries `{ hidden: true }`. `host doctor` prints this
-// exact line for a person to type when it finds a port conflict, so its
-// failure messages and success contract have a human audience regardless of
-// whether `--help` lists it yet - which is why they are written for one.
+// PUBLIC (#1505 flipped the registration in `index.ts`), because `host doctor`
+// prints this exact line for a person to type when it finds a port conflict: a
+// command a diagnostic hands to a user belongs in `--help`. That is why every
+// failure message below is written for a human audience rather than only for
+// Desktop's error toast.
 //
-// The visibility flip itself belongs to the help/human-output PR (#1505),
-// which owns every `index.ts` registration description; duplicating it here
-// would collide on the same lines. Once that lands, this command is public in
-// help too and this note can lose its qualifier. Still destructive and still
-// last-resort either way - the renderer confirms the foreign process's
-// identity with the user before dispatching it over NDJSON, and a typed
-// invocation re-verifies that identity here (`killConflictingPortOwner`
-// refuses to signal a PID that does not own the port) rather than trusting
-// the numbers on the command line.
+// Still destructive and still last-resort. The renderer confirms the foreign
+// process's identity with the user before dispatching it over NDJSON, and a
+// typed invocation re-verifies that identity here
+// (`killConflictingPortOwner` refuses to signal a PID that does not own the
+// port) rather than trusting the numbers on the command line.
 //
 // `cli-lock` coverage (Host Update Layer Redesign Tech Plan, "Lifecycle
 // lock coverage"): the kill (if requested), its verification, and the
