@@ -69,6 +69,7 @@ import {
   RECONNECT_STABLE_RESET_MS,
   RELAY_WAKE_PROBE_TIMEOUT_MS,
   RESTORE_STALL_LOG_AFTER_MS,
+  REASSEMBLY_PROGRESS_TIMEOUT_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -573,6 +574,25 @@ export class RemoteSession<
    */
   private restoreStallTimer: TimerHandle | null = null;
   /**
+   * Per-stream progress deadlines for in-flight chunk reassembly on the
+   * current connection - the replacement for the stall bound that message
+   * COMPLETION used to provide implicitly, before the ready boundary started
+   * accepting the first chunk as restore evidence. Armed/reset by every
+   * accepted chunk of a subscription stream's message, retired when that
+   * message completes (or the stream/connection ends). Expiry is the verdict
+   * "this transfer stopped": the stream is reopened on a fresh id through the
+   * per-stream reopen backoff. See {@link REASSEMBLY_PROGRESS_TIMEOUT_MS} for
+   * why no other deadline can observe this state. The token makes a retired
+   * arm's callback provably inert - a cleared or superseded watchdog must
+   * never reopen a stream that completed or re-armed after it.
+   */
+  private readonly reassemblyWatchdogs = new Map<
+    number,
+    { readonly timer: TimerHandle; readonly token: number }
+  >();
+  /** Monotonic identity for reassembly-watchdog arms (see the map doc). */
+  private reassemblyWatchdogToken = 0;
+  /**
    * Whether this session has EVER reached its ready boundary.
    *
    * Separates "recovering" from "still trying for the first time", which two
@@ -828,6 +848,14 @@ export class RemoteSession<
    * paused and every stream is reconnecting. Answering "ready" there is the
    * standing lie R4-B5 exists to kill (Settings would render Online, off this
    * session, for a host that is OFF — for up to the 15-min standing bound).
+   *
+   * "Restored" means ACCEPTED restore evidence — a delivered frame, or the
+   * first accepted chunk of one still reassembling — not completed delivery.
+   * This verdict is connection/host liveness for session-level surfaces; a
+   * consumer that needs a specific stream's DATA reads that stream's own
+   * status, which stays `reconnecting` until its completed frame lands. The
+   * gap between the two (an in-flight transfer that stops) is bounded by the
+   * per-stream reassembly watchdog, not by this read.
    */
   isReady(): boolean {
     return (
@@ -1496,6 +1524,7 @@ export class RemoteSession<
     // A caller close outranks a pending retryable re-open: without this the
     // timer would re-subscribe a stream the consumer has already abandoned.
     this.clearStreamReopen(streamId);
+    this.clearReassemblyWatchdog(streamId);
     // Locally-closed is terminal: clear any partial inbound accumulator and
     // tombstone the id so an in-flight/delayed server frame can't reseed one.
     connection?.reassembler.forget(streamId);
@@ -1766,6 +1795,8 @@ export class RemoteSession<
         message = connection.reassembler.accept(frame);
       } catch (error) {
         if (this.failStreamOnInboundError(generation, frame, error)) {
+          // The reassembly this watchdog was pacing just ended in a verdict.
+          this.clearReassemblyWatchdog(frame.streamId);
           return;
         }
         throw error;
@@ -1786,9 +1817,15 @@ export class RemoteSession<
         // - a delivered frame remains its only proof (see the dispatch path).
         if (frame.type === MuxFrameType.STREAM_FRAME) {
           this.markStreamRestored(frame.streamId);
+          // Early evidence needs its own progress bound: completion used to
+          // be the implicit one. Reset on every accepted chunk.
+          this.armReassemblyWatchdog(generation, frame.streamId);
         }
         return;
       }
+      // A completed message closes its stream's in-flight sequence; the
+      // watchdog pacing it is retired (no-op for streams with none armed).
+      this.clearReassemblyWatchdog(message.streamId);
       this.dispatchInbound(generation, connection, message);
     })().catch(() =>
       this.handleConnectionLost(
@@ -2313,6 +2350,115 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * (Re-)arms the progress deadline for one subscription stream's in-flight
+   * reassembly. Non-subscription streams are excluded: a chunked unary
+   * response is already bounded by its own response timeout.
+   *
+   * The fired verdict defers while the host leg is detached at the relay -
+   * silence there is the HOST's, not this stream's (the same attribution rule
+   * the restore-stall diagnostic follows), and the detach recovery path owns
+   * that episode. The watchdog re-arms so the verdict resumes if the leg
+   * returns without a reconnect.
+   */
+  private armReassemblyWatchdog(generation: number, streamId: number): void {
+    if (!this.subscriptions.has(streamId)) {
+      return;
+    }
+    const existing = this.reassemblyWatchdogs.get(streamId);
+    if (existing !== undefined) {
+      clearTimeout(existing.timer);
+    }
+    this.reassemblyWatchdogToken += 1;
+    const token = this.reassemblyWatchdogToken;
+    const timer = setTimeout(() => {
+      const armed = this.reassemblyWatchdogs.get(streamId);
+      if (armed === undefined || armed.token !== token) {
+        // Retired or superseded arm: the message completed, a newer chunk
+        // re-armed, or the connection dropped. Nothing to judge.
+        return;
+      }
+      this.reassemblyWatchdogs.delete(streamId);
+      if (!this.isCurrent(generation) || this.phase !== "ready") {
+        return;
+      }
+      const stream = this.subscriptions.get(streamId);
+      if (stream === undefined) {
+        return;
+      }
+      const connection = this.connection;
+      if (connection === null || !connection.hostAttached) {
+        this.armReassemblyWatchdog(generation, streamId);
+        return;
+      }
+      console.warn(
+        `[remote-session] remote session (host ${this.options.hostId}) stream ${stream.method}#${streamId} ` +
+          `made no reassembly progress for ${REASSEMBLY_PROGRESS_TIMEOUT_MS}ms - reopening on a fresh stream id`,
+      );
+      this.reopenStalledStream(streamId, stream, connection);
+    }, REASSEMBLY_PROGRESS_TIMEOUT_MS);
+    this.reassemblyWatchdogs.set(streamId, { timer, token });
+  }
+
+  /**
+   * The watchdog's expiry verdict: the transfer stopped, so the stream's
+   * restore failed. Routed through the same fresh-id reopen shape as a
+   * retryable per-stream FATAL - abandon the partial body, tombstone the old
+   * id on this side (a relay-delayed late chunk must not reseed an
+   * accumulator), tell the host to stop paying for the dead transfer, and
+   * re-subscribe under a fresh id on the per-stream reopen backoff. The
+   * verdict is stream-local on purpose: the rest of the mux is provably
+   * carrying traffic, so the session-level boundary and every surface reading
+   * it stay put, exactly as they do for a resolver stuck in its reopen loop.
+   */
+  private reopenStalledStream(
+    streamId: number,
+    stream: LogicalStream,
+    connection: ActiveConnection,
+  ): void {
+    connection.reassembler.forget(streamId);
+    this.markStreamTerminal(streamId);
+    this.restoredStreamIds.delete(streamId);
+    this.outboundSeq.delete(streamId);
+    this.subscriptions.delete(streamId);
+    // Drop queued outbound first so per-stream FIFO cannot park the CLOSE
+    // behind a transfer nobody wants anymore (mirrors `closeStream`).
+    connection.scheduler.dropStreamOutbound(streamId);
+    this.enqueueMessage(connection, {
+      type: MuxFrameType.CLOSE,
+      streamId,
+      qos: QosClass.INTERACTIVE,
+      json: { reason: "reassembly-stalled" },
+      binary: null,
+    });
+    const reopenAttempts = this.streamReopenAttempts.get(streamId);
+    this.streamReopenAttempts.delete(streamId);
+    const freshStreamId = this.allocateStreamId();
+    stream.adoptStreamIdForReopen(freshStreamId);
+    this.subscriptions.set(freshStreamId, stream);
+    if (reopenAttempts !== undefined) {
+      this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
+    }
+    this.scheduleStreamReopen(stream);
+    this.maybeReachReadyBoundary();
+  }
+
+  private clearReassemblyWatchdog(streamId: number): void {
+    const armed = this.reassemblyWatchdogs.get(streamId);
+    if (armed !== undefined) {
+      clearTimeout(armed.timer);
+      this.reassemblyWatchdogs.delete(streamId);
+    }
+  }
+
+  /** Connection teardown: every in-flight reassembly died with its socket. */
+  private clearAllReassemblyWatchdogs(): void {
+    for (const armed of this.reassemblyWatchdogs.values()) {
+      clearTimeout(armed.timer);
+    }
+    this.reassemblyWatchdogs.clear();
+  }
+
   private openSubscription(
     connection: ActiveConnection,
     stream: LogicalStream,
@@ -2610,8 +2756,10 @@ export class RemoteSession<
     // ladder reset, however close it came.
     this.clearStableResetTimer();
     // The stall diagnostic speaks for ONE attach's restores; the drop ends
-    // that attach, and the next one arms its own.
+    // that attach, and the next one arms its own. Same for the reassembly
+    // watchdogs: every partial they were pacing died with the connection.
     this.clearRestoreStallTimer();
+    this.clearAllReassemblyWatchdogs();
     // Guarded internally to once per outage, so a failed redial arriving here
     // again does not restart the clock.
     this.noteConnectionLost();
@@ -3908,6 +4056,7 @@ export class RemoteSession<
     this.clearStandingTimer();
     this.clearStableResetTimer();
     this.clearRestoreStallTimer();
+    this.clearAllReassemblyWatchdogs();
     this.clearAllStreamReopens();
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);

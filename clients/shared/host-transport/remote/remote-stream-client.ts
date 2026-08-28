@@ -118,8 +118,10 @@ export class RemoteStreamClient<
 
   /**
    * Whether the session backing THIS client is carrying traffic right now
-   * (see {@link IRemoteSession.isReady}) - full attach, every live stream
-   * restored, and the host still attached at the relay.
+   * (see {@link IRemoteSession.isReady}) - full attach, restore evidence
+   * accepted for every live stream (a delivered frame or an in-flight chunk;
+   * completed delivery stays each stream's own status), and the host still
+   * attached at the relay.
    *
    * Exact by construction: one client, one shared session, no lookup by host.
    * A ready one-shot session or a lingering keep-warm one for the same host

@@ -97,6 +97,7 @@ import {
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
   RESTORE_STALL_LOG_AFTER_MS,
+  REASSEMBLY_PROGRESS_TIMEOUT_MS,
 } from "../config";
 import type {
   StreamCloseReason,
@@ -4644,44 +4645,44 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
   );
 });
 
-describe("RemoteSession ready boundary under an in-flight snapshot restore", () => {
-  /** One two-chunk stream message: enough to observe the in-flight interval. */
-  const buildChunkFrames = (
-    streamId: number,
-  ): [EncodeMuxFrameInput, EncodeMuxFrameInput] => {
-    const json = {
-      kind: "snapshot",
-      hasBinaryPayload: false,
-      label: `resync-${"x".repeat(256)}`,
-    };
-    const body = encodeMuxMessageBody(json, null);
-    const split = Math.ceil(body.length / 2);
-    const shared = {
-      type: MuxFrameType.STREAM_FRAME,
-      streamId,
-      qos: QosClass.INTERACTIVE,
-      chunked: true,
-      compressed: false,
-      json: null,
-    } as const;
-    return [
-      {
-        ...shared,
-        seq: 0,
-        chunkFirst: true,
-        chunkLast: false,
-        binary: body.subarray(0, split),
-      },
-      {
-        ...shared,
-        seq: 1,
-        chunkFirst: false,
-        chunkLast: true,
-        binary: body.subarray(split),
-      },
-    ];
+/** One two-chunk stream message: enough to observe the in-flight interval. */
+const buildChunkFrames = (
+  streamId: number,
+): [EncodeMuxFrameInput, EncodeMuxFrameInput] => {
+  const json = {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    label: `resync-${"x".repeat(256)}`,
   };
+  const body = encodeMuxMessageBody(json, null);
+  const split = Math.ceil(body.length / 2);
+  const shared = {
+    type: MuxFrameType.STREAM_FRAME,
+    streamId,
+    qos: QosClass.INTERACTIVE,
+    chunked: true,
+    compressed: false,
+    json: null,
+  } as const;
+  return [
+    {
+      ...shared,
+      seq: 0,
+      chunkFirst: true,
+      chunkLast: false,
+      binary: body.subarray(0, split),
+    },
+    {
+      ...shared,
+      seq: 1,
+      chunkFirst: false,
+      chunkLast: true,
+      binary: body.subarray(split),
+    },
+  ];
+};
 
+describe("RemoteSession ready boundary under an in-flight snapshot restore", () => {
   it(
     "counts a replayed stream as restored on its FIRST accepted chunk - a large snapshot mid-transfer does not hold the session not-ready",
     async () => {
@@ -4829,6 +4830,253 @@ describe("RemoteSession ready boundary under an in-flight snapshot restore", () 
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         armedStall();
         expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "releases the COLD attach's boundary on first-chunk progress too - a subscribe racing the first dial does not wait out its snapshot",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // The first attach's boundary is blocked by this stream's snapshot.
+        expect(session.isReady()).toBe(false);
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[0]);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession reassembly progress watchdog", () => {
+  it(
+    "reopens a stream whose transfer stops after its first chunk - stream-local, on a fresh id, with the session staying ready",
+    async () => {
+      // The state this pins: first-chunk evidence published ready, then no
+      // further chunk ever arrives. No other deadline can see it - any
+      // inbound frame clears the socket's awaiting state, and a relay that
+      // keeps answering pings feeds the idle deadline forever - so the
+      // watchdog's expiry is the only verdict, and it must stay stream-local.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const staleId = relay.subscribeStreamIds[0];
+        const [firstChunk] = buildChunkFrames(staleId);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
+        const dialsBefore = relay.openBearers.length;
+
+        // Fire the armed deadline (suite idiom for long timers). The verdict:
+        // abandon + tombstone the old id, CLOSE it host-side, resubscribe
+        // fresh - and the SESSION stays ready throughout, because the rest of
+        // the mux is provably fine.
+        (watchdogArms()[0][0] as () => void)();
+        expect(session.isReady()).toBe(true);
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(staleId),
+          WAIT,
+        );
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[1]).not.toBe(staleId);
+        // Stream-local means NO session churn: no redial happened.
+        expect(relay.openBearers).toHaveLength(dialsBefore);
+        expect(
+          warnSpy.mock.calls.some((call) =>
+            String(call[0]).includes("no reassembly progress"),
+          ),
+        ).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "judges only the silent stream - a sibling's completed transfer retires its arm, and firing that stale arm is inert",
+    async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let deliveredA = 0;
+      streamA.onServerFrame(() => {
+        deliveredA += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [idA, idB] = relay.subscribeStreamIds;
+        // A completes (arm raised by chunk 1, retired by chunk 2); B stalls
+        // after its first chunk (arm stays).
+        const [aFirst, aLast] = buildChunkFrames(idA);
+        relay.deliverToClient(await relay.encryptFrame(aFirst));
+        const [bFirst] = buildChunkFrames(idB);
+        relay.deliverToClient(await relay.encryptFrame(bFirst));
+        relay.deliverToClient(await relay.encryptFrame(aLast));
+        await vi.waitFor(() => expect(deliveredA).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
+
+        // Fire EVERY recorded arm, in order. A's is retired (its message
+        // completed) and must do nothing; B's is live and must reopen B only.
+        for (const call of watchdogArms()) {
+          (call[0] as () => void)();
+        }
+        await vi.waitFor(() => expect(relay.closesSent).toContain(idB), WAIT);
+        expect(relay.closesSent).not.toContain(idA);
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[2]).not.toBe(idA);
+        expect(relay.subscribeStreamIds[2]).not.toBe(idB);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        streamA.close();
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a forced reconnect mid-partial retires the old generation's arm - the next attach earns its own evidence and no stale verdict fires",
+    async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // Chunk 1 arms the watchdog mid-partial...
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[0]);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
+
+        // ...and the forced drop retires it with the connection.
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const replayId = relay.subscribeStreamIds[1];
+        const [replayFirst, replayLast] = buildChunkFrames(replayId);
+        relay.deliverToClient(await relay.encryptFrame(replayFirst));
+        relay.deliverToClient(await relay.encryptFrame(replayLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // Fire every recorded arm from BOTH generations: all retired or
+        // completed, so none may close a stream or force a resubscribe.
+        const subscribesBefore = relay.subscribeStreamIds.length;
+        for (const call of watchdogArms()) {
+          (call[0] as () => void)();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(relay.closesSent).toEqual([]);
+        expect(relay.subscribeStreamIds).toHaveLength(subscribesBefore);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
       } finally {
         warnSpy.mockRestore();
         setTimeoutSpy.mockRestore();
