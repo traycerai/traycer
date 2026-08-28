@@ -38,6 +38,18 @@ type ParsedHistoryState = HistoryState & {
  */
 export interface PersistentHistoryController {
   getEntries(): ReadonlyArray<string>;
+  /**
+   * The stable identity of each entry, positionally parallel to `getEntries`.
+   *
+   * An entry's KEY survives what its INDEX does not: `restampIndices` renumbers
+   * `__TSR_index` after every structural mutation (prune, cap, collapse), and a
+   * push after a back reuses the truncated position for a different entry - so
+   * state a caller files against an index can silently start naming a
+   * different screen. State filed against the key cannot. `null` for an entry
+   * whose state carries no readable key, which a caller must treat as
+   * unaddressable rather than inventing an identity for it.
+   */
+  getEntryKeys(): ReadonlyArray<string | null>;
   getIndex(): number;
   canGoBack(): boolean; // index > 0 over the live stack
   canGoForward(): boolean; // index < entries.length - 1
@@ -78,6 +90,7 @@ function isPersistentHistoryController(
   if (!isRecord(value)) return false;
   return (
     typeof value.getEntries === "function" &&
+    typeof value.getEntryKeys === "function" &&
     typeof value.getIndex === "function" &&
     typeof value.canGoBack === "function" &&
     typeof value.canGoForward === "function" &&
@@ -405,7 +418,13 @@ function collapseAdjacentDuplicates(
       return [...collapsed, entry];
     }
     if (entry.wasCurrent) {
-      collapsed[collapsed.length - 1] = { ...previous, wasCurrent: true };
+      // The CURRENT entry wins the collapse wholesale - state and key, not
+      // only the marker. The prune is load-free, so the router's cached
+      // location keeps carrying the current entry's key; a survivor wearing
+      // the earlier entry's key would make everything filed against the
+      // cached identity (frozen-screen snapshots among it) unreachable, and
+      // could resurface whatever was filed under the earlier one instead.
+      collapsed[collapsed.length - 1] = entry;
     }
     return collapsed;
   }, []);
@@ -577,21 +596,22 @@ export function createPersistentMemoryHistory(
       // so the state passed to THIS replace survives - the stack stays in
       // agreement with the location TanStack caches after a replace, instead
       // of diverging until the next real navigation.
-      let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
         entries.splice(index - 1, 1);
         states.splice(index - 1, 1);
         index -= 1;
-        collapsedNeighbour = true;
       }
       if (index < entries.length - 1 && entries[index + 1] === path) {
         entries.splice(index + 1, 1);
         states.splice(index + 1, 1);
-        collapsedNeighbour = true;
       }
-      if (collapsedNeighbour) {
-        restampIndices(states);
-      }
+      // Unconditionally, not only after a collapse: the replaced state arrives
+      // carrying TanStack's CACHED `__TSR_index`, which a prior load-free
+      // `prune` (it never calls `history.notify()`) may have left stale - the
+      // same reason the push path re-stamps unconditionally. Without this, a
+      // non-collapsing replace stores the stale index and an array position
+      // diverges from its stamp until the next structural mutation.
+      restampIndices(states);
       persistState(windowId, entries, index);
       notifyController();
     },
@@ -619,6 +639,13 @@ export function createPersistentMemoryHistory(
 
   const controller: PersistentHistoryController = {
     getEntries: () => [...entries],
+    getEntryKeys: () =>
+      states.map((entryState) => {
+        if (typeof entryState.__TSR_key === "string") {
+          return entryState.__TSR_key;
+        }
+        return typeof entryState.key === "string" ? entryState.key : null;
+      }),
     getIndex: () => index,
     canGoBack: () => index > 0,
     canGoForward: () => index < entries.length - 1,

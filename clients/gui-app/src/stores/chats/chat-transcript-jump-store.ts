@@ -76,9 +76,12 @@ export function chatTranscriptJumpKey(hostId: string, chatId: string): string {
   return JSON.stringify([hostId, chatId]);
 }
 
-export function chatTranscriptEventRowId(eventId: string): string {
-  return `chat-event:${eventId}`;
-}
+/**
+ * Re-exported, not restated: the host builds this same id when it numbers a
+ * notification-anchor row's ordinal, so the string lives in the shared row
+ * projection and this store consumes it for its jump targets.
+ */
+export { chatTranscriptEventRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 
 let nextRequestId = 0;
 

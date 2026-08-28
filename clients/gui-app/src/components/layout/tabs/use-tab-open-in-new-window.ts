@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useDraftOpenInNewWindowFlow } from "@/components/layout/hooks/use-draft-open-in-new-window";
 import {
   useEpicOpenInNewWindowFlow,
   type EpicNewWindowFlow,
@@ -17,20 +18,20 @@ export interface TabNewWindowFlow {
  * Tab-kind-aware "Open in New Window" dispatcher. Per-kind dispatch lives
  * in `tabOpenInNewWindow` (registry) - adding a new kind plugs in there
  * without touching this hook. Strip never invokes `requestOpen` for tabs
- * whose `canOpenInNewWindow` is false, so kinds that don't support
- * new-window (e.g., draft) no-op safely.
+ * whose `canOpenInNewWindow` is false.
  */
 export function useTabOpenInNewWindowFlow(): TabNewWindowFlow {
   const bridge = useWindowsBridge();
   const epicFlow = useEpicOpenInNewWindowFlow();
+  const draftFlow = useDraftOpenInNewWindowFlow(bridge);
 
   const requestOpen = useCallback(
     (tab: HeaderTab) => {
       if (!tab.canOpenInNewWindow) return;
       if (bridge === null) return;
-      tabOpenInNewWindow(tab, { bridge, epicFlow });
+      tabOpenInNewWindow(tab, { bridge, epicFlow, draftFlow });
     },
-    [bridge, epicFlow],
+    [bridge, draftFlow, epicFlow],
   );
 
   return {

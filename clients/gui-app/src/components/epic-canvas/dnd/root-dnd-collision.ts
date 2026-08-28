@@ -1,5 +1,5 @@
 /**
- * Collision detection for the single root DndContext: pointer-only hit
+ * Collision detection for the single root DndContext: pointer/keyboard hit
  * testing, source→target compatibility filtering, the priority ladder for
  * overlapping targets, and the collision-pass pointer stash that the
  * provider's preview/commit math reads. Kept out of the provider component
@@ -8,6 +8,7 @@
  */
 import {
   pointerWithin,
+  rectIntersection,
   type Active,
   type CollisionDetection,
 } from "@dnd-kit/core";
@@ -32,10 +33,7 @@ import {
   HEADER_TAB_DND_TYPE,
   HEADER_TAB_SLOT_DND_TYPE,
 } from "@/components/layout/tabs/header-tab-dnd";
-import {
-  TOP_LEVEL_EDGE_SPLIT_TARGET,
-  TOP_LEVEL_FILLABLE_TARGET,
-} from "@/components/layout/tabs/top-level-tab-dnd";
+import { TOP_LEVEL_FILLABLE_TARGET } from "@/components/layout/tabs/top-level-tab-dnd";
 
 /**
  * Resolves the typed canvas source from the active draggable: Pierre hosts
@@ -69,7 +67,6 @@ type EpicRootDropTargetKind =
   | EpicCanvasDropTargetData["kind"]
   | typeof COMPOSER_ATTACHMENT_DROP_TARGET_TYPE
   | typeof HEADER_TAB_SLOT_DND_TYPE
-  | typeof TOP_LEVEL_EDGE_SPLIT_TARGET
   | typeof TOP_LEVEL_FILLABLE_TARGET;
 
 const LEFT_PANEL_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
@@ -100,11 +97,7 @@ function targetKindsForSourceKind(
 ): ReadonlyArray<EpicRootDropTargetKind> {
   if (sourceKind === null) return [];
   if (sourceKind === HEADER_TAB_DND_TYPE) {
-    return [
-      HEADER_TAB_SLOT_DND_TYPE,
-      TOP_LEVEL_EDGE_SPLIT_TARGET,
-      TOP_LEVEL_FILLABLE_TARGET,
-    ];
+    return [HEADER_TAB_SLOT_DND_TYPE, TOP_LEVEL_FILLABLE_TARGET];
   }
   if (sourceKind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
     return LEFT_PANEL_TARGET_KINDS;
@@ -133,7 +126,6 @@ const TARGET_KIND_PRIORITY = {
   [COMPOSER_ATTACHMENT_DROP_TARGET_TYPE]: 0,
   [HEADER_TAB_SLOT_DND_TYPE]: 0,
   [TOP_LEVEL_FILLABLE_TARGET]: 0,
-  [TOP_LEVEL_EDGE_SPLIT_TARGET]: 0,
   "artifact-tab": 1,
   "artifact-tab-strip-end": 2,
   "left-panel-rail-item": 3,
@@ -161,7 +153,7 @@ function readDropTargetKind(value: unknown): EpicRootDropTargetKind | null {
 }
 
 /**
- * Pointer point from the most recent collision pass. @dnd-kit/core's event
+ * Interaction point from the most recent collision pass. @dnd-kit/core's event
  * `delta` is scroll-adjusted (it folds in the scroll delta since drag start)
  * while collision detection receives `pointerCoordinates` = activation
  * coordinates + translate, and droppable rects report live viewport
@@ -182,12 +174,15 @@ export function clearLastCollisionPointerPoint(): void {
 }
 
 /**
- * Pointer-only hit testing with a priority ladder for overlapping targets
+ * Pointer or keyboard hit testing with a priority ladder for overlapping targets
  * (see `TARGET_KIND_PRIORITY`). Targets incompatible with the active source
  * kind are dropped up front so e.g. a rail drag never lights up a pane body.
  */
 export const epicRootCollisionDetection: CollisionDetection = (args) => {
-  lastCollisionPointerPoint = args.pointerCoordinates;
+  lastCollisionPointerPoint = args.pointerCoordinates ?? {
+    x: args.collisionRect.left + args.collisionRect.width / 2,
+    y: args.collisionRect.top + args.collisionRect.height / 2,
+  };
   const activeKind = readActiveDragKind(args.active);
   const activeSource = readActiveDragSource(args.active);
   const compatibleKinds = targetKindsForSourceKind(activeKind);
@@ -201,7 +196,11 @@ export const epicRootCollisionDetection: CollisionDetection = (args) => {
       readDropTargetKind(container.data.current),
     ]),
   );
-  const rankedHits = pointerWithin(args).flatMap((hit) => {
+  const hits =
+    args.pointerCoordinates === null
+      ? rectIntersection(args)
+      : pointerWithin(args);
+  const rankedHits = hits.flatMap((hit) => {
     const kind = kindByContainerId.get(hit.id) ?? null;
     if (kind === null || !compatibleKinds.includes(kind)) return [];
     if (kind === COMPOSER_ATTACHMENT_DROP_TARGET_TYPE) {

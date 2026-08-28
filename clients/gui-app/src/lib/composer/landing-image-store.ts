@@ -18,10 +18,8 @@
 
 import { createStore, del, get, keys, set, type UseStore } from "idb-keyval";
 
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
-
-/** A view guaranteed to be backed by a plain `ArrayBuffer` (not shared). */
-type ImageBytes = Uint8Array<ArrayBuffer>;
 
 /**
  * Session entry for a hash seen this session. Holds the bytes (so submit can

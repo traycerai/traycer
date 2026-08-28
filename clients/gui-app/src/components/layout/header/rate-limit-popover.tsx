@@ -960,6 +960,7 @@ function RateLimitHostPickerRow({
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
+        updateViewForHost={null}
       />
     </div>
   );

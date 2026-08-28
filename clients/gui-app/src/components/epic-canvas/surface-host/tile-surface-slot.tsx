@@ -36,6 +36,7 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 
 export interface TileSurfaceSlotProps {
   readonly node: EpicCanvasTileRef;
@@ -56,6 +57,7 @@ export function TileSurfaceSlot(props: TileSurfaceSlotProps): ReactNode {
   const panePortalContainer = usePanePortalContainer();
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const openEpicHandle = useMaybeOpenEpicHandle();
+  const hostClient = useEpicSessionHostClient();
 
   useLayoutEffect(() => {
     if (slotElement === null) return;
@@ -74,6 +76,7 @@ export function TileSurfaceSlot(props: TileSurfaceSlotProps): ReactNode {
       paneActivation: { focusIntent: paneActivationFocusIntent },
       services: {
         openEpicHandle,
+        hostClient,
         geometryAnchorElement: slotElement,
         panePortalContainer,
         isPaneFocusedNow,
@@ -82,6 +85,7 @@ export function TileSurfaceSlot(props: TileSurfaceSlotProps): ReactNode {
   }, [
     slotElement,
     openEpicHandle,
+    hostClient,
     node.instanceId,
     node.type,
     node.id,

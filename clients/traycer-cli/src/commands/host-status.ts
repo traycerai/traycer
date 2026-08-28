@@ -6,10 +6,6 @@ import {
   type BootstrapPhase,
 } from "../host/bootstrap-log";
 import {
-  maybeAutoBootstrap,
-  type AutoBootstrapDecision,
-} from "../host/auto-bootstrap";
-import {
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
@@ -27,18 +23,30 @@ interface HostStatusOutput {
   readonly bootstrapMarkers: readonly BootstrapLogEntry[];
   readonly bootstrapLogPath: string;
   readonly bootstrapLogTail: string;
-  readonly bootstrap: AutoBootstrapDecision;
+  // Always `null`, and kept only so the payload shape does not change for
+  // callers that already parse it. See the OBSERVATIONAL note below for why
+  // there is no decision left to report; `commands/login.ts` carries the same
+  // pinned-null field for the same reason.
+  readonly bootstrap: null;
 }
 
-// Runner-aware `traycer host status`. Wires Core Flow 7 auto-bootstrap
-// behind the existing structured payload so a first run on a clean
-// machine triggers `installHost` + service registration, then proceeds
-// to read pid metadata, bootstrap markers, and the log tail.
+// Runner-aware `traycer host status` - reads pid metadata, bootstrap
+// markers, and the log tail.
 //
-// `--no-bootstrap`, `CI=1`, `TRAYCER_NONINTERACTIVE=1` cause bootstrap
-// to be skipped with a structured `bootstrap` field on the payload; the
-// remainder of the status output (`pidMetadata`, `bootstrapMarkers`,
-// `bootstrapLogTail`) is rendered unchanged.
+// OBSERVATIONAL, AND THAT IS THE CONTRACT. This command used to call
+// `maybeAutoBootstrap` first, so asking a clean machine for its status could
+// download a host, register an OS service, and start it - none of which the
+// help ("Show host status (pid, websocket URL, recent activity)") promised,
+// and none of which a reader of a *status* command can be expected to want.
+// The audit filed that as CLI-001. Provisioning now lives only in the
+// commands that say they provision: `host ensure` (convergent
+// install/register/start), `host install`, and `host service install`.
+// `traycer login` had already dropped its own auto-bootstrap call for the
+// same reason; this removes the last one.
+//
+// Nothing here writes: the three reads below touch pid.json and
+// bootstrap.log and nothing else, so `host status` is safe to poll, safe in
+// CI, and safe on a machine whose host is deliberately uninstalled.
 //
 // JSON mode emits the runner's NDJSON envelope; the legacy `--json`
 // pretty-print is replaced by the runner's `{ type:"result", status:"ok",
@@ -47,12 +55,6 @@ interface HostStatusOutput {
 export const hostStatusCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
-  const bootstrap = await maybeAutoBootstrap({
-    runtime: ctx.runtime,
-    trigger: "host-status",
-    onProgress: (info) => ctx.progress(info),
-  });
-
   const pidMetadata = await readHostPidMetadata(ctx.runtime.environment);
   const markers = await readBootstrapMarkers(ctx.runtime.environment, 20);
   const bootstrapLogTail = await readBootstrapLogTail(
@@ -70,7 +72,7 @@ export const hostStatusCommand: CommandFn = async (
     bootstrapMarkers: markers,
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
     bootstrapLogTail,
-    bootstrap,
+    bootstrap: null,
   };
 
   return {
@@ -162,10 +164,18 @@ function renderHumanStatus(
     lines.push(...kvBlock(c, rows));
   }
 
-  const bootstrapLine = renderBootstrapLine(output.bootstrap, c);
-  if (bootstrapLine !== null) {
+  // Reading a status is no longer what starts a host (CLI-001), so the
+  // not-running branch has to SAY what does. Without this the command is
+  // observational and unhelpful in the same breath: it reports a stopped host
+  // and leaves the reader with no next move, which is precisely the dead end
+  // the implicit bootstrap used to paper over.
+  if (!output.running) {
     lines.push("");
-    lines.push(bootstrapLine);
+    lines.push(
+      c.dim(
+        "Run 'traycer host ensure' to install, register, and start the host.",
+      ),
+    );
   }
 
   const recent = output.bootstrapMarkers.slice(-RECENT_ACTIVITY_ROWS).reverse();
@@ -180,35 +190,6 @@ function renderHumanStatus(
   lines.push("");
   lines.push(c.dim("Run with --json for the full structured payload."));
   return lines.join("\n");
-}
-
-function renderBootstrapLine(
-  decision: AutoBootstrapDecision,
-  c: Colorizer,
-): string | null {
-  switch (decision.status) {
-    case "ready":
-      return null;
-    case "installed":
-      if (decision.reason === "service-registration-warning") {
-        return `${c.yellow("⚠")} bootstrap: installed host ${decision.installedVersion ?? ""}, service registration warning - ${decision.postSwapError ?? ""}`.trim();
-      }
-      return `${c.green("✓")} bootstrap: installed host ${decision.installedVersion ?? ""}`.trim();
-    case "service-registered":
-      return `${c.green("✓")} bootstrap: registered OS service for installed host ${decision.installedVersion ?? ""} (no download)`.trim();
-    case "skipped":
-      if (decision.reason === "explicit-no-bootstrap") {
-        return c.dim("bootstrap: skipped (--no-bootstrap)");
-      }
-      return c.dim(
-        "bootstrap: skipped (non-interactive - CI=1 or TRAYCER_NONINTERACTIVE=1)",
-      );
-    case "failed":
-      if (decision.reason === "service-registration-failed") {
-        return `${c.red("✗")} bootstrap: OS service registration failed - ${decision.error?.message ?? ""} [${decision.error?.code ?? "?"}]`;
-      }
-      return `${c.red("✗")} bootstrap: failed - ${decision.error?.message ?? ""} [${decision.error?.code ?? "?"}]`;
-  }
 }
 
 function kvBlock(c: Colorizer, rows: readonly [string, string][]): string[] {

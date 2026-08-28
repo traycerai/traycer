@@ -116,6 +116,15 @@ export type DesktopOpenEpicInNewWindowResult =
   | { readonly result: "moved"; readonly windowId: string }
   | { readonly result: "queued-discard"; readonly windowId: string };
 
+/**
+ * `not-found`: the main process's copy of the source window's snapshot holds
+ * no such draft - the projection flush did not land, or the draft closed
+ * mid-flight. Treated as a refused move; nothing was created.
+ */
+export type DesktopOpenDraftInNewWindowResult =
+  | { readonly result: "moved"; readonly windowId: string }
+  | { readonly result: "not-found"; readonly windowId: string };
+
 export type DesktopMenuCommandId =
   | "app.openSettings"
   | "app.signIn"
@@ -695,6 +704,16 @@ export interface DesktopWindowsBridge {
     title: string,
     tabId: string,
   ): Promise<DesktopOpenEpicInNewWindowResult>;
+  /**
+   * Optional + capability-probed, like `perWindowState.clear`: an older
+   * preload (built before draft moves existed) has no such method, and
+   * requiring it in `isDesktopWindowsBridge` would fail the WHOLE bridge on a
+   * renderer/preload version skew. Probe `typeof === "function"` at the call
+   * site (`use-draft-open-in-new-window`).
+   */
+  requestOpenDraftInNewWindow?(
+    draftId: string,
+  ): Promise<DesktopOpenDraftInNewWindowResult>;
   ownership: {
     snapshot(): Promise<readonly DesktopOwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<DesktopOwnershipClaimResult>;

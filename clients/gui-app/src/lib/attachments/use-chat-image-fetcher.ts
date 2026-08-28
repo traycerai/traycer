@@ -10,12 +10,10 @@ import type {
   ImageBytesFetcher,
   ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-
-/** A view guaranteed to be backed by a plain `ArrayBuffer` (not shared). */
-type ImageBytes = Uint8Array<ArrayBuffer>;
 
 /**
  * How long a one-shot byte read (clipboard re-inline, prompt stash) waits before

@@ -88,6 +88,7 @@ export function WorkspaceHostSwitcher(
       isLoading={props.isLoading}
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists}
+      updateViewForHost={null}
       disabled={props.disabled}
       keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
     />

@@ -18,7 +18,7 @@ interface HarnessModelTriggerProps extends Omit<
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
   profileLabel: string | null;
-  /** Bottom-right corner dot on the harness icon (T3's `AccentDot` primitive).
+  /** Bottom-right corner dot on the harness icon (`AccentDot`).
    *  `null` unless the provider has multiple profiles and the selection's
    *  profileId matches a known profile. */
   profileAccentDot: ProfileAccentDotInput | null;

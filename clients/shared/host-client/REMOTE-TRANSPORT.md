@@ -56,7 +56,7 @@ its registry-published static X25519 key.
 - **Host static key**: the client reads it from the `GET /hosts` DTO
   `publicKey` field and decodes hex **or** base64/base64url to 32 bytes
   (`decodeHostPublicKey`). **⚠️ reconcile** the exact publish encoding with
-  T3/T5.
+  the transport and resolver layers.
 - **Messages** (2, carried as opaque relay DATA binary frames):
   1. client → host `msg0` (`e, es`)
   2. host → client `msg1` (`e, ee`)

@@ -58,16 +58,19 @@ vi.mock("sonner", () => ({
   __esModule: true,
 }));
 
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { ChatTileErrorNoticeToasts } from "../chat-tile-error-notice-toasts";
@@ -118,6 +121,8 @@ function createHarness(): Harness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -129,6 +134,29 @@ function createHarness(): Harness {
       return callbacks;
     },
   };
+}
+
+/**
+ * The plain text send these suites exercise: content in, no browser context,
+ * nothing staged for restore beyond the content itself.
+ */
+function sendTestMessage(harness: Harness, content: JsonContent): void {
+  harness.handle.store.getState().sendMessage({
+    content,
+    sender: { type: "user", userId: OWNER_ID },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: "medium",
+      serviceTier: null,
+      agentMode: "epic",
+      profileId: null,
+    },
+    attachments: buildAttachmentsFromJSONContent(content),
+    deliveryPolicy: "auto",
+    restore: { content, browserAnnotations: [] },
+  });
 }
 
 function chatEvent(
@@ -201,6 +229,73 @@ function emitSnapshot(
   });
 }
 
+/**
+ * The same chat on the WINDOWED line, where the interruption is not an event
+ * the driver can watch arrive - it is a value on the snapshot.
+ *
+ * An empty transcript (`rowCount: 0`) rather than a contrived long one: the
+ * point under test is the CARRIAGE, and a setup failure by definition happens
+ * before the message it gated ever became a row. That is also why `events` is
+ * empty and stays empty - the interruption's event occupies no ordinal, so no
+ * amount of hydration would ever put it in `state.events`.
+ */
+function emitWindowedSnapshot(
+  callbacks: ChatStreamCallbacks,
+  restorableSetupInterruption: RestorableSetupInterruption | null,
+): void {
+  callbacks.onConnectionStatus("open", null);
+  callbacks.onWindowedSnapshot({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    snapshot: {
+      chat: {
+        id: CHAT_ID,
+        parentId: null,
+        userId: OWNER_ID,
+        hostId: "test-host",
+        title: "Setup Chat",
+        createdAt: 0,
+        updatedAt: 0,
+        isTitleEditedByUser: false,
+        settings: null,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
+      },
+      access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      managedCommands: [],
+      heldUpdates: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      transcriptEpoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+      derived: {
+        latestAssistantUsage: null,
+        pinnedTodo: null,
+        pinnedTaskTodoItems: [],
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
+      },
+    },
+  });
+}
+
 function appendEvent(callbacks: ChatStreamCallbacks, event: ChatEvent): void {
   callbacks.onEventAppended({
     kind: "eventAppended",
@@ -266,20 +361,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -325,6 +407,92 @@ describe("useChatSetupFailureRestoreDriver", () => {
     );
   });
 
+  it("restores the failed prompt on the windowed line, where no event ever reaches state.events", () => {
+    // Consumer 25 of the `state.messages` sweep, and the one with no
+    // client-side repair: `selectRestorableSetupInterruption`'s scan reads
+    // `state.events`, and on this line the interruption's event occupies no
+    // ordinal - `sliceTranscriptTail` never carries it and `loadRange` cannot
+    // ask for it. If the driver does not read the host's derived payload, the
+    // composer silently stops restoring drafts after a setup failure.
+    const harness = createHarness();
+    emitWindowedSnapshot(harness.callbacks(), null);
+
+    const failedContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "windowed prompt" }],
+        },
+      ],
+    };
+
+    act(() => {
+      harness.handle.store.getState().sendMessage({
+        content: failedContent,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: {
+          harnessId: "codex",
+          model: "gpt-5-codex",
+          permissionMode: "supervised",
+          reasoningEffort: "medium",
+          serviceTier: null,
+          agentMode: "epic",
+          profileId: null,
+        },
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: { content: failedContent, browserAnnotations: [] },
+      });
+    });
+    const sent = harness.handle.store.getState().pendingUserMessages.at(0);
+    if (sent === undefined) throw new Error("expected pending user message");
+
+    render(<DriverHost handle={harness.handle} />);
+
+    act(() => {
+      emitWindowedSnapshot(harness.callbacks(), {
+        eventType: "setup.failed",
+        eventId: "evt-windowed-failed",
+        workspacePath: "/repo",
+        terminalSessionId: null,
+        setupExitCode: 1,
+        clientActionId: sent.clientActionId,
+        messageId: sent.messageId,
+      });
+    });
+
+    // The event log stayed empty throughout, which is the whole point: the
+    // legacy scan had nothing to find and the restore happened anyway.
+    expect(harness.handle.store.getState().events).toEqual([]);
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      failedContent,
+    );
+
+    const epochAfterFirst =
+      useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch ?? 0;
+
+    // Every subsequent snapshot re-delivers the SAME interruption as a value,
+    // so `eventId` is the only thing standing between this and a re-restore on
+    // every frame. Legacy's dedupe guard has to hold harder here.
+    act(() => {
+      emitWindowedSnapshot(harness.callbacks(), {
+        eventType: "setup.failed",
+        eventId: "evt-windowed-failed",
+        workspacePath: "/repo",
+        terminalSessionId: null,
+        setupExitCode: 1,
+        clientActionId: sent.clientActionId,
+        messageId: sent.messageId,
+      });
+    });
+
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch).toBe(
+      epochAfterFirst,
+    );
+  });
+
   it("restores the failed prompt when actionAck and messageAccepted arrive before setup.failed", () => {
     // Bug guard for setup-gating restoration after the host accepted
     // the send. `actionAck`+`messageAccepted` clear `pendingUserMessages`
@@ -345,20 +513,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -390,6 +545,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           message: {
             kind: "user",
             content: failedContent,
+            browserAnnotations: [],
           },
           timestamp: 2,
           sessionAnchor: null,
@@ -420,7 +576,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
 
     // Replaying the same setup.failed event must be idempotent: the
     // dedupe set short-circuits the driver and the accepted-action
-    // record's restoreContent slot is now `null`, so a second pass
+    // record's restore slot is now `null`, so a second pass
     // also has nothing to hand back.
     act(() => {
       appendEvent(
@@ -461,20 +617,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -535,20 +678,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        queuedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, queuedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -596,20 +726,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -689,20 +806,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -745,20 +849,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");
@@ -827,20 +918,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
     };
 
     act(() => {
-      harness.handle.store.getState().sendMessage(
-        failedContent,
-        { type: "user", userId: OWNER_ID },
-        {
-          harnessId: "codex",
-          model: "gpt-5-codex",
-          permissionMode: "supervised",
-          reasoningEffort: "medium",
-          serviceTier: null,
-          agentMode: "epic",
-          profileId: null,
-        },
-        "auto",
-      );
+      sendTestMessage(harness, failedContent);
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
     if (sent === undefined) throw new Error("expected pending user message");

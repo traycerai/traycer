@@ -11,6 +11,7 @@ import {
 import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
@@ -265,6 +266,9 @@ export function publishedChatSessionState(
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.
     transcriptBaselineEpoch: 0,
+    // Frozen, so nothing hydrates and this never moves.
+    transcriptHydrationSequence: 0,
+    transcriptRowContext: {},
     chat: {
       parentId: null,
       id: input.chatId,
@@ -282,11 +286,11 @@ export function publishedChatSessionState(
       lastDeliveredRolesDigest: null,
       activeSessionChain: null,
       claudePendingWakes: [],
-      // Copied into mutable arrays: `Chat` is the persisted record shape and
-      // its arrays are not readonly, while the conversion's are. Nothing
-      // mutates them here - the copy is the type boundary, not a defence.
-      messages: [...input.conversion.messages],
-      events: [...input.conversion.events],
+      // No `messages`/`events` here: the record is a `ChatSessionRecord`, and
+      // the transcript is carried once, on the state's own fields below. A
+      // published copy is the case that made the duplicate most expensive -
+      // the whole transcript arrives materialized, so a second copy doubled
+      // the peak of an already-large read.
       archivedAt: null,
     },
     access: {
@@ -313,6 +317,22 @@ export function publishedChatSessionState(
     pendingFileEditApprovals: [],
     pendingInterviews: [],
     accumulatedFileChanges: [],
+    // A published copy is a FULL-materialized transcript, so it is on the
+    // legacy side of the window seam by construction: `messages`/`events`
+    // above hold everything, and there is no host to hydrate a range from.
+    // The windowed index for a `1.2` head is its own path (`publish-path §4`).
+    transcriptWindow: emptyTranscriptWindow(),
+    transcriptDerived: null,
+    accumulatedFileChangeCount: 0,
+    // A published copy is static: nothing evicts, nothing jumps, and there is
+    // no stream to request hydration from. All three are the inert values.
+    coldRewrittenMessageIds: new Set(),
+    jumpTargetOrdinal: null,
+    requestTranscriptOrdinal: () => undefined,
+    accumulatedFileChangeSummaries: [],
+    // A published transcript is not on the windowed line and streams no
+    // chunks, so there is no generation to be waiting on.
+    accumulatedSummaryGenerationSeated: true,
     backgroundItems: undefined,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,
@@ -323,6 +343,10 @@ export function publishedChatSessionState(
     pendingUserMessages: [],
     errorNotices: [],
     deliveredNoticeActionIds: new Set<string>(),
+    // Nothing streams into a published copy, so no card is ever opened here -
+    // but the field is part of the state shape and a second construction site
+    // that forgets one is how these two drift.
+    openedSubagentCardBlockIds: new Set<string>(),
     failedSendRestoration: null,
     currentComposerSettings: null,
     liveAssistantMessage: null,
@@ -342,6 +366,9 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    // A published copy is complete: every ordinal is hydrated by construction,
+    // so a viewport report has nothing to request.
+    reportVisibleTranscriptRange: () => undefined,
     sendMessage: () => null,
     sendSeededUserMessage: () => null,
     deleteMessageSuffix: () => null,

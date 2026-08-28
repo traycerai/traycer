@@ -26,6 +26,42 @@ export type TransitionPhase =
   | "failed"
   | "compensated";
 
+/**
+ * Every `TransitionPhase`, as a table rather than a list.
+ *
+ * `satisfies Record<TransitionPhase, true>` is the load-bearing part: adding a
+ * member to the union without adding it here is a COMPILE error. That is what
+ * makes phase handling fail loudly instead of silently, which matters because
+ * the failure mode it replaces was invisible - Ticket 05 classified unknown
+ * phases as in-flight and permanently vetoed packaged-mac ownership, with
+ * nothing failing at compile time or in a table-driven test.
+ */
+export const TRANSITION_PHASE_TABLE = {
+  "fallback-journaled": true,
+  "fallback-attesting-slot": true,
+  "fallback-provisioning": true,
+  "fallback-evicting-agent": true,
+  "fallback-committing": true,
+  "reclaim-probing": true,
+  "reclaim-awaiting-probe": true,
+  "reclaim-provisioning-agent": true,
+  "reclaim-committing-shutdown": true,
+  "reclaim-verifying-agent": true,
+  "reclaim-cleaning-fallback": true,
+  "reclaim-compensating-fallback": true,
+  done: true,
+  failed: true,
+  compensated: true,
+} satisfies Record<TransitionPhase, true>;
+
+/** Narrowing guard for decode boundaries. Unknown phases fail closed. */
+export function isTransitionPhase(value: unknown): value is TransitionPhase {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(TRANSITION_PHASE_TABLE, value)
+  );
+}
+
 export type TransitionFailureClass =
   | "lwcr"
   | "probe-terminal"

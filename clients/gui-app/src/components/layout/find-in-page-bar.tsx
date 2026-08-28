@@ -218,6 +218,7 @@ export function FindInPageBar() {
   return (
     <search
       {...{ [getFindSkipAttribute()]: "" }}
+      data-browser-overlay="find-bar"
       className={cn(
         "pointer-events-auto absolute right-3 top-3 z-30 flex items-center gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
       )}

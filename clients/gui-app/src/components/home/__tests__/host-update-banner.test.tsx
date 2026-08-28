@@ -54,6 +54,7 @@ const UP_TO_DATE_STATUS: HostControllerStatus = {
   updateReady: false,
   activation: "activated",
   reachable: true,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
 };
@@ -455,6 +456,30 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-update-banner-deferred")).toBeNull();
     });
+  });
+
+  // G6(i): a CONTROLLER-LANE terminal failure while the local rich view is
+  // idle/unknown (this file's whole premise — no host binding at all) must
+  // still announce with alert semantics. `describeUpdateOperation` has
+  // nothing to say here (the attempt is idle/unknown), so `aria-live` MUST be
+  // derived from the branch actually rendered (`terminal-outcome`), not from
+  // the local view's own copy — which is exactly the defect the independent
+  // cold review's finding 6 named: the live region kept reading the
+  // non-rendered attempt lane while the visible text, label and styling all
+  // correctly said "failed".
+  it("G6(i) — a controller-lane terminal outcome is aria-live: assertive even though the local rich view has nothing to say", async () => {
+    const applyStaged = vi.fn().mockResolvedValueOnce({
+      kind: "deferred" as const,
+      message: "Another Traycer process is managing the host.",
+    });
+    const management = makeManagement({ status: READY_STATUS, applyStaged });
+    renderBanner(makeHost(management));
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    fireEvent.click(button);
+
+    await screen.findByTestId("host-update-banner-deferred");
+    const banner = screen.getByTestId("host-update-banner");
+    expect(banner.getAttribute("aria-live")).toBe("assertive");
   });
 
   it("hides when a pushed controller-status status clears updateReady", async () => {

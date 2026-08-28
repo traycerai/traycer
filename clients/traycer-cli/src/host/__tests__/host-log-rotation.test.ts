@@ -61,8 +61,12 @@ vi.mock("../pid-metadata", () => ({
         },
 }));
 
-const { MAX_HOST_LOG_BYTES, rotateHostLogForPurge, rotateHostLogIfOversized } =
-  await import("../host-log-rotation");
+const {
+  MAX_HOST_LOG_BYTES,
+  rotateHostLogForPurge,
+  rotateHostLogForPurgeWithVerifier,
+  rotateHostLogIfOversized,
+} = await import("../host-log-rotation");
 
 const LOG = () => join(logDir, "host.log");
 const BACKUP = () => join(logDir, "host.log.1");
@@ -187,6 +191,39 @@ describe("rotateHostLogIfOversized (host start)", () => {
 });
 
 describe("rotateHostLogForPurge (host uninstall --all / dev teardown)", () => {
+  it("propagates capability loss before the first rename and preserves the live log", async () => {
+    await writeFile(LOG(), "authority-sensitive session\n");
+    const verify = async (): Promise<void> => {
+      throw new Error("mutation authority lost");
+    };
+
+    await expect(
+      rotateHostLogForPurgeWithVerifier("dev", verify),
+    ).rejects.toThrow("mutation authority lost");
+    expect(await readFile(LOG(), "utf8")).toBe("authority-sensitive session\n");
+    expect(await exists(BACKUP())).toBe(false);
+  });
+
+  it("propagates capability loss between replacement rename edges without rollback or deletion", async () => {
+    await writeFile(LOG(), "current session\n");
+    await writeFile(BACKUP(), "prior session\n");
+    renameFaults.codes.push("EPERM", null, "EACCES");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === 3) throw new Error("mutation authority lost");
+    };
+
+    await expect(
+      rotateHostLogForPurgeWithVerifier("dev", verify),
+    ).rejects.toThrow("mutation authority lost");
+    expect(verifyCalls).toBe(3);
+    expect(await readFile(LOG(), "utf8")).toBe("current session\n");
+    expect(
+      (await readdir(logDir)).some((name) => name.includes("replace-")),
+    ).toBe(true);
+  });
+
   it("preserves the session in host.log.1 instead of deleting it", async () => {
     // The regression this closes: `make dev-desktop` runs `host uninstall --all`
     // on every Ctrl-C, which used to `rm` this file - so the session you wanted
