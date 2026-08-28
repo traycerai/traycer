@@ -60,6 +60,13 @@ export type FinalizeSwapOutcome =
       readonly serviceStartError: string | null;
     }
   | { readonly status: "swap-failed"; readonly errorMessage: string }
+  | {
+      readonly status: "manifest-update-failed";
+      readonly previousVersion: string;
+      readonly version: string;
+      readonly errorMessage: string;
+      readonly serviceStartError: string | null;
+    }
   // The manifest still records a pendingUpgrade, but the file it points
   // at is gone (audit CLI-015). Kept distinct from `no-pending`: the two
   // describe opposite persisted states, and collapsing them reported
@@ -193,6 +200,28 @@ export async function runFinalizeUpgradeSwap(opts: {
     return { status: "swap-failed", errorMessage: swap.errorMessage };
   }
 
+  if (swap.status === "manifest-update-failed") {
+    const serviceStartError = await startServiceBestEffort(
+      opts.environment,
+      logger,
+    );
+    await writePostFinalizeMarkerFile(markerPath, {
+      status: "swapped",
+      attemptedAt: new Date().toISOString(),
+      livePath: swap.livePath,
+      stagedBinaryPath: swap.stagedBinaryPath,
+      errorMessage: swap.errorMessage,
+      serviceStartError,
+    });
+    return {
+      status: "manifest-update-failed",
+      previousVersion: swap.previousVersion,
+      version: swap.version,
+      errorMessage: swap.errorMessage,
+      serviceStartError,
+    };
+  }
+
   // swap.status === "finalised"
   const serviceStartError = await startServiceBestEffort(
     opts.environment,
@@ -254,6 +283,8 @@ function humanForOutcome(outcome: FinalizeSwapOutcome): string {
         : `finalized cli upgrade ${outcome.previousVersion} -> ${outcome.version}`;
     case "swap-failed":
       return `cli finalize-upgrade: swap failed (${outcome.errorMessage}); pending state retained`;
+    case "manifest-update-failed":
+      return `cli finalize-upgrade: installed ${outcome.version}, but could not update the CLI manifest (${outcome.errorMessage}); reconciliation marker retained`;
     case "staged-binary-missing":
       return (
         `cli finalize-upgrade: staged binary for ${outcome.stagedVersion} is missing at ` +

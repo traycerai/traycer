@@ -248,6 +248,8 @@ function humanForRestart(
       // for is not forfeited because a staged CLI swap could not be
       // published. The live binary is untouched and pending state stands.
       return `${reconcilePrefix}${base}; cli upgrade could not publish ${outcome.stagedBinaryPath} over ${outcome.livePath} (${outcome.errorMessage}) - live binary unchanged, pending state retained`;
+    case "manifest-update-failed":
+      return `${reconcilePrefix}${base}; cli ${outcome.version} was installed, but the CLI manifest update failed (${outcome.errorMessage}) - service relaunched and pending state retained for reconciliation`;
     case "no-pending":
     case "no-manifest":
       return `${reconcilePrefix}${base}`;

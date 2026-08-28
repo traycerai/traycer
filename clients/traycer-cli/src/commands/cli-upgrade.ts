@@ -898,6 +898,14 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly errorMessage: string;
     }
   | {
+      readonly status: "manifest-update-failed";
+      readonly previousVersion: string;
+      readonly version: string;
+      readonly stagedBinaryPath: string;
+      readonly livePath: string;
+      readonly errorMessage: string;
+    }
+  | {
       readonly status: "finalised";
       readonly previousVersion: string;
       readonly version: string;
@@ -1004,11 +1012,33 @@ export async function finalizePendingCliUpgrade(opts: {
     };
   }
   const installedAt = new Date().toISOString();
-  await clearPendingUpgrade(opts.environment, {
-    version: pending.version,
-    binaryPath: manifest.binaryPath,
-    installedAt,
-  });
+  try {
+    await clearPendingUpgrade(opts.environment, {
+      version: pending.version,
+      binaryPath: manifest.binaryPath,
+      installedAt,
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error(
+      "CLI pending upgrade binary replaced but manifest update failed",
+      {
+        environment: opts.environment,
+        previousVersion: manifest.version,
+        version: pending.version,
+        livePath: manifest.binaryPath,
+      },
+      errorFromUnknown(err),
+    );
+    return {
+      status: "manifest-update-failed",
+      previousVersion: manifest.version,
+      version: pending.version,
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
+      errorMessage,
+    };
+  }
   logger.info("CLI pending upgrade finalized", {
     environment: opts.environment,
     previousVersion: manifest.version,

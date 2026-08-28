@@ -331,6 +331,36 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     });
   });
 
+  it("on manifest-update-failed, starts the service and leaves a swapped marker for reconciliation", async () => {
+    mocks.finalizeResult = {
+      status: "manifest-update-failed",
+      previousVersion: "1.4.0",
+      version: "1.5.0",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      livePath: "/opt/traycer/cli/traycer",
+      errorMessage: "manifest write failed: EACCES",
+    };
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    const result = await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual(["start"]);
+    expect(result.data).toMatchObject({
+      status: "manifest-update-failed",
+      version: "1.5.0",
+      errorMessage: "manifest write failed: EACCES",
+      serviceStartError: null,
+    });
+    expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
+      status: "swapped",
+      livePath: "/opt/traycer/cli/traycer",
+      stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      errorMessage: "manifest write failed: EACCES",
+      serviceStartError: null,
+    });
+  });
+
   it.each(["no-pending", "no-manifest"])(
     "on %s, writes no marker but still starts the service (this command only ever runs after a restart that stopped it and skipped its own relaunch)",
     async (status) => {
