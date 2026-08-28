@@ -118,6 +118,13 @@ export interface TraycerAppProps {
   readonly remoteFetcher: RemoteHostFetcher | null;
   readonly initialRoute?: string | null;
   /**
+   * URL prefix this shell is served under, for shells mounted below the root
+   * of their origin. Omitted (or `null`) by every shell that owns the root -
+   * the desktop `app://` renderer and the Capacitor WebView both do. See
+   * `createAppRouter`.
+   */
+  readonly basepath?: string | null;
+  /**
    * Dev-runner / test injection seam for the host messenger.
    *
    * Production shells (desktop, mobile) omit this prop so
@@ -146,8 +153,13 @@ export interface TraycerAppProps {
 export function TraycerApp(props: TraycerAppProps): ReactNode {
   const desktopWindowId = readDesktopWindowId(props.runnerHost);
   const router = useMemo(
-    () => createAppRouter(props.initialRoute ?? null, desktopWindowId),
-    [desktopWindowId, props.initialRoute],
+    () =>
+      createAppRouter(
+        props.initialRoute ?? null,
+        desktopWindowId,
+        props.basepath ?? null,
+      ),
+    [desktopWindowId, props.initialRoute, props.basepath],
   );
   // Both escape hatches DECLARE themselves as user intent in history state.
   // They can be taken on a boot surface, before the app or the route bridge

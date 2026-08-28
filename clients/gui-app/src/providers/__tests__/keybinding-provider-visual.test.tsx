@@ -82,7 +82,7 @@ function LeaderProbe() {
 }
 
 function renderProbe(initialRoute: string): AppRouter {
-  const router = createAppRouter(normalizeProbeRoute(initialRoute), null);
+  const router = createAppRouter(normalizeProbeRoute(initialRoute), null, null);
   renderProbeWithRouter(router);
   return router;
 }
@@ -674,7 +674,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     useEpicCanvasStore
       .getState()
       .openTileInTab(tabs.firstTabId, specRef("spec-b"));
-    const router = createAppRouter(`/epics/e1/${tabs.firstTabId}`, null);
+    const router = createAppRouter(`/epics/e1/${tabs.firstTabId}`, null, null);
     renderProbeWithRouter(router);
 
     // The second inner tab is active after the two opens; Cmd+1 must select
@@ -952,7 +952,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("lights only the provider rail while ⌘ is held with the picker open", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -980,7 +980,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("lights only the reasoning footer while ⌥ is held with the picker open", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1008,7 +1008,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("lights only the profile dropdown while ⌘⇧ is held with 2+ profiles", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     const onProfileChange = vi.fn();
     render(
       <KeybindingProvider router={router}>
@@ -1058,7 +1058,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("does not fall through to ordinary hints when a pending Cmd+Shift owner disappears", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     const view = render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1106,7 +1106,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   // hold has already crossed an ownerless state and must not revive on the
   // stale timer - only a fresh hold after releasing leaders may show again.
   it("keeps a pending Cmd+Shift session spent across owner loss and restore before the delay", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     const twoProfiles = [
       testProfile("a-uuid", "A"),
       testProfile("b-uuid", "B"),
@@ -1168,7 +1168,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("hides ordinary hints when a visible Cmd+Shift owner disappears", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     const view = render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1214,7 +1214,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("shows no profile hint while ⌘⇧ is held under 2 profiles - progressive disclosure", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1246,7 +1246,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("transitions visible profile hints to rail hints when Shift is released while ⌘ stays held", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1287,7 +1287,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("restarts the hold delay for a pending profile session when Shift is released before it reveals", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1333,7 +1333,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("transitions visible rail hints to profile hints instantly when Shift is added while ⌘ stays held", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1368,7 +1368,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   it("falls back to header sub-leader hints when picker reasoning becomes inactive", () => {
-    const router = createAppRouter("/epics/e1", null);
+    const router = createAppRouter("/epics/e1", null, null);
     const view = render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
