@@ -16,6 +16,26 @@ import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expans
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
+const TILE_SOURCE = {
+  kind: "artifact-tab",
+  epicId: "epic-1",
+  viewTabId: "view-1",
+  sourceGroupId: "group-1",
+  tabId: "tile-1",
+  isPreview: false,
+} as const satisfies EpicCanvasDragSourceData;
+
+const PANE_RECT = { left: 0, top: 0, width: 600, height: 600 };
+
+function paneBodyTarget(groupId: string) {
+  return {
+    kind: "artifact-tab-group-body",
+    viewTabId: "view-1",
+    groupId,
+    tabCount: 2,
+  } as const;
+}
+
 interface TabStripMoveArgs {
   readonly sourcePaneId: string;
   readonly tabId: string;
@@ -392,6 +412,44 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
     ]);
+  });
+});
+
+describe("root dnd commits - full-pane tile split affordances", () => {
+  const panePoint = { x: 120, y: 300 };
+
+  it("resolves a split immediately anywhere in the tile's source pane", () => {
+    expect(
+      resolveCanvasDropPreview({
+        source: TILE_SOURCE,
+        target: paneBodyTarget("group-1"),
+        point: panePoint,
+        targetRect: PANE_RECT,
+        targetElement: null,
+        activeRect: null,
+      }),
+    ).toEqual({
+      kind: "artifact-tab-group-body",
+      groupId: "group-1",
+      position: "left",
+    });
+  });
+
+  it("resolves a split immediately anywhere in another pane", () => {
+    expect(
+      resolveCanvasDropPreview({
+        source: TILE_SOURCE,
+        target: paneBodyTarget("group-2"),
+        point: panePoint,
+        targetRect: PANE_RECT,
+        targetElement: null,
+        activeRect: null,
+      }),
+    ).toEqual({
+      kind: "artifact-tab-group-body",
+      groupId: "group-2",
+      position: "left",
+    });
   });
 });
 

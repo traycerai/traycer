@@ -10,7 +10,12 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  adoptDraftImageHandoff,
+  draftImageHashes,
+} from "@/lib/composer/landing-image-move";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { isMobileApp } from "@/lib/mobile-app";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import {
@@ -142,6 +147,15 @@ let localPersistenceEnabled = true;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
 let hasAppliedDesktopProjection = false;
+/**
+ * Draft ids whose image-handoff adoption has been attempted this session.
+ * Deliberately NOT "first projection only": adoption must run for whichever
+ * projection first carries a given draft, and nothing guarantees that is the
+ * first projection overall (subscription order vs the seeded snapshot is an
+ * ordering fact, not an invariant). Adoption is already self-gating on
+ * locally-missing hashes; this set only stops per-draft re-probing.
+ */
+const imageAdoptionAttemptedDraftIds = new Set<string>();
 
 const landingDraftStorage: StateStorage = {
   getItem: (name) => window.localStorage.getItem(name),
@@ -162,6 +176,7 @@ export function setLandingDraftDesktopProjectionBridge(
 ): void {
   desktopProjectionBridge = bridge;
   hasAppliedDesktopProjection = false;
+  imageAdoptionAttemptedDraftIds.clear();
   setLandingDraftLocalPersistenceEnabled(bridge === null);
 }
 
@@ -209,6 +224,29 @@ export function applyLandingDraftDesktopProjection(
     applyingDesktopProjection = false;
   }
   hasAppliedDesktopProjection = true;
+  // A draft MOVED here from another window arrives with hash-only content
+  // whose bytes live in the SOURCE window's partition; the source staged them
+  // in a per-draft handoff DB before the move. Adoption is self-gating (it
+  // only opens the handoff when a hash is actually missing locally), so this
+  // is a no-op for ordinary restores; the attempted-set just keeps it to one
+  // probe per draft per session. A FAILED probe releases its entry: an
+  // IndexedDB read that lost to a transient error must be retried on the next
+  // projection, otherwise a moved draft's images stay unavailable for the rest
+  // of the session even though the handoff is still sitting there.
+  for (const draft of drafts) {
+    if (imageAdoptionAttemptedDraftIds.has(draft.id)) continue;
+    imageAdoptionAttemptedDraftIds.add(draft.id);
+    void adoptDraftImageHandoff(
+      draft.id,
+      draftImageHashes(draft.content),
+    ).catch((error: unknown) => {
+      imageAdoptionAttemptedDraftIds.delete(draft.id);
+      appLogger.warn("[landing-draft] draft-move image adoption failed", {
+        draftId: draft.id,
+        error: describeLogError(error),
+      });
+    });
+  }
   // [B2] A non-empty authoritative snapshot confirms the landing roots are real,
   // so the GC's deleting sweep may run (reaping genuine orphans) without risking
   // freshly-restored bytes.

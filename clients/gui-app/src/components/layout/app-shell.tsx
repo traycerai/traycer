@@ -8,6 +8,7 @@ import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
@@ -53,14 +54,22 @@ export function AppShell(props: AppShellProps) {
   // App-wide for the same reason: the swipe answers wherever the user is, and
   // the surface it navigates away from has no say in it. Self-gated on the
   // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
-  useMobileHistorySwipes();
+  // Renders nothing until a swipe is actually in flight.
+  const historySwipeTransition = useMobileHistorySwipes();
 
   return (
     <PrimaryFocusCoordinatorProvider>
       <DiffWorkerPoolProvider>
         <div className="min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
-            <div className="relative flex h-safe-dvh w-full flex-col">
+            {/* The screen, as a history swipe understands one: the header and
+              the content viewport travel together, because a transition that
+              moved only the content would leave the title of the screen you
+              are leaving sitting above the screen you are arriving at. */}
+            <div
+              className="relative flex h-safe-dvh w-full flex-col"
+              {...{ [SWIPE_NAV_SCREEN_ATTRIBUTE]: "" }}
+            >
               <AppHeader variant="app" />
               <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
@@ -106,6 +115,10 @@ export function AppShell(props: AppShellProps) {
                 data-bound-host-id={activeHostId === null ? "" : activeHostId}
                 className="sr-only"
               />
+              {/* Last child, so the frozen screens cover everything they were
+                copied from. Inside this box rather than portalled, because they
+                are this screen leaving rather than a layer over the app. */}
+              {historySwipeTransition}
             </div>
           </RootDndProvider>
         </div>
