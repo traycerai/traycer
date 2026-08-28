@@ -49,6 +49,9 @@ vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsContext: () => null,
 }));
+vi.mock("@/components/epic-canvas/renderers/browser-start-page", () => ({
+  BrowserStartPage: () => <div>Local servers</div>,
+}));
 vi.mock(
   "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus",
   () => ({
@@ -67,6 +70,7 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     state.chromeInputs.push(input);
     return {
       controller: CHROME_CONTROLLER,
+      navigateToUrl: vi.fn(),
       viewportPreset: "responsive",
       downloads: [],
       cancelDownload: vi.fn(),
@@ -213,6 +217,21 @@ describe("ElectronTabSurface", () => {
       });
       expect(state.chromeInputs.at(-1)?.surfaceServices).toBe(state.bridge);
     });
+  });
+
+  it("shows the start page without attaching an opaque native surface", () => {
+    const bindSurface = vi.fn();
+    render(
+      <ElectronTabSurface
+        node={{ ...NODE, url: "about:blank" }}
+        binding={createBinding(bindSurface)}
+        viewTabId="view-1"
+        paneId="pane-1"
+      />,
+    );
+
+    expect(screen.getByText("Local servers")).toBeTruthy();
+    expect(bindSurface).not.toHaveBeenCalled();
   });
 
   it("detaches the native surface when the tile becomes hidden", async () => {

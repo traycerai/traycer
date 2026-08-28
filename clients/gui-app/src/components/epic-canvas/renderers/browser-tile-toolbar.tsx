@@ -3,9 +3,10 @@ import {
   ArrowLeft,
   ArrowRight,
   Bug,
+  EllipsisVertical,
+  ExternalLink,
   Minus,
   Monitor,
-  MoreHorizontal,
   PictureInPicture2,
   Plus,
   RotateCcw,
@@ -17,8 +18,16 @@ import {
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { cn } from "@/lib/utils";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,7 +41,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { browserCookieDegradedMessage } from "@/lib/browser-view/browser-cookie-degraded-message";
 import type {
   BrowserCookieCryptoState,
@@ -162,23 +170,55 @@ function BrowserTileToolbarAddress(props: {
   readonly controller: TileController;
 }) {
   const controller = props.controller;
+  const canOpenExternally =
+    useRunnerHostOrNull() !== null && isWebOriginUrl(controller.url);
   return (
     <form
       className="flex min-w-0 flex-1 items-center"
       onSubmit={controller.onNavigate}
     >
-      <Input
-        aria-label="Browser address"
-        value={controller.addressValue}
-        onChange={(event) => {
-          controller.onAddressChange(event.target.value);
-        }}
-        onFocus={() => controller.onAddressFocusChange(true)}
-        onBlur={() => controller.onAddressFocusChange(false)}
-        className="h-7 min-w-0 flex-1 truncate font-mono text-ui-sm"
-        spellCheck={false}
-      />
+      <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
+        <InputGroupInput
+          aria-label="Browser address"
+          value={controller.addressValue}
+          onChange={(event) => {
+            controller.onAddressChange(event.target.value);
+          }}
+          onFocus={() => controller.onAddressFocusChange(true)}
+          onBlur={() => controller.onAddressFocusChange(false)}
+          className="h-full truncate px-2 font-mono text-ui-sm"
+          spellCheck={false}
+        />
+        {canOpenExternally ? (
+          <InputGroupAddon align="inline-end">
+            <BrowserOpenExternalButton url={controller.url} />
+          </InputGroupAddon>
+        ) : null}
+      </InputGroup>
     </form>
+  );
+}
+
+function BrowserOpenExternalButton(props: { readonly url: string }) {
+  const openExternalLink = useRunnerOpenExternalLink();
+  return (
+    <TooltipWrapper
+      label="Open in default browser"
+      side="top"
+      sideOffset={6}
+      align="center"
+    >
+      <InputGroupButton
+        type="button"
+        size="icon-xs"
+        aria-label="Open in default browser"
+        disabled={openExternalLink.isPending}
+        className="pointer-events-none text-muted-foreground opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
+        onClick={() => openExternalLink.mutate(props.url)}
+      >
+        <ExternalLink aria-hidden />
+      </InputGroupButton>
+    </TooltipWrapper>
   );
 }
 
@@ -225,7 +265,7 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
             aria-label="More browser controls"
             className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
           >
-            <MoreHorizontal aria-hidden />
+            <EllipsisVertical aria-hidden />
           </Button>
         </DropdownMenuTrigger>
       </TooltipWrapper>

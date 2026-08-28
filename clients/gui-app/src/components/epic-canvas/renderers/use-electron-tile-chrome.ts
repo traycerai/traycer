@@ -39,6 +39,7 @@ interface UseElectronTabChromeArgs {
 
 interface ElectronTabChrome {
   readonly controller: TileController;
+  readonly navigateToUrl: (url: string) => void;
   readonly downloads: readonly BrowserViewDownloadChange[];
   readonly certificateError: BrowserViewCertificateErrorChange | null;
   readonly certificateProceeding: boolean;
@@ -107,17 +108,20 @@ export function useElectronTabChrome(
     };
   }, [surfaceServices, tileKey]);
 
-  const navigateToAddress = (
-    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
-  ): void => {
-    event.preventDefault();
-    const nextUrl = normalizeBrowserAddressInput(addressValue);
+  const navigateToUrl = (nextUrl: string): void => {
     draft.onAddressSubmitted(nextUrl);
     if (nextUrl === liveUrl) return;
     onAttemptedUrl(nextUrl);
     setCertificateError(null);
     setCertificateProceeding(false);
     void control({ kind: "navigate", url: nextUrl }).catch(ignoreError);
+  };
+
+  const navigateToAddress = (
+    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
+  ): void => {
+    event.preventDefault();
+    navigateToUrl(normalizeBrowserAddressInput(addressValue));
   };
 
   const reload = (): void => {
@@ -207,6 +211,7 @@ export function useElectronTabChrome(
 
   return {
     controller,
+    navigateToUrl,
     downloads,
     certificateError,
     certificateProceeding,

@@ -543,6 +543,7 @@ import {
   resourcesSubscribeV13,
   resourcesSubscribeV14,
   resourcesKillV10,
+  resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -6715,6 +6716,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: resourcesKillV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "resources.listLocalServers": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesListLocalServersV10,
           upgradeFromPreviousVersion: null,
         },
       },

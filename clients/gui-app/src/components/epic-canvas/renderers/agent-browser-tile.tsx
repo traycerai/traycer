@@ -10,6 +10,7 @@ import {
   BrowserTileDownloadStrip,
 } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
+import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
@@ -18,7 +19,10 @@ import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-b
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
-import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import {
+  BROWSER_VIEW_SURFACE_ATTRIBUTE,
+  type BrowserViewSnapshotState,
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import type {
   BrowserViewStatus,
@@ -35,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
+import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -90,6 +95,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const epicId = useEpicCanvasStore(
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
+  const startPageEpicId = resolveStartPageEpicId(
+    epicId,
+    statusUrl,
+    props.node.url,
+  );
+  const showStartPage = startPageEpicId !== null;
   const annotationSession = browserSessions?.items.find(
     (item) => item.sessionId === props.node.sessionId,
   );
@@ -123,7 +134,11 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     bindingId,
     registrationId,
   );
-  const surfaceReady = visible && currentSurfaceAttachment?.status === "ready";
+  const surfaceReady = isSurfaceReady(
+    visible,
+    showStartPage,
+    currentSurfaceAttachment,
+  );
   const surfaceError = visible
     ? (currentSurfaceAttachment?.error ?? null)
     : null;
@@ -228,7 +243,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const snapshot = useBrowserViewSnapshot(tileKey);
   const cookieCryptoState = useBrowserCookieCryptoState(browserView);
   const annotation = useBrowserAnnotationSession({
-    browserView,
+    browserView: showStartPage ? null : browserView,
     tileKey,
     status: effectiveStatus,
     epicId: epicId ?? "",
@@ -268,7 +283,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     onAttemptedUrl: latchAttemptedUrl,
   });
   useEffect(() => {
-    if (!visible) return;
+    if (!shouldAttachSurface(visible, showStartPage)) return;
     let active = true;
     void bindSurface({
       bindingId,
@@ -305,7 +320,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
     };
-  }, [bindSurface, bindingId, registrationId, tileKey, visible]);
+  }, [bindSurface, bindingId, registrationId, showStartPage, tileKey, visible]);
 
   return (
     <div
@@ -339,7 +354,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         className="relative min-h-0 flex-1 bg-background"
         {...{ [BROWSER_VIEW_SURFACE_ATTRIBUTE]: "" }}
       >
+        <ElectronTabSurfaceBaseLayer
+          startPageEpicId={startPageEpicId}
+          hostId={hostId}
+          snapshot={snapshot}
+          onNavigate={chrome.navigateToUrl}
+        />
         <div
+          hidden={showStartPage}
           className={cn(
             "absolute inset-0 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
             effectiveStatus === "ready" && "pointer-events-none opacity-0",
@@ -354,7 +376,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             hostId={hostId}
           />
         </div>
-        <BrowserViewSnapshotLayer snapshot={snapshot} />
         <BrowserTileDownloadStrip
           downloads={chrome.downloads}
           onCancel={chrome.cancelDownload}
@@ -367,6 +388,51 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       </div>
     </div>
   );
+}
+
+function ElectronTabSurfaceBaseLayer(props: {
+  readonly startPageEpicId: string | null;
+  readonly hostId: string;
+  readonly snapshot: BrowserViewSnapshotState | null;
+  readonly onNavigate: (url: string) => void;
+}) {
+  if (props.startPageEpicId !== null) {
+    return (
+      <BrowserStartPage
+        epicId={props.startPageEpicId}
+        hostId={props.hostId}
+        browserRunsOnHost={false}
+        onNavigate={props.onNavigate}
+      />
+    );
+  }
+  return <BrowserViewSnapshotLayer snapshot={props.snapshot} />;
+}
+
+function resolveStartPageEpicId(
+  epicId: string | null,
+  statusUrl: string,
+  initialUrl: string,
+): string | null {
+  const liveUrl = statusUrl.length > 0 ? statusUrl : initialUrl;
+  return epicId !== null && liveUrl === DEFAULT_BROWSER_TILE_URL
+    ? epicId
+    : null;
+}
+
+function isSurfaceReady(
+  visible: boolean,
+  showStartPage: boolean,
+  attachment: SurfaceAttachmentState | null,
+): boolean {
+  return visible && !showStartPage && attachment?.status === "ready";
+}
+
+function shouldAttachSurface(
+  visible: boolean,
+  showStartPage: boolean,
+): boolean {
+  return visible && !showStartPage;
 }
 
 function resolveCurrentSurfaceAttachment(

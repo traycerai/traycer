@@ -51,6 +51,7 @@ interface UseScreencastTileChromeArgs {
 
 export interface ScreencastTileChrome {
   readonly controller: TileController;
+  readonly navigateToUrl: (url: string) => void;
   readonly onAddressFocusChange: (focused: boolean) => void;
 }
 
@@ -81,6 +82,10 @@ export function useScreencastTileChrome(
   const liveUrl = navState.url.length > 0 ? navState.url : initialUrl;
   const draft = useAddressDraft(liveUrl);
   const addressValue = draft.addressValue;
+  const navigateToUrl = (url: string): void => {
+    draft.onAddressSubmitted(url);
+    onNavigateUrl(url);
+  };
 
   const controller: TileController = {
     capabilities: SCREENCAST_TILE_CHROME_CAPABILITIES,
@@ -97,8 +102,7 @@ export function useScreencastTileChrome(
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
       event.preventDefault();
       const url = normalizeBrowserAddressInput(addressValue);
-      draft.onAddressSubmitted(url);
-      onNavigateUrl(url);
+      navigateToUrl(url);
     },
     onAddressChange: draft.onAddressChange,
     onAddressFocusChange: draft.onAddressFocusChange,
@@ -120,6 +124,7 @@ export function useScreencastTileChrome(
 
   return {
     controller,
+    navigateToUrl,
     onAddressFocusChange: draft.onAddressFocusChange,
   };
 }

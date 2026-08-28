@@ -12,6 +12,19 @@ import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-bro
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 
+const openExternalLink = vi.hoisted(() => ({
+  isPending: false,
+  mutate: vi.fn(),
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => openExternalLink,
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => ({}),
+}));
+
 const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
   mode: "real",
   persistence: "persistent",
@@ -98,6 +111,7 @@ const CHROME_QUERIES: ReadonlyArray<{
   { name: "Forward", role: "button" },
   { name: "Reload", role: "button" },
   { name: "Browser address", role: "textbox" },
+  { name: "Open in default browser", role: "button" },
   { name: "Annotate page", role: "button" },
 ];
 
@@ -127,6 +141,7 @@ function queryChrome(query: {
 describe("<BrowserTileToolbar /> capability gating", () => {
   afterEach(() => {
     cleanup();
+    openExternalLink.mutate.mockClear();
   });
 
   it("renders every chrome control when all capabilities are true", () => {
@@ -165,6 +180,18 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     expect(
       screen.queryByRole("button", { name: "More browser controls" }),
     ).toBeNull();
+  });
+
+  it("opens the current page in the default browser", () => {
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open in default browser" }),
+    );
+
+    expect(openExternalLink.mutate).toHaveBeenCalledExactlyOnceWith(
+      "https://example.com",
+    );
   });
 
   it("renders the explicit picture-in-picture conversion action", () => {

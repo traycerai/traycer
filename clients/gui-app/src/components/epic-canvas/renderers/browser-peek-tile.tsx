@@ -6,6 +6,7 @@ import {
   BrowserTileToolbar,
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
+import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
@@ -26,6 +27,7 @@ import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { cn } from "@/lib/utils";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
 
 interface BrowserPeekStatus {
   readonly label: string;
@@ -121,6 +123,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       chrome.onAddressFocusChange(focused);
     },
   };
+  const showStartPage = chrome.controller.url === DEFAULT_BROWSER_TILE_URL;
 
   return (
     <div
@@ -157,9 +160,18 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           armedEpoch !== null && "ring-2 ring-primary ring-inset",
         )}
       >
+        {showStartPage ? (
+          <BrowserStartPage
+            epicId={epicId}
+            hostId={node.hostId}
+            browserRunsOnHost
+            onNavigate={chrome.navigateToUrl}
+          />
+        ) : null}
         <button
           ref={overlayButtonRef}
           type="button"
+          hidden={showStartPage}
           className="absolute inset-0 h-full w-full cursor-default overflow-hidden bg-background p-0 text-left outline-none"
           aria-label="Browser screencast controls"
           {...session.overlayHandlers}
@@ -200,10 +212,11 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           ref={imeInputRef}
           aria-label="Browser IME input"
           autoComplete="off"
+          disabled={showStartPage}
           className="pointer-events-none absolute left-0 top-0 size-px opacity-0"
           {...session.imeHandlers}
         />
-        {session.composing ? (
+        {!showStartPage && session.composing ? (
           <div
             aria-live="polite"
             className="pointer-events-none absolute right-3 top-3 rounded-sm bg-background/90 px-2 py-1 text-ui-xs text-muted-foreground"
@@ -211,7 +224,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
             Composing text…
           </div>
         ) : null}
-        {dialog === null ? null : (
+        {showStartPage || dialog === null ? null : (
           <BrowserDialogOverlay
             key={dialog.generation}
             dialog={dialog}

@@ -533,6 +533,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "resources.listLocalServers": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 3 * SECOND_MS },
+  },
   // Shell lifecycle from the Shells list and the output window header. `fifo`
   // is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
