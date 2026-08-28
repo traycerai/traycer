@@ -535,19 +535,27 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     // explaining the outage it just had. Info keeps `host doctor`'s exit code
     // (error/fatal only) unaffected for a machine that is now healthy.
     //
-    // "Is the host up RIGHT NOW" is not sufficient on its own, because the
-    // marker outlives the failure it records and only `host restart` clears
-    // it. A host that failed to start here, was brought up by a later
-    // `traycer host start`, and then stopped again for an unrelated reason
-    // would fail a liveness-only test - and this card would blame a fresh
-    // outage on an upgrade the machine demonstrably recovered from.
+    // TWO SEPARATE FACTS, deliberately not merged into one boolean.
     //
-    // The bootstrap log settles it: a `starting` marker written AFTER
-    // `attemptedAt` is positive evidence the host came up since. Recovery is
-    // therefore "running now, OR observed starting since", and only a failure
-    // with neither is still live.
+    // An earlier revision folded "a `starting` marker exists after
+    // `attemptedAt`" into the liveness flag, and got both halves wrong at
+    // once. `starting` is written by `host-start.ts` BEFORE it opens the log
+    // fd and spawns the child, so the same attempt can go on to emit
+    // `failed-to-spawn` or `crashed` - it is evidence that another attempt
+    // BEGAN, never that one succeeded. Treating it as recovery downgraded a
+    // host that has never come up to informational and took away its fix. And
+    // because the merged flag also drove the copy, the card said "The host is
+    // running now" and reported `hostRunningNow: true` while the service probe
+    // and pid probe both said it was down - contradicting the outage the rest
+    // of the same report was describing.
+    //
+    // So liveness decides severity, because "the host is down" is the
+    // actionable part and it is the one thing here that is directly observed.
+    // History only qualifies the wording: if a start has been attempted since
+    // this failure, the current outage may well have a different cause, and
+    // saying so is useful without pretending to know that it does.
     const markerAt = Date.parse(finalizeMarker.marker.attemptedAt);
-    const startedSinceMarker = bootstrapMarkers.some((entry) => {
+    const startAttemptedSince = bootstrapMarkers.some((entry) => {
       if (entry.phase !== "starting") return false;
       const entryAt = Date.parse(entry.timestamp);
       return (
@@ -556,32 +564,37 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         entryAt > markerAt
       );
     });
-    const hostRecovered =
-      hostProcessAlive ||
-      serviceStatus?.state === "running" ||
-      startedSinceMarker;
+    const hostRunningNow =
+      hostProcessAlive || serviceStatus?.state === "running";
     issues.push({
       code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_SERVICE_START_FAILED,
-      severity: hostRecovered ? "info" : "warning",
-      title: hostRecovered
+      severity: hostRunningNow ? "info" : "warning",
+      title: hostRunningNow
         ? "Host briefly failed to start after a CLI upgrade (since recovered)"
         : "CLI upgrade completed but the host service did not start",
-      message: hostRecovered
+      message: hostRunningNow
         ? `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and could not start the host service: ` +
           `${finalizeMarker.marker.serviceStartError}. The host is running now, so this is a record of a past outage rather than a live fault - ` +
           "quote it if you are investigating why the host was briefly unavailable around that time. The next 'traycer host restart' clears the record."
         : `The finalize helper swapped the CLI binary at ${finalizeMarker.marker.attemptedAt} and then failed to start the host service: ` +
-          `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry; ` +
-          "the host is simply down. Start it with 'traycer host restart'.",
-      fixAction: hostRecovered ? null : "host-restart",
-      terminalCommand: hostRecovered ? null : `traycer host restart`,
+          `${finalizeMarker.marker.serviceStartError}. The upgrade itself succeeded - the new CLI is live - so this is not an upgrade to retry. ` +
+          (startAttemptedSince
+            ? "The host has been started at least once since then, so the outage you are looking at now may have a different cause - check the recent activity below. "
+            : "") +
+          "Either way the host is down; start it with 'traycer host restart'.",
+      fixAction: hostRunningNow ? null : "host-restart",
+      terminalCommand: hostRunningNow ? null : `traycer host restart`,
       details: {
         markerPath: cliPostFinalizeMarkerPath(opts.environment),
         attemptedAt: finalizeMarker.marker.attemptedAt,
         serviceStartError: finalizeMarker.marker.serviceStartError,
         livePath: finalizeMarker.marker.livePath,
         stagedBinaryPath: finalizeMarker.marker.stagedBinaryPath,
-        hostRunningNow: hostRecovered,
+        // Directly observed, and named for exactly what it is. Kept apart from
+        // the history flag below so nothing downstream can read one as the
+        // other, which is how the contradiction above happened.
+        hostRunningNow,
+        startAttemptedSinceFailure: startAttemptedSince,
       },
     });
   }

@@ -83,19 +83,17 @@ export function portRepairFailure(opts: {
     });
   }
 
-  if (result.killError !== null) {
-    return cliError({
-      code: CLI_ERROR_CODES.HOST_PORT_KILL_FAILED,
-      message:
-        `${commandName}: could not terminate pid ${pid} holding port ${port}: ${result.killError}. ` +
-        "The port conflict is unresolved." +
-        restartNote +
-        ` Terminate pid ${pid} yourself (it may belong to another user, in which case this needs elevated privileges) and re-run 'traycer host doctor'.`,
-      details,
-      exitCode: 1,
-    });
-  }
-
+  // AN UNVERIFIED PORT OUTRANKS THE SIGNAL ERROR, for the same reason the
+  // replacement holder does: it is the more accurate statement about the thing
+  // the caller has to act on.
+  //
+  // The combination is reachable - the owner exits just before the SIGTERM
+  // (ESRCH) and the follow-up probe is then unavailable or times out, leaving
+  // no holder. Checking `killError` first told the user to terminate the
+  // already-dead original pid and threw away the probe-specific recovery,
+  // which is the only advice that could change the next result. Saying "we
+  // could not determine whether the port is free" is both true and useful; the
+  // signal's fate rides along in the message and in `details.killError`.
   if (result.release === "unverified") {
     // The probe advice has to name the probe this platform actually runs.
     // `pidOwnsPort` dispatches on `process.platform`: Windows never invokes
@@ -109,10 +107,25 @@ export function portRepairFailure(opts: {
     return cliError({
       code: CLI_ERROR_CODES.HOST_PORT_RELEASE_UNVERIFIED,
       message:
-        `${commandName}: signalled pid ${pid}, but could not confirm that port ${port} was released - ${result.releaseDetail}. ` +
+        (result.killError === null
+          ? `${commandName}: signalled pid ${pid}, but could not confirm that port ${port} was released - ${result.releaseDetail}. `
+          : `${commandName}: pid ${pid} could not be signalled (${result.killError}) and it could not be confirmed whether port ${port} is free - ${result.releaseDetail}. `) +
         "Treating an unverifiable repair as successful is how a port conflict gets reported as fixed while it is still live, so this is a failure." +
         restartNote +
         probeAdvice,
+      details,
+      exitCode: 1,
+    });
+  }
+
+  if (result.killError !== null) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_PORT_KILL_FAILED,
+      message:
+        `${commandName}: could not terminate pid ${pid} holding port ${port}: ${result.killError}. ` +
+        "The port conflict is unresolved." +
+        restartNote +
+        ` Terminate pid ${pid} yourself (it may belong to another user, in which case this needs elevated privileges) and re-run 'traycer host doctor'.`,
       details,
       exitCode: 1,
     });

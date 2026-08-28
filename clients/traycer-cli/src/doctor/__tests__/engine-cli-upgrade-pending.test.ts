@@ -675,13 +675,13 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(issue?.message).toContain("Input/output error");
   });
 
-  // Current liveness alone is not enough. The marker outlives the failure it
-  // records and only `host restart` clears it, so a host that failed to start
-  // here, was brought up later, and then stopped again for an unrelated reason
-  // would look like a live upgrade failure - blaming a fresh outage on an
-  // upgrade the machine demonstrably recovered from. A `starting` marker after
-  // `attemptedAt` is the evidence that settles it.
-  it("treats the service-start failure as history when the host started after it, even though it is down now", async () => {
+  // History QUALIFIES the report; it does not suppress it. A `starting` marker
+  // is written before the child is even spawned, so it proves another attempt
+  // began - not that it succeeded - and the host is observably down right now,
+  // which is the actionable part. So: still a warning with a fix, but the copy
+  // says a start has happened since, and the two facts stay in separate
+  // details fields so nothing can read one as the other.
+  it("keeps the service-start failure actionable while the host is down, but notes a start since", async () => {
     // Host is DOWN now (service "stopped", no pid metadata) but the bootstrap
     // log shows a start AFTER the marker was written.
     stageDoctorMocksWithStartAt("2026-05-12T00:00:00Z");
@@ -727,11 +727,18 @@ describe("runDoctor pending CLI upgrade surface", () => {
       (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
     );
     expect(issue).toBeDefined();
-    // Historical, despite the host being down right now - something else took
-    // it down, and this card must not claim the outage.
-    expect(issue?.severity).toBe("info");
-    expect(issue?.fixAction).toBeNull();
-    expect(issue?.details?.hostRunningNow).toBe(true);
+    // The host is down, so this stays actionable - `starting` is not evidence
+    // that any later attempt succeeded.
+    expect(issue?.severity).toBe("warning");
+    expect(issue?.fixAction).toBe("host-restart");
+    // ...but the two facts must not be conflated. Claiming "running now" while
+    // the service and pid probes both say otherwise is the contradiction this
+    // separation exists to prevent.
+    expect(issue?.details?.hostRunningNow).toBe(false);
+    expect(issue?.details?.startAttemptedSinceFailure).toBe(true);
+    expect(issue?.message).not.toContain("The host is running now");
+    // The qualifier the history buys: the current outage may be unrelated.
+    expect(issue?.message).toContain("may have a different cause");
   });
 
   // `invalid` (read the bytes, they were nonsense) and `unreadable` (could not
