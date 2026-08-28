@@ -271,6 +271,28 @@ describe("MobileFileSave", () => {
     expect(stagedBaseName(0)).toBe("photo.jpeg");
   });
 
+  it("reads past a media type's parameters to reach the extension", async () => {
+    // A Blob keeps the full type it was handed, so a response served as
+    // `image/svg+xml; charset=utf-8` arrives with the charset attached.
+    await new MobileFileSave().saveFile(
+      requestOfType(
+        "diagram",
+        new Uint8Array([1]),
+        "image/svg+xml; charset=utf-8",
+      ),
+    );
+
+    expect(stagedBaseName(0)).toBe("diagram.svg");
+  });
+
+  it("reads a type case-insensitively, as media types are", async () => {
+    await new MobileFileSave().saveFile(
+      requestOfType("shot", new Uint8Array([1]), "IMAGE/PNG"),
+    );
+
+    expect(stagedBaseName(0)).toBe("shot.png");
+  });
+
   it("invents no extension for a type it cannot name one for", async () => {
     await new MobileFileSave().saveFile(
       requestOfType("payload", new Uint8Array([1]), "application/x-unknown"),

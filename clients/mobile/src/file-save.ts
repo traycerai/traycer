@@ -145,8 +145,21 @@ const EXTENSION_BY_MEDIA_TYPE = new Map<string, string>([
  */
 function withDerivedExtension(name: string, mediaType: string): string {
   if (name.includes(".")) return name;
-  const extension = EXTENSION_BY_MEDIA_TYPE.get(mediaType);
+  const extension = EXTENSION_BY_MEDIA_TYPE.get(baseMediaType(mediaType));
   return extension === undefined ? name : `${name}.${extension}`;
+}
+
+/**
+ * The type without its parameters, lowercased.
+ *
+ * A `Blob` carries the full media type it was given, parameters and all, so a
+ * response served as `image/svg+xml; charset=utf-8` reaches here with the
+ * charset attached - and an exact-key lookup would miss a type it otherwise
+ * recognises, leaving the file extensionless for the very reason the lookup
+ * exists to prevent.
+ */
+function baseMediaType(mediaType: string): string {
+  return (mediaType.split(";")[0] ?? "").trim().toLowerCase();
 }
 
 /**
