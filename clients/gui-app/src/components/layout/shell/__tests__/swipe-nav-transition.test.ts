@@ -7,7 +7,7 @@ import {
 } from "@/components/layout/shell/screen-snapshot";
 import {
   clearScreenSnapshots,
-  readHistoryIndex,
+  readHistoryEntryKey,
   readScreenSnapshot,
   rememberScreenSnapshot,
 } from "@/components/layout/shell/screen-snapshot-cache";
@@ -206,15 +206,17 @@ describe("swipeNavCommits", () => {
   });
 });
 
-describe("readHistoryIndex", () => {
-  it("reads the index the router stamped", () => {
-    expect(readHistoryIndex({ state: { __TSR_index: 4 } })).toBe(4);
+describe("readHistoryEntryKey", () => {
+  it("reads the key the router stamped", () => {
+    expect(readHistoryEntryKey({ state: { __TSR_key: "abc123" } })).toBe(
+      "abc123",
+    );
   });
 
   it("answers null for an entry the router did not stamp", () => {
-    expect(readHistoryIndex({ state: {} })).toBeNull();
-    expect(readHistoryIndex({ state: null })).toBeNull();
-    expect(readHistoryIndex({ state: { __TSR_index: "4" } })).toBeNull();
+    expect(readHistoryEntryKey({ state: {} })).toBeNull();
+    expect(readHistoryEntryKey({ state: null })).toBeNull();
+    expect(readHistoryEntryKey({ state: { __TSR_key: 4 } })).toBeNull();
   });
 });
 
@@ -226,50 +228,52 @@ describe("the snapshot cache", () => {
   }
 
   it("files a screen under the entry it shows", () => {
-    rememberScreenSnapshot(5, snapshotOf("five"));
+    rememberScreenSnapshot("entry-five", snapshotOf("five"));
 
-    expect(readScreenSnapshot(5)?.node.textContent).toBe("five");
-    expect(readScreenSnapshot(4)).toBeNull();
+    expect(readScreenSnapshot("entry-five")?.node.textContent).toBe("five");
+    expect(readScreenSnapshot("entry-four")).toBeNull();
   });
 
   // A run of consecutive back swipes walks the cursor across entries that were
   // all two-or-more steps away when they were filed. Retention by recency is
   // what keeps the SECOND back of a run animated: pruning against the arrival
-  // index released exactly the screen that back needed.
+  // position released exactly the screen that back needed.
   it("keeps the screens a run of consecutive swipes walks back across", () => {
-    rememberScreenSnapshot(0, snapshotOf("first"));
-    rememberScreenSnapshot(1, snapshotOf("second"));
+    rememberScreenSnapshot("entry-a", snapshotOf("first"));
+    rememberScreenSnapshot("entry-b", snapshotOf("second"));
 
-    expect(readScreenSnapshot(1)?.node.textContent).toBe("second");
-    expect(readScreenSnapshot(0)?.node.textContent).toBe("first");
+    expect(readScreenSnapshot("entry-b")?.node.textContent).toBe("second");
+    expect(readScreenSnapshot("entry-a")?.node.textContent).toBe("first");
   });
 
   // A frozen screen is a whole DOM tree held out of the collector's reach, so
   // the cache is bounded - by count, since distance from the cursor is not a
   // bound the cursor's own movement respects.
   it("releases the least recently filed screen once full", () => {
-    for (let index = 0; index <= 4; index += 1) {
-      rememberScreenSnapshot(index, snapshotOf(`screen ${index}`));
+    for (let step = 0; step <= 4; step += 1) {
+      rememberScreenSnapshot(`entry-${step}`, snapshotOf(`screen ${step}`));
     }
 
-    expect(readScreenSnapshot(0)).toBeNull();
-    expect(readScreenSnapshot(1)?.node.textContent).toBe("screen 1");
-    expect(readScreenSnapshot(4)?.node.textContent).toBe("screen 4");
+    expect(readScreenSnapshot("entry-0")).toBeNull();
+    expect(readScreenSnapshot("entry-1")?.node.textContent).toBe("screen 1");
+    expect(readScreenSnapshot("entry-4")?.node.textContent).toBe("screen 4");
   });
 
   // Re-filing an entry is a fresh departure from it - the strongest claim on
   // being swiped back to - so it renews the screen's tenure rather than
   // inheriting the original filing's.
   it("renews a screen's tenure when its entry is filed again", () => {
-    for (let index = 0; index <= 3; index += 1) {
-      rememberScreenSnapshot(index, snapshotOf(`screen ${index}`));
+    for (let step = 0; step <= 3; step += 1) {
+      rememberScreenSnapshot(`entry-${step}`, snapshotOf(`screen ${step}`));
     }
-    rememberScreenSnapshot(0, snapshotOf("zero refiled"));
-    rememberScreenSnapshot(4, snapshotOf("screen 4"));
+    rememberScreenSnapshot("entry-0", snapshotOf("zero refiled"));
+    rememberScreenSnapshot("entry-4", snapshotOf("screen 4"));
 
-    expect(readScreenSnapshot(1)).toBeNull();
-    expect(readScreenSnapshot(0)?.node.textContent).toBe("zero refiled");
-    expect(readScreenSnapshot(4)?.node.textContent).toBe("screen 4");
+    expect(readScreenSnapshot("entry-1")).toBeNull();
+    expect(readScreenSnapshot("entry-0")?.node.textContent).toBe(
+      "zero refiled",
+    );
+    expect(readScreenSnapshot("entry-4")?.node.textContent).toBe("screen 4");
   });
 });
 

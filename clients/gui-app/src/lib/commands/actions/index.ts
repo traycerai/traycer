@@ -11,6 +11,7 @@ export {
   goBack,
   goForward,
   resolveEligibleHistoryTarget,
+  type EligibleHistoryTarget,
   type HistoryNavRouter,
 } from "./history-navigation";
 export {

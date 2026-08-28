@@ -25,6 +25,19 @@ const EDGE_ZONE_PX = 32;
 
 export type EdgeNavDirection = "back" | "forward";
 
+/**
+ * What activation leads to, answered by the owner of the gesture's effect.
+ *
+ * Three outcomes rather than a boolean, because "nothing will follow the
+ * finger" splits into two answers with OPPOSITE remedies: `instant` means this
+ * step cannot be animated but is still owed its navigation - the discrete step
+ * this gesture has always performed - while `decline` means the gesture must
+ * be consumed with NO navigation at all. Collapsing them into one `false`
+ * is how a swipe landing during a committed settle once fired a second,
+ * instant navigation under layers still showing the first.
+ */
+export type EdgeNavDragResponse = "follow" | "instant" | "decline";
+
 export interface EdgeNavSwipeRelease {
   /** Inward travel when the pointer left, in px. */
   readonly travelPx: number;
@@ -41,15 +54,18 @@ export interface EdgeNavSwipeRelease {
 export interface EdgeNavSwipeHandlers {
   /**
    * Called once, on the move that declares the drag a navigation swipe, and
-   * answers whether something is going to FOLLOW the finger from here.
+   * answers what the rest of the pointer is spent on.
    *
-   * A `true` keeps the pointer tracked to its release, and the drag becomes a
-   * continuous gesture reported through `onDragMove` / `onDragEnd`. A `false`
+   * `follow` keeps the pointer tracked to its release, and the drag becomes a
+   * continuous gesture reported through `onDragMove` / `onDragEnd`. `instant`
    * says nothing can be shown travelling for this particular step, and the
    * swipe falls back to `onNavigate` - a discrete step taken at this instant,
-   * which is the whole of what this gesture used to be.
+   * which is the whole of what this gesture used to be. `decline` consumes
+   * the gesture outright: no follow, no step, nothing - the answer for a
+   * moment when a navigation is already in flight and a second one would
+   * land under it.
    */
-  readonly onDragStart: (direction: EdgeNavDirection) => boolean;
+  readonly onDragStart: (direction: EdgeNavDirection) => EdgeNavDragResponse;
   /** Inward travel so far, on every move of a followed drag. */
   readonly onDragMove: (travelPx: number) => void;
   /** The release of a followed drag. Called exactly once per `onDragStart` true. */
@@ -272,12 +288,14 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       }
       if (intent === "wait") return;
       // Activation asks what kind of gesture this can be, and the answer
-      // decides how the rest of the pointer is spent. Something able to follow
-      // the finger keeps it to the release; nothing able to follow it makes the
-      // step here and now, and the rest of the drag is over before it started.
-      if (!handlersRef.current.onDragStart(started.direction)) {
+      // decides how the rest of the pointer is spent: followed to the release,
+      // spent on a discrete step here and now, or consumed with nothing owed.
+      const response = handlersRef.current.onDragStart(started.direction);
+      if (response !== "follow") {
         tracking = null;
-        handlersRef.current.onNavigate(started.direction);
+        if (response === "instant") {
+          handlersRef.current.onNavigate(started.direction);
+        }
         return;
       }
       started.following = true;

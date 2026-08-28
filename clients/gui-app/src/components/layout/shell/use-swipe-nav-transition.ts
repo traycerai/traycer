@@ -12,7 +12,7 @@ import {
   findSnapshotSource,
 } from "@/components/layout/shell/screen-snapshot";
 import {
-  readHistoryIndex,
+  readHistoryEntryKey,
   readScreenSnapshot,
   rememberScreenSnapshot,
 } from "@/components/layout/shell/screen-snapshot-cache";
@@ -22,7 +22,10 @@ import {
   swipeNavCommits,
 } from "@/components/layout/shell/swipe-nav-transition-motion";
 import type { SwipeNavTransitionView } from "@/components/layout/shell/swipe-nav-transition-layers";
-import type { EdgeNavDirection } from "@/components/layout/shell/use-edge-nav-swipe";
+import type {
+  EdgeNavDirection,
+  EdgeNavDragResponse,
+} from "@/components/layout/shell/use-edge-nav-swipe";
 import { isMobileApp } from "@/lib/mobile-app";
 
 /**
@@ -50,12 +53,15 @@ export interface SwipeNavDragRelease {
 
 export interface SwipeNavTransition {
   /**
-   * Takes the drag if a transition can be shown, and answers whether it did.
-   * A `false` is not a failure: it means this history step has no frozen
-   * destination to move, and the caller navigates instantly instead - which is
-   * what the gesture did before this existed.
+   * Takes the drag if a transition can be shown, and answers what the gesture
+   * becomes. `follow` took it. `instant` is not a failure: this history step
+   * has no frozen destination to move, and the caller navigates instantly
+   * instead - which is what the gesture did before this existed. `decline`
+   * consumes the gesture entirely: a committed settle is already navigating,
+   * and an instant step fired under it would stack a second navigation onto
+   * layers still showing the first.
    */
-  readonly beginDrag: (direction: EdgeNavDirection) => boolean;
+  readonly beginDrag: (direction: EdgeNavDirection) => EdgeNavDragResponse;
   readonly updateDrag: (travelPx: number) => void;
   readonly endDrag: (release: SwipeNavDragRelease) => void;
   /** Non-null exactly while frozen screens should be on top of the app. */
@@ -85,7 +91,7 @@ export interface SwipeNavTransition {
 export function useSwipeNavTransition(
   router: SwipeNavRouter,
   navigate: (direction: EdgeNavDirection) => void,
-  resolveDestination: (direction: EdgeNavDirection) => number | null,
+  resolveDestination: (direction: EdgeNavDirection) => string | null,
 ): SwipeNavTransition {
   const progress = useMotionValue(0);
   const [view, setView] = useState<SwipeNavTransitionView | null>(null);
@@ -123,7 +129,7 @@ export function useSwipeNavTransition(
       if (!event.hrefChanged) return;
       const from = event.fromLocation;
       if (from === undefined) return;
-      const leaving = readHistoryIndex(from);
+      const leaving = readHistoryEntryKey(from);
       if (leaving === null) return;
       const source = findSnapshotSource();
       if (source === null) return;
@@ -141,7 +147,7 @@ export function useSwipeNavTransition(
   }, []);
 
   const beginDrag = useCallback(
-    (direction: EdgeNavDirection): boolean => {
+    (direction: EdgeNavDirection): EdgeNavDragResponse => {
       const active = viewRef.current;
       if (active !== null) {
         // A settle that has not navigated yet is still just two frozen screens
@@ -149,33 +155,37 @@ export function useSwipeNavTransition(
         // wherever they had reached. One that HAS navigated cannot be taken
         // over: the app underneath is already the destination, and reversing
         // would mean navigating again - the cost this design exists to refuse.
-        if (committedRef.current) return false;
-        if (active.direction !== direction) return false;
+        // Both refusals CONSUME the gesture rather than falling back to an
+        // instant step: the step is already in flight (or its screens still
+        // are), and a second navigation fired under the travelling layers is
+        // exactly the stacking this surface exists to prevent.
+        if (committedRef.current) return "decline";
+        if (active.direction !== direction) return "decline";
         settleRef.current?.stop();
         settleRef.current = null;
-        return true;
+        return "follow";
       }
       // Direct manipulation is the finger, not motion the interface chose to
       // play - but the settle and the parallax are, and a reduced-motion
       // preference asks for neither. Standing down entirely leaves the instant
       // navigation this gesture has always performed.
-      if (reducedMotionRef.current === true) return false;
+      if (reducedMotionRef.current === true) return "instant";
       // The entry the NAVIGATION would land on, not the adjacent one: a
       // semantic step skips ineligible entries, so "one entry over" can be a
-      // screen the commit never reaches - and a refused step (null) must show
-      // nothing travelling, since the fallback navigation will refuse it too.
-      const destinationIndex = resolveDestination(direction);
-      if (destinationIndex === null) return false;
-      const destination = readScreenSnapshot(destinationIndex);
+      // screen the commit never reaches - and a step nothing can resolve must
+      // show nothing travelling.
+      const destinationKey = resolveDestination(direction);
+      if (destinationKey === null) return "instant";
+      const destination = readScreenSnapshot(destinationKey);
       // No frozen destination: a cold start, a restored session, or the first
       // step of a run. Nothing is invented to slide in behind the finger.
-      if (destination === null) return false;
+      if (destination === null) return "instant";
       const source = findSnapshotSource();
-      if (source === null) return false;
+      if (source === null) return "instant";
       const widthPx = source.clientWidth;
-      if (widthPx <= 0) return false;
+      if (widthPx <= 0) return "instant";
       const outgoing = captureScreenSnapshot(source);
-      if (outgoing === null) return false;
+      if (outgoing === null) return "instant";
       progress.set(0);
       const next: SwipeNavTransitionView = {
         direction,
@@ -186,7 +196,7 @@ export function useSwipeNavTransition(
       };
       viewRef.current = next;
       setView(next);
-      return true;
+      return "follow";
     },
     [progress, resolveDestination],
   );

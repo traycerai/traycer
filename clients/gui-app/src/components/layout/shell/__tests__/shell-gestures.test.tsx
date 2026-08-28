@@ -10,6 +10,7 @@ import { useNavDrawerClosePull } from "@/components/layout/shell/use-nav-drawer-
 import {
   useEdgeNavSwipe,
   type EdgeNavDirection,
+  type EdgeNavDragResponse,
   type EdgeNavSwipeRelease,
 } from "@/components/layout/shell/use-edge-nav-swipe";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
@@ -1193,8 +1194,8 @@ describe("useEdgeNavSwipe", () => {
 
   function mountSwipe(options: {
     readonly edgesClaimed: () => boolean;
-    /** Whether a transition claims the drag at activation. */
-    readonly follows: boolean;
+    /** What the transition answers at activation. */
+    readonly response: EdgeNavDragResponse;
   }): SwipeProbe {
     const navigations: EdgeNavDirection[] = [];
     const dragStarts: EdgeNavDirection[] = [];
@@ -1204,7 +1205,7 @@ describe("useEdgeNavSwipe", () => {
       useEdgeNavSwipe({
         onDragStart: (direction) => {
           dragStarts.push(direction);
-          return options.follows;
+          return options.response;
         },
         onDragMove: (travelPx) => {
           dragTravel.push(travelPx);
@@ -1229,13 +1230,13 @@ describe("useEdgeNavSwipe", () => {
    */
   function mountOnBareScreen(): SwipeProbe {
     setMobileApp(true);
-    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, follows: false });
+    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response: "instant" });
   }
 
   /** The same screen, with a transition that takes the drag at activation. */
   function mountWithFollowingTransition(): SwipeProbe {
     setMobileApp(true);
-    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, follows: true });
+    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response: "follow" });
   }
 
   function swipe(options: {
@@ -1425,7 +1426,7 @@ describe("useEdgeNavSwipe", () => {
     setMobileApp(false);
     const probe = mountSwipe({
       edgesClaimed: NOTHING_CLAIMED,
-      follows: false,
+      response: "instant",
     });
 
     swipe({ from: 8, to: 60, target: document.body, dropY: 0 });
@@ -1437,7 +1438,7 @@ describe("useEdgeNavSwipe", () => {
   // is already inside a drag of its own.
   it("stands down while the caller says the edges are claimed", () => {
     setMobileApp(true);
-    const probe = mountSwipe({ edgesClaimed: () => true, follows: false });
+    const probe = mountSwipe({ edgesClaimed: () => true, response: "instant" });
 
     swipe({ from: 8, to: 60, target: document.body, dropY: 0 });
 
@@ -1460,7 +1461,7 @@ describe("useEdgeNavSwipe", () => {
       let claimed = false;
       const probe = mountSwipe({
         edgesClaimed: () => claimed,
-        follows: false,
+        response: "instant",
       });
       return {
         probe,
@@ -1794,7 +1795,7 @@ describe("useEdgeNavSwipe", () => {
 
     it("leaves a drag alone while the edges are claimed", () => {
       setMobileApp(true);
-      mountSwipe({ edgesClaimed: () => true, follows: false });
+      mountSwipe({ edgesClaimed: () => true, response: "instant" });
 
       touchDown(8, document.body);
       const move = touchTo({ clientX: 60, clientY: 300 }, document.body);
@@ -2047,6 +2048,28 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.dragTravel).toEqual([]);
     });
 
+    // The third answer. A declined gesture is CONSUMED - no follow, and no
+    // instant step either: the decliner is a navigation already in flight,
+    // and falling back to a discrete step would fire a second navigation
+    // under layers still showing the first.
+    it("consumes the gesture entirely when the transition declines it", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "decline",
+      });
+
+      press(8, 0);
+      move(60, 100);
+      move(160, 200);
+      lift("pointerup", 300);
+
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(probe.navigations).toEqual([]);
+      expect(probe.dragTravel).toEqual([]);
+      expect(probe.releases).toEqual([]);
+    });
+
     it("reports travel for the whole drag rather than only its activation", () => {
       const probe = mountWithFollowingTransition();
 
@@ -2123,7 +2146,7 @@ describe("useEdgeNavSwipe", () => {
       let claimed = false;
       const probe = mountSwipe({
         edgesClaimed: () => claimed,
-        follows: true,
+        response: "follow",
       });
 
       press(8, 0);
@@ -2165,7 +2188,7 @@ describe("useEdgeNavSwipe", () => {
       setMobileApp(true);
       const probe = mountSwipe({
         edgesClaimed: NOTHING_CLAIMED,
-        follows: true,
+        response: "follow",
       });
 
       press(8, 0);

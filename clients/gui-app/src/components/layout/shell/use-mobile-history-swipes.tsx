@@ -60,13 +60,20 @@ export function useMobileHistorySwipes(): ReactElement | null {
   );
   // The same eligibility scan the navigation itself runs, asked ahead of it:
   // the screen shown travelling under the finger must be the screen the
-  // committed step lands on, and only the action layer knows which one that is.
+  // committed step lands on, and only the action layer knows which one that
+  // is. The transition receives the entry's stable KEY - the identity frozen
+  // screens are filed under - not its index, which re-stamping can move.
   const resolveDestination = useCallback(
-    (direction: EdgeNavDirection): number | null =>
-      resolveEligibleHistoryTarget(router, direction === "back" ? -1 : 1),
+    (direction: EdgeNavDirection): string | null =>
+      resolveEligibleHistoryTarget(router, direction === "back" ? -1 : 1)
+        ?.key ?? null,
     [router],
   );
-  const transition = useSwipeNavTransition(router, navigate, resolveDestination);
+  const transition = useSwipeNavTransition(
+    router,
+    navigate,
+    resolveDestination,
+  );
   useEdgeNavSwipe({
     onDragStart: transition.beginDrag,
     onDragMove: transition.updateDrag,

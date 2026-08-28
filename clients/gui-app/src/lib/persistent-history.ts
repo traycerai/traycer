@@ -38,6 +38,18 @@ type ParsedHistoryState = HistoryState & {
  */
 export interface PersistentHistoryController {
   getEntries(): ReadonlyArray<string>;
+  /**
+   * The stable identity of each entry, positionally parallel to `getEntries`.
+   *
+   * An entry's KEY survives what its INDEX does not: `restampIndices` renumbers
+   * `__TSR_index` after every structural mutation (prune, cap, collapse), and a
+   * push after a back reuses the truncated position for a different entry - so
+   * state a caller files against an index can silently start naming a
+   * different screen. State filed against the key cannot. `null` for an entry
+   * whose state carries no readable key, which a caller must treat as
+   * unaddressable rather than inventing an identity for it.
+   */
+  getEntryKeys(): ReadonlyArray<string | null>;
   getIndex(): number;
   canGoBack(): boolean; // index > 0 over the live stack
   canGoForward(): boolean; // index < entries.length - 1
@@ -78,6 +90,7 @@ function isPersistentHistoryController(
   if (!isRecord(value)) return false;
   return (
     typeof value.getEntries === "function" &&
+    typeof value.getEntryKeys === "function" &&
     typeof value.getIndex === "function" &&
     typeof value.canGoBack === "function" &&
     typeof value.canGoForward === "function" &&
@@ -619,6 +632,13 @@ export function createPersistentMemoryHistory(
 
   const controller: PersistentHistoryController = {
     getEntries: () => [...entries],
+    getEntryKeys: () =>
+      states.map((entryState) => {
+        if (typeof entryState.__TSR_key === "string") {
+          return entryState.__TSR_key;
+        }
+        return typeof entryState.key === "string" ? entryState.key : null;
+      }),
     getIndex: () => index,
     canGoBack: () => index > 0,
     canGoForward: () => index < entries.length - 1,

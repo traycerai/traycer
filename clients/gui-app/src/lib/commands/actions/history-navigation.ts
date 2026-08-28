@@ -71,9 +71,20 @@ export function goForward(router: HistoryNavRouter): void {
   navigateHistory(router, 1);
 }
 
+export interface EligibleHistoryTarget {
+  /** Position in the controller's entry list, for the `go` offset. */
+  readonly index: number;
+  /**
+   * The entry's stable identity, for keying per-entry state. `null` when the
+   * entry's state carries no readable key - such an entry can still be landed
+   * on, but nothing can be reliably filed against it.
+   */
+  readonly key: string | null;
+}
+
 /**
- * The entry index a semantic step would land on, or `null` when the step would
- * be refused - no eligible entry in that direction, or a history that owns no
+ * The entry a semantic step would land on, or `null` when the step would be
+ * refused - no eligible entry in that direction, or a history that owns no
  * entry list (the plain backend, whose landing is unknowable before it moves).
  *
  * Read-only twin of the step itself, exported for the surface that must know
@@ -83,15 +94,11 @@ export function goForward(router: HistoryNavRouter): void {
  * skip ineligible entries. Answering from the same scan `navigateHistory`
  * performs is what keeps the animated screen and the landed screen the same
  * screen.
- *
- * The returned index is in the controller's own entry-list coordinates, which
- * the history keeps identical to each entry's stamped `__TSR_index` (its
- * restamp invariant), so callers may use it to key per-entry state.
  */
 export function resolveEligibleHistoryTarget(
   router: HistoryNavRouter,
   direction: -1 | 1,
-): number | null {
+): EligibleHistoryTarget | null {
   const controller = getHistoryController(router.history);
   if (controller === null) return null;
   const index = controller.getIndex();
@@ -101,7 +108,9 @@ export function resolveEligibleHistoryTarget(
     direction,
     (href) => isHistoryEntryEligible(href, useEpicCanvasStore.getState()),
   );
-  return offset === null ? null : index + offset;
+  if (offset === null) return null;
+  const target = index + offset;
+  return { index: target, key: controller.getEntryKeys()[target] ?? null };
 }
 
 function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
@@ -114,8 +123,8 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
   if (target === null) {
     return;
   }
-  reopenClosedTilePreview(controller.getEntries()[target]);
-  router.history.go(target - controller.getIndex());
+  reopenClosedTilePreview(controller.getEntries()[target.index]);
+  router.history.go(target.index - controller.getIndex());
   trackHistoryNavigationUsed(direction === -1 ? "back" : "forward");
 }
 

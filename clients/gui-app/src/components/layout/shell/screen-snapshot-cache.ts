@@ -11,9 +11,13 @@ import type { ScreenSnapshot } from "@/components/layout/shell/screen-snapshot";
  * moment the app leaves a screen, and is waiting by the time a swipe asks for
  * it.
  *
- * Keyed by the router's own `__TSR_index` rather than by href, because the
- * index is what a step actually moves along: two entries can share an href, and
- * a back from the second must land on the first rather than on itself.
+ * Keyed by the entry's stable KEY (`__TSR_key`) rather than by its index,
+ * because an index is a POSITION and positions move under a live cache: the
+ * prune scheduler re-stamps `__TSR_index` contiguously after dropping dead
+ * entries, and a push after a back reuses the truncated position for a new
+ * entry. A screen filed under an index can silently start naming a different
+ * entry after either; a screen filed under the entry's own key cannot - the
+ * key survives re-stamping and is never reused.
  */
 
 /**
@@ -35,27 +39,27 @@ import type { ScreenSnapshot } from "@/components/layout/shell/screen-snapshot";
  */
 const MAX_RETAINED_SCREENS = 4;
 
-const snapshotsByIndex = new Map<number, ScreenSnapshot>();
+const snapshotsByEntryKey = new Map<string, ScreenSnapshot>();
 
 /**
- * The history entry a location names, or `null` when the router has not stamped
- * one - a document the app did not navigate to, which has no neighbours worth
- * remembering.
+ * The stable key of the entry a location names, or `null` when the router has
+ * not stamped one - a document the app did not navigate to, which no screen
+ * can be reliably filed against.
  *
  * Read defensively rather than through a declared shape. `HistoryState` is an
- * augmentable interface that promises nothing about `__TSR_index`; the router
+ * augmentable interface that promises nothing about `__TSR_key`; the router
  * stamps it, but a session restored into an entry someone else pushed carries
- * whatever that writer put there. A missing or non-numeric index is a screen
- * with no knowable neighbours, which is exactly the answer this returns.
+ * whatever that writer put there. A missing or non-string key is a screen
+ * with no usable identity, which is exactly the answer this returns.
  */
-export function readHistoryIndex(location: {
+export function readHistoryEntryKey(location: {
   readonly state: unknown;
-}): number | null {
+}): string | null {
   const state: unknown = location.state;
   if (typeof state !== "object" || state === null) return null;
-  if (!("__TSR_index" in state)) return null;
-  const index: unknown = state.__TSR_index;
-  return typeof index === "number" ? index : null;
+  if (!("__TSR_key" in state)) return null;
+  const key: unknown = state.__TSR_key;
+  return typeof key === "string" ? key : null;
 }
 
 /**
@@ -64,18 +68,16 @@ export function readHistoryIndex(location: {
  *
  * Re-filing an entry replaces its screen AND refreshes its recency - the entry
  * was just departed, which is the strongest claim on being swiped back to.
- * Every departure files the departed entry, so an index reused by a later push
- * is always overwritten before it can be a swipe's destination again.
  */
 export function rememberScreenSnapshot(
-  leavingIndex: number,
+  leavingKey: string,
   snapshot: ScreenSnapshot,
 ): void {
-  snapshotsByIndex.delete(leavingIndex);
-  snapshotsByIndex.set(leavingIndex, snapshot);
-  for (const index of snapshotsByIndex.keys()) {
-    if (snapshotsByIndex.size <= MAX_RETAINED_SCREENS) break;
-    snapshotsByIndex.delete(index);
+  snapshotsByEntryKey.delete(leavingKey);
+  snapshotsByEntryKey.set(leavingKey, snapshot);
+  for (const key of snapshotsByEntryKey.keys()) {
+    if (snapshotsByEntryKey.size <= MAX_RETAINED_SCREENS) break;
+    snapshotsByEntryKey.delete(key);
   }
 }
 
@@ -85,11 +87,11 @@ export function rememberScreenSnapshot(
  * to show does not invent one: it falls back to the instant navigation this
  * gesture performed before the transition existed.
  */
-export function readScreenSnapshot(index: number): ScreenSnapshot | null {
-  return snapshotsByIndex.get(index) ?? null;
+export function readScreenSnapshot(entryKey: string): ScreenSnapshot | null {
+  return snapshotsByEntryKey.get(entryKey) ?? null;
 }
 
 /** Releases every held screen. For teardown and for tests. */
 export function clearScreenSnapshots(): void {
-  snapshotsByIndex.clear();
+  snapshotsByEntryKey.clear();
 }
