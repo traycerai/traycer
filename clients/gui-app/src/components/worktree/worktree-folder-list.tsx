@@ -116,8 +116,15 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                     className="min-w-0 flex-1"
                   >
                     <div className="truncate font-medium">{label}</div>
+                    {/* `pointer-events-auto` re-opens the one hole this row
+                        needs. A disabled CommandItem takes
+                        `pointer-events-none` for the whole row, and a
+                        `checking`/`missing` worktree - still visible, and the
+                        row whose location someone most wants to read - would
+                        otherwise have no reachable trigger. Selection stays
+                        shut: `onSelect` returns early while disabled. */}
                     <FilePathTooltip content={secondary} side="bottom">
-                      <StartTruncatedText className="block min-w-0 text-ui-xs text-muted-foreground">
+                      <StartTruncatedText className="pointer-events-auto block min-w-0 text-ui-xs text-muted-foreground">
                         {secondary}
                       </StartTruncatedText>
                     </FilePathTooltip>

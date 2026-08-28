@@ -146,8 +146,11 @@ export function LandingTerminalDirectoryPicker(
                       </Badge>
                     ) : null}
                   </span>
+                  {/* Same reason as the worktree list: these rows disable
+                      themselves while a launch is in flight, and a disabled
+                      CommandItem drops pointer events for the whole row. */}
                   <FilePathTooltip content={workspacePath} side="bottom">
-                    <StartTruncatedText className="block text-ui-xs text-muted-foreground">
+                    <StartTruncatedText className="pointer-events-auto block text-ui-xs text-muted-foreground">
                       {workspacePath}
                     </StartTruncatedText>
                   </FilePathTooltip>
