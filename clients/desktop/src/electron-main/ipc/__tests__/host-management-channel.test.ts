@@ -183,13 +183,18 @@ class FakeHostController implements IpcHostController {
   };
   uninstallHostResult: MutationOutcome<UninstallOk> = {
     kind: "ok",
-    value: { removedInstallDir: true, deregisteredService: true },
+    value: {
+      removedInstallDir: true,
+      deregisteredService: true,
+      serviceRegistrationRetained: null,
+    },
   };
   removeTraycerResult: MutationOutcome<RemoveTraycerOk> = {
     kind: "ok",
     value: {
       removedHost: true,
       deregisteredService: true,
+      serviceRegistrationRetained: null,
       removedLoginItem: false,
     },
   };
