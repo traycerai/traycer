@@ -715,6 +715,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.windowsRequestFocus,
         RunnerHostInvoke.windowsRequestClose,
         RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+        RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
         RunnerHostInvoke.ownershipSnapshot,
         RunnerHostInvoke.ownershipClaim,
         RunnerHostInvoke.ownershipRelease,
