@@ -5,7 +5,7 @@ import {
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -72,7 +72,8 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
       return noop("host-unreachable");
     }
 
-    const { accepted } = parseHostResponse(
+    const { accepted } = parseCanonicalHostResponse(
+      "agent.tui.turnEnded",
       tuiAgentTurnEndedResponseSchema,
       rpcResult,
     );

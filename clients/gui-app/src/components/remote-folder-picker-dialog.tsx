@@ -36,10 +36,11 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { FilePathTooltip } from "@/components/file-path-tooltip";
 import {
   FullPathSheet,
   HighlightedName,
-  TailAnchoredPath,
 } from "@/components/folder-picker-path-view";
 import { RemoteFolderPickerHeader } from "@/components/remote-folder-picker-header";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
@@ -322,7 +323,7 @@ function RemoteFolderPickerBody(): ReactNode {
           isPending={parsed.valid ? browseQuery.isPending : false}
           error={listingError}
           matches={data === undefined ? undefined : matches}
-          upPresent={upRowPresent}
+          upPath={upRowPresent ? upPath : null}
           selectedIndex={clampedIndex}
           filtering={parsed.filter !== ""}
           homePath={effectiveHome}
@@ -596,7 +597,15 @@ function RemoteFolderPickerFooter(props: {
  */
 function PathGroupHeader(props: {
   readonly label: string;
+  /**
+   * The ABSOLUTE shared base. Collapsing happens here rather than in the
+   * caller so the tooltip keeps the raw path while the line abbreviates it —
+   * handing this component an already-collapsed base would make the hover
+   * repeat the visible text and reveal nothing.
+   */
   readonly basePath: string | null;
+  /** Where `~` points, for the visible line only. */
+  readonly homePath: string | null;
   readonly fallback: string;
 }): ReactNode {
   return (
@@ -609,10 +618,11 @@ function PathGroupHeader(props: {
       ) : (
         <>
           <span className="shrink-0">{props.label}</span>
-          <TailAnchoredPath
-            path={props.basePath}
-            className="min-w-0 flex-1 font-mono"
-          />
+          <FilePathTooltip content={props.basePath} side="bottom">
+            <StartTruncatedText className="min-w-0 flex-1 font-mono">
+              {tildeCollapse(props.basePath, props.homePath)}
+            </StartTruncatedText>
+          </FilePathTooltip>
         </>
       )}
     </p>
@@ -626,11 +636,21 @@ function PathGroupHeader(props: {
  * inside one folder every such line repeats the same prefix, so a column of
  * them is duplication rather than information, and each row truncating at a
  * different character makes the block read as noise. The heading above states
- * the location once; long-press produces the absolute path on demand.
+ * the location once; hover (or long-press on touch) produces the absolute
+ * path on demand.
  */
 function PickerRow(props: {
   readonly name: string;
   readonly ranges: ReadonlyArray<FuzzyRange>;
+  /** Absolute path the row stands for: what hover and long-press both reveal. */
+  readonly fullPath: string;
+  /**
+   * Which end survives when the label will not fit. A recent shows a PATH,
+   * whose leaf is its identity and whose prefix repeats down the column, so it
+   * loses its front; a directory shows a bare folder name, which reads from
+   * the front like any other word.
+   */
+  readonly truncateFrom: "start" | "end";
   /** Listbox options carry an id and selection; the recents strip does not. */
   readonly option: { readonly id: string; readonly selected: boolean } | null;
   readonly testId: string;
@@ -643,38 +663,49 @@ function PickerRow(props: {
     disabled: false,
   });
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      tabIndex={-1}
-      role={props.option === null ? undefined : "option"}
-      id={props.option?.id}
-      aria-selected={props.option?.selected}
-      className={cn(
-        "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
-        props.option?.selected === true &&
-          "bg-foreground/8 hover:bg-foreground/8",
-      )}
-      data-testid={props.testId}
-      // Keep focus (and the keyboard model) on the combobox field.
-      onMouseDown={(event) => {
-        event.preventDefault();
-      }}
-      {...longPress.handlers}
-      onClick={() => {
-        // The long-press already answered this gesture; picking as well
-        // would move the user off the row they were inspecting.
-        if (longPress.consumedTap()) return;
-        props.onOpen();
-      }}
-    >
-      {props.icon}
-      <HighlightedName
-        name={props.name}
-        ranges={props.ranges}
-        className="min-w-0 flex-1 truncate text-left font-normal"
-      />
-    </Button>
+    // Hover is the pointer's half of the long-press: `useLongPress` is touch
+    // only by design, so without this a mouse has no way at all to reach the
+    // absolute path behind an abbreviated row.
+    <FilePathTooltip content={props.fullPath} side="bottom">
+      <Button
+        type="button"
+        variant="ghost"
+        tabIndex={-1}
+        role={props.option === null ? undefined : "option"}
+        id={props.option?.id}
+        aria-selected={props.option?.selected}
+        className={cn(
+          "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
+          props.option?.selected === true &&
+            "bg-foreground/8 hover:bg-foreground/8",
+        )}
+        data-testid={props.testId}
+        // Keep focus (and the keyboard model) on the combobox field.
+        onMouseDown={(event) => {
+          event.preventDefault();
+        }}
+        {...longPress.handlers}
+        onClick={() => {
+          // The long-press already answered this gesture; picking as well
+          // would move the user off the row they were inspecting.
+          if (longPress.consumedTap()) return;
+          props.onOpen();
+        }}
+      >
+        {props.icon}
+        {props.truncateFrom === "start" ? (
+          <StartTruncatedText className="min-w-0 flex-1 font-normal">
+            {props.name}
+          </StartTruncatedText>
+        ) : (
+          <HighlightedName
+            name={props.name}
+            ranges={props.ranges}
+            className="min-w-0 flex-1 truncate text-left font-normal"
+          />
+        )}
+      </Button>
+    </FilePathTooltip>
   );
 }
 
@@ -703,7 +734,8 @@ function RemoteFolderPickerRecents(props: {
     <div data-testid="remote-folder-picker-recents" className="pb-3">
       <PathGroupHeader
         label="Recent, under"
-        basePath={base === null ? null : tildeCollapse(base, props.homePath)}
+        basePath={base}
+        homePath={props.homePath}
         fallback="Recent"
       />
       <ul className="flex flex-col">
@@ -716,6 +748,8 @@ function RemoteFolderPickerRecents(props: {
               <PickerRow
                 name={relative ?? tildeCollapse(entry.path, props.homePath)}
                 ranges={[]}
+                fullPath={entry.path}
+                truncateFrom="start"
                 option={null}
                 testId="remote-folder-picker-recent"
                 icon={
@@ -743,7 +777,12 @@ function RemoteFolderPickerListing(props: {
   readonly matches:
     | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>
     | undefined;
-  readonly upPresent: boolean;
+  /**
+   * Where `..` leads, or null when there is no up row. One nullable prop
+   * rather than a path beside a boolean: the row and its destination appear
+   * and disappear together, so a present row with no path is not a state.
+   */
+  readonly upPath: string | null;
   readonly selectedIndex: number;
   readonly filtering: boolean;
   readonly homePath: string | null;
@@ -761,37 +800,41 @@ function RemoteFolderPickerListing(props: {
   // The <li> wrappers are therefore `role="presentation"` - a listbox must own
   // its options directly, and an <li> sitting between the two is an invalid
   // owned-element hop.
-  if (props.upPresent) {
+  if (props.upPath !== null) {
     rows.push(
       <li key=".." role="presentation">
-        <Button
-          type="button"
-          variant="ghost"
-          tabIndex={-1}
-          role="option"
-          id={pickerOptionId(0)}
-          aria-selected={props.selectedIndex === 0}
-          className={cn(
-            "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
-            props.selectedIndex === 0 &&
-              "bg-foreground/8 hover:bg-foreground/8",
-          )}
-          data-testid="remote-folder-picker-up-row"
-          // Keep focus (and the keyboard model) on the combobox field.
-          onMouseDown={(event) => {
-            event.preventDefault();
-          }}
-          onClick={props.onUp}
-        >
-          <CornerLeftUp className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-left font-normal">
-            ..
-          </span>
-        </Button>
+        {/* `..` is the one label that names no path at all, so the hover is
+            the only thing that says where the row goes. */}
+        <FilePathTooltip content={props.upPath} side="bottom">
+          <Button
+            type="button"
+            variant="ghost"
+            tabIndex={-1}
+            role="option"
+            id={pickerOptionId(0)}
+            aria-selected={props.selectedIndex === 0}
+            className={cn(
+              "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
+              props.selectedIndex === 0 &&
+                "bg-foreground/8 hover:bg-foreground/8",
+            )}
+            data-testid="remote-folder-picker-up-row"
+            // Keep focus (and the keyboard model) on the combobox field.
+            onMouseDown={(event) => {
+              event.preventDefault();
+            }}
+            onClick={props.onUp}
+          >
+            <CornerLeftUp className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-left font-normal">
+              ..
+            </span>
+          </Button>
+        </FilePathTooltip>
       </li>,
     );
   }
-  const offset = props.upPresent ? 1 : 0;
+  const offset = props.upPath === null ? 0 : 1;
   (props.error === null ? (props.matches ?? []) : []).forEach(
     (match, index) => {
       rows.push(
@@ -799,6 +842,8 @@ function RemoteFolderPickerListing(props: {
           <PickerRow
             name={match.item.name}
             ranges={match.ranges}
+            fullPath={match.item.path}
+            truncateFrom="end"
             option={{
               id: pickerOptionId(index + offset),
               selected: props.selectedIndex === index + offset,

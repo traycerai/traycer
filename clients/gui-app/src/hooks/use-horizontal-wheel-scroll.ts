@@ -1,7 +1,5 @@
 import { useCallback, type WheelEvent } from "react";
-
-const DOM_DELTA_LINE = 1;
-const DOM_DELTA_PAGE = 2;
+import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
 
 export function useHorizontalWheelScroll() {
   return useCallback((event: WheelEvent<HTMLElement>) => {
@@ -31,17 +29,6 @@ export function useHorizontalWheelScroll() {
     element.scrollLeft = nextScrollLeft;
     event.preventDefault();
   }, []);
-}
-
-function wheelDeltaToPixels(
-  delta: number,
-  deltaMode: number,
-  pageSize: number,
-  lineSize: number,
-): number {
-  if (deltaMode === DOM_DELTA_LINE) return delta * lineSize;
-  if (deltaMode === DOM_DELTA_PAGE) return delta * pageSize;
-  return delta;
 }
 
 function clamp(value: number, min: number, max: number): number {

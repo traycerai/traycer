@@ -3,6 +3,7 @@ import { epicArtifactMentionToken } from "@traycer/protocol/host/epic/unary-sche
 import {
   ACTIVE_AGENT_DND_TYPE,
   ARTIFACT_TAB_DND_TYPE,
+  BROWSER_TILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -215,6 +216,7 @@ export function mentionAttachmentFromDragSource(
     case ACTIVE_AGENT_DND_TYPE:
       return activeAgentMention(source, targetHostId);
     case ARTIFACT_TAB_DND_TYPE:
+    case BROWSER_TILE_DND_TYPE:
     case TERMINAL_TILE_DND_TYPE:
     case MANAGED_COMMAND_OUTPUT_DND_TYPE:
     case LEFT_PANEL_RAIL_ITEM_DND_TYPE:

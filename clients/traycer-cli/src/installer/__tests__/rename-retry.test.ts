@@ -39,6 +39,7 @@ describe("renameWithRetryPlan", () => {
       delaysMs: [1, 1, 1],
       onRetry,
       maxTotalMs: null,
+      verifyBeforeAttempt: async () => undefined,
     });
 
     expect(mocks.renameCalls).toBe(3);
@@ -54,6 +55,7 @@ describe("renameWithRetryPlan", () => {
         delaysMs: [1, 1],
         onRetry,
         maxTotalMs: null,
+        verifyBeforeAttempt: async () => undefined,
       }),
     ).rejects.toMatchObject({ code: "EIO" });
 
@@ -70,6 +72,7 @@ describe("renameWithRetryPlan", () => {
         delaysMs: [1, 1],
         onRetry,
         maxTotalMs: null,
+        verifyBeforeAttempt: async () => undefined,
       }),
     ).rejects.toMatchObject({ code: "EBUSY" });
 
@@ -80,18 +83,21 @@ describe("renameWithRetryPlan", () => {
     expect(onRetry).toHaveBeenCalledTimes(2);
   });
 
-  it("swallows an onRetry failure rather than masking the rename outcome", async () => {
+  it("propagates an onRetry failure instead of masking authority loss", async () => {
     mocks.failureCodes = ["EBUSY"];
 
-    await renameWithRetryPlan("/from", "/to", {
-      delaysMs: [1],
-      onRetry: async () => {
-        throw new Error("kill failed");
-      },
-      maxTotalMs: null,
-    });
+    await expect(
+      renameWithRetryPlan("/from", "/to", {
+        delaysMs: [1],
+        onRetry: async () => {
+          throw new Error("kill failed");
+        },
+        maxTotalMs: null,
+        verifyBeforeAttempt: async () => undefined,
+      }),
+    ).rejects.toThrow("kill failed");
 
-    expect(mocks.renameCalls).toBe(2);
+    expect(mocks.renameCalls).toBe(1);
   });
 
   it("stops retrying once the wall-clock ceiling is exceeded, even with schedule entries left", async () => {
@@ -109,6 +115,7 @@ describe("renameWithRetryPlan", () => {
         delaysMs: [1, 1, 1],
         onRetry,
         maxTotalMs: 20,
+        verifyBeforeAttempt: async () => undefined,
       }),
     ).rejects.toMatchObject({ code: "EBUSY" });
 

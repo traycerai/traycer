@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { open, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, rename, stat, unlink, writeFile } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
@@ -11,6 +13,7 @@ import {
   readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,
+  type ProcessIdentityVerdict,
 } from "./process-identity";
 
 // Cross-process file lock protocol (Host Update Layer Redesign Tech Plan,
@@ -64,6 +67,22 @@ export interface LockMetadata {
   // `verifyProcessIdentity` reports as "indeterminate" and therefore never
   // breaks.
   readonly processStartIdentity: ProcessStartIdentity | null;
+  /**
+   * Optional detached POSIX process group supervised by `pid`. A dead
+   * supervisor is not stale while this group still has a member: the group
+   * contains the actuator or a descendant that may still own an irreversible
+   * platform operation. It is deliberately advisory-to-safety: an
+   * indeterminate probe is busy, never breakable.
+   */
+  readonly supervisedProcessGroupId?: number;
+  /**
+   * A supervisor may be responsible for a Windows process tree whose
+   * membership Node cannot positively enumerate. If that supervisor dies
+   * before a protocol-confirmed handback, fail closed rather than guessing
+   * that taskkill completed. Normal completion rewrites this field away under
+   * the token-preserving arbitration lock.
+   */
+  readonly retainOnPublisherDeath?: boolean;
 }
 
 export interface LockHandle {
@@ -128,6 +147,53 @@ function errorCode(err: unknown): string | null {
   return null;
 }
 
+// Node-on-Windows exposes neither O_NOFOLLOW nor O_NONBLOCK. That is a
+// capability distinction, not evidence that every existing lock is unsafe:
+// use a before/opened/after identity proof there. POSIX keeps the stronger
+// descriptor-only O_NOFOLLOW | O_NONBLOCK path, which cannot hang on a FIFO.
+interface LockReadPlatform {
+  readonly noFollow: number;
+  readonly nonBlock: number;
+}
+
+const defaultLockReadPlatform: LockReadPlatform = {
+  noFollow: typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0,
+  nonBlock: typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0,
+};
+
+let lockReadPlatformForTest: LockReadPlatform | null = null;
+
+/** Test-only override for the missing-flag Node/Electron fallback. */
+export function __setLockReadPlatformForTest(
+  platform: LockReadPlatform | null,
+): void {
+  lockReadPlatformForTest = platform;
+}
+
+function lockReadPlatform(): LockReadPlatform {
+  return lockReadPlatformForTest ?? defaultLockReadPlatform;
+}
+
+// SUPPORTED-FILESYSTEM POLICY: this flagless-fallback identity proof only
+// runs where O_NOFOLLOW/O_NONBLOCK are unavailable (Node on Windows). There
+// the lock lives under the user's profile, and the filesystems that can host
+// it on supported Windows (NTFS/ReFS) report non-zero volume serials and
+// 64-bit file IDs through libuv's handle-based stat. A filesystem that
+// reports zero (FAT-family media, some network redirectors) is deliberately
+// REJECTED — every read degrades to `read-error`, which the break/release
+// machinery already treats as busy/indeterminate. That direction is safe
+// (locks cannot be stolen there, only not broken) and intentional: an
+// identity-less filesystem cannot carry the TOCTOU proof this fallback
+// exists to provide, and weakening it to a regular-file check would let a
+// swapped FIFO/symlink through on exactly the platforms that need the guard.
+function samePositiveFileIdentity(
+  a: Pick<Stats, "ino" | "dev">,
+  b: Pick<Stats, "ino" | "dev">,
+): boolean {
+  if (a.ino === 0 || a.dev === 0 || b.ino === 0 || b.dev === 0) return false;
+  return a.ino === b.ino && a.dev === b.dev;
+}
+
 // Result of a raw read of a lock-shaped file. Distinguishes "genuinely not
 // there" (`absent`, ENOENT) from "we don't know" (`read-error` - a
 // transient EIO/EACCES/etc.) from "successfully read N bytes" (`present`,
@@ -152,13 +218,71 @@ type LockRead =
 // `breakStaleLock` for its arbitrated equality check - re-reading at break
 // time would defeat the point, since the whole race this guards against is
 // content changing between read and break.
+//
+// It must also be total. `readFile(path)` opens a FIFO for blocking read, so
+// a corrupt lock entry could hang acquire(waitMs: 0), holder probes, release,
+// and the positive-evidence breaker. On POSIX we bind a nonblocking,
+// no-follow descriptor and verify it is regular before reading. On Node's
+// Windows flagless runtime we allow only an existing regular entry whose
+// positive identity agrees before, through, and after the open. Absent is
+// still useful (creation may proceed); anything ambiguous is read-error and
+// therefore never evidence for breaking.
 async function readLockRaw(path: string): Promise<LockRead> {
+  const platform = lockReadPlatform();
+  const hasSafeDescriptorOpen =
+    platform.noFollow !== 0 && platform.nonBlock !== 0;
+  let before: Stats | null = null;
+
+  if (!hasSafeDescriptorOpen) {
+    try {
+      const inspected = await lstat(path);
+      if (!inspected.isFile()) return { kind: "read-error" };
+      before = inspected;
+    } catch (err) {
+      return errorCode(err) === "ENOENT"
+        ? { kind: "absent" }
+        : { kind: "read-error" };
+    }
+  }
+
+  let handle: FileHandle;
   try {
-    return { kind: "present", raw: await readFile(path, "utf8") };
+    handle = await open(
+      path,
+      constants.O_RDONLY |
+        (hasSafeDescriptorOpen
+          ? platform.noFollow | platform.nonBlock
+          : platform.nonBlock),
+    );
   } catch (err) {
     return errorCode(err) === "ENOENT"
       ? { kind: "absent" }
       : { kind: "read-error" };
+  }
+
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile()) return { kind: "read-error" };
+    if (before !== null) {
+      let after: Stats;
+      try {
+        after = await lstat(path);
+      } catch {
+        return { kind: "read-error" };
+      }
+      if (
+        !after.isFile() ||
+        !samePositiveFileIdentity(before, opened) ||
+        !samePositiveFileIdentity(opened, after)
+      ) {
+        return { kind: "read-error" };
+      }
+    }
+    return { kind: "present", raw: await handle.readFile("utf8") };
+  } catch {
+    return { kind: "read-error" };
+  } finally {
+    await handle.close().catch(() => undefined);
   }
 }
 
@@ -180,7 +304,7 @@ function parseLockMetadata(raw: string): LockMetadata | null {
   ) {
     return null;
   }
-  return {
+  const metadata: LockMetadata = {
     pid: obj.pid,
     reason: obj.reason,
     startedAt: obj.startedAt,
@@ -203,6 +327,26 @@ function parseLockMetadata(raw: string): LockMetadata | null {
     processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
       ? obj.processStartIdentity
       : null,
+  };
+  // `> 1`, not `> 0`: probing group 1 runs `process.kill(-1, 0)`, which
+  // POSIX defines as "signal every process the caller may signal" — it
+  // answers "does anything at all run", never "is THIS group alive", so a
+  // recorded group of 1 would classify any machine's holder as live forever.
+  // No supervised actuator can legitimately lead process group 1 (init's).
+  const supervisedProcessGroupId =
+    typeof obj.supervisedProcessGroupId === "number" &&
+    Number.isSafeInteger(obj.supervisedProcessGroupId) &&
+    obj.supervisedProcessGroupId > 1
+      ? obj.supervisedProcessGroupId
+      : undefined;
+  return {
+    ...metadata,
+    ...(supervisedProcessGroupId === undefined
+      ? {}
+      : { supervisedProcessGroupId }),
+    ...(obj.retainOnPublisherDeath === true
+      ? { retainOnPublisherDeath: true }
+      : {}),
   };
 }
 
@@ -464,6 +608,165 @@ async function recordBreakOutcomeForTest(
   await writeFile(join(dir, "outcome"), outcome).catch(() => undefined);
 }
 
+// ---- Read-only holder probe ------------------------------------------------
+//
+// What a READER (never a contender) can establish about a lock file, using
+// this module's own raw read and metadata parser rather than a second copy
+// of them. Added for the update-attempt layer's read-side interruption
+// derivation, which must distinguish "no holder, proven" from "cannot tell"
+// without ever attempting an acquisition - a status projection that acquired
+// the lock to find out who holds it would itself become a mutator.
+//
+// The arms mirror `LockRead`'s only-positive-evidence discipline exactly:
+// `absent` is the ONLY arm that proves nobody holds the lock. `unparseable`
+// is an empty/corrupt lock file, which a live holder still inside the
+// `open()`->`writeFile()` gap also produces, so it proves nothing either
+// way; `read-error` proves nothing by definition.
+export type LockHolderProbe =
+  | { readonly kind: "absent" }
+  | { readonly kind: "held"; readonly holder: LockMetadata }
+  | { readonly kind: "unparseable" }
+  | { readonly kind: "read-error" };
+
+export async function readLockHolder(path: string): Promise<LockHolderProbe> {
+  const read = await readLockRaw(path);
+  if (read.kind === "absent") return { kind: "absent" };
+  if (read.kind === "read-error") return { kind: "read-error" };
+  const holder = parseLockMetadata(read.raw);
+  return holder === null ? { kind: "unparseable" } : { kind: "held", holder };
+}
+
+/**
+ * Rewrite liveness metadata only while the canonical lock still carries the
+ * expected token. This shares the stale-break arbitration lock: a contender
+ * that observed a dead publisher cannot unlink/acquire between our ownership
+ * check and the rewrite, and we never restore an old token over a new holder.
+ *
+ * This is intentionally narrower than a public lock mutation API. The token
+ * and all semantic lock fields remain fixed; callers may use it only to
+ * republish a supervised live process identity.
+ */
+export async function rewriteLockLivenessIfToken(
+  path: string,
+  expectedToken: string,
+  next: LockMetadata,
+): Promise<boolean> {
+  const arbitration = await acquireBreakLock(path);
+  if (arbitration.kind === "busy") return false;
+  try {
+    const read = await readLockRaw(path);
+    if (read.kind !== "present") return false;
+    const current = parseLockMetadata(read.raw);
+    if (current === null || current.token !== expectedToken) return false;
+    // Keep the acquisition identity immutable. A liveness rebind must never
+    // become an accidental authority transfer to a different lock token.
+    if (
+      next.token !== expectedToken ||
+      next.reason !== current.reason ||
+      next.startedAt !== current.startedAt
+    ) {
+      return false;
+    }
+    // A crashed publisher must never leave a truncated canonical lock that a
+    // later contender can age-break while its supervised actuator still runs.
+    // The arbitration lock serializes us with stale breaking; a same-directory
+    // temp + rename makes publication itself atomic to every reader.
+    const temporaryPath = `${path}.${randomUUID()}.liveness`;
+    try {
+      const temporary = await open(temporaryPath, "wx", 0o600);
+      try {
+        await temporary.writeFile(JSON.stringify(next, null, 2), "utf8");
+        // The rename swaps directory entries atomically, but only a flushed
+        // temp guarantees the entry resolves to full content after a power
+        // loss — a zero-length canonical lock is exactly the empty record
+        // `acquireLockAtPath` age-breaks after its grace window, while the
+        // supervised actuator may still be running.
+        await temporary.sync();
+      } finally {
+        await temporary.close().catch(() => undefined);
+      }
+      await rename(temporaryPath, path);
+      // The temp fsync above makes the CONTENT durable; the directory entry
+      // the rename swapped is separate metadata with its own flush. On a
+      // power loss before the directory flushes, the entry reverts to the
+      // pre-rewrite record — no `supervisedProcessGroupId`, no
+      // `retainOnPublisherDeath` — which is the same hazard the temp fsync
+      // closes, arriving through the directory instead of the file. Sync the
+      // directory too. Best-effort where directories cannot be opened
+      // (win32): rename durability there is bounded by the platform, and a
+      // failed dir sync must not turn a completed rename into a refusal.
+      try {
+        const dir = await open(dirname(path), "r");
+        try {
+          await dir.sync();
+        } finally {
+          await dir.close().catch(() => undefined);
+        }
+      } catch {
+        // Windows cannot open directories; elsewhere a failed dir sync
+        // leaves durability at the platform's rename guarantee.
+      }
+    } catch {
+      // A failed republication is a refusal, not an exception: every other
+      // denial in this function returns false, and callers treat a rebind as
+      // deniable rather than wrapping it in try/catch.
+      return false;
+    } finally {
+      await unlink(temporaryPath).catch(() => undefined);
+    }
+    return true;
+  } finally {
+    await releaseBreakLock(path, arbitration.token);
+  }
+}
+
+/**
+ * Conservative holder liveness used by both acquisition and read-side
+ * projections. A supervisor that died is not stale while a detached POSIX
+ * actuator group survives. On platforms where Node cannot prove the group
+ * gone, `retainOnPublisherDeath` fails closed rather than guessing.
+ */
+export function verifyLockHolderLiveness(
+  holder: LockMetadata,
+): ProcessIdentityVerdict {
+  const publisher = verifyProcessIdentity({
+    pid: holder.pid,
+    startedAtMs: holder.processStartedAtMs,
+    startIdentity: holder.processStartIdentity,
+  });
+  if (publisher === "alive-same" || publisher === "indeterminate") {
+    return publisher;
+  }
+  if (holder.supervisedProcessGroupId !== undefined) {
+    const group = probeProcessGroupLiveness(holder.supervisedProcessGroupId);
+    if (group === "alive") return "alive-same";
+    if (group === "indeterminate") return "indeterminate";
+    return publisher;
+  }
+  return holder.retainOnPublisherDeath === true ? "indeterminate" : publisher;
+}
+
+function probeProcessGroupLiveness(
+  processGroupId: number,
+): "alive" | "dead" | "indeterminate" {
+  if (process.platform === "win32") return "indeterminate";
+  // Parse already refuses group ids ≤ 1, but this probe is the last line:
+  // `process.kill(-1, 0)` asks "can I signal ANY process", which is true on
+  // every running machine and would report an eternal holder.
+  if (processGroupId <= 1) return "indeterminate";
+  try {
+    // A negative PID probes the POSIX process group. Its leader may already
+    // have exited while a platform child continues the irreversible edge.
+    process.kill(-processGroupId, 0);
+    return "alive";
+  } catch (err) {
+    const code = errorCode(err);
+    if (code === "EPERM") return "alive";
+    if (code === "ESRCH") return "dead";
+    return "indeterminate";
+  }
+}
+
 async function tryAcquireOnce(
   path: string,
   meta: LockMetadata,
@@ -538,6 +841,18 @@ async function tryAcquireOnce(
       ) {
         return;
       }
+      // A parent handle can publish a supervised child only for liveness;
+      // it must nevertheless never unlink that child's record on an error
+      // path. Normal protocol completion first atomically republishes the
+      // parent, then calls release. If the child died and its group/tree is
+      // not positively gone, retaining the lock is the fail-closed outcome.
+      if (
+        current.pid !== meta.pid &&
+        (current.supervisedProcessGroupId !== undefined ||
+          current.retainOnPublisherDeath === true)
+      ) {
+        return;
+      }
       try {
         await unlink(path);
       } catch {
@@ -585,11 +900,7 @@ async function acquireLockAtPath(
         // age ceiling here - a genuinely alive, genuinely
         // identity-verified holder is never broken out from under itself
         // no matter how long its operation takes.
-        const identity = verifyProcessIdentity({
-          pid: holder.pid,
-          startedAtMs: holder.processStartedAtMs,
-          startIdentity: holder.processStartIdentity,
-        });
+        const identity = verifyLockHolderLiveness(holder);
         shouldBreak = identity === "dead" || identity === "alive-different";
       } else {
         // Empty or corrupt lock file - no PID to probe. A crashed holder

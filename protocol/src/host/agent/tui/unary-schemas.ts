@@ -183,7 +183,7 @@ export type ValidateTuiForkProfileRequest = z.infer<
 // candidate-specific profile-lifecycle rejection (unknown/tombstoned/
 // setup-pending/unsupported-provider) that is NOT a `TuiForkScopeGuardError` -
 // the bulk resolver reshapes that error family into its own verdict row
-// (amend-01, T3 review) rather than aborting the whole batch.
+// rather than aborting the whole batch.
 //
 // `SOURCE_NOT_READY` (follow-up fix): a Claude source's `harnessSessionId` is
 // minted synchronously at launch, before any turn writes its transcript to

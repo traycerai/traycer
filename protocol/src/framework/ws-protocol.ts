@@ -7,6 +7,7 @@ import {
   type ClientHandshakeIdentity,
 } from "@traycer/protocol/framework/client-identity";
 import {
+  holdersRevisionWireFieldSchema,
   worktreeBusyHoldersWireFieldSchema,
   type WorktreeBusyHolder,
 } from "./worktree-busy-holders";
@@ -248,6 +249,7 @@ export type HostResponseFrame = {
     readonly code: string;
     readonly message: string;
     readonly holders?: readonly WorktreeBusyHolder[];
+    readonly holdersRevision?: string;
   } | null;
 };
 
@@ -419,6 +421,7 @@ export const hostResponseErrorSchema = z.object({
   // absent rather than rejecting the envelope — adding this optional
   // field must never fail a `{ code, message }` that parsed before it.
   holders: worktreeBusyHoldersWireFieldSchema,
+  holdersRevision: holdersRevisionWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

@@ -46,6 +46,7 @@ import { appLogger } from "@/lib/logger";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
+import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/link-routing/browser-link-router";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
@@ -257,6 +258,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const { fontFamily, fontSize: effectiveFontSize } =
     useEffectiveTerminalFont();
   const runnerHost = useRunnerHost();
+  const routeBrowserLink = useBrowserLinkRouterForRunnerHost(runnerHost);
   // Unfocused panes unregister global find ownership. Both split halves stay
   // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
   // visibility alone would leave two panes claiming it.
@@ -346,15 +348,15 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const onUserInputRef = useRef(props.onUserInput);
   const onContainerResizeRef = useRef(props.onContainerResize);
   const onWriterReadyRef = useRef(props.onWriterReady);
+  const routeBrowserLinkRef = useRef(routeBrowserLink);
   const onTerminalReadyRef = useRef(props.onTerminalReady);
-  const runnerHostRef = useRef(runnerHost);
   const keepAliveRef = useRef(props.keepAlive);
   useEffect(() => {
     onUserInputRef.current = props.onUserInput;
     onContainerResizeRef.current = props.onContainerResize;
     onWriterReadyRef.current = props.onWriterReady;
+    routeBrowserLinkRef.current = routeBrowserLink;
     onTerminalReadyRef.current = props.onTerminalReady;
-    runnerHostRef.current = runnerHost;
     findTargetIdRef.current = activeFindTargetId;
     keepAliveRef.current = props.keepAlive;
   }, [
@@ -364,7 +366,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     props.onTerminalReady,
     props.keepAlive,
     activeFindTargetId,
-    runnerHost,
+    routeBrowserLink,
   ]);
 
   // Acquire the persistent xterm engine for this session and attach its
@@ -397,8 +399,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     entry.live.onUserInput = (data) => onUserInputRef.current(data);
     entry.live.onContainerResize = (cols, rows) =>
       onContainerResizeRef.current(cols, rows);
-    entry.live.openExternalLink = (uri) => {
-      void runnerHostRef.current.openExternalLink(uri);
+    entry.live.openExternalLink = (uri, event) => {
+      routeBrowserLinkRef.current("terminal", uri, event);
     };
     const getFindTargetId = () => findTargetIdRef.current;
     const onSearchResults = (result: ISearchResultChangeEvent): void => {
@@ -740,12 +742,14 @@ function createXtermEntry(
   // sign-in URL as an OSC 8 link, so without `linkHandler` it kept hitting
   // OscLinkProvider's dead default confirm dialog even after WebLinksAddon was
   // wired up.
-  const openClickedLink = (uri: string): void => {
-    live.openExternalLink(uri);
+  const openClickedLink = (event: MouseEvent, uri: string): void => {
+    live.openExternalLink(uri, event);
   };
-  term.loadAddon(new WebLinksAddon((_event, uri) => openClickedLink(uri)));
+  term.loadAddon(
+    new WebLinksAddon((event, uri) => openClickedLink(event, uri)),
+  );
   term.options.linkHandler = {
-    activate: (_event, uri) => openClickedLink(uri),
+    activate: (event, uri) => openClickedLink(event, uri),
   };
   const searchAddon = new SearchAddon();
   term.loadAddon(searchAddon);

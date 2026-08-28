@@ -155,6 +155,22 @@ export async function readCliFeedCompatibilityEpoch(
   }
 }
 
+/**
+ * The version the feed's `platforms` map actually describes.
+ *
+ * The feed is ROLLING: it carries exactly one build's platform assets, and the
+ * publisher writes `latest` and `version` from the same value (see
+ * `scripts/native-packaging/publish-cli-package-managers.cjs`). `version` is
+ * the one that is definitionally tied to the assets, so every caller that
+ * stamps a version alongside downloaded bytes must read it from here rather
+ * than from `latest` - a lagging or hand-edited feed where the two disagree
+ * would otherwise install `version`'s bytes and record `latest`'s number,
+ * which is the divergence the audit's CLI-013 describes.
+ */
+export function cliAssetVersion(manifest: CliVersionsManifest): string {
+  return manifest.version;
+}
+
 export function resolveCliAsset(
   manifest: CliVersionsManifest,
   platformKey: HostPlatformKey,
@@ -163,8 +179,8 @@ export function resolveCliAsset(
   if (asset === undefined || !asset.available) {
     throw cliError({
       code: CLI_ERROR_CODES.REGISTRY_VERSION_NOT_FOUND,
-      message: `cli registry: no asset for ${platformKey} in version ${manifest.latest}`,
-      details: { platformKey, latest: manifest.latest },
+      message: `cli registry: no asset for ${platformKey} in version ${manifest.version}`,
+      details: { platformKey, version: manifest.version },
       exitCode: 1,
     });
   }

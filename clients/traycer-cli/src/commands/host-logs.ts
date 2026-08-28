@@ -1,20 +1,23 @@
-import { open, readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { hostLogPath } from "../store/paths";
 import { writeStdoutBytes } from "../runner/std-write";
+import {
+  LOG_TAIL_MAX_MISSING_RETRIES,
+  LOG_TAIL_POLL_INTERVAL_MS,
+  startLogTail,
+  type LogTail,
+} from "../host/log-tail";
 
 // `traycer host logs [--tail N] [--follow]` - surfaces the host
 // log file the supervisor writes into. JSON mode emits the tail string
 // as `result.data.tail`; human mode prints it directly so users get a
 // `tail -f`-equivalent experience without leaving the CLI.
 //
-// `--follow` uses a stat-based polling loop instead of `fs.watch` so
-// log rotation (file truncated to 0 bytes, file deleted-and-recreated)
-// is handled cleanly across macOS / Linux / Windows. `fs.watch` doesn't
-// reliably surface FSEvents truncation on macOS and races on the read
-// offset under concurrent appends.
-const POLL_INTERVAL_MS = 500;
-const MAX_MISSING_FILE_RETRIES = 60; // ~30s at 500ms
+// `--follow` delegates the offset/rotation bookkeeping to `host/log-tail.ts` -
+// see that module for why it polls rather than watches, and for the identity
+// and continuity rules that stop a rotation swallowing the new file's prefix.
+// This file owns only the signal handling that ends an interactive follow.
 
 export interface HostLogsArgs {
   readonly follow: boolean;
@@ -92,91 +95,44 @@ async function readTail(path: string, lines: number): Promise<string> {
   return slice.join("\n");
 }
 
-// Stat-based tail follower. Wakes every POLL_INTERVAL_MS, compares the
-// observed file size to the last offset we read, and emits any new
-// bytes to stdout. Truncation (size shrank) resets the offset to 0 so
-// the rotated file is re-read from the beginning; deletion enters a
-// bounded retry loop waiting for the file to reappear. Uses
-// `setTimeout`-recursive scheduling rather than `setInterval` to avoid
-// drift if a read takes longer than the poll interval.
-async function followLog(path: string, quiet: boolean): Promise<void> {
-  let offset: number;
-  try {
-    offset = (await stat(path)).size;
-  } catch {
-    offset = 0;
-  }
-  let stopped = false;
-  let missingRetries = 0;
+// Runs the shared tail until the user interrupts it (or the file stays gone
+// long enough that the tail gives up on its own).
+function followLog(path: string, quiet: boolean): Promise<void> {
   return new Promise<void>((resolve) => {
+    let stopped = false;
     // Keep a reference to the bound handler so we can deregister it on
     // resolve. `process.once` removes its own listener AFTER the signal
-    // fires, but a clean `resolve()` (e.g. the bounded-retry path
-    // calling cleanup itself) leaves both SIGINT/SIGTERM listeners
-    // attached. That leak is invisible in a real CLI process (it exits
-    // anyway) but accumulates in in-process test runners that invoke
+    // fires, but a clean `resolve()` (e.g. the tail exhausting its bounded
+    // retries and calling cleanup itself) leaves both SIGINT/SIGTERM
+    // listeners attached. That leak is invisible in a real CLI process (it
+    // exits anyway) but accumulates in in-process test runners that invoke
     // followLog repeatedly across tests.
+    //
+    // `tail` is a mutable binding because it and its cleanup refer to each
+    // other: `onExhausted` ends the follow, and ending the follow stops the
+    // tail.
+    let tail: LogTail | null = null;
     const cleanup = (): void => {
       if (stopped) return;
       stopped = true;
       process.off("SIGINT", cleanup);
       process.off("SIGTERM", cleanup);
+      tail?.stop();
       resolve();
     };
+    tail = startLogTail({
+      path,
+      // The tail advances its offset regardless, so a later un-quieted follow
+      // would not re-emit these bytes; only the write is gated, mirroring
+      // `ctx.output.human`'s own `--quiet` suppression.
+      onBytes: (chunk) => {
+        if (!quiet) writeStdoutBytes(chunk);
+      },
+      onExhausted: cleanup,
+      pollIntervalMs: LOG_TAIL_POLL_INTERVAL_MS,
+      maxMissingRetries: LOG_TAIL_MAX_MISSING_RETRIES,
+    });
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
-
-    const tick = async (): Promise<void> => {
-      if (stopped) return;
-      try {
-        // Open first, then size and read through the same handle, so the size
-        // we act on is the file we read rather than re-resolving the path twice
-        // (a TOCTOU window). Re-opening each tick also transparently follows a
-        // rotation: the next open lands on whatever file now holds the path.
-        const fh = await open(path, "r");
-        try {
-          const stats = await fh.stat();
-          missingRetries = 0;
-          if (stats.size < offset) {
-            // Truncated / rotated: re-read from the top.
-            offset = 0;
-          }
-          if (stats.size > offset) {
-            const length = stats.size - offset;
-            const buf = Buffer.alloc(length);
-            const { bytesRead } = await fh.read(buf, 0, length, offset);
-            if (bytesRead > 0) {
-              // Advance the offset unconditionally so a later un-quieted
-              // follow wouldn't re-emit these bytes; gate only the write
-              // so `--quiet` mirrors `ctx.output.human`'s suppression.
-              if (!quiet) {
-                writeStdoutBytes(buf.subarray(0, bytesRead));
-              }
-              offset += bytesRead;
-            }
-          }
-        } finally {
-          await fh.close();
-        }
-      } catch {
-        // ENOENT or transient: bounded retry then give up. Restart of
-        // the host supervisor recreates the log file, so a short
-        // gap during rotation is expected.
-        missingRetries += 1;
-        if (missingRetries > MAX_MISSING_FILE_RETRIES) {
-          cleanup();
-          return;
-        }
-        offset = 0;
-      }
-      if (!stopped) {
-        setTimeout(() => {
-          void tick();
-        }, POLL_INTERVAL_MS);
-      }
-    };
-    setTimeout(() => {
-      void tick();
-    }, POLL_INTERVAL_MS);
   });
 }

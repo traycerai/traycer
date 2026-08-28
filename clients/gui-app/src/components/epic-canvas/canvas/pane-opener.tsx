@@ -6,7 +6,7 @@
  *
  * Builds a pane-scoped `CommandContext` (`targetGroupId = this pane's group`,
  * `activeTabId`/`activeEpicId` = this pane's tab/epic), so leaves open into
- * THIS pane via `openTileInPane` (T3). Host-dependent hooks work directly -
+ * THIS pane via `openTileInPane`. Host-dependent hooks work directly -
  * the pane renders within the app provider stack (unlike the app-root modal).
  *
  * Precedent for inline cmdk (Command outside a Dialog): worktree-picker.tsx,

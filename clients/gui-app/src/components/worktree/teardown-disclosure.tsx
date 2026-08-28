@@ -18,7 +18,7 @@ export function TeardownDisclosure(props: {
   const idle = props.holders.filter((holder) => holder.activity === "idle");
   return (
     <div
-      className="flex w-full min-w-0 flex-col gap-3"
+      className="flex w-full min-w-0 flex-col gap-3 overflow-hidden"
       data-testid="teardown-disclosure"
     >
       {working.length > 0 ? (
@@ -80,7 +80,10 @@ function HolderGroup(props: {
               )}
             >
               <div className="flex min-w-0 items-baseline gap-2">
-                <span className="min-w-0 flex-1 truncate text-foreground">
+                <span
+                  className="min-w-0 flex-1 wrap-anywhere text-foreground"
+                  data-testid="teardown-holder-label"
+                >
                   {holder.label}
                 </span>
                 <span className="shrink-0 text-ui-xs text-muted-foreground">

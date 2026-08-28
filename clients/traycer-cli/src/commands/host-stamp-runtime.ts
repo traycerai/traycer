@@ -1,6 +1,11 @@
 import { stampRuntime, type StampRuntimeOutcome } from "../host/stamp-runtime";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+} from "../host/update-contender";
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { withCliLock } from "../store/cli-lock";
 
 // `traycer host stamp-runtime` (hidden, internal) - the desktop
 // controller's sole caller of `stampRuntime` (Host Update Layer
@@ -13,6 +18,8 @@ export interface HostStampRuntimeArgs {
   readonly observedPid: number;
   readonly observedStartedAt: string;
   readonly observedRuntimeVersion: string;
+  /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
+  readonly attemptAdoption: string | null;
 }
 
 export function buildHostStampRuntimeCommand(
@@ -23,20 +30,36 @@ export function buildHostStampRuntimeCommand(
       environment: ctx.runtime.environment,
       observedPid: args.observedPid,
     });
-    const outcome = await withCliLock(
+    const adoption = await resolveAttemptAdoptionFromNonce(
+      hostHomeDir(ctx.runtime.environment),
+      args.attemptAdoption,
+      Date.now(),
+    );
+    const outcome = await withCliUpdateContender(
       {
         environment: ctx.runtime.environment,
         reason: "host-stamp-runtime",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "runtime-repair-maintenance",
+        adoption,
       },
-      () =>
+      (capability) =>
         stampRuntime({
           environment: ctx.runtime.environment,
           expectedInstallGeneration: args.expectedInstallGeneration,
           observedPid: args.observedPid,
           observedStartedAt: args.observedStartedAt,
           observedRuntimeVersion: args.observedRuntimeVersion,
+          verifyMutationCapability: () =>
+            requireCliUpdateMutationCapability(capability, {
+              environment: ctx.runtime.environment,
+              reason: "host-stamp-runtime",
+              waitMs: 30_000,
+              pollIntervalMs: 100,
+              admission: "runtime-repair-maintenance",
+              adoption,
+            }),
         }),
     );
     ctx.runtime.logger.info("Host stamp-runtime command completed", {
