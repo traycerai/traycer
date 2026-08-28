@@ -110,16 +110,26 @@ export function useSwipeNavTransition(
   // fraction of the distance the layers have actually covered.
   const takeoverTravelPxRef = useRef(0);
   const navigateRef = useRef(navigate);
+  const resolveDestinationRef = useRef(resolveDestination);
   const reducedMotion = useReducedMotion();
   const reducedMotionRef = useRef(reducedMotion);
   useEffect(() => {
     navigateRef.current = navigate;
+    resolveDestinationRef.current = resolveDestination;
     reducedMotionRef.current = reducedMotion;
   });
+
+  // Armed for exactly the departure the commit itself initiates, and consumed
+  // by it. A plain "any navigation during a committed settle" test would also
+  // catch a redirect off the landed entry, or a programmatic navigation inside
+  // the settle window - and file the swipe's outgoing screen under an entry it
+  // never showed.
+  const ownDepartureRef = useRef(false);
 
   const clearView = useCallback((): void => {
     settleRef.current = null;
     committedRef.current = false;
+    ownDepartureRef.current = false;
     viewRef.current = null;
     setView(null);
   }, []);
@@ -138,16 +148,21 @@ export function useSwipeNavTransition(
       if (from === undefined) return;
       const leaving = readHistoryEntryKey(from);
       if (leaving === null) return;
-      // A committed transition's own navigation reaches here with the overlay
-      // still mounted, and the screen being left is one this hook has ALREADY
-      // frozen - the outgoing copy taken when the drag began. Filing that copy
-      // is not merely cheaper than recapturing (a capture here deep-clones the
-      // live app AND both mounted frozen screens before the exclusion pass can
-      // drop them, on the pointer-up path where a stall is visible): it is
-      // also the truer record, since the screen the user last SAW is the one
-      // the drag froze, not whatever the live app did underneath the overlay.
+      // The committed transition's OWN navigation reaches here with the
+      // overlay still mounted, and the screen being left is one this hook has
+      // ALREADY frozen - the outgoing copy taken when the drag began. Filing
+      // that copy is not merely cheaper than recapturing (a capture here
+      // deep-clones the live app AND both mounted frozen screens before the
+      // exclusion pass can drop them, on the pointer-up path where a stall is
+      // visible): it is also the truer record, since the screen the user last
+      // SAW is the one the drag froze, not whatever the live app did
+      // underneath the overlay. One-shot, consumed by the first departure the
+      // commit causes: a redirect off the landed entry, or any other
+      // navigation inside the settle window, is leaving a screen this gesture
+      // never froze and is captured like any other departure.
       const active = viewRef.current;
-      if (active !== null && committedRef.current) {
+      if (active !== null && ownDepartureRef.current) {
+        ownDepartureRef.current = false;
         rememberScreenSnapshot(leaving, active.outgoing);
         return;
       }
@@ -220,6 +235,7 @@ export function useSwipeNavTransition(
         direction,
         outgoing,
         destination,
+        destinationKey,
         widthPx,
         shape: SWIPE_NAV_SHAPE,
       };
@@ -246,7 +262,7 @@ export function useSwipeNavTransition(
       const active = viewRef.current;
       if (active === null) return;
       settleRef.current?.stop();
-      const commits = swipeNavCommits({
+      let commits = swipeNavCommits({
         // The distance the LAYERS have covered, not the distance this pointer
         // has: a takeover inherits the interrupted settle's travel, and a
         // release judged on the new pointer alone would spring back a screen
@@ -256,12 +272,27 @@ export function useSwipeNavTransition(
         velocityPxPerS: release.velocityPxPerS,
         cancelled: release.cancelled,
       });
+      // The landing was resolved when the drag BEGAN, and the stores it was
+      // resolved from can move under a held pointer - a prune, a tab closing,
+      // a draft deleted. Re-asked at the commit, and a changed answer turns
+      // the release into a spring-back: carrying the frozen destination to
+      // completion and then navigating somewhere else - or nowhere - would
+      // show one screen and land another, which is the lie this transition
+      // exists to prevent.
+      if (
+        commits &&
+        resolveDestinationRef.current(active.direction) !==
+          active.destinationKey
+      ) {
+        commits = false;
+      }
       // Navigated at the START of the settle, not at its end. The live app
       // spends the settle rendering the destination behind two frozen screens
       // that already show it, so the layers come off onto a screen that is
       // finished rather than onto one that begins mounting at that instant.
       if (commits) {
         committedRef.current = true;
+        ownDepartureRef.current = true;
         navigateRef.current(active.direction);
       }
       settleRef.current = animate(progress, commits ? 1 : 0, {

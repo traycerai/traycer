@@ -25,6 +25,13 @@ export interface SwipeNavTransitionView {
   readonly direction: EdgeNavDirection;
   readonly outgoing: ScreenSnapshot;
   readonly destination: ScreenSnapshot;
+  /**
+   * The history entry the destination snapshot shows, resolved when the drag
+   * began. The commit re-resolves and compares against this, because a store
+   * mutation under the held pointer can move the step's landing: a settle
+   * must not carry a screen to completion and then navigate somewhere else.
+   */
+  readonly destinationKey: string;
   /** Measured once, at the gesture's start; never re-read mid-drag. */
   readonly widthPx: number;
   readonly shape: SwipeNavShape;
