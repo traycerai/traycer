@@ -2080,6 +2080,29 @@ describe("useEdgeNavSwipe", () => {
       ]);
     });
 
+    // The hand does not stop moving when it leaves the glass: a fast swipe
+    // covers real ground between the last delivered move and the up, and a
+    // release judged on the move's numbers alone would refuse a flick that
+    // crossed the threshold on its way out.
+    it("judges the release on the ground the up itself covered", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      dispatchPointer("pointerup", {
+        clientX: 140,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 200,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      expect(probe.releases).toEqual([
+        { travelPx: 132, velocityPxPerS: 800, cancelled: false },
+      ]);
+    });
+
     it("reports a release the system took as cancelled", () => {
       const probe = mountWithFollowingTransition();
 

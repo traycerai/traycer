@@ -17,14 +17,23 @@ import type { ScreenSnapshot } from "@/components/layout/shell/screen-snapshot";
  */
 
 /**
- * How far either side of the cursor a snapshot is worth keeping.
+ * How many frozen screens are worth holding at once.
  *
- * A gesture can only reach the entry before or the entry after, so anything
- * further is a screen no swipe can ask for - and a frozen screen is a whole DOM
- * tree held out of the collector's reach. One step each way is what the feature
- * needs and the ceiling it is allowed.
+ * Retention is by RECENCY rather than by distance from the current entry,
+ * because the cursor moves: a single gesture can only reach the entry either
+ * side of it, but the next gesture starts from where that one landed, and a
+ * run of consecutive back swipes walks the cursor across screens that were all
+ * two-or-more steps away when they were filed. Pruning against the arrival
+ * index released exactly those screens, so the second back of a run had
+ * nothing to move and fell back to instant navigation.
+ *
+ * The count bounds what a distance rule bounded before - a frozen screen is a
+ * whole DOM tree held out of the collector's reach - and it is sized to cover
+ * a run of swipes rather than a whole session: deep enough that consecutive
+ * steps keep animating, small enough that a long walk releases the screens it
+ * has left behind.
  */
-const RETAINED_NEIGHBOUR_STEPS = 1;
+const MAX_RETAINED_SCREENS = 4;
 
 const snapshotsByIndex = new Map<number, ScreenSnapshot>();
 
@@ -50,24 +59,23 @@ export function readHistoryIndex(location: {
 }
 
 /**
- * Files the screen being left under its own entry, then drops everything the
- * cursor's new position puts out of reach.
+ * Files the screen being left under its own entry, releasing the
+ * least-recently-filed screen once the cache is full.
  *
- * Pruning here rather than on read is what bounds the cache by the SHAPE of
- * history rather than by a count: a long session walks the cursor forward and
- * every screen behind it is released as it goes, while a user stepping back and
- * forth over the same two entries holds exactly the two they can reach.
+ * Re-filing an entry replaces its screen AND refreshes its recency - the entry
+ * was just departed, which is the strongest claim on being swiped back to.
+ * Every departure files the departed entry, so an index reused by a later push
+ * is always overwritten before it can be a swipe's destination again.
  */
 export function rememberScreenSnapshot(
   leavingIndex: number,
-  arrivingIndex: number,
   snapshot: ScreenSnapshot,
 ): void {
+  snapshotsByIndex.delete(leavingIndex);
   snapshotsByIndex.set(leavingIndex, snapshot);
   for (const index of snapshotsByIndex.keys()) {
-    if (Math.abs(index - arrivingIndex) > RETAINED_NEIGHBOUR_STEPS) {
-      snapshotsByIndex.delete(index);
-    }
+    if (snapshotsByIndex.size <= MAX_RETAINED_SCREENS) break;
+    snapshotsByIndex.delete(index);
   }
 }
 

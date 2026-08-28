@@ -85,6 +85,7 @@ export interface SwipeNavTransition {
 export function useSwipeNavTransition(
   router: SwipeNavRouter,
   navigate: (direction: EdgeNavDirection) => void,
+  resolveDestination: (direction: EdgeNavDirection) => number | null,
 ): SwipeNavTransition {
   const progress = useMotionValue(0);
   const [view, setView] = useState<SwipeNavTransitionView | null>(null);
@@ -128,11 +129,7 @@ export function useSwipeNavTransition(
       if (source === null) return;
       const snapshot = captureScreenSnapshot(source);
       if (snapshot === null) return;
-      // The arriving index decides what stays reachable. When the router has
-      // not stamped one, the entry being left is the best cursor available -
-      // it is at most one step from wherever this lands.
-      const arriving = readHistoryIndex(event.toLocation) ?? leaving;
-      rememberScreenSnapshot(leaving, arriving, snapshot);
+      rememberScreenSnapshot(leaving, snapshot);
     });
   }, [router]);
 
@@ -163,10 +160,12 @@ export function useSwipeNavTransition(
       // preference asks for neither. Standing down entirely leaves the instant
       // navigation this gesture has always performed.
       if (reducedMotionRef.current === true) return false;
-      const currentIndex = readHistoryIndex(router.history.location);
-      if (currentIndex === null) return false;
-      const destinationIndex =
-        direction === "back" ? currentIndex - 1 : currentIndex + 1;
+      // The entry the NAVIGATION would land on, not the adjacent one: a
+      // semantic step skips ineligible entries, so "one entry over" can be a
+      // screen the commit never reaches - and a refused step (null) must show
+      // nothing travelling, since the fallback navigation will refuse it too.
+      const destinationIndex = resolveDestination(direction);
+      if (destinationIndex === null) return false;
       const destination = readScreenSnapshot(destinationIndex);
       // No frozen destination: a cold start, a restored session, or the first
       // step of a run. Nothing is invented to slide in behind the finger.
@@ -189,7 +188,7 @@ export function useSwipeNavTransition(
       setView(next);
       return true;
     },
-    [progress, router],
+    [progress, resolveDestination],
   );
 
   const updateDrag = useCallback(

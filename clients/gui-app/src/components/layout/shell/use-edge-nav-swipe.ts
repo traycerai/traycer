@@ -287,8 +287,27 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     };
 
     const handlePointerUp = (event: PointerEvent): void => {
-      if (tracking === null) return;
-      if (event.pointerId !== tracking.pointerId) return;
+      const started = tracking;
+      if (started === null) return;
+      if (event.pointerId !== started.pointerId) return;
+      // The release is a sample too: a fast swipe covers real ground between
+      // the last delivered move and the up, and judging the release on the
+      // move's numbers alone can refuse a flick that crossed a threshold on
+      // its way out. Folded in only when the up MOVED - a release at the last
+      // move's position carries no new motion, and deriving a velocity from
+      // it would replace the flick's real speed with zero.
+      if (started.following) {
+        const travelPx =
+          started.direction === "back"
+            ? event.clientX - started.x
+            : started.x - event.clientX;
+        const elapsedMs = event.timeStamp - started.lastAt;
+        if (elapsedMs > 0 && travelPx !== started.travelPx) {
+          started.velocityPxPerS =
+            ((travelPx - started.travelPx) / elapsedMs) * 1000;
+          started.travelPx = travelPx;
+        }
+      }
       stopTracking(false);
     };
 

@@ -226,31 +226,50 @@ describe("the snapshot cache", () => {
   }
 
   it("files a screen under the entry it shows", () => {
-    rememberScreenSnapshot(5, 4, snapshotOf("five"));
+    rememberScreenSnapshot(5, snapshotOf("five"));
 
     expect(readScreenSnapshot(5)?.node.textContent).toBe("five");
     expect(readScreenSnapshot(4)).toBeNull();
   });
 
-  // Only the entry either side of the cursor is reachable by a swipe, so
-  // anything further is a screen no gesture can ask for - and a held screen is
-  // a whole DOM tree kept out of the collector's reach.
-  it("releases screens the cursor has moved out of reach of", () => {
-    rememberScreenSnapshot(1, 2, snapshotOf("one"));
-    rememberScreenSnapshot(2, 3, snapshotOf("two"));
-    rememberScreenSnapshot(3, 4, snapshotOf("three"));
+  // A run of consecutive back swipes walks the cursor across entries that were
+  // all two-or-more steps away when they were filed. Retention by recency is
+  // what keeps the SECOND back of a run animated: pruning against the arrival
+  // index released exactly the screen that back needed.
+  it("keeps the screens a run of consecutive swipes walks back across", () => {
+    rememberScreenSnapshot(0, snapshotOf("first"));
+    rememberScreenSnapshot(1, snapshotOf("second"));
 
-    expect(readScreenSnapshot(1)).toBeNull();
-    expect(readScreenSnapshot(2)).toBeNull();
-    expect(readScreenSnapshot(3)?.node.textContent).toBe("three");
+    expect(readScreenSnapshot(1)?.node.textContent).toBe("second");
+    expect(readScreenSnapshot(0)?.node.textContent).toBe("first");
   });
 
-  it("keeps both neighbours of a cursor stepping back and forth", () => {
-    rememberScreenSnapshot(5, 4, snapshotOf("five"));
-    rememberScreenSnapshot(4, 5, snapshotOf("four"));
+  // A frozen screen is a whole DOM tree held out of the collector's reach, so
+  // the cache is bounded - by count, since distance from the cursor is not a
+  // bound the cursor's own movement respects.
+  it("releases the least recently filed screen once full", () => {
+    for (let index = 0; index <= 4; index += 1) {
+      rememberScreenSnapshot(index, snapshotOf(`screen ${index}`));
+    }
 
-    expect(readScreenSnapshot(5)?.node.textContent).toBe("five");
-    expect(readScreenSnapshot(4)?.node.textContent).toBe("four");
+    expect(readScreenSnapshot(0)).toBeNull();
+    expect(readScreenSnapshot(1)?.node.textContent).toBe("screen 1");
+    expect(readScreenSnapshot(4)?.node.textContent).toBe("screen 4");
+  });
+
+  // Re-filing an entry is a fresh departure from it - the strongest claim on
+  // being swiped back to - so it renews the screen's tenure rather than
+  // inheriting the original filing's.
+  it("renews a screen's tenure when its entry is filed again", () => {
+    for (let index = 0; index <= 3; index += 1) {
+      rememberScreenSnapshot(index, snapshotOf(`screen ${index}`));
+    }
+    rememberScreenSnapshot(0, snapshotOf("zero refiled"));
+    rememberScreenSnapshot(4, snapshotOf("screen 4"));
+
+    expect(readScreenSnapshot(1)).toBeNull();
+    expect(readScreenSnapshot(0)?.node.textContent).toBe("zero refiled");
+    expect(readScreenSnapshot(4)?.node.textContent).toBe("screen 4");
   });
 });
 
