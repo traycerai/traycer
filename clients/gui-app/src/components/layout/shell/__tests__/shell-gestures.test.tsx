@@ -2082,6 +2082,37 @@ describe("useEdgeNavSwipe", () => {
       expect(probe.dragStarts).toEqual(["back"]);
     });
 
+    // The trailing edge, exercised end to end. The followed-drag path inverts
+    // travel for a forward swipe in two places, and a block that only ever
+    // presses at the leading edge would pass with a sign error in either -
+    // one direction covered and the other assumed is the exact shape of the
+    // defect this feature shipped with.
+    it("follows a forward drag from the trailing edge, travel inward-positive", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(VIEWPORT_PX - 8, 0);
+      move(VIEWPORT_PX - 60, 100);
+      move(VIEWPORT_PX - 110, 200);
+      move(VIEWPORT_PX - 160, 300);
+      dispatchPointer("pointerup", {
+        clientX: VIEWPORT_PX - 160,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 400,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      expect(probe.dragStarts).toEqual(["forward"]);
+      expect(probe.navigations).toEqual([]);
+      expect(probe.dragTravel).toEqual([52, 102, 152]);
+      // Velocity is the last move-pair's 500 px/s; the up sat still at a
+      // later timestamp, so the last real sample stands.
+      expect(probe.releases).toEqual([
+        { travelPx: 152, velocityPxPerS: 500, cancelled: false },
+      ]);
+    });
+
     // DIRECTION LOCK, the axis half: past activation the classifier is never
     // consulted again, so a drag that curves sharply downward afterwards is
     // still this gesture's - a thumb arcing across a phone does not travel a
