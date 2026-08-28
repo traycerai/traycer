@@ -790,7 +790,9 @@ describe("runDoctor pending CLI upgrade surface", () => {
     ).toBeDefined();
     // The stale marker must NOT be read as completing the newer upgrade.
     expect(
-      result.issues.find((i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED"),
+      result.issues.find(
+        (i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+      ),
     ).toBeUndefined();
   });
 
