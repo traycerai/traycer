@@ -3467,11 +3467,11 @@ describe("<ChatTile />", () => {
   }
 
   function submitComposerWithEnter(): void {
-    const editorDom = document.querySelector('[contenteditable="true"]');
-    if (!(editorDom instanceof HTMLElement)) {
-      throw new Error("expected composer editor");
-    }
-    fireEvent.keyDown(editorDom, { key: "Enter" });
+    // The composer's prompt editor is the only textbox while the inline
+    // message editor is closed; its accessible name is the placeholder,
+    // which varies with narrow/steer-hint state, so the bare role query is
+    // the stable handle.
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
   }
 
   it("sends clean during a running turn when no workspace draft is staged", async () => {
