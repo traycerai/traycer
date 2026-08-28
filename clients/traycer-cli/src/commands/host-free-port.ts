@@ -1,7 +1,11 @@
 import { killConflictingPortOwner } from "../host/free-port-kill";
 import { portRepairFailure } from "../host/free-port-outcome";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+} from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { withCliLock } from "../store/cli-lock";
 
 // `traycer host free-port --pid <pid> --port <port>` - a kill-only
 // sibling of `host free-port-and-restart` (Host Update Layer Redesign
@@ -48,18 +52,25 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
       totalBytes: null,
       workUnits: null,
     });
-    const result = await withCliLock(
-      {
-        environment: ctx.runtime.environment,
-        reason: "host-free-port",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-      },
-      () =>
+    // ONE options value for acquisition and every in-segment revalidation:
+    // separate literals that must stay identical are how admission policies
+    // drift.
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "host-free-port",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "recovery-maintenance",
+    };
+    const result = await withCliUpdateContender(
+      contenderOptions,
+      (capability) =>
         killConflictingPortOwner({
           pid: args.pid,
           port: args.port,
           commandName: "host free-port",
+          verifyMutationCapability: () =>
+            requireCliUpdateMutationCapability(capability, contenderOptions),
         }),
     );
     const failure = portRepairFailure({

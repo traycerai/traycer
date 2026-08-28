@@ -14,7 +14,14 @@ import {
   type ServiceController,
   type ServiceLabel,
 } from "../service";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContenderContext } from "../host/update-contender";
+import {
+  relaunchHostAfterRestartWithAttempt,
+  stopHostServiceWithAttempt,
+  stopHostForRestartWithAttempt,
+} from "../host/update-mutation";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
   defaultSpawnImpl,
@@ -74,9 +81,32 @@ import {
 // mechanics. Mutually exclusive with `--if-idle` - one flag widens the busy
 // gate, the other removes it, and a command carrying both has no coherent
 // intent.
+// `--defer-if-parked` (hidden, internal - the Desktop force-restart path):
+// when the canonical recovery classification says `stop-only`, do NOT stop the
+// service; refuse and report, leaving a running host running.
+//
+// ## Why this is a flag on THIS command rather than a check by the caller
+//
+// The classification and the action it authorizes must happen under ONE
+// acquisition of the contender lock. Desktop previously read the attempt record
+// itself, decided the record was not an active continuation, and only then
+// shelled this command - a snapshot, not a condition on the restart. A new
+// contender can park `preparing/activate` in the window between that read and
+// this command taking the lock, so the caller's "safe to restart" verdict was
+// already stale when it was acted on: the CLI would then classify the NEW
+// record as `stop-only`, stop the service, and report `restarted:false`,
+// leaving the host down with a continuation on disk. That is the stranding the
+// Desktop check existed to prevent, produced by the check itself.
+//
+// Deciding here closes the window by construction, because
+// `contenderContext.recoveryAction` is computed from the record under the same
+// lock that guards the stop/restart below. It also removes the second copy of
+// the policy: which phases are recoverable is `recoveryActionFor`'s call in
+// shared, and no caller re-derives it.
 export interface HostRestartArgs {
   readonly ifIdle: boolean;
   readonly force: boolean;
+  readonly deferIfParked: boolean;
 }
 
 export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
@@ -94,45 +124,110 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
     }
     const label = serviceLabelFor(ctx.runtime.environment);
     const controller = createServiceController();
-    const locked = await withCliLock(
+    const locked = await withCliUpdateContenderContext(
       {
         environment: ctx.runtime.environment,
         reason: "host-restart",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "recovery-maintenance",
       },
-      async () => {
+      async (capability, _cliLock, contenderContext) => {
         if (args.ifIdle) {
           await assertHostNotBusy(ctx.runtime.environment);
         }
-        const result = await restartWithPendingCliUpgradeFinalize({
-          environment: ctx.runtime.environment,
-          controller,
-          label,
-          parentPid: process.pid,
-          platform: osPlatform(),
-          spawnImpl: defaultSpawnImpl,
-          writeImpl: defaultWriteImpl,
-          force: args.force,
-        });
+        if (contenderContext.recoveryAction === "stop-only") {
+          // Classified from the record under the SAME lock acquisition that
+          // guards the action below, so no contender can change the record
+          // between the decision and its effect.
+          if (args.deferIfParked) {
+            // Refuse without touching the service. For a caller whose whole
+            // purpose is "get this host running", stopping it is strictly
+            // worse than doing nothing: a stop leaves the machine down AND
+            // the continuation parked, which is the state the caller was
+            // trying to escape. Doing nothing leaves a running host running
+            // and a down host no worse, and the parked record stays for the
+            // admitted activation flow either way.
+            return {
+              kind: "deferred-for-parked-activation" as const,
+              attestation: await attestInstallRuntime(ctx.runtime.environment),
+            };
+          }
+          // An activate-continuation record proves that packaged-Mac bytes
+          // are waiting for the update executor's explicit activation edge.
+          // Force restart remains a usable recovery control, but relaunching
+          // the generic supervisor here could activate those parked bytes
+          // outside that continuation. Stop the current service safely and
+          // leave the parked record for the admitted activation flow.
+          await stopHostServiceWithAttempt(
+            capability,
+            {
+              environment: ctx.runtime.environment,
+              reason: "host-restart",
+              waitMs: 30_000,
+              pollIntervalMs: 100,
+              admission: "recovery-maintenance",
+            },
+            controller,
+            label,
+            { force: args.force },
+          );
+          return {
+            kind: "stopped-for-parked-activation" as const,
+            attestation: await attestInstallRuntime(ctx.runtime.environment),
+          };
+        }
+        const result = await restartWithPendingCliUpgradeFinalizeWithAttempt(
+          {
+            environment: ctx.runtime.environment,
+            controller,
+            label,
+            parentPid: process.pid,
+            platform: osPlatform(),
+            spawnImpl: defaultSpawnImpl,
+            writeImpl: defaultWriteImpl,
+            force: args.force,
+          },
+          capability,
+          {
+            environment: ctx.runtime.environment,
+            reason: "host-restart",
+            waitMs: 30_000,
+            pollIntervalMs: 100,
+            admission: "recovery-maintenance",
+          },
+        );
         return {
+          kind: "restarted" as const,
           result,
           attestation: await attestInstallRuntime(ctx.runtime.environment),
         };
       },
     );
+    const restarted = locked.kind === "restarted";
+    // A distinct fact from `restarted:false`. Both mean "no relaunch", but a
+    // safe-stop STOPPED the service and this one deliberately did not touch
+    // it, and a caller that cannot tell them apart cannot tell "your host is
+    // now down" from "your host is still up, activation is pending".
+    const deferredForParkedActivation =
+      locked.kind === "deferred-for-parked-activation";
     return {
       data: {
-        restarted: true,
+        restarted,
+        deferredForParkedActivation,
         label: label.id,
-        cliUpgrade: locked.result.finalize,
-        helper: locked.result.helper,
-        markerReconcile: locked.result.markerReconcile,
+        cliUpgrade: restarted ? locked.result.finalize : null,
+        helper: restarted ? locked.result.helper : null,
+        markerReconcile: restarted ? locked.result.markerReconcile : null,
         installGeneration: locked.attestation.installGeneration,
         runtimeVersion: locked.attestation.runtimeVersion,
         runtimeWasNull: locked.attestation.runtimeWasNull,
       },
-      human: humanForRestart(label.id, locked.result),
+      human: restarted
+        ? humanForRestart(label.id, locked.result)
+        : deferredForParkedActivation
+          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation`
+          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation`,
       exitCode: 0,
     };
   };
@@ -166,6 +261,44 @@ export interface RestartFinalizeResult {
 // without monkey-patching the OS-level helpers.
 export async function restartWithPendingCliUpgradeFinalize(
   args: RestartFinalizeArgs,
+  actuators: RestartActuators,
+): Promise<RestartFinalizeResult> {
+  return restartWithActuators(args, actuators);
+}
+
+async function restartWithPendingCliUpgradeFinalizeWithAttempt(
+  args: RestartFinalizeArgs,
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<RestartFinalizeResult> {
+  return restartWithActuators(args, {
+    stop: () =>
+      stopHostForRestartWithAttempt(
+        capability,
+        contenderOptions,
+        args.controller,
+        args.label,
+        { force: args.force },
+      ),
+    relaunch: (stopped) =>
+      relaunchHostAfterRestartWithAttempt(
+        capability,
+        contenderOptions,
+        args.controller,
+        args.label,
+        stopped,
+      ),
+  });
+}
+
+export interface RestartActuators {
+  stop(): Promise<import("../service").RestartStop>;
+  relaunch(stopped: import("../service").RestartStop): Promise<void>;
+}
+
+async function restartWithActuators(
+  args: RestartFinalizeArgs,
+  actuators: RestartActuators,
 ): Promise<RestartFinalizeResult> {
   // 1. Apply any marker from a prior helper attempt. This may clear
   //    pendingUpgrade if the helper succeeded on the last cycle.
@@ -180,9 +313,7 @@ export async function restartWithPendingCliUpgradeFinalize(
   // to repair. The restart half reports that as `forcedRecycle` instead, and
   // the relaunch below recycles the job rather than no-opping a kickstart
   // against a process that never left. A busy host still throws.
-  const stop = await args.controller.stopForRestart(args.label, {
-    force: args.force,
-  });
+  const stop = await actuators.stop();
 
   // 2. Try the in-process finalize. On POSIX this almost always works
   //    once the host supervisor releases the binary.
@@ -219,7 +350,7 @@ export async function restartWithPendingCliUpgradeFinalize(
     if (finalize.status === "manifest-update-failed") {
       let relaunchError: unknown = null;
       try {
-        await args.controller.relaunchAfterRestart(args.label, stop);
+        await actuators.relaunch(stop);
       } catch (err) {
         relaunchError = err;
       }
@@ -250,7 +381,7 @@ export async function restartWithPendingCliUpgradeFinalize(
       if (relaunchError !== null) throw relaunchError;
       if (markerWriteError !== null) throw markerWriteError;
     } else {
-      await args.controller.relaunchAfterRestart(args.label, stop);
+      await actuators.relaunch(stop);
     }
   }
 

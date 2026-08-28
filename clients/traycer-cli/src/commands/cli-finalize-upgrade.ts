@@ -7,7 +7,10 @@ import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContender } from "../host/update-contender";
+import { startHostServiceWithAttempt } from "../host/update-mutation";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 
 // `traycer cli finalize-upgrade` - hidden, internal-only command the
@@ -28,15 +31,24 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
   const environment = ctx.runtime.environment;
+  // ONE options value for acquisition and for every in-attempt revalidation:
+  // two literals that must stay identical are how admission policies drift.
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment,
+    reason: "cli-finalize-upgrade",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "service-maintenance",
+  };
   try {
-    const outcome = await withCliLock(
-      {
-        environment,
-        reason: "cli-finalize-upgrade",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-      },
-      () => runFinalizeUpgradeSwap({ environment }),
+    const outcome = await withCliUpdateContender(
+      contenderOptions,
+      (capability) =>
+        runFinalizeUpgradeSwapWithAttempt(
+          { environment },
+          capability,
+          contenderOptions,
+        ),
     );
     return {
       data: outcome,
@@ -44,7 +56,16 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
       exitCode: 0,
     };
   } catch (err) {
-    if (err instanceof CliError && err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY) {
+    // Both refusals defer the same way: no marker is written, so
+    // `pendingUpgrade` stays populated and the next `host restart` retries.
+    // An active durable attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE from the
+    // nonterminal-attempt admission verdict) is a scheduling refusal exactly
+    // like a busy cli-lock, not a finalization failure.
+    if (
+      err instanceof CliError &&
+      (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
+        err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
+    ) {
       const outcome: FinalizeSwapOutcome = { status: "lock-timeout" };
       return { data: outcome, human: humanForOutcome(outcome), exitCode: 0 };
     }
@@ -89,9 +110,34 @@ export type FinalizeSwapOutcome =
 // - installer/apply.ts, restartWithPendingCliUpgradeFinalize). Kept
 // separate from the command wrapper so tests can exercise it without
 // lock machinery.
-export async function runFinalizeUpgradeSwap(opts: {
-  readonly environment: Environment;
-}): Promise<FinalizeSwapOutcome> {
+export async function runFinalizeUpgradeSwap(
+  opts: {
+    readonly environment: Environment;
+  },
+  startService: () => Promise<void>,
+): Promise<FinalizeSwapOutcome> {
+  return runFinalizeUpgradeSwapWithStart(opts, startService);
+}
+
+async function runFinalizeUpgradeSwapWithAttempt(
+  opts: { readonly environment: Environment },
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<FinalizeSwapOutcome> {
+  return runFinalizeUpgradeSwapWithStart(opts, () =>
+    startHostServiceWithAttempt(
+      capability,
+      contenderOptions,
+      createServiceController(),
+      serviceLabelFor(opts.environment),
+    ),
+  );
+}
+
+async function runFinalizeUpgradeSwapWithStart(
+  opts: { readonly environment: Environment },
+  startService: () => Promise<void>,
+): Promise<FinalizeSwapOutcome> {
   const logger = createCliLogger(opts.environment);
   const markerPath = cliPostFinalizeMarkerPath(opts.environment);
   const swap = await finalizePendingCliUpgrade({
@@ -124,6 +170,7 @@ export async function runFinalizeUpgradeSwap(opts: {
   // for the duration of its own critical section.
   if (swap.status === "no-pending" || swap.status === "no-manifest") {
     const serviceStartError = await startServiceBestEffort(
+      startService,
       opts.environment,
       logger,
     );
@@ -162,6 +209,7 @@ export async function runFinalizeUpgradeSwap(opts: {
     // reads as `marker-invalid` on every already-installed CLI. The
     // errorMessage carries the distinction that matters.
     const serviceStartError = await startServiceBestEffort(
+      startService,
       opts.environment,
       logger,
     );
@@ -186,6 +234,7 @@ export async function runFinalizeUpgradeSwap(opts: {
   // `pendingUpgrade` stands. Both must still hand the host back.
   if (swap.status === "publish-failed" || swap.status === "still-locked") {
     const serviceStartError = await startServiceBestEffort(
+      startService,
       opts.environment,
       logger,
     );
@@ -202,6 +251,7 @@ export async function runFinalizeUpgradeSwap(opts: {
 
   if (swap.status === "manifest-update-failed") {
     const serviceStartError = await startServiceBestEffort(
+      startService,
       opts.environment,
       logger,
     );
@@ -224,6 +274,7 @@ export async function runFinalizeUpgradeSwap(opts: {
 
   // swap.status === "finalised"
   const serviceStartError = await startServiceBestEffort(
+    startService,
     opts.environment,
     logger,
   );
@@ -249,11 +300,16 @@ export async function runFinalizeUpgradeSwap(opts: {
 // message goes into the marker's `serviceStartError` so the next CLI
 // invocation's reconcile can surface it.
 async function startServiceBestEffort(
+  // The INJECTED start, never a raw controller call: under the maintenance
+  // capability the thunk is `startHostServiceWithAttempt`, and a raw start
+  // here would hand the host back outside the attempt gate on exactly the
+  // paths that report failures.
+  startService: () => Promise<void>,
   environment: Environment,
   logger: ILogger,
 ): Promise<string | null> {
   try {
-    await createServiceController().start(serviceLabelFor(environment));
+    await startService();
     return null;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

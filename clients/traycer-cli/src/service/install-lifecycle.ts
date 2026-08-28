@@ -16,6 +16,11 @@ import {
   killLingeringSlotProcesses,
 } from "./platforms/windows";
 import type { Environment } from "../runner/environment";
+import {
+  isServiceMutationAuthorityError,
+  withServiceMutationAuthority,
+} from "./mutation-authority";
+import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 
 // Windows only: the pre-swap stop kills every process the slot scan can
 // see, but a handle it cannot (an orphaned child whose CWD is inside
@@ -128,8 +133,16 @@ export function createServiceInstallLifecycle(
     postSwapAction: "none",
     postSwapError: null,
   };
+  let verifyMutationCapability = async (): Promise<void> => {};
+  let publishHostStartAdoption: HostStartAdoptionPublisher = async () => {};
   const lifecycle: InstallHostLifecycle = {
     swapLockRecovery: swapLockRecoveryFor(label),
+    setMutationVerifier: (verify) => {
+      verifyMutationCapability = verify;
+    },
+    setHostStartAdoptionPublisher: (publish) => {
+      publishHostStartAdoption = publish;
+    },
     beforeSwap: async () => {
       const status = await controller.status(label);
       state.priorState = status.state;
@@ -141,7 +154,9 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
-        await controller.stop(label, { force: options.force });
+        await withServiceMutationAuthority(verifyMutationCapability, () =>
+          controller.stop(label, { force: options.force }),
+        );
         state.stoppedBeforeSwap = true;
         return;
       }
@@ -165,9 +180,12 @@ export function createServiceInstallLifecycle(
         process.platform === "darwin"
       ) {
         try {
-          await controller.stop(label, { force: options.force });
+          await withServiceMutationAuthority(verifyMutationCapability, () =>
+            controller.stop(label, { force: options.force }),
+          );
           state.stoppedBeforeSwap = true;
         } catch (cause) {
+          if (isServiceMutationAuthorityError(cause)) throw cause;
           if (
             cause instanceof CliError &&
             cause.code === CLI_ERROR_CODES.HOST_BUSY
@@ -203,29 +221,24 @@ export function createServiceInstallLifecycle(
         // the registered owner and the CLI label is genuinely a competitor
         // - `externally-managed` alone cannot distinguish that from a
         // pre-split machine whose CLI label IS Desktop's registration.
-        // Contractually non-throwing - but caught anyway rather than trusted:
-        // the install's bytes are already swapped in at this point, so an
-        // opportunistic cleanup must not be able to abort the lifecycle no
-        // matter how a future platform implementation behaves.
-        //
-        // Its outcome is deliberately NOT recorded on `state`: nothing builds
-        // a `serviceLifecycle` payload from it (every caller assembles that
-        // field-by-field), so a field here would be dead state. The repair
-        // reports itself through the CLI logger, which is where a field
-        // diagnosis for "my host went away after an install" starts.
-        await controller
-          .retireCompetingRegistration(label)
-          .catch((cause: unknown) => {
-            // Logged HERE rather than swallowed: every failure the repair
-            // anticipates is already reported at its own seam, so the only
-            // way to land in this catch is an unforeseen throw - precisely
-            // the case that escaped that logging. A silent swallow would
-            // make it invisible everywhere.
-            createCliLogger(options.environment).warn(
-              "Competing-registration repair threw unexpectedly; the host install itself was unaffected.",
-              { cause: cause instanceof Error ? cause.message : String(cause) },
-            );
-          });
+        // This is a destructive service edge even though it is a repair. It
+        // must consume the exact same live verifier as the swap itself; do
+        // not catch-and-log a lost capability and continue into a later
+        // registration edge.
+        try {
+          await withServiceMutationAuthority(verifyMutationCapability, () =>
+            controller.retireCompetingRegistration(label),
+          );
+        } catch (cause) {
+          // An unexpected best-effort repair error keeps the historical
+          // post-swap doctor path. Authority loss is different: it is a hard
+          // stop and must never be converted into that best-effort outcome.
+          if (isServiceMutationAuthorityError(cause)) throw cause;
+          createCliLogger(options.environment).warn(
+            "Competing-registration repair threw unexpectedly; the host install itself was unaffected.",
+            { cause: cause instanceof Error ? cause.message : String(cause) },
+          );
+        }
         if (process.platform === "darwin") {
           // Bring the host up on the NEW bytes now instead of leaving the
           // machine hostless until Desktop's next register cycle. Both
@@ -261,15 +274,24 @@ export function createServiceInstallLifecycle(
           // A failure must not abort the completed install - record it and
           // steer to doctor like every other post-swap error.
           try {
-            if (state.stoppedBeforeSwap) {
-              await controller.relaunchAfterRestart(label, {
-                forcedRecycle: true,
-              });
-            } else {
-              await controller.start(label);
-            }
+            await withServiceMutationAuthority(verifyMutationCapability, () =>
+              (async () => {
+                await runWithPublishedHostStartAdoption(
+                  publishHostStartAdoption,
+                  controller,
+                  label,
+                  async () =>
+                    state.stoppedBeforeSwap
+                      ? controller.relaunchAfterRestart(label, {
+                          forcedRecycle: true,
+                        })
+                      : controller.start(label),
+                );
+              })(),
+            );
             state.postSwapAction = "start";
           } catch (cause) {
+            if (isServiceMutationAuthorityError(cause)) throw cause;
             state.postSwapError =
               cause instanceof Error ? cause.message : String(cause);
           }
@@ -291,8 +313,11 @@ export function createServiceInstallLifecycle(
             environment: options.environment,
             bootstrap: options.bootstrap,
             preservedCli: null,
+            verifyMutationCapability,
+            publishHostStartAdoption,
           });
         } catch (cause) {
+          if (isServiceMutationAuthorityError(cause)) throw cause;
           // No rollback - the new host stays in place. The command
           // surfaces this as a warning and steers the user toward
           // `traycer host doctor` / `traycer host service install`
@@ -368,8 +393,11 @@ export function createServiceInstallLifecycle(
             allowSelfInvocation: true,
           },
           preservedCli,
+          verifyMutationCapability,
+          publishHostStartAdoption,
         });
       } catch (cause) {
+        if (isServiceMutationAuthorityError(cause)) throw cause;
         // No rollback. New host is in place; surface the failure
         // so the command can warn the user and Doctor can flag it.
         state.postSwapError =
@@ -394,12 +422,18 @@ export function createBytesOnlyInstallLifecycle(
   controller: ServiceController,
   label: ServiceLabel,
 ): InstallHostLifecycle {
+  let verifyMutationCapability = async (): Promise<void> => {};
   return {
     swapLockRecovery: swapLockRecoveryFor(label),
-    beforeSwap: (): Promise<void> =>
-      process.platform === "win32"
-        ? controller.stop(label, { force: false })
-        : Promise.resolve(),
+    setMutationVerifier: (verify) => {
+      verifyMutationCapability = verify;
+    },
+    beforeSwap: async (): Promise<void> => {
+      if (process.platform !== "win32") return;
+      await withServiceMutationAuthority(verifyMutationCapability, () =>
+        controller.stop(label, { force: false }),
+      );
+    },
     afterSwap: (): Promise<void> => Promise.resolve(),
   };
 }
@@ -413,6 +447,8 @@ interface RegisterServiceOptions {
   // invocation kept verbatim (host update's no-repoint contract) instead of
   // re-resolving it.
   readonly preservedCli: CliInvocation | null;
+  readonly verifyMutationCapability: () => Promise<void>;
+  readonly publishHostStartAdoption: HostStartAdoptionPublisher;
 }
 
 async function registerService(opts: RegisterServiceOptions): Promise<void> {
@@ -432,9 +468,35 @@ async function registerService(opts: RegisterServiceOptions): Promise<void> {
   // / Flow 7 expectations that first-launch ends with a running host,
   // and matching the existing-registration update path that must
   // re-load the regenerated definition rather than kickstart a cache.
-  await opts.controller.install({
-    label: opts.label,
-    cli,
-    enableLinger: opts.bootstrap.enableLinger,
-  });
+  await withServiceMutationAuthority(opts.verifyMutationCapability, () =>
+    (async () => {
+      await runWithPublishedHostStartAdoption(
+        opts.publishHostStartAdoption,
+        opts.controller,
+        opts.label,
+        () =>
+          opts.controller.install({
+            label: opts.label,
+            cli,
+            enableLinger: opts.bootstrap.enableLinger,
+          }),
+      );
+    })(),
+  );
+}
+
+async function runWithPublishedHostStartAdoption(
+  publish: HostStartAdoptionPublisher,
+  controller: Pick<ServiceController, "hostStartAdoptionLabel">,
+  label: ServiceLabel,
+  start: () => Promise<void>,
+): Promise<void> {
+  const serviceLabel = await controller.hostStartAdoptionLabel(label);
+  const lease = await publish(serviceLabel);
+  try {
+    await start();
+    await lease?.waitForSpawn();
+  } finally {
+    await lease?.cancel();
+  }
 }

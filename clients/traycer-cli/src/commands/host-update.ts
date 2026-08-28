@@ -1,4 +1,4 @@
-import { applyHost, type ApplyHostOutcome } from "../installer/apply";
+import type { ApplyHostOutcome } from "../installer/apply";
 import {
   downloadAndStageHost,
   type HostDownloadOutcome,
@@ -18,7 +18,11 @@ import type { ILogger } from "../logger";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContender } from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
+import { installDispatchAckStamper } from "../host/update-dispatch-ack";
+import { hostHomeDir } from "../store/paths";
+import { applyHostWithAttempt } from "../host/update-mutation";
 
 // `traycer host update [--version X] [--force]` - the composite (Host Update Layer
 // Redesign Tech Plan, "New/changed commands" > `host update`, D6): stage
@@ -74,6 +78,22 @@ export interface HostUpdateArgs {
   readonly force: boolean;
   /** `null` stages the latest registry version; an explicit value is a pin. */
   readonly versionRequest?: string | null;
+  /**
+   * Correlation nonce for the dispatch ACK (Ticket 07 §5.2.8), or `null` when
+   * this run was not dispatched by a host resolver waiting to name the attempt.
+   *
+   * A nonce, never a token: it grants nothing, so argv is a legitimate carrier
+   * for it. The child stamps it into the sibling ACK file at durable-claim
+   * time, and the resolver accepts an ACK only when the nonce matches one it
+   * minted for a child it spawned.
+   *
+   * Consumed at the schema-v2 executor's acknowledgement seam. That junction is
+   * the CUTOVER: today `host update` runs the legacy path, whose contender
+   * admission is `legacy-update-shadow` and which creates no schema-v2 attempt
+   * to acknowledge, so a nonce passed now is carried and not stamped. That is
+   * the same darkness the resolver's wait ships with, and the two flip together.
+   */
+  readonly ackNonce: string | null;
 }
 
 export interface LegacyHostUpdateServiceLifecycle {
@@ -113,6 +133,23 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       environment,
       force: args.force,
     });
+
+    // Ticket 07 §5.2.8. FIRST, before `downloadAndStageHost` writes anything:
+    // a run dispatched with a nonce this build cannot honour has already lost
+    // the correlation its caller is waiting on, and discovering that after
+    // staging bytes would mean doing destructive work for a dispatch that can
+    // only ever report indeterminate.
+    //
+    // The returned callback is the executor segment's `acknowledge` hook, so
+    // the stamp lands after the claim is durable rather than beside it.
+    const dispatchAckAcknowledgement = installDispatchAckStamper(
+      hostHomeDir(environment),
+      args.ackNonce,
+    );
+
+    // Carried into the execution half. Referenced here so the installation is
+    // a real dependency of the run rather than a value the compiler can drop.
+    void dispatchAckAcknowledgement;
 
     const downloadOutcome = await downloadAndStageHost({
       environment,
@@ -267,66 +304,67 @@ async function applyAndProjectLegacy(
   needsApply: boolean,
   onProgress: (info: ProgressInfo) => void,
 ): Promise<LegacyHostUpdateResult> {
-  return withCliLock(
-    {
-      environment,
-      reason: "host-update-apply",
-      waitMs: 30_000,
-      pollIntervalMs: 100,
-    },
-    async () => {
-      if (!needsApply) {
-        return projectNoOp(await requireInstalled(environment));
-      }
-      let outcome: ApplyHostOutcome;
-      try {
-        outcome = await applyHost({
-          environment,
-          force,
-          noService: false,
-          expectedStageFingerprint: null,
-          onProgress,
-        });
-      } catch (err) {
-        if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
-          // The stage was left intact by `applyHost`'s own busy check (it
-          // runs before any commit) - read it HERE, still inside the same
-          // lock span `applyHost`'s busy decision was made under (never
-          // re-acquired), so the reported version can't have changed out
-          // from under the decision the way a read after this call's own
-          // lock release could. D6's "staged-version details in the error
-          // payload" contract needs this coherence, not just a value.
-          const staged = await readHostStagedRecord(environment);
-          throw cliError({
-            code: CLI_ERROR_CODES.HOST_BUSY,
-            message: err.message,
-            details: { stagedVersion: staged?.version ?? null },
-            exitCode: err.exitCode,
-          });
-        }
-        throw err;
-      }
-      if (outcome.outcome === "no-op") {
-        // Still holding the same lock `applyHost` itself ran under
-        // (it assumes the caller holds `cli-lock`, never re-acquires)
-        // - this re-read observes exactly the state `applyHost` had
-        // internal access to but didn't return, not a fresh race.
-        return projectNoOp(await requireInstalled(environment));
-      }
-      if (outcome.outcome === "stage-fingerprint-mismatch") {
+  // ONE options value for acquisition and revalidation: two literals that
+  // must stay identical are how admission policies drift.
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment,
+    reason: "host-update-apply",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "legacy-update-shadow",
+  };
+  return withCliUpdateContender(contenderOptions, async (capability) => {
+    if (!needsApply) {
+      return projectNoOp(await requireInstalled(environment));
+    }
+    let outcome: ApplyHostOutcome;
+    try {
+      outcome = await applyHostWithAttempt(capability, contenderOptions, {
+        environment,
+        force,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress,
+      });
+    } catch (err) {
+      if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
+        // The stage was left intact by `applyHost`'s own busy check (it
+        // runs before any commit) - read it HERE, still inside the same
+        // lock span `applyHost`'s busy decision was made under (never
+        // re-acquired), so the reported version can't have changed out
+        // from under the decision the way a read after this call's own
+        // lock release could. D6's "staged-version details in the error
+        // payload" contract needs this coherence, not just a value.
+        const staged = await readHostStagedRecord(environment);
         throw cliError({
-          code: CLI_ERROR_CODES.UNEXPECTED,
-          message: "host update: staged handoff changed unexpectedly",
-          details: {
-            expectedStageFingerprint: outcome.expectedStageFingerprint,
-            actualStageFingerprint: outcome.actualStageFingerprint,
-          },
-          exitCode: 1,
+          code: CLI_ERROR_CODES.HOST_BUSY,
+          message: err.message,
+          details: { stagedVersion: staged?.version ?? null },
+          exitCode: err.exitCode,
         });
       }
-      return projectApplied(outcome);
-    },
-  );
+      throw err;
+    }
+    if (outcome.outcome === "no-op") {
+      // Still holding the same lock `applyHost` itself ran under
+      // (it assumes the caller holds `cli-lock`, never re-acquires)
+      // - this re-read observes exactly the state `applyHost` had
+      // internal access to but didn't return, not a fresh race.
+      return projectNoOp(await requireInstalled(environment));
+    }
+    if (outcome.outcome === "stage-fingerprint-mismatch") {
+      throw cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: "host update: staged handoff changed unexpectedly",
+        details: {
+          expectedStageFingerprint: outcome.expectedStageFingerprint,
+          actualStageFingerprint: outcome.actualStageFingerprint,
+        },
+        exitCode: 1,
+      });
+    }
+    return projectApplied(outcome);
+  });
 }
 
 async function requireInstalled(

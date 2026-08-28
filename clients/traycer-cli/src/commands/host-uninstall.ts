@@ -16,7 +16,16 @@ import {
   type StopServiceOptions,
   type UninstallServiceOptions,
 } from "../service";
-import { withCliLock } from "../store/cli-lock";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+  type WithCliUpdateContenderOptions,
+} from "../host/update-contender";
+import {
+  stopHostServiceWithAttempt,
+  uninstallHostServiceWithAttempt,
+} from "../host/update-mutation";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import { readHostPidMetadata } from "../host/pid-metadata";
 import {
   getPublishedProcessIdentityVerdict,
@@ -98,10 +107,22 @@ export interface RunHostUninstallContext {
 }
 
 interface StopServiceBeforeRuntimePurgeArgs {
-  readonly controller: RuntimePurgeStopController;
   readonly environment: Environment;
   readonly label: ServiceLabel;
   readonly logger: ILogger;
+}
+
+export interface HostUninstallActuators {
+  uninstall(
+    controller: HostUninstallServiceController,
+    options: UninstallServiceOptions,
+  ): Promise<void>;
+  stop(
+    controller: RuntimePurgeStopController,
+    label: ServiceLabel,
+    options: StopServiceOptions,
+  ): Promise<void>;
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 // Did the stop CALL resolve? Necessary for the runtime purge but not
@@ -111,9 +132,10 @@ interface StopServiceBeforeRuntimePurgeArgs {
 // remain best-effort either way.
 export async function stopServiceBeforeRuntimePurge(
   args: StopServiceBeforeRuntimePurgeArgs,
+  stop: () => Promise<void>,
 ): Promise<boolean> {
   try {
-    await args.controller.stop(args.label, { force: false });
+    await stop();
     return true;
   } catch (err) {
     args.logger.warn("Host uninstall service stop failed; preserving runtime", {
@@ -131,15 +153,16 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
       environment: ctx.runtime.environment,
       all: args.all,
     });
-    return withCliLock(
+    return withCliUpdateContender(
       {
         environment: ctx.runtime.environment,
         reason: "host-uninstall",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "uninstall-maintenance",
       },
-      () =>
-        runHostUninstall(
+      (capability) =>
+        runHostUninstallWithAttempt(
           args,
           {
             environment: ctx.runtime.environment,
@@ -159,6 +182,7 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
             },
             probeProcessExited: getPublishedProcessIdentityVerdict,
           },
+          capability,
         ),
     );
   };
@@ -168,6 +192,56 @@ export async function runHostUninstall(
   args: HostUninstallArgs,
   ctx: RunHostUninstallContext,
   deps: RunHostUninstallDeps,
+  actuators: HostUninstallActuators,
+): Promise<CommandResult> {
+  return runHostUninstallWithActuators(args, ctx, deps, actuators);
+}
+
+export async function runHostUninstallWithAttempt(
+  args: HostUninstallArgs,
+  ctx: RunHostUninstallContext,
+  deps: RunHostUninstallDeps,
+  capability: UpdateMutationCapability,
+): Promise<CommandResult> {
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment: ctx.environment,
+    // The maintenance lease creates the capability for the sudo CALLER's
+    // canonical home while this process runs elevated. Revalidation must name
+    // the same home, or every in-attempt verify resolves the elevated
+    // process's own home and refuses with wrong-host-home.
+    hostHomeDir: capability.hostHomeDir,
+    reason: "host-uninstall",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "uninstall-maintenance",
+  };
+  const verifyMutationCapability = (): Promise<void> =>
+    requireCliUpdateMutationCapability(capability, contenderOptions);
+  return runHostUninstallWithActuators(args, ctx, deps, {
+    uninstall: (controller, options) =>
+      uninstallHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        options,
+      ),
+    stop: (controller, label, options) =>
+      stopHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        label,
+        options,
+      ),
+    verifyMutationCapability,
+  });
+}
+
+async function runHostUninstallWithActuators(
+  args: HostUninstallArgs,
+  ctx: RunHostUninstallContext,
+  deps: RunHostUninstallDeps,
+  actuators: HostUninstallActuators,
 ): Promise<CommandResult> {
   let serviceUninstalled = false;
   let purgeChannelRuntime = false;
@@ -219,7 +293,7 @@ export async function runHostUninstall(
     // failed/crashed exit and launchd respawns the host before we
     // ever reach `uninstall`. Deregistering first removes that
     // supervision so no exit outcome can trigger a respawn.
-    await controller.uninstall({ label });
+    await actuators.uninstall(controller, { label });
     serviceUninstalled = true;
     ctx.logger.info("Host uninstall service deregistered", {
       environment: ctx.environment,
@@ -228,12 +302,14 @@ export async function runHostUninstall(
     // Install removal stays best-effort, but runtime files are preserved
     // unless the process is confirmed GONE. A host that is still serving is
     // still writing its pid metadata and rotating its log.
-    const stopResolved = await stopServiceBeforeRuntimePurge({
-      controller,
+    const stopArgs = {
       environment: ctx.environment,
       label,
       logger: ctx.logger,
-    });
+    };
+    const stopResolved = await stopServiceBeforeRuntimePurge(stopArgs, () =>
+      actuators.stop(controller, label, { force: false }),
+    );
     // The resolved `stop()` is necessary but NOT sufficient - see
     // `findLiveHost`. Both halves are required: a stop that threw means the
     // host was never asked/consented to die, and a probe that still finds one
@@ -308,9 +384,11 @@ export async function runHostUninstall(
     totalBytes: null,
     workUnits: null,
   });
+  await actuators.verifyMutationCapability();
   const result = await deps.uninstallHost({
     environment: ctx.environment,
     purgeChannelRuntime,
+    verifyMutationCapability: actuators.verifyMutationCapability,
   });
   if (!args.all) {
     // AFTER the removal, deliberately. The default path stops nothing, so a

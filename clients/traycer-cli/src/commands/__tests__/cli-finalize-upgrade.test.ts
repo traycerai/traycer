@@ -61,9 +61,22 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The real `publishHostStartAdoption` waits (up to 30s) for a service-
+// manager child to ack a spawn that never happens under a stubbed
+// controller. This suite pins `cli finalize-upgrade`'s command-level
+// wiring, not the adoption handshake (that's `host-start-adoption.
+// test.ts`), so replace it with an immediately-satisfied lease.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 vi.mock("../../store/cli-lock", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/cli-lock")>();
@@ -490,6 +503,35 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
     expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(mocks.controllerCalls).toEqual([]);
+    expect(existsSync(markerPath())).toBe(false);
+  });
+
+  it("on an active host-update attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE), writes no marker, never runs the swap, and does not throw", async () => {
+    // Mirrors the cli-lock-timeout test above: the catch in
+    // `cli-finalize-upgrade.ts` maps BOTH `CLI_LOCK_BUSY` and
+    // `HOST_UPDATE_ATTEMPT_ACTIVE` to the same deferred "lock-timeout"
+    // outcome (exit 0). `withCliLock` is the seam this suite already uses
+    // to inject a CliError from inside the contender's critical section -
+    // the outer `withCliUpdateContender` unwraps whichever CliError
+    // propagates out of it identically regardless of which layer actually
+    // raised it, so reusing this seam with the other code is a faithful
+    // regression test for the new mapping.
+    const { CLI_ERROR_CODES: freshCodes, cliError: freshCliError } =
+      await import("../../runner/errors");
+    mocks.lockThrows = freshCliError({
+      code: freshCodes.HOST_UPDATE_ATTEMPT_ACTIVE,
+      message: "a host update attempt is in progress",
+      details: null,
+      exitCode: 75,
+    });
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    const result = await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.exitCode).toBe(0);
     expect(mocks.controllerCalls).toEqual([]);
     expect(existsSync(markerPath())).toBe(false);
   });

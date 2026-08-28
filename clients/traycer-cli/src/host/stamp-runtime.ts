@@ -52,6 +52,8 @@ export interface StampRuntimeOptions {
   readonly observedPid: number;
   readonly observedStartedAt: string;
   readonly observedRuntimeVersion: string;
+  /** Revalidated immediately before the durable runtime-stamp write. */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 export type StampRuntimeSupersededReason =
@@ -157,6 +159,7 @@ export async function stampRuntime(
     return { outcome: "superseded", reason: "pid-not-live" };
   }
 
+  await opts.verifyMutationCapability();
   await writeHostInstallRecord(opts.environment, {
     ...installed,
     runtimeVersion: opts.observedRuntimeVersion,

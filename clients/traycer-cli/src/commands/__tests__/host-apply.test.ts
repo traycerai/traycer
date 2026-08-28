@@ -44,6 +44,7 @@ function record(version: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath: "/tmp/traycer-host",
+    executableSha256: null,
   };
 }
 
@@ -84,6 +85,7 @@ function runApply(outcome: ApplyHostOutcome): Promise<{
     force: false,
     noService: false,
     expectedStageFingerprint: null,
+    attemptAdoption: null,
   })(fakeCtx());
 }
 

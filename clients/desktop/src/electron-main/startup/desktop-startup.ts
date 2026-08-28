@@ -27,7 +27,13 @@ import {
   DESKTOP_LOCK_WAIT_MS,
   HostController,
 } from "../host/host-controller";
-import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import {
+  cliLockPath,
+  getHostFsLayout,
+  labelForEnvironment,
+  smAppServiceAgentLabelId,
+} from "../host/host-paths";
+import { backfillSubstrateOwnerAtLaunch } from "../host/substrate-backfill-contender";
 import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
 import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
@@ -159,10 +165,8 @@ import {
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
-import {
-  hostManagesHostLoginItem,
-  retireCompetingCliRegistrationAtLaunch,
-} from "../app/host-login-item";
+import { hostManagesHostLoginItem } from "../app/host-login-item";
+import { retireCompetingCliRegistrationWithContender } from "../host/launch-repair-contender";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -808,6 +812,44 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
 
+  // macOS-only: commit the durable service-registration owner before any
+  // other host mutation this launch.
+  //
+  // Ordering is the point, not tidiness. `substrate.json` is the only durable
+  // answer to "who owns launchd for this host", and on the installed base it
+  // has never been written - so every machine reads `unknown` until this
+  // lands. The two darwin sections below both take the same desktop lock and
+  // can both mutate registration, so they await this rather than racing it:
+  // an owner committed AFTER a repair has already run is a fact about a
+  // machine that was in a different state when the repair decided.
+  //
+  // Fail-open by construction: every refusal path leaves the record untouched
+  // and the projection at `unknown`, which is fail-closed for service
+  // mutation and never resolves to `raw-fallback` by guess. A launch that
+  // cannot backfill is therefore no worse than today.
+  const substrateBackfilled: Promise<void> =
+    process.platform === "darwin"
+      ? timed("deferred", "substrate-owner-backfill", async () => {
+          if (!(await hostManagesHostLoginItem())) return;
+          const launchLayout = getHostFsLayout(state.config.environment);
+          const cliLabelId = labelForEnvironment(state.config.environment).id;
+          const outcome = await backfillSubstrateOwnerAtLaunch({
+            layout: launchLayout,
+            lockPath: cliLockPath(state.config.environment),
+            waitMs: DESKTOP_LOCK_WAIT_MS,
+            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+            agentLabelId: smAppServiceAgentLabelId(cliLabelId),
+            cliLabelId,
+          });
+          log.debug("[host-owner] launch substrate backfill outcome", {
+            outcome,
+          });
+        }).then(
+          () => undefined,
+          () => undefined,
+        )
+      : Promise.resolve();
+
   // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
   // revision (see `desktop-install-cloud.js`'s marker +
   // `HostController.applyPendingLoginItemRevisionIfIdle`) gets applied
@@ -821,6 +863,8 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     void hostReady.then(async () => {
       if (state.bridge === null) return;
       if (!(await hostManagesHostLoginItem())) return;
+      await substrateBackfilled;
+      if (state.bridge === null) return;
       const revisionMonitor = startPendingLoginItemRevisionMonitor({
         hostController: services.hostController,
         intervalMs: undefined,
@@ -840,7 +884,14 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // becomes ready. All of its own gates live inside; see its doc comment.
   if (process.platform === "darwin") {
     void timed("deferred", "competing-registration-repair", async () => {
-      const outcome = await retireCompetingCliRegistrationAtLaunch();
+      await substrateBackfilled;
+      const launchLayout = getHostFsLayout(state.config.environment);
+      const outcome = await retireCompetingCliRegistrationWithContender({
+        hostHomeDir: launchLayout.rootDir,
+        lockPath: cliLockPath(state.config.environment),
+        waitMs: DESKTOP_LOCK_WAIT_MS,
+        pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+      });
       log.debug("[host-login-item] launch repair outcome", { outcome });
     });
   }

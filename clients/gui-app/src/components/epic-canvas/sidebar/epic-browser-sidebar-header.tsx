@@ -248,6 +248,7 @@ function BrowserHostFilterChoices(props: { readonly surfaceKey: string }) {
               active={host.hostId === options.activeHostId}
               intent="pin"
               surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+              updateView={null}
             />
           </DropdownMenuRadioItem>
         ))}
