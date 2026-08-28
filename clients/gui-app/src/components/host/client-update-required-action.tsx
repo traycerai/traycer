@@ -10,7 +10,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
-import { isMobileApp } from "@/lib/mobile-app";
+import { getMobileAppPlatform, isMobileApp } from "@/lib/mobile-app";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -185,15 +185,21 @@ export function ClientUpdateRequiredAction(props: {
   // cannot act on: mobile builds ship through the stores, not GitHub. There
   // is no store URL this repository can vouch for across lanes (internal
   // testing installs update through the TestFlight app / Play opt-in track),
-  // so the remedy is named rather than linked.
+  // so the remedy names the shell's own store. A `null` platform is the
+  // mobile stream's dev browser tab, which belongs to neither store and gets
+  // the neutral sentence.
   if (isMobileApp()) {
+    const platform = getMobileAppPlatform();
     return (
       <p
         className="w-full text-left text-xs text-muted-foreground"
         data-testid="client-update-required-mobile-note"
       >
-        Update the Traycer app from where you installed it - TestFlight or the
-        App Store on iPhone and iPad, Google Play on Android - then reopen it.
+        {platform === "ios"
+          ? "Update the Traycer app in TestFlight or the App Store, then reopen it."
+          : platform === "android"
+            ? "Update the Traycer app in Google Play, then reopen it."
+            : "Update the Traycer app from the store you installed it from, then reopen it."}
       </p>
     );
   }

@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
-import { setMobileApp } from "@/lib/mobile-app";
+import { setMobileApp, setMobileAppPlatform } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import type {
@@ -53,6 +53,7 @@ vi.mock("@/lib/runner-error-toast", () => ({
 afterEach(() => {
   cleanup();
   setMobileApp(false);
+  setMobileAppPlatform(null);
 });
 
 /**
@@ -837,20 +838,49 @@ describe("<ClientUpdateRequiredAction /> restart-to-clear-staged arm", () => {
 });
 
 describe("<ClientUpdateRequiredAction /> mobile shell", () => {
-  it("shows the store note instead of the releases page button", () => {
+  it("names the iOS stores instead of the releases page button", () => {
     // No desktop arm above applies without an updater bridge, so a mobile
     // build always falls through to here - and the releases page is a
-    // desktop remedy a phone cannot act on.
+    // desktop remedy a phone cannot act on. The copy must name the shell's
+    // own update channel, not a generic "update" a tester cannot locate.
+    setMobileApp(true);
+    setMobileAppPlatform("ios");
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      null,
+    );
+    const note = screen.getByTestId("client-update-required-mobile-note");
+    expect(note.textContent).toContain("TestFlight");
+    expect(note.textContent).toContain("App Store");
+    expect(note.textContent).not.toContain("Google Play");
+    expect(
+      screen.queryByTestId("client-update-required-download-page"),
+    ).toBeNull();
+  });
+
+  it("names Google Play on Android", () => {
+    setMobileApp(true);
+    setMobileAppPlatform("android");
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      null,
+    );
+    const note = screen.getByTestId("client-update-required-mobile-note");
+    expect(note.textContent).toContain("Google Play");
+    expect(note.textContent).not.toContain("TestFlight");
+  });
+
+  it("stays store-neutral when the shell reports no platform", () => {
+    // The mobile stream's dev browser tab: installed-app policy without a
+    // native shell. Naming either store would be a guess.
     setMobileApp(true);
     renderAction(
       <ClientUpdateRequiredAction requirement={requirement({})} />,
       null,
     );
-    expect(
-      screen.getByTestId("client-update-required-mobile-note"),
-    ).toBeTruthy();
-    expect(
-      screen.queryByTestId("client-update-required-download-page"),
-    ).toBeNull();
+    const note = screen.getByTestId("client-update-required-mobile-note");
+    expect(note.textContent).toContain("store you installed it from");
+    expect(note.textContent).not.toContain("TestFlight");
+    expect(note.textContent).not.toContain("Google Play");
   });
 });
