@@ -37,6 +37,14 @@ export enum ContextType {
    * output`) and never talk to.
    */
   Terminal = "terminal",
+  /**
+   * A browser tab the coding agent can read (title/URL/page contents) but not
+   * drive - a reference by identity, not a control surface. Mirrors `Terminal`
+   * exactly: display title plus the durable `tabId` the runtime resolves it
+   * with, and no `TerminalAgent`-style interface duality since a browser tab
+   * is never itself an Agent.
+   */
+  BrowserTab = "browser-tab",
   Execution = "execution",
   User = "user",
 }
@@ -78,7 +86,7 @@ function getIndent(ctx: SerializerContext): string {
   return " ".repeat(ctx.listDepth * (ctx.options.listIndent ?? 2));
 }
 
-function escapeXmlAttr(str: string): string {
+export function escapeXmlAttr(str: string): string {
   return str
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
@@ -87,7 +95,7 @@ function escapeXmlAttr(str: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function escapeXmlContent(str: string): string {
+export function escapeXmlContent(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
@@ -261,6 +269,7 @@ export interface MentionAttrs {
   phaseId?: string;
   reviewCommentId?: string;
   terminalId?: string;
+  tabId?: string;
   commandName?: string;
   workflowId?: string;
   b64content?: string;
@@ -340,6 +349,10 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
     case ContextType.Terminal: {
       const title = attrs.label || attrs.terminalId || attrs.id || "";
       return `terminal:${title}`;
+    }
+    case ContextType.BrowserTab: {
+      const title = attrs.label || attrs.tabId || attrs.id || "";
+      return `browser-tab:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -494,6 +507,16 @@ function formatMentionForLLMQuery(
       return terminalId.length === 0
         ? `@terminal:${title} [terminalId is unavailable]`
         : `@terminal:${title} [terminalId=${terminalId}]`;
+    }
+    // Mirrors the terminal arm above exactly: a browser tab is readable but
+    // not addressable as an Agent, so it gets the same title+id shape rather
+    // than the `@agent:` projection.
+    case ContextType.BrowserTab: {
+      const tabId = attrs.tabId || attrs.id || "";
+      const title = attrs.label || "untitled";
+      return tabId.length === 0
+        ? `@browser-tab:${title} [tabId is unavailable]`
+        : `@browser-tab:${title} [tabId=${tabId}]`;
     }
     case ContextType.Execution: {
       const epicPart = attrs.epicId ? `${attrs.epicId}/` : "";

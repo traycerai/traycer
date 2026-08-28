@@ -83,6 +83,7 @@ const READY_STATUS: HostControllerStatus = {
   updateReady: true,
   activation: "activated",
   reachable: true,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
 };
@@ -135,6 +136,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         removedInstallDir: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
       }),
     ),
     restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
@@ -142,6 +144,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         removedHost: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
         removedLoginItem: false,
       }),
     ),

@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   type KeyboardEvent,
@@ -327,6 +328,14 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     if (rename.isEditing) return;
     navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
   }, [navigate, rename.isEditing, tab]);
+  // Chrome selects a tab the moment a drag picks it up, not on release - the
+  // tab travelling under the pointer must be the active one. Click activation
+  // cannot cover this: a completed drag suppresses the click. Runs only on the
+  // false→true edge (isActive flips right after, ending the effect's work).
+  useEffect(() => {
+    if (!isDragging || isActive) return;
+    activateTab();
+  }, [activateTab, isActive, isDragging]);
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (rename.isEditing) return;
@@ -573,6 +582,7 @@ function HeaderTabDropIndicator(props: {
     <m.span
       aria-hidden
       data-testid="tab-drop-indicator"
+      data-side={props.side}
       initial={{ opacity: 0, scaleY: 0.45 }}
       animate={{ opacity: 1, scaleY: 1 }}
       transition={{ duration: 0.12, ease: "easeOut" }}
@@ -792,25 +802,29 @@ export function TabChrome(props: { readonly isActive: boolean }) {
 }
 
 /**
- * Shown on the tab a pair-into-split drop would combine with, once its dwell
- * has fired. The two panes mirror the content-pane edge-split preview so both
- * routes into a split announce the same outcome.
+ * Shown on the tab a pair-into-split drop would combine with, the moment the
+ * pointer is on its approach half. The highlight covers ONLY the half the
+ * DRAGGED tab will take - the side it approaches from, the same side the
+ * commit writes. A full-tab ring reads inverted mid-drag: the opaque drag
+ * overlay sits over the approach half, so the only visible part of a whole-tab
+ * highlight is the OPPOSITE half.
  */
 function StripPairPreview(props: {
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
 }) {
-  const previewing = useTopLevelStripPairPreview(props.tabKind, props.tabId);
-  if (!previewing) return null;
+  const side = useTopLevelStripPairPreview(props.tabKind, props.tabId);
+  if (side === null) return null;
   return (
     <span
       aria-hidden
       data-testid={`tab-strip-pair-preview-${props.tabKind}-${props.tabId}`}
-      className="pointer-events-none absolute inset-x-1 inset-y-1 z-30 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-primary/15 ring-2 ring-primary"
-    >
-      <span className="bg-primary/10" />
-      <span className="bg-primary/25" />
-    </span>
+      data-side={side}
+      className={cn(
+        "pointer-events-none absolute inset-y-1 z-30 rounded-sm bg-primary/20 ring-2 ring-primary",
+        side === "left" ? "left-1 right-1/2" : "left-1/2 right-1",
+      )}
+    />
   );
 }
 

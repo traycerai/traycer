@@ -55,10 +55,9 @@ export interface HistoryNavRouter {
  *
  * A plain history exposes no entries and no index, so none of that is knowable
  * and none of it is attempted: the step is handed straight to the history, which
- * either moves or does nothing. That is the whole fallback, and it is enough
- * because the surfaces it serves are top-level ones - the entries a phone
- * accumulates are tab activations, and the eligibility rules exist for tiles
- * nested inside a Task.
+ * either moves or does nothing. That is the whole fallback, and it serves only
+ * the browser web app - the desktop renderer and the installed mobile app both
+ * run the branded history, so their steps are always the semantic kind.
  */
 export function goBack(router: HistoryNavRouter): void {
   navigateHistory(router, -1);
@@ -72,22 +71,60 @@ export function goForward(router: HistoryNavRouter): void {
   navigateHistory(router, 1);
 }
 
+export interface EligibleHistoryTarget {
+  /** Position in the controller's entry list, for the `go` offset. */
+  readonly index: number;
+  /**
+   * The entry's stable identity, for keying per-entry state. `null` when the
+   * entry's state carries no readable key - such an entry can still be landed
+   * on, but nothing can be reliably filed against it.
+   */
+  readonly key: string | null;
+}
+
+/**
+ * The entry a semantic step would land on, or `null` when the step would be
+ * refused - no eligible entry in that direction, or a history that owns no
+ * entry list (the plain backend, whose landing is unknowable before it moves).
+ *
+ * Read-only twin of the step itself, exported for the surface that must know
+ * the landing BEFORE navigating: the swipe transition puts the destination
+ * screen under the finger for the whole drag, and a destination assumed to be
+ * "one entry over" shows the wrong screen whenever the step would actually
+ * skip ineligible entries. Answering from the same scan `navigateHistory`
+ * performs is what keeps the animated screen and the landed screen the same
+ * screen.
+ */
+export function resolveEligibleHistoryTarget(
+  router: HistoryNavRouter,
+  direction: -1 | 1,
+): EligibleHistoryTarget | null {
+  const controller = getHistoryController(router.history);
+  if (controller === null) return null;
+  const index = controller.getIndex();
+  const offset = findEligibleOffset(
+    controller.getEntries(),
+    index,
+    direction,
+    (href) => isHistoryEntryEligible(href, useEpicCanvasStore.getState()),
+  );
+  if (offset === null) return null;
+  const target = index + offset;
+  return { index: target, key: controller.getEntryKeys()[target] ?? null };
+}
+
 function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
   const controller = getHistoryController(router.history);
   if (controller === null) {
     stepPlainHistory(router.history, direction);
     return;
   }
-  const entries = controller.getEntries();
-  const index = controller.getIndex();
-  const offset = findEligibleOffset(entries, index, direction, (href) =>
-    isHistoryEntryEligible(href, useEpicCanvasStore.getState()),
-  );
-  if (offset === null) {
+  const target = resolveEligibleHistoryTarget(router, direction);
+  if (target === null) {
     return;
   }
-  reopenClosedTilePreview(entries[index + offset]);
-  router.history.go(offset);
+  reopenClosedTilePreview(controller.getEntries()[target.index]);
+  router.history.go(target.index - controller.getIndex());
   trackHistoryNavigationUsed(direction === -1 ? "back" : "forward");
 }
 

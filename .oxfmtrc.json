@@ -4,5 +4,9 @@
   "semi": true,
   "tabWidth": 2,
   "trailingComma": "all",
-  "ignorePatterns": ["protocol/**/__fixtures__/**", "protocol/**/snapshot-*.ts"]
+  "ignorePatterns": [
+    "clients/desktop/src/electron-main/browser-view/browser-annotation-overlay-guest.generated.ts",
+    "protocol/**/__fixtures__/**",
+    "protocol/**/snapshot-*.ts"
+  ]
 }

@@ -25,9 +25,12 @@ import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import {
-  hasUndoableFileEditsFromMessage,
-  scopedArtifactCountFromMessage,
+  editSubmitNeedsRevertPrompt,
+  resolveRevertScope,
+  revertPromptArtifactCount,
+  type RevertScope,
 } from "@/lib/chat/file-edits-below-message";
+import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
@@ -71,6 +74,13 @@ export interface ChatMessageActionsInput {
   readonly chatParentId: string | null;
   readonly messages: ChatSessionState["messages"];
   readonly events: ChatSessionState["events"];
+  /**
+   * The hydration state behind `messages`/`events`, or `null` on the legacy
+   * line where those two ARE the whole transcript. Read only by the
+   * revert-scope resolution, which is the one thing here that scans DOWNWARD
+   * from a message and so cannot treat the two arrays as complete.
+   */
+  readonly transcriptWindow: TranscriptWindow | null;
   readonly profile: AuthProfile | null;
   readonly chatActions: ChatActions;
   readonly pendingActions: ChatSessionState["pendingActions"];
@@ -117,7 +127,13 @@ export interface ChatMessageActionsResult {
     readonly onOpenChange: (open: boolean) => void;
     readonly onRevert: (revertArtifacts: boolean) => void;
     readonly onDontRevert: () => void;
-    readonly artifactCount: number;
+    /**
+     * `null` when the transcript below the edit point is not fully hydrated, so
+     * the count would be an under-count rather than a measurement. The dialog
+     * renders the artifact opt-out without a number in that case - see
+     * {@link RevertScope}.
+     */
+    readonly artifactCount: number | null;
     readonly queuedCount: number;
   };
 }
@@ -152,6 +168,7 @@ export function useChatMessageActions(
     chatParentId,
     messages,
     events,
+    transcriptWindow,
     profile,
     chatActions,
     pendingActions,
@@ -160,6 +177,31 @@ export function useChatMessageActions(
     setForkTarget,
     worktreeBinding,
   } = input;
+
+  /**
+   * What a revert from the message being edited would touch.
+   *
+   * Resolved once for both readers below - the submit gate and the dialog's
+   * artifact count - because they are two halves of one prompt and must not be
+   * able to disagree about its scope.
+   */
+  // Keyed on the target id alone, NOT on `activeInlineEdit`: that object gets a
+  // fresh identity on every `updateInlineEditContent`, i.e. per keystroke,
+  // while the scope depends only on which message is being edited. Widening it
+  // back would re-run three transcript passes for each character typed.
+  const inlineEditTargetMessageId = activeInlineEdit?.targetMessageId ?? null;
+  const revertScope = useMemo<RevertScope | null>(
+    () =>
+      inlineEditTargetMessageId === null
+        ? null
+        : resolveRevertScope({
+            messages,
+            events,
+            transcriptWindow,
+            fromMessageId: inlineEditTargetMessageId,
+          }),
+    [inlineEditTargetMessageId, events, messages, transcriptWindow],
+  );
 
   const beginInlineEdit = useCallback(
     (message: ChatMessageModel) => {
@@ -240,15 +282,14 @@ export function useChatMessageActions(
     if (activeInlineEdit === null) return;
     if (!canModifyMessages) return;
     if (userMessageSenderForProfile(profile) === null) return;
-    // Editing a previous message with reversible edits below it prompts for
-    // a revert first; otherwise submit straight through.
-    if (
-      hasUndoableFileEditsFromMessage(
-        messages,
-        events,
-        activeInlineEdit.targetMessageId,
-      )
-    ) {
+    // Editing a previous message with reversible edits below it - or a history
+    // this side cannot see the bottom of - prompts for a revert first;
+    // otherwise submit straight through. See `editSubmitNeedsRevertPrompt`.
+    //
+    // Null only when there is no active edit, which the guard above already
+    // returned on - the memo is keyed by the same value.
+    if (revertScope === null) return;
+    if (editSubmitNeedsRevertPrompt(revertScope)) {
       dispatchUi({ type: "setRevertOnEditOpen", open: true });
       return;
     }
@@ -257,10 +298,9 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     dispatchUi,
-    events,
-    messages,
     performEditSubmit,
     profile,
+    revertScope,
   ]);
 
   const deleteMessageSuffix = useCallback(
@@ -497,17 +537,7 @@ export function useChatMessageActions(
     [dispatchUi],
   );
 
-  const revertOnEditArtifactCount = useMemo(
-    () =>
-      activeInlineEdit === null
-        ? 0
-        : scopedArtifactCountFromMessage(
-            messages,
-            events,
-            activeInlineEdit.targetMessageId,
-          ),
-    [activeInlineEdit, events, messages],
-  );
+  const revertOnEditArtifactCount = revertPromptArtifactCount(revertScope);
 
   return {
     messageActionsFor,

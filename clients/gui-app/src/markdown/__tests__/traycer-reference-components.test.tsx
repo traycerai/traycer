@@ -380,7 +380,7 @@ describe("legacy traycer-* reference components", () => {
   });
 });
 
-// ─── Inline-chip drag source (T3) ────────────────────────────────────────────
+// ─── Inline-chip drag source ─────────────────────────────────────────────────
 
 describe("same-epic spec/ticket chips are canvas drag sources", () => {
   it("a same-epic spec chip registers a draggable, emits the payload, and wires the drag surface", () => {

@@ -1,9 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
+import { useMaybeBrowserSessionsCoordinatorKey } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  browserSessionsCoordinatorState,
+  subscribeToBrowserSessionsCoordinator,
+  type BrowserSessionsState,
+} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { resolveTabTitle } from "@/lib/browser-view/browser-tab-display";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
@@ -46,6 +59,7 @@ import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/lo
 import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
 import type {
+  BrowserTabMentionEntry,
   EpicAgentMentionEntry,
   EpicChatMentionEntry,
   EpicMentionEntry,
@@ -189,6 +203,45 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     );
   }, [terminalSessions, currentEpicId]);
 
+  // Browser tabs are sourced live from the same coordinator the canvas/sidebar
+  // browser surfaces read - no host RPC of its own, so this needs no
+  // request/loading plumbing the way workspace/epic sources do. Dormant
+  // sessions and tabs are NOT excluded: `page.attachTab` auto-wakes a dormant
+  // session before leasing it (`SessionReplTabSource.attach` ->
+  // `activateTabForAgent` -> `ensureTabAttached`, which runs
+  // `runDormantActivation` BEFORE the lease - see
+  // `browser-repl-tab-source.ts` on the host), the same path the GUI's own
+  // viewer uses to wake a tab on demand. So a dormant tab is fully
+  // mentionable - offering it here matches what attach actually does, and
+  // hiding it would withhold a reference the agent CAN resolve. The row
+  // still carries a `dormant` flag (see `BrowserTabMentionEntry`) purely for
+  // the menu's Moon glyph, which sets expectations that the first message to
+  // it pays a wake cost, not to gate whether it appears.
+  //
+  // This does NOT read `useMaybeBrowserSessionsContext()`: that context value
+  // is a fresh object on every sessions-stream frame (`patchState` in
+  // `browser-sessions-coordinator.ts` spreads state on each server frame, and
+  // the host emits several frames per agent browser tool call plus one per
+  // navigation), so subscribing the composer to it re-rendered the WHOLE
+  // composer subtree at frame rate even with the picker closed, and rebuilt
+  // the entire ranked menu every frame while open. Instead this subscribes
+  // straight to the coordinator registry (`browserSessionsCoordinatorState` /
+  // `subscribeToBrowserSessionsCoordinator`, keyed by the STABLE
+  // `BrowserSessionsCoordinatorKeyContext`) through `useBrowserTabMentionEntries`
+  // below, which returns the closed-picker constant untouched and, while open,
+  // caches the built entries by a content key so a frame that changes nothing
+  // mention-relevant keeps the same array identity and re-runs nothing
+  // downstream. Gated to the chat's own host the same way the pure builder
+  // always was (see `browserTabMentionEntriesFromSessions`, below - the
+  // coordinator is canvas-host-bound, not chat-host-bound).
+  const readiness = useReactiveHostReadiness(hostClient);
+  const browserSessionsCoordinatorKey = useMaybeBrowserSessionsCoordinatorKey();
+  const browserTabEntries = useBrowserTabMentionEntries(
+    browserSessionsCoordinatorKey,
+    readiness.hostId,
+    active,
+  );
+
   // The current epic's COMPLETE local artifact set, read the same churn-free way
   // (via `getState`) as the chats above. Cloud `epic.mention*` returns at most
   // 25 artifacts per kind across all epics, so on a large epic some of the
@@ -273,6 +326,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
       terminalEntries: EMPTY_TERMINAL_ENTRIES,
+      browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
     }),
@@ -289,6 +343,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
       terminalEntries: EMPTY_TERMINAL_ENTRIES,
+      browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
     }),
@@ -397,6 +452,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       currentEpicId,
       agentEntries: epicAgentEntries,
       terminalEntries: epicTerminalEntries,
+      browserTabEntries,
       epicAttachedRoots,
       github: github.context,
     }),
@@ -405,6 +461,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicAgentEntries,
       epicTerminalEntries,
       epicAttachedRoots,
+      browserTabEntries,
       epicEntries,
       epicRequests.length,
       github.context,
@@ -461,7 +518,6 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       githubPending: github.checking,
     });
 
-  const readiness = useReactiveHostReadiness(hostClient);
   const stepChrome = useMentionStepChrome({
     active,
     step,
@@ -737,6 +793,7 @@ export function mentionNoMatchDismissVerdict(
 
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
 const EMPTY_TERMINAL_ENTRIES: ReadonlyArray<EpicTerminalMentionEntry> = [];
+const EMPTY_BROWSER_TAB_ENTRIES: ReadonlyArray<BrowserTabMentionEntry> = [];
 const EMPTY_ATTACHED_ROOTS: ReadonlySet<string> = new Set();
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];
 const EMPTY_TITLE_MAP: ReadonlyMap<string, string> = new Map();
@@ -860,6 +917,159 @@ export function epicTerminalMentionEntriesFromSessions(
     return [buildTerminalMentionEntry(session, epicId)];
   });
   return entries.length === 0 ? EMPTY_TERMINAL_ENTRIES : entries;
+}
+
+/**
+ * Pure projection of the live browser-sessions state into @-mention tab
+ * suggestions - gated to the picker's own host. The coordinator state is
+ * bound to the CANVAS host (`useCanvasHostId`), not necessarily this chat's
+ * host (a chat stays bound to its own host for life), so `sessions.hostId`
+ * must match the chat's resolved `hostId` or the menu would offer a tab the
+ * chat cannot actually attach - see `BrowserSessionsState.hostId`.
+ */
+export function browserTabMentionEntriesFromSessions(
+  sessions: BrowserSessionsState | null,
+  hostId: string | null,
+  active: boolean,
+): ReadonlyArray<BrowserTabMentionEntry> {
+  if (!active || sessions === null || sessions.hostId !== hostId) {
+    return EMPTY_BROWSER_TAB_ENTRIES;
+  }
+  return sessions.items.flatMap((session) => {
+    return session.tabs.map((tab) => ({
+      kind: "browser-tab" as const,
+      id: `browser-tab:${session.sessionId}:${tab.tabId}`,
+      tabId: tab.tabId,
+      sessionId: session.sessionId,
+      label: resolveTabTitle(tab),
+      url: tab.url,
+      // Ranking hint only - see `BrowserTabMentionEntry`'s doc for why this
+      // stands in for the co-located-pane-group rank the design asks for.
+      coLocated: tab.viewed,
+      lastActivityAt: session.lastActivityAt,
+      // Per-TAB status, matching the sidebar's own source of truth for the
+      // dormant Moon glyph (`epic-browser-sidebar-row.tsx`'s
+      // `tab.status === "dormant"`) rather than the SESSION's runtime kind -
+      // a session can be non-dormant while carrying individual dormant tabs.
+      dormant: tab.status === "dormant",
+    }));
+  });
+}
+
+/**
+ * The mention-relevant content key for a sessions snapshot: every tab's
+ * `sessionId|tabId|title|url|viewed|status`, which is exactly what
+ * `browserTabMentionEntriesFromSessions` turns into a `BrowserTabMentionEntry`
+ * (title via `resolveTabTitle`, `coLocated` from `viewed`, `dormant` from
+ * `status`), plus the host so a host swap is never masked by an identical tab
+ * set. `status` MUST be in the key - it is a required field on the produced
+ * entry, so a tab waking (or going dormant) with everything else unchanged
+ * has to invalidate the cached array, or the snapshot cache would keep
+ * serving a stale `dormant` flag until some unrelated field also changed.
+ *
+ * Deliberately excludes `lastActivityAt`: the host bumps it on essentially
+ * every session frame (each agent browser tool call, each navigation), so
+ * folding it in would defeat the cache - every frame would mint a new key and
+ * a new array. `lastActivityAt` is read straight off the LIVE session at
+ * build time instead (see `browserTabMentionEntriesFromSessions` above), so a
+ * cache hit still serves whatever value was live at the moment the cached
+ * array was built. It is only ever a secondary sort tiebreak, after
+ * `coLocated`, so serving a momentarily-stale tiebreak while the picker stays
+ * open (until some OTHER field changes and rebuilds the array anyway) is an
+ * acceptable trade for not rebuilding the ranked menu at frame rate.
+ */
+export function browserTabMentionEntriesContentKey(
+  sessions: BrowserSessionsState,
+): string {
+  const parts: string[] = [];
+  for (const session of sessions.items) {
+    for (const tab of session.tabs) {
+      parts.push(
+        `${session.sessionId}|${tab.tabId}|${resolveTabTitle(tab)}|${tab.url}|${String(tab.viewed)}|${tab.status}`,
+      );
+    }
+  }
+  return `${sessions.hostId ?? ""}\x1f${parts.join("\x1e")}`;
+}
+
+/**
+ * A content-keyed cache over `browserTabMentionEntriesFromSessions`: repeated
+ * calls whose sessions snapshot hashes to the same
+ * `browserTabMentionEntriesContentKey` return the SAME array reference
+ * instead of rebuilding it. Factored out as a plain closure (no React) so
+ * `useBrowserTabMentionEntries` can hand one instance to
+ * `useSyncExternalStore` as its `getSnapshot`, and so this caching behavior is
+ * directly testable without rendering a component.
+ */
+export function createBrowserTabMentionEntriesSnapshotCache(): (
+  sessions: BrowserSessionsState | null,
+  hostId: string | null,
+  active: boolean,
+) => ReadonlyArray<BrowserTabMentionEntry> {
+  let cachedKey: string | null = null;
+  let cachedEntries: ReadonlyArray<BrowserTabMentionEntry> =
+    EMPTY_BROWSER_TAB_ENTRIES;
+  return (sessions, hostId, active) => {
+    if (!active || sessions === null || sessions.hostId !== hostId) {
+      return EMPTY_BROWSER_TAB_ENTRIES;
+    }
+    const key = browserTabMentionEntriesContentKey(sessions);
+    if (key === cachedKey) return cachedEntries;
+    cachedKey = key;
+    cachedEntries = browserTabMentionEntriesFromSessions(
+      sessions,
+      hostId,
+      active,
+    );
+    return cachedEntries;
+  };
+}
+
+/**
+ * Subscribes directly to the browser-sessions coordinator registry (see the
+ * comment above this hook's call site in `useMentionItems`) instead of the
+ * churning `BrowserSessionsContext`. `!active` unsubscribes entirely and
+ * returns the shared empty constant, so a closed picker holds no coordinator
+ * subscription at all; while open, `getSnapshot` is backed by a per-hook
+ * content-keyed cache so a frame that doesn't change any tab's mention fields
+ * returns the previous array reference and triggers no downstream re-render.
+ */
+function useBrowserTabMentionEntries(
+  coordinatorKey: string | null,
+  hostId: string | null,
+  active: boolean,
+): ReadonlyArray<BrowserTabMentionEntry> {
+  const snapshotCacheRef = useRef<
+    | ((
+        sessions: BrowserSessionsState | null,
+        hostId: string | null,
+        active: boolean,
+      ) => ReadonlyArray<BrowserTabMentionEntry>)
+    | null
+  >(null);
+  if (snapshotCacheRef.current === null) {
+    snapshotCacheRef.current = createBrowserTabMentionEntriesSnapshotCache();
+  }
+  const snapshotCache = snapshotCacheRef.current;
+
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) =>
+      active
+        ? subscribeToBrowserSessionsCoordinator(coordinatorKey, listener)
+        : () => undefined,
+    [active, coordinatorKey],
+  );
+  const getSnapshot = useCallback(
+    (): ReadonlyArray<BrowserTabMentionEntry> =>
+      snapshotCache(
+        active ? browserSessionsCoordinatorState(coordinatorKey) : null,
+        hostId,
+        active,
+      ),
+    [active, coordinatorKey, hostId, snapshotCache],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function buildTerminalMentionEntry(

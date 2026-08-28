@@ -40,9 +40,10 @@ import type { TabRef } from "@/stores/tabs/types";
  * re-pair into a NEW split that happened while the flush await was in
  * flight. A ref absent from the layout entirely (e.g. a `useTabsStore` not
  * yet synced) is treated as not grouped - nothing here for a group to have
- * survived in.
+ * survived in. Shared with the draft move flow, which revalidates the same
+ * way.
  */
-function isRefGroupedInLayout(ref: TabRef): boolean {
+export function isRefGroupedInLayout(ref: TabRef): boolean {
   const item = findStripItemForRef(readTabStripLayout(), ref);
   return item !== null && item.kind === "split";
 }

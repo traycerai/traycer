@@ -144,6 +144,36 @@ export function createTaskTodoState(): TaskTodoState {
   };
 }
 
+/**
+ * A fold state that already holds `items`, for resuming a fold partway.
+ *
+ * The task tools are a DELTA protocol: `update`/`complete`/`cancel` carry an id
+ * and a status and nothing else, so {@link applyParsedTaskTodoItems} recovers
+ * each item's text from the state it is applied to and DROPS any item it cannot
+ * name. Folding such a payload onto {@link createTaskTodoState} therefore
+ * yields nothing at all - correct for a fold that starts at the beginning of a
+ * transcript, wrong for one resuming after a prefix somebody else folded.
+ *
+ * That second case is the windowed line, where the host folds the whole
+ * transcript and the client folds only the live turn on top of the host's
+ * answer. Seeding is what lets an update-only turn move the checklist there
+ * instead of sitting on a stale baseline until the turn ends.
+ *
+ * `taskTodoToolItemIds` stays empty: it maps a TOOL USE id to the item it last
+ * touched, and the caller is by construction resuming with no tool uses of its
+ * own yet. An incoming payload that names its item id needs no such mapping,
+ * and one that does not cannot be attributed to a tool use this state never saw.
+ */
+export function seedTaskTodoState(
+  items: ReadonlyArray<TaskTodoItem>,
+): TaskTodoState {
+  const state = createTaskTodoState();
+  for (const item of items) {
+    state.taskTodoItemsById.set(item.id, item);
+  }
+  return state;
+}
+
 export function applyParsedTaskTodoItems(
   state: TaskTodoState,
   toolUseId: string,

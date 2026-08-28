@@ -22,6 +22,7 @@ import { modLabel } from "@/lib/keybindings/platform";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
 interface FakeQueryState {
   readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
@@ -1407,6 +1408,81 @@ describe("<RemoteFolderPickerDialog />", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("hover reveals the absolute path", () => {
+    // Long-press is touch-only (`useLongPress`), so a mouse user's only route
+    // to the same absolute path is hover - this is the pointer half of the
+    // two long-press tests above.
+    it("a recent row keeps its short name visible but hovers to the full path", async () => {
+      // Two entries under a shared base, same as the "offers the host's
+      // recent workspaces" fixture above - a single entry has no base to
+      // collapse against and would render its full path as the label too,
+      // which is not the pairing this test is about.
+      recentEntries = [
+        { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+        { path: "/srv/api", lastOpenedAt: "2026-07-30T00:00:00.000Z" },
+      ];
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      const [chip] = await screen.findAllByTestId(
+        "remote-folder-picker-recent",
+      );
+      // The pairing this change is about: the row still reads as the short,
+      // tilde/relative-collapsed name...
+      expect(chip.textContent).toBe("app");
+      // ...while hover carries the full absolute path, matching what
+      // long-press has always shown.
+      expect(tooltipTextFor(chip)).toBe("/srv/app");
+    });
+
+    it("a directory row hovers to its full absolute path", async () => {
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      const [row] = await screen.findAllByTestId("remote-folder-picker-row");
+      expect(row.textContent).toBe("code");
+      expect(tooltipTextFor(row)).toBe("/Users/tester/code");
+    });
+
+    it("the .. row hovers to the parent path", async () => {
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      fireEvent.click(
+        (await screen.findAllByTestId("remote-folder-picker-row"))[0],
+      );
+      // Now inside /Users/tester/code, whose parent is /Users/tester - the
+      // ".." row names no path itself, so hover is the only thing that says
+      // where it goes.
+      const upRow = screen.getByTestId("remote-folder-picker-up-row");
+      expect(tooltipTextFor(upRow)).toBe("/Users/tester");
+    });
+
+    it("the group header hovers to the absolute base, not the ~ it displays", async () => {
+      // A base UNDER the host's home is the case the two collapse steps can
+      // silently agree on: if the header were handed an already-collapsed
+      // base, hover would repeat `~/code` and reveal nothing.
+      recentEntries = [
+        {
+          path: "/Users/tester/code/app",
+          lastOpenedAt: "2026-08-01T00:00:00.000Z",
+        },
+        {
+          path: "/Users/tester/code/api",
+          lastOpenedAt: "2026-07-30T00:00:00.000Z",
+        },
+      ];
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      const header = await screen.findByTestId(
+        "remote-folder-picker-group-header",
+      );
+      expect(header.textContent).toContain("~/code");
+      // The header's label sits outside the trigger, so the tooltip hangs off
+      // the path span within it rather than off the line itself.
+      const trigger = header.querySelector('[data-slot="tooltip-trigger"]');
+      if (trigger === null) throw new Error("group header has no tooltip");
+      expect(tooltipTextFor(trigger)).toBe("/Users/tester/code");
     });
   });
 });

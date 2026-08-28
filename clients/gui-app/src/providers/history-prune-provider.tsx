@@ -61,8 +61,8 @@ export function HistoryPruneProvider(
     if (!hydrated) return;
     // Sanitize the restored stack before it can service a Back/Forward action.
     // The scheduler below only reacts to future source mutations; without this
-    // eager pass, a session-restored dead entry could reach T3 and be treated
-    // as an ordinary external route, which would recreate its source tab.
+    // eager pass, a session-restored dead entry could reach navigation and be
+    // treated as an ordinary external route, which would recreate its source tab.
     const controller = getHistoryController(router.history);
     const hasInitialDeadEntry =
       controller !== null &&

@@ -49,6 +49,29 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
   useRegisteredHostsPollLiveness: () => undefined,
 }));
 
+// Same reasoning, one hook later: the picker now resolves each row's update
+// badge through `useFleetUpdateViews`, which owns a `useQuery` for the fleet
+// sweep and therefore needs a query client this navigation suite deliberately
+// does not mount. Stubbed to the "nothing observed" answer — which is also the
+// honest production answer for a fleet with no borrowable sessions, so the
+// rows this suite asserts on render exactly as they would there.
+//
+// The badge's OWN behaviour is covered where it belongs (the host-option row
+// and per-host isolation suites); stubbing it here keeps a navigation test from
+// silently becoming a fleet-polling test.
+// Returns the SHARED constant rather than a literal spelled out here. A mock
+// factory is not type-checked against the module it replaces, so a hand-written
+// view silently loses any field added later — and `undefined` is not `null`, so
+// the row's badge would have read "last seen undefined" on every host while
+// this navigation suite went on passing. The whole point of exporting
+// `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
+// of these by hand.
+vi.mock("@/hooks/host/use-fleet-update-views", async () => {
+  const { UNKNOWN_FLEET_UPDATE_VIEW } =
+    await import("@/lib/host/fleet-update/fleet-update-view");
+  return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
+});
+
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => (

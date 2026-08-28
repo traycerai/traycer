@@ -58,6 +58,39 @@ describe("shared installation readers", () => {
     expect(parsed.runtimeVersion).toBeNull();
   });
 
+  it("normalizes a missing or malformed executableSha256 to null but round-trips a well-formed one", () => {
+    const base = {
+      installId: null,
+      version: "1.5.0",
+      runtimeVersion: null,
+      platform: "darwin",
+      arch: "arm64",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      source: { kind: "registry", value: "1.5.0" },
+      archiveSha256: null,
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      signatureKeyId: "test-key",
+      sizeBytes: 12,
+      executablePath: "/tmp/traycer-host",
+    };
+
+    expect(hostInstallRecordSchema.parse(base).executableSha256).toBeNull();
+    expect(
+      hostInstallRecordSchema.parse({ ...base, executableSha256: "not-hex" })
+        .executableSha256,
+    ).toBeNull();
+    expect(
+      hostInstallRecordSchema.parse({ ...base, executableSha256: 12345 })
+        .executableSha256,
+    ).toBeNull();
+
+    const digest = "c".repeat(64);
+    expect(
+      hostInstallRecordSchema.parse({ ...base, executableSha256: digest })
+        .executableSha256,
+    ).toBe(digest);
+  });
+
   it("uses the CLI-compatible staged semantics at the explicit-path boundary", async () => {
     const dir = await fixtureDir();
     const { stageId: _stageId, ...legacy } = stagedRecord({});

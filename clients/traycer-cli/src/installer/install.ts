@@ -20,7 +20,7 @@ import {
 } from "../registry";
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { createOwnedTempDir } from "../store/owned-temp";
 import { hostHomeDir, hostInstallDir, ensureHostHomeDir } from "../store/paths";
@@ -28,13 +28,18 @@ import { extractHostSource, resolveHostExecutable } from "./extract";
 import { preserveLegacyProviders } from "./legacy-providers";
 import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
+import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 import {
   invalidateAsideDir,
+  legacyMutationVerifier,
   listAsideDirsNewestFirst,
   sweepDeadAsideDirs,
 } from "./aside-dirs";
 import { isRetryableRenameCode, renameWithRetryPlan } from "./rename-retry";
-import { reconcileHostStage } from "./stage-reconcile";
+import {
+  reconcileHostStage,
+  reconcileHostStageWithAttempt,
+} from "./stage-reconcile";
 
 // Host installer - verify-before-replace per the Tech Plan.
 //
@@ -98,6 +103,23 @@ export interface InstallHostLifecycle {
   readonly beforeSwap: () => Promise<void>;
   readonly afterSwap: () => Promise<void>;
   readonly swapLockRecovery: SwapLockRecovery | null;
+  /**
+   * The contender facade supplies its live-capability verifier immediately
+   * before this lifecycle is used. Lifecycle implementations call it at
+   * their own raw service actuators, not merely at the surrounding swap.
+   */
+  readonly setMutationVerifier?: (
+    verifyMutationCapability: () => Promise<void>,
+  ) => void;
+  /**
+   * A contender-aware caller publishes this immediately before lifecycle
+   * code asks an OS manager to launch `host start`. It avoids the parent
+   * attempt holder and its service-launched supervisor reacquiring each
+   * other’s non-reentrant lock.
+   */
+  readonly setHostStartAdoptionPublisher?: (
+    publishHostStartAdoption: HostStartAdoptionPublisher,
+  ) => void;
 }
 
 // A process the platform's slot scan still associates with the install
@@ -164,12 +186,14 @@ export async function installHost(
     source: opts.source,
     onProgress: opts.onProgress,
     recordVersionOverride: opts.recordVersionOverride,
+    verifyMutationCapability: legacyMutationVerifier,
   });
   const { record, previous } = await commitHostInstallSource({
     environment: opts.environment,
     staged,
     onProgress: opts.onProgress,
     lifecycle: opts.lifecycle,
+    verifyMutationCapability: legacyMutationVerifier,
   });
   logger.info("Host install completed", {
     environment: opts.environment,
@@ -205,7 +229,9 @@ export async function stageHostInstallSource(
   opts: StageOptions,
 ): Promise<StagedHostInstallSource> {
   const logger = createCliLogger(opts.environment);
+  await opts.verifyMutationCapability();
   await ensureHostHomeDir(opts.environment);
+  await opts.verifyMutationCapability();
   const owned = await createOwnedTempDir(opts.environment, "install-");
   const stagingDir = owned.path;
 
@@ -234,6 +260,7 @@ export async function stageHostInstallSource(
   });
 
   try {
+    await opts.verifyMutationCapability();
     opts.onProgress({
       stage: "extract",
       message: `extracting host archive into ${staging.stagingDir}`,
@@ -305,6 +332,7 @@ export async function stageHostInstallSource(
         stagingDir: staging.stagingDir,
         swapped: false,
         archiveConsumed: false,
+        verifyMutationCapability: opts.verifyMutationCapability,
       },
       logger,
     );
@@ -320,6 +348,7 @@ export async function stageHostInstallSource(
 export async function discardStagedHostInstallSource(
   environment: Environment,
   staged: StagedHostInstallSource,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<void> {
   const logger = createCliLogger(environment);
   await cleanupStagingArtifacts(
@@ -332,6 +361,7 @@ export async function discardStagedHostInstallSource(
       // Declining to commit is not consuming: `--if-idle` finding the host
       // busy is a retry-later, and that retry re-stages from the archive.
       archiveConsumed: false,
+      verifyMutationCapability,
     },
     logger,
   );
@@ -342,6 +372,13 @@ export interface CommitHostInstallSourceOptions {
   readonly staged: StagedHostInstallSource;
   readonly onProgress: (info: ProgressInfo) => void;
   readonly lifecycle: InstallHostLifecycle | null;
+  /**
+   * Invoked at each irreversible edge. Legacy/internal callers must pass
+   * the explicitly named `legacyMutationVerifier`; an omitted or nullable
+   * verifier would make an unguarded mutation indistinguishable from an
+   * authority-checked one.
+   */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 export interface CommitHostInstallSourceResult {
@@ -374,7 +411,10 @@ export async function commitHostInstallSource(
   const logger = createCliLogger(opts.environment);
   let swapped = false;
   try {
-    await reconcileHostStage(opts.environment);
+    await reconcileHostStageWithAttempt(
+      opts.environment,
+      opts.verifyMutationCapability,
+    );
     const { record, previous } = await commitInstallFromSource({
       environment: opts.environment,
       sourceDir: opts.staged.stagingDir,
@@ -388,12 +428,16 @@ export async function commitHostInstallSource(
       sizeBytes: opts.staged.sizeBytes,
       onProgress: opts.onProgress,
       lifecycle: opts.lifecycle,
+      verifyMutationCapability: opts.verifyMutationCapability,
       onCommitted: () => {
         swapped = true;
       },
     });
 
-    await reconcileHostStage(opts.environment);
+    await reconcileHostStageWithAttempt(
+      opts.environment,
+      opts.verifyMutationCapability,
+    );
 
     const installGeneration = encodeInstallGeneration({
       installId: record.installId,
@@ -420,6 +464,7 @@ export async function commitHostInstallSource(
         // so it is also the moment the archive stops being worth keeping. A
         // commit that threw before it leaves a retry to re-stage.
         archiveConsumed: swapped,
+        verifyMutationCapability: opts.verifyMutationCapability,
       },
       logger,
     );
@@ -442,6 +487,7 @@ async function cleanupStagingArtifacts(
     // Whether this install is finished with the archive. False on every
     // path that could still be retried - see the two release calls below.
     readonly archiveConsumed: boolean;
+    readonly verifyMutationCapability: () => Promise<void>;
   },
   logger: ILogger,
 ): Promise<void> {
@@ -458,23 +504,35 @@ async function cleanupStagingArtifacts(
         // forces a fresh ~800MB transfer that cannot yield anything
         // different. Drop only the claim and let the next run resume it.
         releaseDownloadSlotOwnership;
-    await release(opts.environment, opts.archivePath).catch((err) => {
+    // The verifier gates the destructive edge but must not THROW out of this
+    // cleanup: it runs from `finally` blocks, where a capability loss would
+    // replace the primary commit error (or a success) and abort the steps
+    // after it. Sequential await-then-actuate inside one catch keeps the
+    // edge admitted-or-skipped while the primary outcome survives (and keeps
+    // the verifier→actuator domination visible to the architecture scan).
+    try {
+      await opts.verifyMutationCapability();
+      await release(opts.environment, opts.archivePath);
+    } catch (err) {
       logger.warn("Host install failed to release temporary archive", {
         environment: opts.environment,
         archiveConsumed: opts.archiveConsumed,
         errorName: errorFromUnknown(err).name,
         errorMessage: errorFromUnknown(err).message,
       });
-    });
+    }
   }
   if (!opts.swapped) {
-    await rm(opts.stagingDir, { recursive: true, force: true }).catch((err) => {
+    try {
+      await opts.verifyMutationCapability();
+      await rm(opts.stagingDir, { recursive: true, force: true });
+    } catch (err) {
       logger.warn("Host install failed to remove staging directory", {
         environment: opts.environment,
         errorName: errorFromUnknown(err).name,
         errorMessage: errorFromUnknown(err).message,
       });
-    });
+    }
   }
 }
 
@@ -503,6 +561,8 @@ export interface CommitInstallFromSourceOptions {
   // are committed, a later step failed" from "never swapped, the source dir
   // still needs cleanup", without re-deriving that boundary itself.
   readonly onCommitted: () => void;
+  /** See `CommitHostInstallSourceOptions.verifyMutationCapability`. */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 export interface CommitInstallFromSourceResult {
@@ -527,12 +587,25 @@ export async function commitInstallFromSource(
   opts: CommitInstallFromSourceOptions,
 ): Promise<CommitInstallFromSourceResult> {
   const logger = createCliLogger(opts.environment);
+  const verifyMutationCapability = opts.verifyMutationCapability;
+  if (
+    opts.lifecycle !== null &&
+    opts.lifecycle.setMutationVerifier !== undefined
+  ) {
+    opts.lifecycle.setMutationVerifier(verifyMutationCapability);
+  }
   const previous = await readHostInstallRecord(opts.environment);
 
   const finalExecutablePath = opts.executablePath.replace(
     opts.sourceDir,
     hostInstallDir(opts.environment),
   );
+  // This is distinct from `archiveSha256`: recovery needs an attestation of
+  // the exact executable that will move into `install/`, not merely the
+  // signed archive from which the source tree was extracted.  The record is
+  // written inside that same source tree before the atomic swap, binding the
+  // digest and bytes to one promoted generation.
+  const executableSha256 = await hashFileSha256(opts.executablePath, null);
   const record: HostInstallRecord = {
     installId: randomUUID(),
     version: opts.version,
@@ -546,7 +619,9 @@ export async function commitInstallFromSource(
     signatureKeyId: opts.signatureKeyId,
     sizeBytes: opts.sizeBytes,
     executablePath: finalExecutablePath,
+    executableSha256,
   };
+  await verifyMutationCapability();
   await writeHostInstallRecordAt(opts.sourceDir, record);
   logger.info("Host install record materialized in source tree", {
     environment: opts.environment,
@@ -558,6 +633,7 @@ export async function commitInstallFromSource(
   // verify-before-replace means we must not disturb the running host if
   // staging or verification would have failed.
   if (opts.lifecycle !== null) {
+    await verifyMutationCapability();
     opts.onProgress({
       stage: "service-stop",
       message: "stopping service before replacing install directory",
@@ -581,11 +657,13 @@ export async function commitInstallFromSource(
     totalBytes: null,
     workUnits: null,
   });
+  await verifyMutationCapability();
   await atomicSwap({
     environment: opts.environment,
     stagingDir: opts.sourceDir,
     swapLockRecovery:
       opts.lifecycle === null ? null : opts.lifecycle.swapLockRecovery,
+    verifyMutationCapability,
   });
   opts.onCommitted();
   logger.info("Host install atomic swap completed", {
@@ -599,6 +677,7 @@ export async function commitInstallFromSource(
   // non-readiness. The hook is responsible for swallowing start errors if
   // it wants the caller to report success.
   if (opts.lifecycle !== null) {
+    await verifyMutationCapability();
     opts.onProgress({
       stage: "service-start",
       message: "starting service after replacing install directory",
@@ -637,14 +716,21 @@ export async function sweepOldTrash(
   target: string,
   sidecarFilename: string,
   logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<void> {
   const matches = await listAsideDirsNewestFirst(target, "old-");
-  await Promise.all(
-    matches.map((match) =>
-      invalidateAsideDir(target, match, sidecarFilename, logger),
-    ),
-  );
-  await sweepDeadAsideDirs(target);
+  for (const match of matches) {
+    await verifyMutationCapability();
+    await invalidateAsideDir(
+      target,
+      match,
+      sidecarFilename,
+      logger,
+      verifyMutationCapability,
+    );
+  }
+  await verifyMutationCapability();
+  await sweepDeadAsideDirs(target, verifyMutationCapability);
 }
 
 interface StageResult {
@@ -666,6 +752,8 @@ interface StageOptions {
   readonly source: InstallSourceArg;
   readonly onProgress: (info: ProgressInfo) => void;
   readonly recordVersionOverride: string | null;
+  /** Required before every staging-tree creation or cleanup edge. */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 interface StageLocalOptions {
@@ -846,12 +934,28 @@ function swapLockRetryHook(
     try {
       await recovery.killLingeringProcesses();
     } catch (err) {
+      // The retry primitive verifies again immediately before it invokes this
+      // hook. Do not subsequently turn a capability failure thrown by a
+      // recovery implementation into a harmless warning: that would let the
+      // next retry proceed as though its authority were still intact.
+      if (
+        err instanceof CliError &&
+        err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY
+      ) {
+        throw err;
+      }
       logger.warn("Host install swap-lock re-kill failed", {
         errorName: errorFromUnknown(err).name,
         errorMessage: errorFromUnknown(err).message,
       });
     }
   };
+}
+
+function isLostMutationAuthority(cause: unknown): cause is CliError {
+  return (
+    cause instanceof CliError && cause.code === CLI_ERROR_CODES.CLI_LOCK_BUSY
+  );
 }
 
 async function collectSwapLockHolders(
@@ -928,6 +1032,8 @@ interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
   readonly swapLockRecovery: SwapLockRecovery | null;
+  /** Revalidated immediately before every irreversible swap edge. */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 // The swap renames get a far longer runway than `renameWithRetry`'s
@@ -978,12 +1084,18 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   // create another one. Doesn't block the swap on sweep success - if
   // the sweep fails we log via the surrounding flow's progress and
   // continue.
-  await sweepOldTrash(target, "install.json", logger);
+  await sweepOldTrash(
+    target,
+    "install.json",
+    logger,
+    opts.verifyMutationCapability,
+  );
 
   const swapRenamePlan = {
     delaysMs: swapRenameDelays(),
     onRetry: swapLockRetryHook(opts.swapLockRecovery, logger),
     maxTotalMs: SWAP_RENAME_MAX_TOTAL_MS,
+    verifyBeforeAttempt: opts.verifyMutationCapability,
   };
 
   const targetExists = await access(target).then(
@@ -1002,6 +1114,7 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     try {
       await renameWithRetryPlan(target, trash, swapRenamePlan);
     } catch (cause) {
+      if (isLostMutationAuthority(cause)) throw cause;
       // Nothing has moved: the previous install is intact, only the update
       // is blocked. Wrap the raw fs error (historically surfaced verbatim
       // as "EBUSY: resource busy or locked, rename ...") and name the
@@ -1044,36 +1157,44 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     );
     // Restore the previous install if the rename of the new one fails. The
     // same transient Windows lock that failed the swap can also fail the
-    // restore, so it gets the SAME recovery-aware plan as the forward
-    // renames (schedule + re-kill) rather than the bare ~2.5s default -
-    // this is the worst failure in the file (no `install/` at all, the
-    // previous install stranded as `install.old-*`), so it needs every bit
-    // of the retry budget the forward renames get. If it still fails we log
-    // rather than mask the swap error about to be thrown - but a silent
-    // failure here would leave no install at all with nothing pointing at
-    // why.
+    // restore, so it gets the same bounded retry plan. The restore is still
+    // an install-tree rename, however: every one of its attempts validates
+    // the live capability. If authority has been lost we intentionally leave
+    // the exact old tree in `trash` and surface the authority failure rather
+    // than performing an unverified rollback. The next admitted repair can
+    // inspect/recover that explicitly named pre-swap tree; it cannot mistake
+    // a stale actor's restore for authorised forward progress.
     if (targetExists) {
-      await renameWithRetryPlan(trash, target, swapRenamePlan).catch(
-        async (restoreCause) => {
-          // The `holders` in the enclosing scope were collected right after
-          // the SWAP-IN failure, before this restore ever ran its own
-          // retries/re-kills - they don't necessarily describe who (if
-          // anyone) still holds `target` now that the restore has also
-          // exhausted. Re-scan so this, the worst failure in the file (no
-          // `install/` at all), gets a diagnosis of its own rather than a
-          // stale one.
-          const restoreHolders = await collectSwapLockHolders(
-            opts.swapLockRecovery,
-            logger,
-          );
-          logger.error(
-            "Host install rollback failed - previous install left aside",
-            { target, trash, holders: restoreHolders.map(logLockHolder) },
-            errorFromUnknown(restoreCause),
-          );
-        },
-      );
+      try {
+        await renameWithRetryPlan(trash, target, {
+          delaysMs: swapRenameDelays(),
+          // Compensation may restore the previous bytes, never kill another
+          // process as part of a stale forward transaction.
+          onRetry: null,
+          maxTotalMs: SWAP_RENAME_MAX_TOTAL_MS,
+          verifyBeforeAttempt: opts.verifyMutationCapability,
+        });
+      } catch (restoreCause) {
+        // The `holders` in the enclosing scope were collected right after
+        // the SWAP-IN failure, before this restore ever ran its own
+        // retries/re-kills - they don't necessarily describe who (if
+        // anyone) still holds `target` now that the restore has also
+        // exhausted. Re-scan so this, the worst failure in the file (no
+        // `install/` at all), gets a diagnosis of its own rather than a
+        // stale one.
+        const restoreHolders = await collectSwapLockHolders(
+          opts.swapLockRecovery,
+          logger,
+        );
+        logger.error(
+          "Host install rollback failed - previous install left aside",
+          { target, trash, holders: restoreHolders.map(logLockHolder) },
+          errorFromUnknown(restoreCause),
+        );
+        if (isLostMutationAuthority(restoreCause)) throw restoreCause;
+      }
     }
+    if (isLostMutationAuthority(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
       message: `host install: failed to swap staging dir into place: ${cause instanceof Error ? cause.message : String(cause)}${swapLockFailureSuffix(cause, holders, opts.swapLockRecovery)}`,
@@ -1086,8 +1207,16 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     // install BEFORE the old dir is invalidated - a slim host archive ships
     // no coding-agent CLIs, and these bytes are what keeps every provider
     // runnable until its registry pack downloads (see legacy-providers.ts).
-    // Best-effort by its own contract; it never fails the install.
-    await preserveLegacyProviders(trash, target, logger);
+    // Provider carryover is best-effort for a pack that cannot move, but it
+    // is still a post-swap canonical-tree mutation. Thread the live verifier
+    // through so authority loss stops the composite rather than being logged
+    // as a tolerable provider-pack failure.
+    await preserveLegacyProviders(
+      trash,
+      target,
+      logger,
+      opts.verifyMutationCapability,
+    );
     // Layered invalidation (rename-to-`.dead-*` -> sidecar-unlink ->
     // recursive-rm -> accept-and-log), not a plain `rm`: mirrors
     // `download-stage.ts`'s `replaceStagedDir`, which creates and discards
@@ -1097,7 +1226,14 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     // exactly the residual `sweepOldTrash` above exists to heal, so a
     // failed deletion here must not be more recoverable than one caught by
     // the next sweep.
-    await invalidateAsideDir(target, trash, "install.json", logger);
+    await opts.verifyMutationCapability();
+    await invalidateAsideDir(
+      target,
+      trash,
+      "install.json",
+      logger,
+      opts.verifyMutationCapability,
+    );
   }
 }
 

@@ -2,6 +2,7 @@ import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useBrowserLinkRouter } from "@/lib/browser-view/link-routing/browser-link-router";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -45,6 +46,8 @@ export function MarkdownAnchor({
 }: MarkdownAnchorProps) {
   const runnerHost = use(RunnerHostContext);
   const linkPolicy = use(MarkdownLinkContext);
+  const routeBrowserLink = useBrowserLinkRouter();
+
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
   );
@@ -105,9 +108,17 @@ export function MarkdownAnchor({
       }
 
       linkPolicy?.supersedePendingFileLink();
-      if (runnerHost !== null) void runnerHost.openExternalLink(classified.url);
+      if (runnerHost !== null) {
+        routeBrowserLink("markdown", classified.url, event);
+      }
     },
-    [navigableHref, linkPolicy, reportIssueAvailable, runnerHost],
+    [
+      navigableHref,
+      linkPolicy,
+      reportIssueAvailable,
+      routeBrowserLink,
+      runnerHost,
+    ],
   );
 
   // Native `title` ON PURPOSE - see the eslint exemption for this file. This

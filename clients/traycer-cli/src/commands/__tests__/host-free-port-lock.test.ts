@@ -166,7 +166,12 @@ describe.skipIf(process.platform === "win32")(
         writeFileSync(join(holdBarrierDir, "release"), "");
         const result = await pending;
         expect(mocks.killCalls).toEqual([
-          { pid: 4242, port: 51820, commandName: "host free-port" },
+          expect.objectContaining({
+            pid: 4242,
+            port: 51820,
+            commandName: "host free-port",
+            verifyMutationCapability: expect.any(Function),
+          }),
         ]);
         expect(result.data).toMatchObject({ killed: true });
       } finally {

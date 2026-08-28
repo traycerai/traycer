@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
-  EDGE_SPLIT_DWELL_MS,
-  EdgeSplitDwellMachine,
-  type EdgeSplitTimer,
-} from "@/components/layout/tabs/edge-split-dwell";
-import {
-  resolveUnpairedHeaderEdgeSource,
+  resolveUnpairedHeaderSource,
   resolveValidatedTopLevelTabDrop,
   stripPairTargetForIndex,
 } from "@/components/layout/tabs/top-level-tab-dnd";
@@ -31,34 +26,6 @@ import type { TabRef } from "@/stores/tabs/types";
 
 const PARTNER: TabRef = { kind: "epic", id: "partner" };
 const OPEN_DRAFT: TabRef = { kind: "draft", id: "draft-open" };
-
-interface FakeTimers {
-  readonly timers: EdgeSplitTimer;
-  run: (id: number) => void;
-  cleared: ReadonlyArray<number>;
-}
-
-function fakeTimers(): FakeTimers {
-  let nextId = 0;
-  const callbacks = new Map<number, () => void>();
-  const cleared: number[] = [];
-  return {
-    timers: {
-      set: (callback, timeout) => {
-        expect(timeout).toBe(EDGE_SPLIT_DWELL_MS);
-        nextId += 1;
-        callbacks.set(nextId, callback);
-        return nextId;
-      },
-      clear: (id) => {
-        cleared.push(id);
-        callbacks.delete(id);
-      },
-    },
-    run: (id) => callbacks.get(id)?.(),
-    cleared,
-  };
-}
 
 function seedSplitLayout() {
   useEpicCanvasStore
@@ -94,69 +61,7 @@ afterEach(() => {
 });
 
 describe("T9 split interactions", () => {
-  it("commits edge split only after an uninterrupted 400ms dwell and resets on target change or cancel", () => {
-    expect(EDGE_SPLIT_DWELL_MS).toBe(400);
-    const fake = fakeTimers();
-    const states: string[] = [];
-    const machine = new EdgeSplitDwellMachine(
-      (state) => states.push(state.kind),
-      fake.timers,
-    );
-    machine.setTargetValidator(() => true);
-    const left = {
-      kind: "top-level-edge-split" as const,
-      targetRef: PARTNER,
-      side: "left" as const,
-    };
-    const right = { ...left, side: "right" as const };
-
-    machine.observe(left);
-    expect(machine.getState().kind).toBe("armed");
-    expect(machine.commit(left)).toBeNull();
-    expect(machine.getState().kind).toBe("idle");
-
-    machine.observe(left);
-    machine.observe(right);
-    fake.run(2);
-    expect(machine.getState().kind).toBe("armed");
-    fake.run(3);
-    expect(machine.getState().kind).toBe("preview");
-    expect(machine.commit(right)).toEqual(right);
-    expect(machine.getState().kind).toBe("commit");
-    machine.reset();
-
-    expect(states).toEqual([
-      "armed",
-      "idle",
-      "armed",
-      "armed",
-      "preview",
-      "commit",
-      "idle",
-    ]);
-    expect(fake.cleared).toContain(1);
-  });
-
-  it("withdraws a dwell preview when the live validator changes before the timer fires", () => {
-    const fake = fakeTimers();
-    let valid = true;
-    const machine = new EdgeSplitDwellMachine(() => undefined, fake.timers);
-    machine.setTargetValidator(() => valid);
-    const target = {
-      kind: "top-level-edge-split" as const,
-      targetRef: PARTNER,
-      side: "left" as const,
-    };
-
-    machine.observe(target);
-    valid = false;
-    machine.revalidate();
-
-    expect(machine.getState().kind).toBe("idle");
-    expect(machine.commit(target)).toBeNull();
-  });
-
-  it("validates edge and fill targets against the live active item, locks, and source identity", () => {
+  it("validates fill targets against the live active item, locks, and source identity", () => {
     const source: TabRef = { kind: "draft", id: "source" };
     const target: TabRef = { kind: "epic", id: "target" };
     const header = {
@@ -166,47 +71,8 @@ describe("T9 split interactions", () => {
       tabId: source.id,
       index: 0,
     };
-    const layout = {
-      version: 2 as const,
-      items: [
-        { kind: "tab" as const, id: "source-item", ref: source },
-        { kind: "tab" as const, id: "target-item", ref: target },
-      ],
-      activeItemId: "target-item",
-      systemTabs: { history: null, settings: null },
-    };
-    const edge = {
-      kind: "top-level-edge-split" as const,
-      targetRef: target,
-      side: "left" as const,
-    };
-
-    expect(resolveValidatedTopLevelTabDrop(header, edge, layout)).toEqual({
-      source,
-      target: edge,
-    });
-    expect(
-      resolveValidatedTopLevelTabDrop(
-        header,
-        { ...edge, targetRef: source },
-        layout,
-      ),
-    ).toBeNull();
-    expect(
-      resolveValidatedTopLevelTabDrop(header, edge, {
-        ...layout,
-        activeItemId: "source-item",
-      }),
-    ).toBeNull();
-
-    const unregister = registerTabStructuralLockPredicate(
-      (ref) => ref.kind === target.kind && ref.id === target.id,
-    );
-    expect(resolveValidatedTopLevelTabDrop(header, edge, layout)).toBeNull();
-    unregister();
-
     const fillLayout = {
-      ...layout,
+      version: 2 as const,
       items: [
         { kind: "tab" as const, id: "source-item", ref: source },
         {
@@ -224,6 +90,7 @@ describe("T9 split interactions", () => {
         },
       ],
       activeItemId: "split-target",
+      systemTabs: { history: null, settings: null },
     };
     const fill = {
       kind: "top-level-fillable-slot" as const,
@@ -234,12 +101,21 @@ describe("T9 split interactions", () => {
       source,
       target: fill,
     });
+    // The slot must belong to the ACTIVE item.
     expect(
       resolveValidatedTopLevelTabDrop(header, fill, {
         ...fillLayout,
         activeItemId: "source-item",
       }),
     ).toBeNull();
+    // A structurally locked SOURCE cannot fill a slot.
+    const unregister = registerTabStructuralLockPredicate(
+      (ref) => ref.kind === source.kind && ref.id === source.id,
+    );
+    expect(
+      resolveValidatedTopLevelTabDrop(header, fill, fillLayout),
+    ).toBeNull();
+    unregister();
   });
 
   it("resolves a pair target from the live strip and refuses split items", () => {
@@ -331,33 +207,6 @@ describe("T9 split interactions", () => {
     );
     expect(resolveValidatedTopLevelTabDrop(header, pair, layout)).toBeNull();
     unregister();
-  });
-
-  it("treats an edge and a pair target on the same tab as distinct dwell targets", () => {
-    const target: TabRef = { kind: "epic", id: "target" };
-    const timers = fakeTimers();
-    const states: string[] = [];
-    const machine = new EdgeSplitDwellMachine((state) => {
-      states.push(state.kind);
-    }, timers.timers);
-    machine.setTargetValidator(() => true);
-
-    machine.observe({
-      kind: "top-level-edge-split",
-      targetRef: target,
-      side: "left",
-    });
-    // Same tab, different gesture: this must re-arm rather than be swallowed as
-    // "already observing this target".
-    machine.observe({ kind: "top-level-strip-pair", targetRef: target });
-    expect(states).toEqual(["armed", "armed"]);
-    expect(timers.cleared).toHaveLength(1);
-
-    timers.run(2);
-    expect(states).toEqual(["armed", "armed", "preview"]);
-    expect(
-      machine.commit({ kind: "top-level-strip-pair", targetRef: target }),
-    ).toEqual({ kind: "top-level-strip-pair", targetRef: target });
   });
 
   it("shows descriptor catalog Epic and legacy Phase destinations after reusable open refs", () => {
@@ -523,12 +372,12 @@ describe("T9 split interactions", () => {
     expect(activate).toHaveBeenCalledWith(OPEN_DRAFT);
   });
 
-  it("reorders a split atomically and rejects one of its members as an edge source", () => {
+  it("reorders a split atomically and rejects one of its members as a pair/fill source", () => {
     seedSplitLayout();
     useLandingDraftStore.getState().createDraftWithId(OPEN_DRAFT.id, null);
 
     expect(
-      resolveUnpairedHeaderEdgeSource(
+      resolveUnpairedHeaderSource(
         {
           kind: "header-tab",
           stripItemId: "split-a",
