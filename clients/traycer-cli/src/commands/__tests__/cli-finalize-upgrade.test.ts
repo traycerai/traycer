@@ -351,6 +351,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       status: "staged-binary-missing",
       stagedVersion: "1.5.0",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      livePath: "/opt/traycer/cli/traycer",
     };
 
     const { cliFinalizeUpgradeCommand } =
@@ -362,12 +363,13 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       status: "staged-binary-missing",
       stagedVersion: "1.5.0",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+      livePath: "/opt/traycer/cli/traycer",
     });
     expect(existsSync(markerPath())).toBe(true);
     const marker = JSON.parse(readFileSync(markerPath(), "utf8"));
     expect(marker).toMatchObject({
       status: "swap-failed",
-      livePath: "",
+      livePath: "/opt/traycer/cli/traycer",
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
       errorMessage:
         "staged binary for 1.5.0 is missing at /opt/traycer/cli/traycer-1.5.0",
@@ -401,6 +403,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
                 status: "staged-binary-missing",
                 stagedVersion: "1.5.0",
                 stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
+                livePath: "/opt/traycer/cli/traycer",
               }
             : { status: "no-pending" };
       mocks.serviceStartThrows = new Error("schtasks /Run failed");

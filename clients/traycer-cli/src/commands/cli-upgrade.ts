@@ -877,6 +877,7 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly status: "staged-binary-missing";
       readonly stagedVersion: string;
       readonly stagedBinaryPath: string;
+      readonly livePath: string;
     }
   | {
       readonly status: "still-locked";
@@ -954,6 +955,7 @@ export async function finalizePendingCliUpgrade(opts: {
       status: "staged-binary-missing",
       stagedVersion: pending.version,
       stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
     };
   }
   // A publication failure must not escape as an exception - see the

@@ -69,6 +69,7 @@ export type FinalizeSwapOutcome =
       readonly status: "staged-binary-missing";
       readonly stagedVersion: string;
       readonly stagedBinaryPath: string;
+      readonly livePath: string;
     }
   | { readonly status: "no-pending" }
   | { readonly status: "lock-timeout" };
@@ -139,7 +140,7 @@ export async function runFinalizeUpgradeSwap(opts: {
     await writePostFinalizeMarkerFile(markerPath, {
       status: "swap-failed",
       attemptedAt: new Date().toISOString(),
-      livePath: "",
+      livePath: swap.livePath,
       stagedBinaryPath: swap.stagedBinaryPath,
       errorMessage: `staged binary for ${swap.stagedVersion} is missing at ${swap.stagedBinaryPath}`,
       serviceStartError,
@@ -148,6 +149,7 @@ export async function runFinalizeUpgradeSwap(opts: {
       status: "staged-binary-missing",
       stagedVersion: swap.stagedVersion,
       stagedBinaryPath: swap.stagedBinaryPath,
+      livePath: swap.livePath,
     };
   }
 
