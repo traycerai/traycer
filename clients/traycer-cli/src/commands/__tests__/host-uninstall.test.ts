@@ -22,6 +22,7 @@ function commandDeps(args: {
   readonly status: () => Promise<ServiceStatus>;
   // Defaults to a published host that is positively dead, so the existing
   // cases read as a confirmed teardown; the cases that care override it.
+  // "unpublished" models a host that never wrote pid.json at all.
   readonly liveness: PublishedProcessIdentityVerdict | "unpublished" | null;
   // Does a host publish pid metadata AFTER the teardown? Null models the
   // ordinary case (the teardown removed it); true models the supervisor's
@@ -193,6 +194,29 @@ describe("runHostUninstall", () => {
     });
   });
 
+  // Nothing was ever published, so there is no process to ask about. That is
+  // NOT death - a host that started moments ago and has not written pid.json
+  // looks identical - so liveness stays unknown.
+  it("reports liveness as unknown when nothing was ever published", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => NOT_INSTALLED_STATUS,
+        liveness: "unpublished",
+        successorAfterTeardown: null,
+        publishedPid: null,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      hostStillRunning: null,
+      purgedRuntime: false,
+    });
+  });
+
   it("forwards runtime preservation after a failed stop", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
@@ -273,10 +297,11 @@ describe("runHostUninstall", () => {
       }),
     );
 
-    // `serviceUninstalled` is the VERIFIED fact, not the request. Desktop's
-    // `parseUninstallResult` projects it straight to `deregisteredService`, so
-    // leaving it true against a readback saying "still registered" published
-    // the exact false outcome the readback had just caught.
+    // `serviceUninstalled` keeps REQUEST semantics (no platform can verify
+    // absence), but a POSITIVE readback vetoes it - Desktop projects the field
+    // straight to `deregisteredService`, so leaving it true against a readback
+    // saying "still registered" published the exact false outcome the readback
+    // had just caught.
     expect(result.data).toMatchObject({
       deregisterRequested: true,
       serviceUninstalled: false,

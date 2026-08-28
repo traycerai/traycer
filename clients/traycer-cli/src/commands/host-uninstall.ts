@@ -54,6 +54,12 @@ export interface HostUninstallServiceController extends RuntimePurgeStopControll
   status(label: ServiceLabel): Promise<ServiceStatus>;
 }
 
+/** The host process an environment last published, as pid.json recorded it. */
+type PublishedHost = {
+  readonly pid: number;
+  readonly startIdentity: string | null;
+};
+
 export interface RunHostUninstallDeps {
   createServiceController(): HostUninstallServiceController;
   uninstallHost(options: UninstallHostOptions): Promise<UninstallHostResult>;
@@ -63,10 +69,7 @@ export interface RunHostUninstallDeps {
    * removes pid metadata even when its `taskkill` calls failed, so a probe
    * that runs afterwards has nothing left to look at.
    */
-  readPublishedHost(environment: Environment): Promise<{
-    readonly pid: number;
-    readonly startIdentity: string | null;
-  } | null>;
+  readPublishedHost(environment: Environment): Promise<PublishedHost | null>;
   /**
    * Did THAT process exit? Compares the OS process against the start identity
    * pid.json published, so a recycled pid reads as gone rather than alive.
@@ -246,8 +249,16 @@ export async function runHostUninstall(
     // chance to take time. `published` describes the child we captured; this
     // asks whether anything is publishing NOW - a supervisor relaunch loop can
     // produce a successor while these probes are running.
-    const successor = await readPublishedHostBestEffort(deps, ctx);
-    if (successor !== null) {
+    // `readPublishedHostBestEffort` returns null both for "nothing published"
+    // and for "the record was unreadable or malformed". The second is not
+    // evidence of absence, so it must not leave the captured child's `gone`
+    // standing - `observeLiveness` reports unknown for a null input, which is
+    // exactly the right answer here too.
+    const successorRead = await readPublishedHostReadOutcome(deps, ctx);
+    const successor = successorRead.host;
+    if (!successorRead.answered) {
+      liveness = "unknown";
+    } else if (successor !== null) {
       // Identity-probe B rather than inheriting A's verdict. A successor
       // record is not proof of life either - it can be stale - so it gets the
       // same treatment A got.
@@ -289,10 +300,6 @@ export async function runHostUninstall(
   }
   // The boundary re-read, on BOTH paths now: `published` describes the child
   // captured at entry; this asks what is publishing at the moment the bytes go.
-  const boundary = await readPublishedHostBestEffort(deps, ctx);
-  if (!args.all) {
-    liveness = await observeLiveness(deps, ctx, boundary ?? published);
-  }
   ctx.progress({
     stage: "uninstall",
     message: "removing installed host",
@@ -305,6 +312,17 @@ export async function runHostUninstall(
     environment: ctx.environment,
     purgeChannelRuntime,
   });
+  if (!args.all) {
+    // AFTER the removal, deliberately. The default path stops nothing, so a
+    // still-registered service or a foreground supervisor can publish a
+    // successor while the install and staged directories are being deleted -
+    // and a read taken before that would report the machine clean while the
+    // successor serves the install just removed.
+    const boundary = await readPublishedHostReadOutcome(deps, ctx);
+    liveness = boundary.answered
+      ? await observeLiveness(deps, ctx, boundary.host)
+      : "unknown";
+  }
   ctx.logger.info("Host uninstall command completed", {
     environment: ctx.environment,
     serviceUninstalled,
@@ -413,24 +431,36 @@ export async function runHostUninstall(
 // Best-effort like the status probe, and for the same reason: this exists to
 // DESCRIBE the end state, so an unreachable endpoint degrades to "unknown"
 // rather than failing a removal that already happened.
-type PublishedHost = {
-  readonly pid: number;
-  readonly startIdentity: string | null;
-};
-
 async function readPublishedHostBestEffort(
   deps: RunHostUninstallDeps,
   ctx: RunHostUninstallContext,
 ): Promise<PublishedHost | null> {
+  return (await readPublishedHostReadOutcome(deps, ctx)).host;
+}
+
+/**
+ * Distinguishes "nothing is published" from "the read did not answer" -
+ * `readHostPidMetadata` collapses both to null, and only the first is evidence.
+ */
+async function readPublishedHostReadOutcome(
+  deps: RunHostUninstallDeps,
+  ctx: RunHostUninstallContext,
+): Promise<{
+  readonly answered: boolean;
+  readonly host: PublishedHost | null;
+}> {
   try {
-    return await deps.readPublishedHost(ctx.environment);
+    return {
+      answered: true,
+      host: await deps.readPublishedHost(ctx.environment),
+    };
   } catch (err) {
     ctx.logger.warn("Host uninstall could not read published host metadata", {
       environment: ctx.environment,
       errorName: err instanceof Error ? err.name : "Error",
       errorMessage: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { answered: false, host: null };
   }
 }
 
