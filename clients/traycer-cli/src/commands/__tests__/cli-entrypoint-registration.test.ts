@@ -65,9 +65,22 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.serviceControllerCalls.push("restart");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The restart-with-attempt path publishes a host-start adoption lease and
+// waits (up to 30s) for a service-manager child to ack a spawn that never
+// happens under the stubbed controller above. Same immediately-satisfied
+// stand-in as `host-free-port-and-restart.test.ts` - the adoption handshake
+// itself is `host-start-adoption.test.ts`'s subject, not this file's.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: async (opts: {
