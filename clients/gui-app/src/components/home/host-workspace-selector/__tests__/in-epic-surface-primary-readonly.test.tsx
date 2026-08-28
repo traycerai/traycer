@@ -1305,12 +1305,16 @@ it("acknowledges a captured create that committed after Discard cancelled the ru
     expect(mutationMocks.createWorktree).toHaveBeenCalled();
   });
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
-  fireEvent.click(await screen.findByTestId("folder-discard-staged"));
+  const discard = await screen.findByTestId("folder-discard-staged");
+  expect(discard instanceof HTMLButtonElement).toBe(true);
+  if (!(discard instanceof HTMLButtonElement)) return;
+  expect(discard.disabled).toBe(true);
+  fireEvent.click(discard);
   expect(
     useWorktreeIntentStagingStore.getState().intentByKey[
       worktreeStagingKeyString(TERMINAL_STAGING_KEY)
     ],
-  ).toBeUndefined();
+  ).toBeDefined();
   act(() => {
     releaseCreate?.({
       perEntry: [

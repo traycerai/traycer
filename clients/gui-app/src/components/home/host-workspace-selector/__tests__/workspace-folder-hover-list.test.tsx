@@ -183,6 +183,30 @@ describe("WorkspaceFolderHoverList", () => {
     expect(screen.queryByText(/New worktree/)).toBeNull();
   });
 
+  it("does not hint a committed local row as a staged apply", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "traycer",
+            branchLabel: "main",
+            displayPath: "/Users/me/Work/traycer",
+            mode: "worktree",
+            currentIntent: {
+              kind: "local",
+              workspacePath: "/Users/me/Work/traycer",
+              repoIdentifier: null,
+              isPrimary: true,
+            },
+            hasStagedIntent: false,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.queryByTestId("workspace-hover-draft-hint")).toBeNull();
+  });
+
   it("names a staged existing-worktree switch", () => {
     render(
       <WorkspaceFolderHoverList

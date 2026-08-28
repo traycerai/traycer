@@ -33,7 +33,7 @@ export function WorkspaceFolderRows(props: {
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
   readonly onDiscardStaged?: (() => void) | null;
-  readonly discardDisabled?: boolean;
+  readonly discardDisabled: boolean;
   readonly draftPending?: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly readOnly: boolean;
@@ -116,7 +116,7 @@ export function WorkspaceFolderRows(props: {
   const discardButton = (
     <DiscardStagedButton
       onDiscardStaged={props.onDiscardStaged}
-      discardDisabled={props.discardDisabled === true}
+      discardDisabled={props.discardDisabled}
       draftPending={props.draftPending === true}
     />
   );
@@ -210,6 +210,7 @@ function DiscardStagedButton(props: {
     <button
       type="button"
       data-testid="folder-discard-staged"
+      disabled={props.discardDisabled}
       aria-disabled={props.discardDisabled ? true : undefined}
       tabIndex={props.discardDisabled ? -1 : undefined}
       onClick={discardStaged}

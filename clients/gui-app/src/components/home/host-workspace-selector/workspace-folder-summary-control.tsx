@@ -149,7 +149,7 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly draftPending?: boolean;
   readonly onDiscardStaged: (() => void) | null;
   /** True while a captured Update/teardown run is in flight. */
-  readonly discardDisabled?: boolean;
+  readonly discardDisabled: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   /**
    * Re-derives these folders from disk, or `null` on a surface with no host to
@@ -405,7 +405,7 @@ export function WorkspaceFolderSummaryControl(props: {
             updateEnabled={props.updateEnabled}
             updatePending={props.updatePending}
             onDiscardStaged={props.onDiscardStaged}
-            discardDisabled={props.discardDisabled === true}
+            discardDisabled={props.discardDisabled}
             draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}

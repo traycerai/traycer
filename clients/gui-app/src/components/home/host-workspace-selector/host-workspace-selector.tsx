@@ -1245,6 +1245,7 @@ function HomeWorkspaceRows(props: {
           onUpdate={null}
           updateEnabled={false}
           updatePending={false}
+          discardDisabled={false}
           onEditEnvironment={handleEditEnvironment}
           readOnly={false}
           // Rendered inline in the fork / add-node dialogs, never inside a
@@ -1305,6 +1306,7 @@ function HomeWorkspaceSummaryControl(props: {
           updateEnabled={false}
           updatePending={false}
           onDiscardStaged={null}
+          discardDisabled={false}
           onEditEnvironment={props.onEditEnvironment}
           refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
