@@ -30,6 +30,7 @@ import { sessionKeyOf, type SessionRegistryPolicy } from "../session-registry";
 import type { Replica, ReplicaApplyOutcome } from "../replica";
 import type { AdapterHost, LaneAdapter } from "../adapter";
 import type { LeaseMaterializer } from "../lease";
+import type { DocReplicaEvent } from "../replica-events";
 
 // ─── createMonotonicSequence ────────────────────────────────────────────────
 
@@ -134,7 +135,7 @@ describe("advancesLaneCursor", () => {
 describe("createTransactionalProjectionSink", () => {
   it("delivers immediately outside a transaction and bumps revision by 1", () => {
     const deliver = vi.fn();
-    const sink = createTransactionalProjectionSink(0, deliver);
+    const sink = createTransactionalProjectionSink<number>(0, deliver);
 
     sink.publish(1);
 
@@ -146,7 +147,7 @@ describe("createTransactionalProjectionSink", () => {
 
   it("delivers once with the last value for three publishes in one transaction", () => {
     const deliver = vi.fn();
-    const sink = createTransactionalProjectionSink(0, deliver);
+    const sink = createTransactionalProjectionSink<number>(0, deliver);
 
     sink.transact(() => {
       sink.publish(1);
@@ -161,7 +162,7 @@ describe("createTransactionalProjectionSink", () => {
 
   it("delivers nothing and does not bump revision for an empty transaction", () => {
     const deliver = vi.fn();
-    const sink = createTransactionalProjectionSink(0, deliver);
+    const sink = createTransactionalProjectionSink<number>(0, deliver);
 
     sink.transact(() => {
       // no publish
@@ -173,7 +174,7 @@ describe("createTransactionalProjectionSink", () => {
 
   it("delivers only on the outermost exit of nested transactions", () => {
     const deliver = vi.fn();
-    const sink = createTransactionalProjectionSink(0, deliver);
+    const sink = createTransactionalProjectionSink<number>(0, deliver);
 
     sink.transact(() => {
       sink.publish(1);
@@ -191,7 +192,7 @@ describe("createTransactionalProjectionSink", () => {
 
   it("read() inside an open transaction returns the buffered value", () => {
     const deliver = vi.fn();
-    const sink = createTransactionalProjectionSink(0, deliver);
+    const sink = createTransactionalProjectionSink<number>(0, deliver);
 
     sink.transact(() => {
       sink.publish(42);
@@ -201,7 +202,7 @@ describe("createTransactionalProjectionSink", () => {
 
   it("delivers what was published and rethrows when body() throws", () => {
     const deliver = vi.fn();
-    const sink = createTransactionalProjectionSink(0, deliver);
+    const sink = createTransactionalProjectionSink<number>(0, deliver);
 
     expect(() =>
       sink.transact(() => {
@@ -448,7 +449,9 @@ function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
       host = nextHost;
     },
     resumeOffer() {
-      return null;
+      // The cursored-lane form of the union: a records/log adapter offers a
+      // cursor, never a bare `LaneCursor`.
+      return { kind: "cursor", cursor: cursor("e1", laneId, 0) };
     },
     detach(reason): void {
       detachReasons.push(reason);
@@ -490,6 +493,12 @@ describe("Replica / LaneAdapter / AdapterHost conformance smoke test", () => {
     const adapter = createFakeLaneAdapter("epic.state.subscribe@1.0");
 
     adapter.attach(host);
+    // The cursored-lane arm of the `ResumeOffer` union — a records/log
+    // adapter's offer, distinct from the doc class's `doc-seed` arm below.
+    expect(adapter.resumeOffer()).toEqual({
+      kind: "cursor",
+      cursor: cursor("e1", "epic.state.subscribe@1.0", 0),
+    });
     adapter.pushFrame([
       { kind: "upsert", rowId: "row-1", revision: 2, row: { label: "second" } },
       // Same or lower revision than what was just applied — must be dropped,
@@ -592,5 +601,269 @@ describe("LeaseMaterializer conformance", () => {
     expect(resource).toEqual({ bytes: 128 });
     materializer.demote("doc-1", resource!);
     expect(materializer.demoted).toEqual(["doc-1"]);
+  });
+});
+
+// ─── Doc-class Replica conformance ──────────────────────────────────────────
+//
+// The four rules `DocSnapshotEvent`/`DocUpdateEvent`/`DocCoverageAckEvent`/
+// `DocUnavailableEvent` exist to protect. Content is modelled as a set of
+// opaque string tokens rather than real CRDT bytes — the point here is the
+// replica's DECISION per event kind, not Yjs merge semantics, which this seam
+// deliberately keeps out of the runtime's own dependency surface.
+
+type DocProjection = readonly string[];
+
+function tokensOf(update: Uint8Array): readonly string[] {
+  return new TextDecoder()
+    .decode(update)
+    .split(",")
+    .filter((token) => token.length > 0);
+}
+
+function updateOf(...tokens: readonly string[]): Uint8Array {
+  return new TextEncoder().encode(tokens.join(","));
+}
+
+/**
+ * A minimal in-memory `Replica<DocReplicaEvent, DocProjection>`.
+ *
+ * `markLocalDivergence` is test-only scaffolding standing in for the local
+ * unsynced-edit tracking a real doc replica would own — the point under test
+ * is which event retires it, not how it is set.
+ */
+function createFakeDocReplica(planeId: string): Replica<DocReplicaEvent, DocProjection> & {
+  markLocalDivergence(): void;
+  isLocallyDivergent(): boolean;
+} {
+  let heldGuid: string | null = null;
+  let tokens = new Set<string>();
+  let divergent = false;
+  let disposed = false;
+  const sink = createTransactionalProjectionSink<DocProjection>([], () => {});
+
+  return {
+    planeId,
+    dataClass: "doc",
+    markLocalDivergence(): void {
+      divergent = true;
+    },
+    isLocallyDivergent(): boolean {
+      return divergent;
+    },
+    apply(event: DocReplicaEvent): ReplicaApplyOutcome {
+      if (disposed) return { kind: "ignored", reason: "disposed" };
+      switch (event.kind) {
+        case "doc-snapshot": {
+          heldGuid = event.docGuid;
+          const incoming = tokensOf(event.update);
+          if (event.seed === "full") {
+            // Self-sufficient: safe, and REQUIRED, to install wholesale.
+            tokens = new Set(incoming);
+          } else {
+            // A delta against this replica's own offer — merging is the only
+            // correct move. Installing it wholesale would silently drop
+            // every token the delta legitimately omitted.
+            for (const token of incoming) tokens.add(token);
+          }
+          return { kind: "applied", cursor: null };
+        }
+        case "doc-update": {
+          if (event.docGuid !== heldGuid) {
+            // The bytes describe a document this replica does not hold.
+            // Deliberately NOT `"stale-generation"`: the frame is current,
+            // the DOCUMENT was replaced underneath it.
+            return { kind: "ignored", reason: "guid-mismatch" };
+          }
+          for (const token of tokensOf(event.update)) tokens.add(token);
+          return { kind: "applied", cursor: null };
+        }
+        case "doc-coverage-ack": {
+          // The ONLY event that retires local divergence — nothing else
+          // touches it below.
+          divergent = false;
+          return { kind: "applied", cursor: null };
+        }
+        case "doc-awareness":
+        case "doc-ready":
+          return { kind: "applied", cursor: null };
+        case "doc-unavailable": {
+          if (event.code === "stale-authority-epoch") {
+            // Always terminal and never an availability state: the whole
+            // epic view is void, so the replica itself must be replaced.
+            return {
+              kind: "requires-replacement",
+              reason: "authority-epoch-changed",
+            };
+          }
+          // "artifact-not-found" and "body-unavailable" (terminal or not)
+          // are availability facts about THIS body, not a replica-identity
+          // change — the replica stays and just records the state.
+          return { kind: "applied", cursor: null };
+        }
+      }
+    },
+    project(): void {
+      sink.publish(Array.from(tokens).sort());
+    },
+    sink,
+    watermark(): LaneCursor | null {
+      return null;
+    },
+    freshness() {
+      return unknownFreshness(planeId, "doc");
+    },
+    reset(): void {
+      heldGuid = null;
+      tokens = new Set();
+      divergent = false;
+      sink.publish([]);
+    },
+    dispose(): void {
+      disposed = true;
+      tokens = new Set();
+    },
+  };
+}
+
+describe("doc-class Replica conformance", () => {
+  it("drops a doc-update whose docGuid differs from the held one, applies a matching one", () => {
+    const replica = createFakeDocReplica("doc-plane-1");
+    replica.apply({
+      kind: "doc-snapshot",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-1",
+      update: updateOf("a", "b"),
+      hostStateVectorBase64: null,
+      seed: "full",
+    });
+
+    const droppedOutcome = replica.apply({
+      kind: "doc-update",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-WRONG",
+      update: updateOf("c"),
+    });
+    expect(droppedOutcome).toEqual({
+      kind: "ignored",
+      reason: "guid-mismatch",
+    });
+
+    const appliedOutcome = replica.apply({
+      kind: "doc-update",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-1",
+      update: updateOf("c"),
+    });
+    expect(appliedOutcome).toEqual({ kind: "applied", cursor: null });
+
+    replica.project();
+    // "c" from the wrong-guid update never lands — only the matching one does.
+    expect(replica.sink.read()).toEqual(["a", "b", "c"]);
+  });
+
+  it("merges a delta-against-offer snapshot but replaces wholesale on a full snapshot", () => {
+    const replica = createFakeDocReplica("doc-plane-1");
+    replica.apply({
+      kind: "doc-snapshot",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-1",
+      update: updateOf("a", "b", "c"),
+      hostStateVectorBase64: null,
+      seed: "full",
+    });
+
+    replica.apply({
+      kind: "doc-snapshot",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-1",
+      update: updateOf("d"),
+      hostStateVectorBase64: "vector-1",
+      seed: "delta-against-offer",
+    });
+    replica.project();
+    // The delta carried only "d" — "a", "b", "c" survive because a delta
+    // MERGES. Installing it wholesale (the bug this field exists to
+    // prevent) would have dropped them silently.
+    expect(replica.sink.read()).toEqual(["a", "b", "c", "d"]);
+
+    replica.apply({
+      kind: "doc-snapshot",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-1",
+      update: updateOf("x", "y"),
+      hostStateVectorBase64: null,
+      seed: "full",
+    });
+    replica.project();
+    // A full snapshot REPLACES — none of the prior tokens survive.
+    expect(replica.sink.read()).toEqual(["x", "y"]);
+  });
+
+  it("retires local divergence only on a doc-coverage-ack, nothing else", () => {
+    const replica = createFakeDocReplica("doc-plane-1");
+    replica.markLocalDivergence();
+    expect(replica.isLocallyDivergent()).toBe(true);
+
+    replica.apply({
+      kind: "doc-awareness",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      frame: new Uint8Array(),
+    });
+    expect(replica.isLocallyDivergent()).toBe(true);
+
+    replica.apply({
+      kind: "doc-ready",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+    });
+    expect(replica.isLocallyDivergent()).toBe(true);
+
+    replica.apply({
+      kind: "doc-coverage-ack",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      docGuid: "guid-1",
+      coverageStateVectorBase64: "vector-2",
+    });
+    expect(replica.isLocallyDivergent()).toBe(false);
+  });
+
+  it("routes stale-authority-epoch to replacement, and non-terminal body-unavailable to a plain applied state", () => {
+    const replica = createFakeDocReplica("doc-plane-1");
+
+    const staleEpochOutcome = replica.apply({
+      kind: "doc-unavailable",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      code: "stale-authority-epoch",
+      terminal: true,
+      reason: "epoch bumped under an open attach",
+    });
+    expect(staleEpochOutcome).toEqual({
+      kind: "requires-replacement",
+      reason: "authority-epoch-changed",
+    });
+
+    const transientUnavailableOutcome = replica.apply({
+      kind: "doc-unavailable",
+      authorityEpoch: "e1",
+      docId: "doc-1",
+      code: "body-unavailable",
+      terminal: false,
+      reason: "materialising",
+    });
+    expect(transientUnavailableOutcome).toEqual({
+      kind: "applied",
+      cursor: null,
+    });
+    expect(transientUnavailableOutcome.kind).not.toBe("requires-replacement");
   });
 });

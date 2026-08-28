@@ -102,6 +102,70 @@ export const epicLaneCursorSchema = z.object({
 export type EpicLaneCursor = z.infer<typeof epicLaneCursorSchema>;
 
 /**
+ * A ROW's revision - the per-entity staleness test, and a different number from
+ * {@link epicLanePositionSchema} in every respect that matters.
+ *
+ * `position` / `seq` is TRANSACTION ORDER: where a commit sits in the lane.
+ * `revision` is ENTITY ORDER: how many times this particular row has changed.
+ * A single envelope at one `seq` carries rows at many different revisions, so a
+ * consumer must never synthesize one from the other. Deriving a revision from
+ * `seq` would give every row touched by one commit the same value and make two
+ * unrelated rows falsely comparable - which is exactly the reconciliation bug
+ * the guard exists to prevent.
+ *
+ * ## Where the number comes from
+ *
+ * Minted by the SERVING HOST'S REPLICA, per entity, and bumped on every change
+ * the host commits to that entity. It is persisted WITH the replica, so it
+ * survives a host restart within an `authorityEpoch` - a revision that reset on
+ * restart would let a post-restart push lose to a pre-restart row the client
+ * still holds. It is never derived from frame arrival order, from a wall clock
+ * (`updatedAt` is display metadata that no ordering decision may read), or from
+ * the lane position.
+ *
+ * Comparable only against another revision for the SAME entity under the SAME
+ * `authorityEpoch`. Across an epoch change every revision is void along with
+ * the rest of the replica's identity.
+ *
+ * ## The two rules a consumer applies
+ *
+ * 1. **Revision guard on upserts.** Apply an upsert only when its revision
+ *    STRICTLY EXCEEDS the one held for that row. This is what makes a slow
+ *    answer - a cold unary read that lost a race to a push - unable to regress
+ *    newer state, and what makes replayed or reordered deliveries harmless
+ *    without any merge logic.
+ * 2. **Tombstones are ABSORBING, not merely ordered.** A removal is terminal
+ *    against later upserts *regardless of their revision*: once a client has
+ *    seen a row removed, no upsert resurrects it, even one carrying a higher
+ *    number. The revision on a removal therefore does NOT gate whether it
+ *    applies - a tombstone whose revision is LOWER than an upsert the client
+ *    already applied still absorbs. What the revision is for is the
+ *    reconciler's retraction memory: it records WHEN in the entity's history
+ *    the removal happened, so removals can be ordered against each other and a
+ *    resurrect-then-delete sequence is not mistaken for a delete-then-resurrect
+ *    one.
+ *
+ * Rule 2 is stated this explicitly because the natural reading of rule 1 -
+ * "higher revision wins" - gets it backwards, and getting it backwards
+ * resurrects deleted artifacts on exactly the flaky links this design is for.
+ */
+export const epicLaneRowRevisionSchema = z.number().int().nonnegative();
+export type EpicLaneRowRevision = z.infer<typeof epicLaneRowRevisionSchema>;
+
+/**
+ * The revision field, spread into every row and every removal on the records
+ * lane so a single definition covers all of them.
+ *
+ * On a REMOVAL as well as an upsert, deliberately. The client seam's
+ * `RecordChange` requires one on both arms, and a removal without a revision
+ * cannot be placed in its entity's history at all - see rule 2 above for why
+ * carrying it is not the same as gating on it.
+ */
+export const epicLaneRowRevisionFields = {
+  revision: epicLaneRowRevisionSchema,
+} as const;
+
+/**
  * The epoch stamp every non-`pong` lane frame carries.
  *
  * Spread rather than referenced as a nested object so the epoch reads as a

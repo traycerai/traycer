@@ -103,6 +103,20 @@ export type ReplicaIgnoreReason =
   /** The frame belongs to a stream generation this replica has replaced. */
   | "stale-generation"
   /**
+   * Doc class: the bytes name a `docGuid` this replica does not hold, so they
+   * describe a different document.
+   *
+   * Its own member rather than folded into `"stale-generation"`, which it
+   * superficially resembles. They are different facts with different causes: a
+   * stale generation means the frame came from a subscription attempt this
+   * replica has replaced, while this means the frame is current but the
+   * DOCUMENT was deleted and recreated underneath it. Reading one as the other
+   * sends a diagnosis after the wrong thing - a reconnect loop instead of a
+   * reseed - and the guid guard is what stops two histories being spliced
+   * under one artifact id.
+   */
+  | "guid-mismatch"
+  /**
    * A snapshot answer issued BEFORE something the client has since ingested.
    * The monotonic request-time fence: an omission in a slow answer may only
    * delete a row that was already held when that answer was issued.

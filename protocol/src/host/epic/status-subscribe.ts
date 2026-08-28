@@ -35,6 +35,40 @@
  * reconcile this lane against `epic.state.subscribe`, which re-seeds on the
  * same event.
  *
+ * ## THE RULE THAT MAKES CURSOR-LESS HONEST
+ *
+ * Dropping the cursor is only defensible if the snapshot is COMPLETE. So:
+ *
+ *   **Every non-`snapshot` server frame kind MUST have a current-state
+ *   projection on the `snapshot` frame, or a stated reason why absence is
+ *   itself the state.**
+ *
+ * Without that rule, a transition-only fact silently becomes unrecoverable
+ * across a reconnect: the client missed the frame, no cursor can replay it, and
+ * the snapshot does not mention it - so the fact is simply gone, and the client
+ * renders a session it believes is healthy. This is not hypothetical; the
+ * migration frames shipped that way in the first cut of this contract, and a
+ * client reconnecting mid-migration could not distinguish "no migration" from
+ * "migration running, next progress frame pending" while the state lane held
+ * its snapshot for the same migration.
+ *
+ * The sweep, kind by kind - extend it when adding a frame:
+ *
+ * | Frame kind            | Projection on `snapshot`      |
+ * | --------------------- | ----------------------------- |
+ * | `permissionChanged`   | `permissionRole`, `securityEpoch` |
+ * | `cloudSyncStatus`     | `cloudSyncStatus`             |
+ * | `dirtyChanged`        | `dirty`                       |
+ * | `epicDeleted`         | `deleted`                     |
+ * | `migrationStarted`    | `migration.state === "running"` |
+ * | `migrationProgress`   | `migration.progress`          |
+ * | `migrationFailed`     | `migration.state === "failed"` |
+ * | `migrationNotAllowed` | `migration.state === "notAllowed"` |
+ * | `pong`                | none - transport heartbeat, carries no session state |
+ *
+ * `pong` is the only exempt kind, and it is exempt because it is not a fact
+ * about the epic at all.
+ *
  * ## Aggregate dirty, and why pre-snapshot silence is UNKNOWN
  *
  * `dirty` is ONE boolean per epic: the host folds root and every live room into
@@ -102,6 +136,76 @@ const permissionRoleSchema = getRecordSchema(
 );
 
 /**
+ * WHO deleted the epic, when the host observed a remote deletion.
+ *
+ * One shape used in TWO places - the `epicDeleted` transition frame and the
+ * snapshot's current-state projection of it - rather than two flat field pairs
+ * that could drift. Both members are nullable because attribution is
+ * best-effort: the host may know the epic is gone without knowing who removed
+ * it, and "deleted by nobody we can name" must stay renderable.
+ */
+export const epicDeletionAttributionSchema = z.object({
+  deletedByDisplayName: z.string().nullable(),
+  deletedByTraycerUserId: z.string().nullable(),
+});
+export type EpicDeletionAttribution = z.infer<
+  typeof epicDeletionAttributionSchema
+>;
+
+/**
+ * The CURRENT state of a major migration, as the snapshot projects it.
+ *
+ * This exists because the control lane has no resume cursor, and that model is
+ * only honest if the snapshot is COMPLETE. Without this field a client
+ * reconnecting mid-migration receives a snapshot that says nothing about the
+ * migration and cannot distinguish "no migration" from "a migration is running
+ * and the next progress frame has not arrived yet" - while the state lane is
+ * silently holding its own snapshot for the same migration. The client would
+ * render an epic that appears merely slow, with no modal and no explanation,
+ * for as long as the migration takes.
+ *
+ * Discriminated on `state` rather than flattened into nullable siblings so the
+ * per-state fields cannot be read in a combination that never occurs (a
+ * `reason` on a running migration, a `phase` on a failed one).
+ *
+ * - `running`   - started, and not yet finished or failed. `progress` is `null`
+ *   between `migrationStarted` and the first `migrationProgress`, which is a
+ *   real window a reconnect can land in - encoding it as `0 / 1` instead would
+ *   claim a determinate fraction the host has not measured.
+ * - `failed`    - terminal for this attempt; `epic.retryMigration` is the way
+ *   out. `reason` carries the same host-side summary the `migrationFailed`
+ *   frame does, and is likewise never rendered as product copy.
+ * - `notAllowed` - the epic needs a migration this caller lacks the write
+ *   access to perform. Terminal and NOT retryable, which is the whole reason it
+ *   is a separate state rather than a `failed` with a particular reason.
+ *
+ * There is no `completed` state: a finished migration leaves the epic in its
+ * ordinary condition under a new `authorityEpoch`, so `null` covers both "never
+ * needed one" and "finished". Adding a terminal success state would create a
+ * value every snapshot would have to carry forever with nothing to say.
+ */
+export const epicMigrationStatusSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("running"),
+    progress: z
+      .object({
+        phase: epicMigrationPhaseSchema,
+        chunksDone: z.number().int().nonnegative(),
+        chunksTotal: z.number().int().positive(),
+      })
+      .nullable(),
+  }),
+  z.object({
+    state: z.literal("failed"),
+    reason: z.string(),
+  }),
+  z.object({
+    state: z.literal("notAllowed"),
+  }),
+]);
+export type EpicMigrationStatus = z.infer<typeof epicMigrationStatusSchema>;
+
+/**
  * The host-local authorization epoch for this epic/member.
  *
  * Monotonic per host and NOT comparable across hosts - it names how many times
@@ -155,6 +259,23 @@ const epicStatusSubscribeSnapshotFrameSchemaV10 = z.object({
   permissionRole: permissionRoleSchema.nullable(),
   cloudSyncStatus: epicCloudSyncStatusSchema,
   dirty: z.boolean(),
+  /**
+   * The current migration state, or `null` when no migration is running,
+   * failed, or blocked. See {@link epicMigrationStatusSchema} - this field is
+   * what makes the cursor-less model honest for a client that reconnects
+   * mid-migration.
+   */
+  migration: epicMigrationStatusSchema.nullable(),
+  /**
+   * Attribution when the epic has ALREADY been deleted, `null` otherwise.
+   *
+   * The current-state projection of the `epicDeleted` frame. A client
+   * reconnecting after the deletion - a persisted tab list, or a reconnect that
+   * raced the delete - would otherwise receive a snapshot describing a healthy
+   * session for an epic that no longer exists, and only learn otherwise if a
+   * transition frame it already missed were somehow re-sent.
+   */
+  deleted: epicDeletionAttributionSchema.nullable(),
   ...epicLaneTextFrameFields,
 });
 
@@ -211,8 +332,12 @@ export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
     z.object({
       kind: z.literal("epicDeleted"),
       ...epicLaneEpochFrameFields,
-      deletedByDisplayName: z.string().nullable(),
-      deletedByTraycerUserId: z.string().nullable(),
+      /**
+       * The same shape the snapshot's `deleted` field carries, deliberately:
+       * the transition and its current-state projection must not be able to
+       * disagree about what attribution IS.
+       */
+      attribution: epicDeletionAttributionSchema,
       ...epicLaneTextFrameFields,
     }),
     /**

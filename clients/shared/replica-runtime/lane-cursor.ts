@@ -105,14 +105,47 @@ export function advancesLaneCursor(
 }
 
 /**
- * The cursor a client offers when (re)opening a lane, or `null` for "I have
- * nothing, send me a snapshot".
+ * What a client offers when (re)opening a lane, or `null` for "I have nothing,
+ * send me a snapshot".
  *
  * `null` is a first-class answer, not a missing value: a first open on a host
  * has no seed, and a client that has just been told `resume-too-old` has
  * nothing valid to offer either.
+ *
+ * A UNION rather than a bare cursor, because the doc class does not resume by
+ * position. A body's resume state is `(knownDocGuid, stateVector)` - which
+ * document, and how much of it the client already holds - and there is no
+ * ordinal to offer. Typing every adapter's offer as a cursor would leave a doc
+ * adapter two bad choices: invent a meaningless position, or bypass the offer
+ * seam entirely. Both were reachable before this union existed.
  */
-export type ResumeOffer = LaneCursor | null;
+export type ResumeOffer = CursorResumeOffer | DocSeedResumeOffer | null;
+
+/** The cursored lanes: records and logs. */
+export interface CursorResumeOffer {
+  readonly kind: "cursor";
+  readonly cursor: LaneCursor;
+}
+
+/**
+ * The doc class's offer. The authority answers with everything it holds that
+ * this state vector does not - or, if the guid does not match what it is
+ * serving, with a full reseed, because the client's replica is a different
+ * document that must never be merged into this one.
+ */
+export interface DocSeedResumeOffer {
+  readonly kind: "doc-seed";
+  /** The epic replica generation this attach is made under. */
+  readonly authorityEpoch: string;
+  /**
+   * Taken off the snapshot event that seeded this replica, NEVER derived from
+   * the artifact id: a body that was deleted and recreated has a new guid under
+   * the same id, so the id cannot answer "is my replica the same document as
+   * yours".
+   */
+  readonly knownDocGuid: string;
+  readonly stateVectorBase64: string;
+}
 
 /**
  * What the host did with a {@link ResumeOffer}.

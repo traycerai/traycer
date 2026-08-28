@@ -35,6 +35,22 @@ export type RecordChange<TRow> =
   | {
       readonly kind: "remove";
       readonly rowId: string;
+      /**
+       * Required on a removal too, and the distinction that reads backwards at
+       * first: it is CARRIED, not GATED ON.
+       *
+       * Removal is terminal and absorbing, so a tombstone whose revision is
+       * LOWER than an upsert already applied still removes the row - "this row
+       * was deleted" wins against later upserts at any revision. What the
+       * number buys is placement in the entity's history: ordering removals
+       * against each other, and telling a delete-then-recreate from a
+       * recreate-then-delete. A removal with no revision cannot be placed at
+       * all.
+       *
+       * So: never write `if (change.revision <= held) return` on this arm. The
+       * ignore reason for a removal is `"absorbed-tombstone"`, never
+       * `"stale-revision"`.
+       */
       readonly revision: number;
       /**
        * Carried through to the UI. A removal the user can see a reason for is
@@ -216,14 +232,9 @@ export type LogReplicaEvent<TRow> =
 // ─── Docs ─────────────────────────────────────────────────────────────────
 
 /**
- * Availability of one doc, mirrored from the authority.
- *
- * A doc absent from the report is implicitly `"unavailable"`. `"ready"` is
- * reported on first observation and on every recovery transition, INDEPENDENTLY
- * of whether any bytes have arrived - so `"ready"` with no snapshot is a real,
- * reachable state and must stay distinguishable from an empty doc.
+ * A doc the runtime has heard nothing about is implicitly unavailable - there
+ * is no "unknown" member, because absence already means it.
  */
-export type DocAvailability = "ready" | "unavailable" | "retrying";
 
 /**
  * Doc-class payloads are opaque encoded bytes at this seam, never live CRDT
@@ -232,8 +243,30 @@ export type DocAvailability = "ready" | "unavailable" | "retrying";
  * editor on the main thread - bytes transfer across that boundary, a `Y.Doc`
  * cannot.
  */
+/**
+ * Whether a snapshot's bytes stand on their own.
+ *
+ * LOAD-BEARING, and the reason this is a named state rather than a flag: both
+ * forms apply through the same CRDT merge, so this does not select an apply
+ * FUNCTION - it forbids the replica's swap-in-a-fresh-doc path. A delta is
+ * computed against the state vector THIS replica offered, so installing it
+ * wholesale drops every byte the delta legitimately omitted, silently and
+ * unrecoverably.
+ *
+ * Two named members rather than the wire's present-or-absent flag: absence is
+ * unrepresentable here, so no consumer can branch on `=== false` where it meant
+ * `!== true`, and neither state can be reached by forgetting a field.
+ */
+export type DocSeedMode =
+  /** Self-sufficient. Safe to install wholesale. */
+  | "full"
+  /** A delta against this replica's own offer. MUST be merged, never installed. */
+  | "delta-against-offer";
+
 export interface DocSnapshotEvent {
   readonly kind: "doc-snapshot";
+  /** The epic replica generation this body was served under. */
+  readonly authorityEpoch: string;
   readonly docId: string;
   /**
    * The authority's identity for this doc instance. A deleted-and-recreated
@@ -245,37 +278,131 @@ export interface DocSnapshotEvent {
   readonly update: Uint8Array;
   /** The authority's state vector at snapshot time, for the reconcile diff. */
   readonly hostStateVectorBase64: string | null;
+  readonly seed: DocSeedMode;
 }
 
 export interface DocUpdateEvent {
   readonly kind: "doc-update";
+  readonly authorityEpoch: string;
   readonly docId: string;
+  /**
+   * REQUIRED, and the replica - not the adapter - owns the drop.
+   *
+   * A replica holding a different guid must DROP this update rather than apply
+   * it: the bytes describe a document it does not have. Leaving the guid off
+   * the event would push a core replica invariant into every adapter, where it
+   * would be enforced three times and eventually only twice.
+   */
+  readonly docGuid: string;
   readonly update: Uint8Array;
 }
 
 /**
- * Presence for one doc. Ephemeral by class - never cursored, never replayed
- * from a durable store - but buffered briefly for a cold doc so a collaborator
- * already sitting in the body is visible the moment it materialises instead of
- * after their next renewal.
+ * The authority's coverage of updates THIS client pushed: its state vector
+ * after applying them.
+ *
+ * Carries no bytes - it answers "how much of what I sent have you got", which
+ * is what lets the replica retire its unsynced divergence watermark without
+ * waiting for its own edit to echo back through the room. Without it there is
+ * no event on which local divergence can ever be retired, so a body would read
+ * as permanently unsynced after a successful push and the runtime-local
+ * divergence input to any sync indicator would never clear.
+ *
+ * Divergence is replica-owned state, so this is a replica event, not an adapter
+ * detail.
+ */
+export interface DocCoverageAckEvent {
+  readonly kind: "doc-coverage-ack";
+  readonly authorityEpoch: string;
+  readonly docId: string;
+  readonly docGuid: string;
+  readonly coverageStateVectorBase64: string;
+}
+
+/**
+ * Presence for one doc. Ephemeral by class - never replayed from a durable
+ * store - but buffered briefly for a cold doc so a collaborator already sitting
+ * in the body is visible the moment it materialises instead of after their next
+ * renewal.
+ *
+ * Carries `authorityEpoch` but deliberately NO `docGuid`, and both halves are
+ * deliberate. The epoch is replica identity, so a caret from a superseded
+ * replica is still dropped - that is not cursoring, it is addressing. The guid
+ * is absent because a caret is not document state: replaying one after a reseed
+ * would place a cursor from a document that no longer exists.
  */
 export interface DocAwarenessEvent {
   readonly kind: "doc-awareness";
+  readonly authorityEpoch: string;
   readonly docId: string;
   readonly frame: Uint8Array;
 }
 
-export interface DocAvailabilityEvent {
-  readonly kind: "doc-availability";
+/**
+ * The body is being served.
+ *
+ * Emitted on first observation and on every recovery transition, INDEPENDENTLY
+ * of whether any bytes have arrived - so "ready with no snapshot" is a real,
+ * reachable state. It must stay distinguishable from an empty body: a consumer
+ * that treats ready-but-unseeded as an empty document renders a blank editor
+ * and exports an empty file over real content. This is the same distinction
+ * `LeaseGrant`'s `"unseeded"` arm exists to preserve.
+ */
+export interface DocReadyEvent {
+  readonly kind: "doc-ready";
+  readonly authorityEpoch: string;
   readonly docId: string;
-  readonly availability: DocAvailability;
+}
+
+/**
+ * Why a body is not being served. A CLOSED set: a client handed only free text
+ * would have to string-match to choose between reseeding the epic and rendering
+ * an unavailable affordance, and those are different products of one frame.
+ */
+export type DocUnavailableCode =
+  /**
+   * The attach named an epoch the authority is not serving. Always terminal,
+   * and NOT an availability state: the client's whole epic view is void. The
+   * replica must be replaced (`"authority-epoch-changed"`) and the body
+   * reattached under the epoch the records lane then reports - rendering this
+   * as an unavailable body would leave the epic silently stale.
+   */
+  | "stale-authority-epoch"
+  /** No such artifact at this epoch, or it is tombstoned. Terminal. */
+  | "artifact-not-found"
+  /** It exists and the body cannot currently be materialised. See `terminal`. */
+  | "body-unavailable";
+
+export interface DocUnavailableEvent {
+  readonly kind: "doc-unavailable";
+  readonly authorityEpoch: string;
+  readonly docId: string;
+  readonly code: DocUnavailableCode;
+  /**
+   * Whether this lane is finished. `true` means no later event arrives and the
+   * consumer must reattach if it still wants the body; `false` means the
+   * authority is retrying and the tile shows a transient state without tearing
+   * down.
+   *
+   * Its own field rather than derived from {@link code}, because
+   * `"body-unavailable"` is genuinely both - retrying, and given up - and
+   * folding them forces one of the two to be a lie.
+   */
+  readonly terminal: boolean;
+  /**
+   * A short authority-side summary, for logs only. Never parse it, never branch
+   * on it, never render it as product copy - that is what {@link code} is for.
+   */
+  readonly reason: string;
 }
 
 export type DocReplicaEvent =
   | DocSnapshotEvent
   | DocUpdateEvent
+  | DocCoverageAckEvent
   | DocAwarenessEvent
-  | DocAvailabilityEvent;
+  | DocReadyEvent
+  | DocUnavailableEvent;
 
 // ─── Ephemera ─────────────────────────────────────────────────────────────
 
@@ -292,21 +419,65 @@ export interface EphemeralEvent<TPayload> {
 
 // ─── Control plane ────────────────────────────────────────────────────────
 
-export type MigrationPhase =
-  | { readonly phase: "started" }
+/**
+ * The migration's internal stage, meaningful only while it is running.
+ *
+ * Distinct from {@link MigrationStatus}, which is the lifecycle. Keeping them
+ * two words matters: the wire calls THIS one `phase`, so a seam that also
+ * called its lifecycle discriminant `phase` would give one word two meanings
+ * across the boundary an adapter has to translate.
+ */
+export type MigrationStage =
+  /** Connect to the new room and seed the metadata-only root. */
+  | "prepare"
+  /** Publish the bodies. The long, genuinely fraction-bearing stage. */
+  | "upload"
+  /** Write the final root and tear down the migration provider. */
+  | "finalize";
+
+/**
+ * The migration lifecycle as the runtime observes it.
+ *
+ * There is deliberately **no `completed` member.** Completion is not an event
+ * on this lane - it is the authority epoch changing, after which both lanes
+ * resume from the post-migration replica. The runtime learns of it through
+ * `ReplicaReplacementReason: "migration-completed"`, the same machinery as any
+ * other epoch bump.
+ *
+ * A `completed` member here would be a second, parallel route to "the migration
+ * finished", and the two could disagree. The cross-lane coordination - the
+ * state lane holding its snapshot while this lane reports progress - is a
+ * designed contract precisely because it used to be an emergent one, and a
+ * synthesised completion event is how it would become emergent again.
+ */
+export type MigrationStatus =
+  /** Emitted before any progress, so a silent skeleton can become a modal. */
+  | { readonly status: "started" }
   | {
-      readonly phase: "progress";
+      readonly status: "progress";
+      readonly stage: MigrationStage;
+      /**
+       * An OPAQUE tick fraction for the active stage, not a global percentage.
+       * Only `"upload"` is determinate; `"prepare"` and `"finalize"` report
+       * `0 / 1`, which a consumer must render as an indeterminate spinner
+       * rather than as a bar stuck at zero.
+       */
       readonly chunksDone: number;
       readonly chunksTotal: number;
     }
   /**
-   * Carries the epoch both lanes resume from. Without it the state lane has
-   * no way to know which epoch its held snapshot belongs to, and the
-   * cross-lane resume becomes a guess.
+   * Terminal failure of an in-flight migration, delivered INSTEAD of a fatal
+   * close so the session survives and a retry stays reachable. `reason` is a
+   * host-side summary for logs; product copy must never render it.
    */
-  | { readonly phase: "completed"; readonly authorityEpoch: string }
-  | { readonly phase: "failed"; readonly reason: string }
-  | { readonly phase: "not-allowed"; readonly reason: string };
+  | { readonly status: "failed"; readonly reason: string }
+  /**
+   * The epic needs a migration this caller lacks the write access to perform.
+   * One-shot and terminal, and distinct from `"failed"` in the way that
+   * matters: nothing was attempted, so a retry from THIS caller can never
+   * succeed and must not be offered.
+   */
+  | { readonly status: "not-allowed"; readonly reason: string };
 
 /**
  * Control-plane facts. Records with barrier semantics on an urgent lane, kept
@@ -351,4 +522,4 @@ export type ControlEvent =
    */
   | { readonly kind: "aggregate-dirty"; readonly dirty: boolean }
   | { readonly kind: "epic-deleted" }
-  | { readonly kind: "migration"; readonly migration: MigrationPhase };
+  | { readonly kind: "migration"; readonly migration: MigrationStatus };

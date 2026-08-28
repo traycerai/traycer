@@ -64,20 +64,31 @@
  * `artifactRecordRemove` frames `@2` used: those could not express atomicity at
  * all, and a consumer had no way to know a reparent was half-applied.
  *
- * ## Ordering guards, and why the row shapes differ
+ * ## Two orders, and they are not interchangeable
  *
- * `seq` is the lane's total order and the ONLY ordering fact for artifact rows,
- * epic metadata and role claims: this lane is their sole delivery plane, so
- * there is no second source a stale answer could arrive from, and a per-row
- * revision would be a guard against a race that cannot occur.
+ * `seq` is TRANSACTION order - where a commit sits in the lane. `revision` is
+ * ENTITY order - how many times one row has changed. Every row and every
+ * removal on this lane carries a revision, because the runtime's reconciler
+ * needs a per-entity fence that transaction order cannot provide: one envelope
+ * at one `seq` carries rows at many different revisions, so synthesizing a
+ * revision from `seq` would stamp every row a commit touched with the same
+ * value and make unrelated rows falsely comparable.
  *
- * Comment threads are the exception, and carry a `revision` for that reason:
- * `epic.listCommentThreads` remains installed for cold reads, so a slow unary
- * answer genuinely can land after a newer push. The guard is the one the record
- * layer already proves elsewhere (`chatRecordSummarySchema.revision`): apply an
- * upsert only when its revision strictly exceeds the one held, and treat a
- * removal as TERMINAL AND ABSORBING - it applies unconditionally and no later
- * upsert resurrects the row on that client.
+ * The guard is the one the record layer already proves elsewhere
+ * (`chatRecordSummarySchema.revision`): apply an upsert only when its revision
+ * strictly exceeds the one held, and treat a removal as TERMINAL AND ABSORBING
+ * - it applies unconditionally, at any revision, and no later upsert resurrects
+ * the row on that client. {@link epicLaneRowRevisionSchema} states both rules
+ * in full, including why the second one is not simply "higher revision wins".
+ *
+ * The guard is not decoration even though this lane is the only PUSH source for
+ * these rows: two of the three populations have a cold-read path that races it
+ * (`epic.listCommentThreads` for threads, `agent.roles.list` for claims), and
+ * an optimistic local write is a third racer for all of them.
+ *
+ * Role claims are the one population revisioned as a SET rather than per row,
+ * because a claim is created and destroyed but never updated - see
+ * {@link epicStateRoleClaimsProjectionSchema}.
  *
  * ## Seed-first, with the trust labelled
  *
@@ -109,6 +120,7 @@ import {
   epicLaneCursorSchema,
   epicLaneEpochFrameFields,
   epicLanePositionSchema,
+  epicLaneRowRevisionFields,
   epicLaneTextFrameFields,
 } from "@traycer/protocol/host/epic/lane-cursor";
 import { commentThreadWireSchema } from "@traycer/protocol/host/epic/unary-schemas";
@@ -132,6 +144,14 @@ import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims"
  * same thing on disk and on the wire, and two spellings of that would be a seam
  * where they could drift.
  *
+ * `revision` is added at the WIRE layer, not pushed down into the persisted
+ * shape: it is a property of this host replica's delivery of the row, not of
+ * the artifact itself, and a persisted artifact copied to another host is the
+ * same artifact at a different revision. See
+ * {@link epicLaneRowRevisionSchema} for the guard it powers, and note that
+ * `updatedAt` - which the persisted shape does carry - is display metadata that
+ * must never be read as an ordering fact in its place.
+ *
  * `artifactRoomId` is omitted, and that omission is load-bearing rather than
  * tidy. Room routing is how the HOST reaches an artifact body in the cloud; a
  * lane client addresses bodies by `artifactId` through `artifact.subscribe` and
@@ -144,10 +164,18 @@ import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims"
  * from here.
  */
 export const epicArtifactRecordSchema = z.discriminatedUnion("kind", [
-  specArtifactSchema.omit({ artifactRoomId: true }),
-  ticketArtifactSchema.omit({ artifactRoomId: true }),
-  storyArtifactSchema.omit({ artifactRoomId: true }),
-  reviewArtifactSchema.omit({ artifactRoomId: true }),
+  specArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
+  ticketArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
+  storyArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
+  reviewArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
 ]);
 export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
 
@@ -160,12 +188,30 @@ export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
  * deleted-artifact affordances, and a client that inferred deletion from a
  * missing row would resurrect an artifact the moment a snapshot arrived that
  * legitimately did not mention it.
+ *
+ * A tombstone carries the same `revision` a live row does, and for a reason
+ * that reads backwards at first: it does NOT gate whether the tombstone
+ * applies. Removal is ABSORBING - a tombstone whose revision is LOWER than an
+ * upsert the client already applied still removes the artifact, because "this
+ * row was deleted" is terminal against later upserts at any revision. The
+ * number is what lets the reconciler place the removal in the entity's history
+ * (ordering removals against each other, and distinguishing a
+ * delete-then-recreate from a recreate-then-delete). See
+ * {@link epicLaneRowRevisionSchema} rule 2.
  */
 export const epicDeletedArtifactRecordSchema = z.discriminatedUnion("kind", [
-  deletedSpecArtifactSchema.omit({ artifactRoomId: true }),
-  deletedTicketArtifactSchema.omit({ artifactRoomId: true }),
-  deletedStoryArtifactSchema.omit({ artifactRoomId: true }),
-  deletedReviewArtifactSchema.omit({ artifactRoomId: true }),
+  deletedSpecArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
+  deletedTicketArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
+  deletedStoryArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
+  deletedReviewArtifactSchema
+    .omit({ artifactRoomId: true })
+    .extend(epicLaneRowRevisionFields),
 ]);
 export type EpicDeletedArtifactRecord = z.infer<
   typeof epicDeletedArtifactRecordSchema
@@ -193,16 +239,44 @@ const permissionRoleSchema = getRecordSchema(
 );
 
 /**
- * The role-claims projection carried on this lane.
+ * The role-claims projection carried on this lane: a whole SET, revisioned as a
+ * set rather than per row.
  *
- * Whole-set replacement, not per-claim deltas: claims are a handful of small
- * rows per epic, the host already computes the visible projection in one pass
- * (`projectVisibleRoleClaims` - filtered by account, then by live agents), and
- * a per-claim delta would force the client to re-derive a filter the host is
- * the only party able to evaluate. `seq` orders the replacements; there is no
- * per-claim revision because there is no second source for a claim.
+ * ## Why whole-set replacement
+ *
+ * Claims are a handful of small rows per epic, the host already computes the
+ * visible projection in one pass (`projectVisibleRoleClaims` - filtered by
+ * account, then by live agents), and a per-claim delta would force the client
+ * to re-derive a filter the host is the only party able to evaluate. A claim
+ * that leaves the projection because its agent died is not a "removal" any
+ * per-row tombstone could express.
+ *
+ * ## Why the revision is on the SET and not on each claim
+ *
+ * This is the one record population on the lane where a per-row revision would
+ * be the wrong shape, and the reason is the entity's lifecycle: a claim is
+ * CREATED (`agent.roles.claim`) and DESTROYED (`agent.roles.relinquish`) and
+ * never updated, so a per-claim revision would be a constant - a guard against
+ * a change that cannot happen. What actually races is the SET, and the set
+ * revision is what fences it: apply a replacement only when its revision
+ * strictly exceeds the one held.
+ *
+ * That race is real rather than theoretical, because claims DO have a second
+ * delivery path: `agent.roles.list` is installed and a client may read it
+ * directly. Note honestly what this contract can and cannot do about that -
+ * `agent.roles.list` is a released line and carries no revision, so it cannot
+ * be fenced against this one today. Until it grows one, the runtime must treat
+ * THIS LANE as authoritative for role claims and never let a poll answer
+ * overwrite lane state. The set revision is what a later `agent.roles.list`
+ * minor would carry to close the gap properly.
  */
-const epicStateRoleClaimsSchema = z.array(roleClaimSchema);
+export const epicStateRoleClaimsProjectionSchema = z.object({
+  ...epicLaneRowRevisionFields,
+  claims: z.array(roleClaimSchema),
+});
+export type EpicStateRoleClaimsProjection = z.infer<
+  typeof epicStateRoleClaimsProjectionSchema
+>;
 
 /**
  * One comment thread, as a ROW on the records lane.
@@ -221,15 +295,16 @@ const epicStateRoleClaimsSchema = z.array(roleClaimSchema);
  *   the row key. The artifact KIND is deliberately absent: it is already on the
  *   artifact record this thread hangs off, and carrying a second copy would let
  *   a frame assert a kind that contradicts the record it references.
- * - `revision` - the per-row monotonic staleness test. It exists for comment
- *   threads and for no other row on this lane because comment threads are the
- *   only rows with a SECOND delivery path (`epic.listCommentThreads`, kept for
- *   cold reads), so a slow unary answer can genuinely land after a newer push.
- *   Apply an upsert only when its revision strictly EXCEEDS the one held.
+ * - `revision` - the per-row monotonic staleness test every row on this lane
+ *   carries (see {@link epicLaneRowRevisionSchema}). It matters most acutely
+ *   here, because comment threads have a SECOND delivery path
+ *   (`epic.listCommentThreads`, kept for cold reads), so a slow unary answer
+ *   can genuinely land after a newer push. Apply an upsert only when its
+ *   revision strictly EXCEEDS the one held.
  */
 export const epicCommentThreadRecordSchema = commentThreadWireSchema.extend({
   artifactId: z.string().min(1),
-  revision: z.number().int().nonnegative(),
+  ...epicLaneRowRevisionFields,
 });
 export type EpicCommentThreadRecord = z.infer<
   typeof epicCommentThreadRecordSchema
@@ -238,16 +313,24 @@ export type EpicCommentThreadRecord = z.infer<
 /**
  * A comment thread's removal, addressed by its row key.
  *
- * No revision, and none is needed: removal is TERMINAL AND ABSORBING, the one
- * lifecycle rule this design has. It applies unconditionally and idempotently,
- * and no later upsert - however high its revision - resurrects the thread on a
- * client that has seen this. That is what makes replayed and reordered deltas
- * harmless without any merge logic (the `host.chatRecords.subscribe` `remove`
- * precedent).
+ * Removal is TERMINAL AND ABSORBING: it applies unconditionally and
+ * idempotently, and no later upsert - however high its revision - resurrects
+ * the thread on a client that has seen this. That is what makes replayed and
+ * reordered deltas harmless without any merge logic (the
+ * `host.chatRecords.subscribe` `remove` precedent).
+ *
+ * It carries a `revision` anyway, and the two statements are not in tension.
+ * The revision does not GATE the removal - a tombstone at a lower revision than
+ * an upsert the client already applied still absorbs. It records WHERE in the
+ * thread's history the removal sits, which is what lets a reconciler order two
+ * removals against each other and keep retraction memory that survives a
+ * reconnect. Without it, "removed" is a fact with no position, and the
+ * client seam has nowhere to put it.
  */
 export const epicCommentThreadRemovalSchema = z.object({
   artifactId: z.string().min(1),
   threadId: z.string().min(1),
+  ...epicLaneRowRevisionFields,
 });
 export type EpicCommentThreadRemoval = z.infer<
   typeof epicCommentThreadRemovalSchema
@@ -368,7 +451,7 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = z.object({
    * here would grow the snapshot without end for a fact no consumer reads.
    */
   deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
-  roleClaims: epicStateRoleClaimsSchema,
+  roleClaims: epicStateRoleClaimsProjectionSchema,
   /** Every LIVE thread on this epic. Removed threads are simply absent. */
   commentThreads: z.array(epicCommentThreadRecordSchema),
   ...epicLaneTextFrameFields,
@@ -436,10 +519,11 @@ const epicStateSubscribeDeltaFrameSchemaV10 = z.object({
   epicMeta: epicMetaSchema.partial().nullable(),
   /**
    * The complete visible role-claim set after this commit, or `null` when the
-   * commit did not touch claims. Whole-set replacement - see
-   * {@link epicStateRoleClaimsSchema} for why claims are not delta'd.
+   * commit did not touch claims. Whole-set replacement, carrying the set's own
+   * revision - see {@link epicStateRoleClaimsProjectionSchema} for why claims
+   * are revisioned as a set rather than per row.
    */
-  roleClaims: epicStateRoleClaimsSchema.nullable(),
+  roleClaims: epicStateRoleClaimsProjectionSchema.nullable(),
   ...epicLaneTextFrameFields,
 });
 

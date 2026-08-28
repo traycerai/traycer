@@ -5,13 +5,17 @@ import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build"
 import {
   epicArtifactRecordSchema,
   epicCommentThreadRecordSchema,
+  epicCommentThreadRemovalSchema,
   epicDeletedArtifactRecordSchema,
+  epicStateRoleClaimsProjectionSchema,
   epicStateSnapshotBasisSchema,
   epicStateSubscribeClientFrameSchemaV10,
   epicStateSubscribeOpenRequestSchemaV10,
   epicStateSubscribeServerFrameSchemaV10,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
+  epicDeletionAttributionSchema,
+  epicMigrationStatusSchema,
   epicStatusSubscribeClientFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV10,
 } from "@traycer/protocol/host/epic/status-subscribe";
@@ -161,6 +165,7 @@ const specArtifactFixture = {
   updatedAt: 1,
   createdManually: false,
   parentId: null,
+  revision: 0,
 };
 
 const deletedSpecArtifactFixture = {
@@ -169,6 +174,7 @@ const deletedSpecArtifactFixture = {
   title: "A spec",
   artifactRoomId: null,
   deletedAt: "2026-01-01T00:00:00.000Z",
+  revision: 0,
 };
 
 const commentThreadFixture = {
@@ -180,6 +186,14 @@ const commentThreadFixture = {
   artifactId: "artifact-1",
   revision: 0,
 };
+
+const commentThreadRemovalFixture = {
+  artifactId: "artifact-1",
+  threadId: "thread-1",
+  revision: 0,
+};
+
+const emptyRoleClaimsProjectionFixture = { revision: 0, claims: [] };
 
 const epicMetaFixture = { title: "An epic", updatedAt: 1 };
 
@@ -219,7 +233,7 @@ describe("epic.state.subscribe@1.0", () => {
       epicMeta: epicMetaFixture,
       artifactRecords: [specArtifactFixture],
       deletedArtifacts: [deletedSpecArtifactFixture],
-      roleClaims: [],
+      roleClaims: emptyRoleClaimsProjectionFixture,
       commentThreads: [commentThreadFixture],
       hasBinaryPayload: false,
     });
@@ -277,12 +291,9 @@ describe("epic.state.subscribe@1.0", () => {
       ["artifactUpserts", [specArtifactFixture]],
       ["artifactTombstones", [deletedSpecArtifactFixture]],
       ["commentThreadUpserts", [commentThreadFixture]],
-      [
-        "commentThreadRemovals",
-        [{ artifactId: "artifact-1", threadId: "thread-1" }],
-      ],
+      ["commentThreadRemovals", [commentThreadRemovalFixture]],
       ["epicMeta", { title: "A renamed epic" }],
-      ["roleClaims", []],
+      ["roleClaims", emptyRoleClaimsProjectionFixture],
     ] as const)("accepts a delta carrying only %s", (field, value) => {
       const delta = { ...emptyDelta, [field]: value };
       const result = epicStateSubscribeServerFrameSchemaV10.safeParse(delta);
@@ -304,7 +315,7 @@ describe("epic.state.subscribe@1.0", () => {
           epicMeta: epicMetaFixture,
           artifactRecords: [],
           deletedArtifacts: [],
-          roleClaims: [],
+          roleClaims: emptyRoleClaimsProjectionFixture,
           commentThreads: [],
         },
       ],
@@ -372,6 +383,78 @@ describe("epic.state.subscribe@1.0", () => {
       epicCommentThreadRecordSchema.safeParse(commentThreadFixture).success,
     ).toBe(true);
   });
+
+  describe("every row and removal on the lane requires a revision", () => {
+    it("rejects an artifact record with no revision, accepts one with it", () => {
+      const { revision: _revision, ...withoutRevision } = specArtifactFixture;
+      expect(
+        epicArtifactRecordSchema.safeParse(withoutRevision).success,
+      ).toBe(false);
+      expect(epicArtifactRecordSchema.safeParse(specArtifactFixture).success).toBe(
+        true,
+      );
+    });
+
+    it("rejects a deleted-artifact tombstone with no revision, accepts one with it", () => {
+      const { revision: _revision, ...withoutRevision } =
+        deletedSpecArtifactFixture;
+      expect(
+        epicDeletedArtifactRecordSchema.safeParse(withoutRevision).success,
+      ).toBe(false);
+      expect(
+        epicDeletedArtifactRecordSchema.safeParse(deletedSpecArtifactFixture)
+          .success,
+      ).toBe(true);
+    });
+
+    it("rejects a comment-thread removal with no revision, accepts one with it", () => {
+      const { revision: _revision, ...withoutRevision } =
+        commentThreadRemovalFixture;
+      expect(
+        epicCommentThreadRemovalSchema.safeParse(withoutRevision).success,
+      ).toBe(false);
+      expect(
+        epicCommentThreadRemovalSchema.safeParse(commentThreadRemovalFixture)
+          .success,
+      ).toBe(true);
+    });
+  });
+
+  it("a tombstone does not gate absorption on revision ordering - a lower-revision tombstone is a valid frame beside a higher-revision upsert for the same row", () => {
+    // The wire only carries the number; the reconciler's absorbing-removal
+    // semantics (rule 2 in `epicLaneRowRevisionSchema`'s doc comment) are what
+    // makes this pair meaningful, not a schema-level ordering check. The
+    // schema's job here is only to prove it does NOT reject this shape.
+    const upsertAtRevisionFive = { ...specArtifactFixture, revision: 5 };
+    const tombstoneAtRevisionTwo = {
+      ...deletedSpecArtifactFixture,
+      revision: 2,
+    };
+
+    expect(
+      epicArtifactRecordSchema.safeParse(upsertAtRevisionFive).success,
+    ).toBe(true);
+    expect(
+      epicDeletedArtifactRecordSchema.safeParse(tombstoneAtRevisionTwo)
+        .success,
+    ).toBe(true);
+  });
+
+  describe("epicStateRoleClaimsProjectionSchema is a revisioned SET, not a bare array", () => {
+    it("accepts {revision, claims}", () => {
+      expect(
+        epicStateRoleClaimsProjectionSchema.safeParse(
+          emptyRoleClaimsProjectionFixture,
+        ).success,
+      ).toBe(true);
+    });
+
+    it("rejects the old bare-array shape", () => {
+      expect(epicStateRoleClaimsProjectionSchema.safeParse([]).success).toBe(
+        false,
+      );
+    });
+  });
 });
 
 describe("epic.status.subscribe@1.0", () => {
@@ -381,6 +464,8 @@ describe("epic.status.subscribe@1.0", () => {
     permissionRole: "owner",
     cloudSyncStatus: "connected",
     dirty: false,
+    migration: null,
+    deleted: null,
   };
 
   it("parses a full snapshot frame", () => {
@@ -399,9 +484,36 @@ describe("epic.status.subscribe@1.0", () => {
       securityEpoch: snapshotBase.securityEpoch,
       permissionRole: snapshotBase.permissionRole,
       cloudSyncStatus: snapshotBase.cloudSyncStatus,
+      migration: snapshotBase.migration,
+      deleted: snapshotBase.deleted,
       hasBinaryPayload: false,
     });
     expect(result.success).toBe(false);
+  });
+
+  describe("migration and deleted are required-and-nullable - a host must not be able to stay silent about them", () => {
+    it("rejects a snapshot omitting migration", () => {
+      const {
+        migration: _migration,
+        ...withoutMigration
+      } = snapshotBase;
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "snapshot",
+        ...withoutMigration,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a snapshot omitting deleted", () => {
+      const { deleted: _deleted, ...withoutDeleted } = snapshotBase;
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "snapshot",
+        ...withoutDeleted,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   it("permissionChanged requires securityEpoch - the stamp is the point of the frame", () => {
@@ -463,8 +575,10 @@ describe("epic.status.subscribe@1.0", () => {
         "epicDeleted",
         {
           authorityEpoch: "epoch-1",
-          deletedByDisplayName: "A user",
-          deletedByTraycerUserId: "user-1",
+          attribution: {
+            deletedByDisplayName: "A user",
+            deletedByTraycerUserId: "user-1",
+          },
         },
       ],
       ["migrationStarted", { authorityEpoch: "epoch-1" }],
@@ -507,6 +621,119 @@ describe("epic.status.subscribe@1.0", () => {
       (option) => option.shape.kind.value,
     );
     expect(kinds).toEqual(["ping"]);
+  });
+
+  describe("epicMigrationStatusSchema - the snapshot's current-state projection of the migration lifecycle", () => {
+    it.each([
+      ["running with progress null - the real reconnect window before the first migrationProgress", { state: "running" as const, progress: null }],
+      [
+        "running with progress",
+        {
+          state: "running" as const,
+          progress: { phase: "upload" as const, chunksDone: 1, chunksTotal: 2 },
+        },
+      ],
+      ["failed", { state: "failed" as const, reason: "boom" }],
+      ["notAllowed", { state: "notAllowed" as const }],
+    ])("parses %s", (_label, status) => {
+      expect(epicMigrationStatusSchema.safeParse(status).success).toBe(true);
+    });
+
+    it("rejects a running state with no progress key - progress is required, even though it is nullable", () => {
+      expect(
+        epicMigrationStatusSchema.safeParse({ state: "running" }).success,
+      ).toBe(false);
+    });
+
+    it("rejects a failed state with no reason", () => {
+      expect(
+        epicMigrationStatusSchema.safeParse({ state: "failed" }).success,
+      ).toBe(false);
+    });
+
+    it("rejects a completed state - there is deliberately no terminal-success member", () => {
+      expect(
+        epicMigrationStatusSchema.safeParse({ state: "completed" }).success,
+      ).toBe(false);
+    });
+  });
+
+  describe("epicDeleted carries a nested attribution, not the old flat fields", () => {
+    it("parses with nested attribution", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "epicDeleted",
+        authorityEpoch: "epoch-1",
+        attribution: {
+          deletedByDisplayName: "A user",
+          deletedByTraycerUserId: "user-1",
+        },
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects the old flat shape - the two flat fields no longer exist on this frame", () => {
+      const result = epicStatusSubscribeServerFrameSchemaV10.safeParse({
+        kind: "epicDeleted",
+        authorityEpoch: "epoch-1",
+        deletedByDisplayName: "A user",
+        deletedByTraycerUserId: "user-1",
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("epicDeletionAttributionSchema is the exact shape shared by the transition frame and the snapshot projection", () => {
+      expect(
+        epicDeletionAttributionSchema.safeParse({
+          deletedByDisplayName: null,
+          deletedByTraycerUserId: null,
+        }).success,
+      ).toBe(true);
+    });
+  });
+
+  it("the completeness sweep: every non-snapshot, non-pong frame kind has a snapshot projection, and every projected field actually exists on the snapshot", () => {
+    // Mirrors the module doc's frame-kind -> snapshot-projection table verbatim.
+    // Adding a frame kind without extending this map fails this test, which is
+    // the point: cursor-less-by-design is only honest if the snapshot stays
+    // complete, and this is what keeps that from silently rotting.
+    const kindToSnapshotFields: Readonly<Record<string, readonly string[]>> = {
+      permissionChanged: ["securityEpoch", "permissionRole"],
+      cloudSyncStatus: ["cloudSyncStatus"],
+      dirtyChanged: ["dirty"],
+      epicDeleted: ["deleted"],
+      migrationStarted: ["migration"],
+      migrationProgress: ["migration"],
+      migrationFailed: ["migration"],
+      migrationNotAllowed: ["migration"],
+    };
+
+    const allKinds = epicStatusSubscribeServerFrameSchemaV10.options.map(
+      (option) => option.shape.kind.value,
+    );
+    const projectableKinds = allKinds.filter(
+      (kind) => kind !== "snapshot" && kind !== "pong",
+    );
+
+    // Every projectable kind is mapped, and the map contains nothing stale.
+    expect(new Set(Object.keys(kindToSnapshotFields))).toEqual(
+      new Set(projectableKinds),
+    );
+
+    const snapshotOption = epicStatusSubscribeServerFrameSchemaV10.options.find(
+      (option) => option.shape.kind.value === "snapshot",
+    );
+    if (!snapshotOption) {
+      throw new Error("no snapshot variant on epicStatusSubscribeServerFrameSchemaV10");
+    }
+    const snapshotFieldNames = new Set(Object.keys(snapshotOption.shape));
+
+    for (const fields of Object.values(kindToSnapshotFields)) {
+      for (const field of fields) {
+        expect(snapshotFieldNames.has(field)).toBe(true);
+      }
+    }
   });
 });
 

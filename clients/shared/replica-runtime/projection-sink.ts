@@ -87,9 +87,30 @@ export type ProjectionDelivery<TProjection> = (
  * answer for nested transactions and empty transactions. Compose it (deliver
  * into a zustand `setState`, or into a `postMessage`) rather than
  * reimplementing the buffering.
+ *
+ * `initial` is `NoInfer` deliberately: **the seed value is not the authority on
+ * what the projection type is.** Left inferable, a narrow seed pins the whole
+ * sink to itself - `createTransactionalProjectionSink(0, deliver)` fixes
+ * `TProjection` at the literal `0`, and every later `publish` of a different
+ * value is a type error at the call site rather than a design error here. The
+ * empty projection a plane starts from is routinely narrower than the type it
+ * goes on to publish (an empty table, a frozen `EMPTY_*` constant, `null`), so
+ * that is the common case, not the exotic one.
+ *
+ * The type therefore comes from the consumer - the delivery callback's declared
+ * parameter, or an explicit type argument. Prefer the explicit form at
+ * construction sites; it is the one place a reader can see what this sink
+ * carries:
+ *
+ * ```ts
+ * createTransactionalProjectionSink<EpicProjectedSlices>(
+ *   EMPTY_PROJECTED_SLICES,
+ *   (value, revision) => store.setState({ projection: value, revision }),
+ * );
+ * ```
  */
 export function createTransactionalProjectionSink<TProjection>(
-  initial: TProjection,
+  initial: NoInfer<TProjection>,
   deliver: ProjectionDelivery<TProjection>,
 ): ProjectionSink<TProjection> {
   let current: TProjection = initial;
