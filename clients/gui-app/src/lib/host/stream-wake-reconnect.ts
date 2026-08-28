@@ -24,18 +24,21 @@ export type WakeSignalReason = "wake-online" | "wake-resume" | "wake-network";
  * Subscribes `onWake` to the three OS-level wake triggers - `window 'online'`
  * (`onWakeReconnect`), `IRunnerHost.onSystemResumed` (the shell's own wake
  * signal: Electron `powerMonitor` on desktop, the app returning to the
- * foreground on mobile), and `IRunnerHost.onNetworkPathChanged` (the shell's
- * native reachability edge; a no-op subscription on desktop and web) - and
- * returns a disposer. The shared primitive under every renderer-side wake
- * consumer (stream re-dial, closed chat-session retry), so a new consumer
- * cannot wire only one trigger and miss the same-network lid-open or app
- * switch (`online` never fires for either), the Wi-Fi -> cellular handoff
- * (`online` never fires there either - the network moved without going
- * offline), or the web shell (no shell wake signal at all).
+ * foreground on mobile, the tab returning to visibility in a browser), and
+ * `IRunnerHost.onNetworkPathChanged` (the shell's native reachability edge; a
+ * no-op subscription on desktop and web) - and returns a disposer. The shared
+ * primitive under every renderer-side wake consumer (stream re-dial, closed
+ * chat-session retry), so a new consumer cannot wire only one trigger and
+ * miss the same-network lid-open or app switch (`online` never fires for
+ * either), the Wi-Fi -> cellular handoff (`online` never fires there either -
+ * the network moved without going offline), or a frozen browser tab whose
+ * sockets died while the network stayed put (`online` cannot fire for that
+ * one either).
  *
- * `resume` carries the shell's measured background dwell on `wake-resume` and
- * is `null` for the other two triggers - it is the evidence
- * {@link wakeReconnectOptions} turns into a probe-or-redial verdict.
+ * `resume` carries the shell's measured background dwell on `wake-resume`,
+ * `null` for the other two triggers and for a shell whose wake edge cannot
+ * measure the dwell - it is the evidence {@link wakeReconnectOptions} turns
+ * into a probe-or-redial verdict.
  */
 export function subscribeWakeSignals(
   runnerHost: IRunnerHost,
@@ -226,10 +229,15 @@ export function subscribeStreamWakeReconnect(
  *    Cross-platform; does NOT fire on a same-network lid-open.
  *  - `IRunnerHost.onSystemResumed`: the shell's own wake signal - Electron
  *    `powerMonitor` resume/unlock-screen on desktop, the app returning to the
- *    foreground on mobile. The reliable trigger, because it fires even when no
- *    network transition occurs, which is every app switch on a phone (the
- *    WebView is suspended, its sockets die, and the network never moved).
- *    Shells with no wake signal at all (web, tests) install a no-op
+ *    foreground on mobile, the tab returning to visibility in a browser. The
+ *    reliable trigger, because it fires even when no network transition
+ *    occurs, which is every app switch on a phone and every frozen tab in a
+ *    browser (the runtime is suspended, its sockets die, and the network
+ *    never moved). A browser tab reports no dwell with it
+ *    (`backgroundedForMs: null`), so its wakes take the conservative
+ *    probe-first verdict - which is also what makes a raw visibility edge
+ *    safe to subscribe here at all, since probing leaves a healthy stream
+ *    alone. Shells with no wake signal at all (tests) install a no-op
  *    subscription, so this degrades to the `online`-only path.
  *  - `IRunnerHost.onNetworkPathChanged`: the shell's native reachability
  *    edge (mobile only; a no-op elsewhere) - connectivity regained, or the

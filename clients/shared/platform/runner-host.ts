@@ -457,10 +457,19 @@ export interface IRunnerHost {
    * the preload IPC bridge. Mobile raises it when the app returns to the
    * foreground (the DOM visibility edge and the native app-state edge,
    * deduplicated) - "the machine woke" means the OS un-suspended its WebView.
-   * Shells with no wake signal at all (web, tests)
-   * install a no-op whose handler never fires; consumers still pair this with
-   * the cross-platform `window` `online` event, so wake recovery degrades
-   * gracefully where no native signal exists.
+   * A browser tab raises it on its own hidden -> visible edge, which is the
+   * same fact a level out: a tab the browser froze or discarded lost its
+   * sockets and its timers while the network never moved. That edge carries
+   * no stamp of when the freeze began, so it is published with
+   * `backgroundedForMs: null` - a real wake whose duration is unmeasurable,
+   * which is exactly the case that selects the conservative recovery instead
+   * of a dwell-tuned one. It is publishable only because the wake path probes
+   * before it re-dials; a consumer that reconnected blindly on it would tear
+   * healthy streams down once per hide/show.
+   * Shells with no wake signal at all (tests) install a no-op whose handler
+   * never fires; consumers still pair this with the cross-platform `window`
+   * `online` event, so wake recovery degrades gracefully where no signal
+   * exists.
    */
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 
