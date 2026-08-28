@@ -13,6 +13,7 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
+import * as landingImageMove from "@/lib/composer/landing-image-move";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -1312,6 +1313,41 @@ describe("useLandingDraftStore", () => {
       } finally {
         setLandingDraftDesktopProjectionBridge(null);
       }
+    });
+  });
+
+  describe("draft-move image adoption", () => {
+    it("adopts for a draft whenever it FIRST appears, not only on the first projection, and once per draft", () => {
+      // The regression this pins: adoption gated on "is this the first
+      // projection". Subscription order vs the seeded snapshot is an ordering
+      // fact, not an invariant - an empty snapshot arriving first must not
+      // permanently skip a moved draft that lands on the next one.
+      const adopt = vi
+        .spyOn(landingImageMove, "adoptDraftImageHandoff")
+        .mockImplementation(() => Promise.resolve());
+      const snapshot = emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-adopt-late",
+            content: desktopTextContent("moved here"),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+          },
+        ],
+        activeLandingDraftId: "draft-adopt-late",
+      });
+
+      applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
+      expect(adopt).not.toHaveBeenCalled();
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledWith("draft-adopt-late", []);
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(1);
     });
   });
 

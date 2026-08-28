@@ -12,6 +12,7 @@ vi.mock("@/components/chat/chat-progress-icon", () => ({
   ChatProgressIcon: () => <span data-testid="chat-progress-icon" />,
 }));
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -36,6 +37,7 @@ import {
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -50,11 +52,13 @@ interface CapturedDroppableInput {
 interface TabStripTestState {
   draggableInputs: CapturedDraggableInput[];
   droppableInputs: CapturedDroppableInput[];
+  isDragging: boolean;
 }
 
 const testState = vi.hoisted((): TabStripTestState => ({
   draggableInputs: [],
   droppableInputs: [],
+  isDragging: false,
 }));
 
 interface TerminalAuthorityTestState {
@@ -97,7 +101,7 @@ vi.mock("@dnd-kit/core", () => ({
     return {
       setNodeRef: () => undefined,
       listeners: undefined,
-      isDragging: false,
+      isDragging: testState.isDragging,
     };
   },
   useDroppable: (input: CapturedDroppableInput) => {
@@ -288,6 +292,7 @@ describe("<TabStrip />", () => {
     vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
+    testState.isDragging = false;
     terminalAuthorityState.capability = "legacy";
     terminalAuthorityState.canMutate = false;
     terminalAuthorityState.viewModel = null;
@@ -295,6 +300,53 @@ describe("<TabStrip />", () => {
     terminalAuthorityState.close.mockReset();
     consumeNotificationEntity.mockReset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
+  });
+
+  it("shows the insertion separator when returning a tile to its own strip", () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    act(() => {
+      useEpicDndStore.getState().canvasDragStarted(
+        {
+          kind: "artifact-tab",
+          epicId: "epic-1",
+          viewTabId: VIEW_TAB_ID,
+          sourceGroupId: "group-1",
+          tabId: TAB.instanceId,
+          isPreview: false,
+        },
+        TAB,
+      );
+      useEpicDndStore.getState().dropPreviewChanged({
+        kind: "artifact-tab-strip",
+        groupId: "group-1",
+        index: 0,
+      });
+    });
+
+    expect(screen.getByTestId("tab-strip-drop-indicator")).toBeTruthy();
+  });
+
+  it("retains a dimmed source tab in its strip while dragging", () => {
+    testState.isDragging = true;
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    const frame = screen
+      .getByTestId(`tab-item-${TAB.instanceId}`)
+      .closest("[data-tile-item-id]");
+    expect(frame).not.toBeNull();
+    expect((frame as HTMLElement).style.opacity).toBe("0.36");
   });
 
   it("renders preview tabs with an overlaid close button that does not reserve flex space", () => {
