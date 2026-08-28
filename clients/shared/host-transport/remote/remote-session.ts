@@ -594,6 +594,23 @@ export class RemoteSession<
   /** Monotonic identity for reassembly-watchdog arms (see the map doc). */
   private reassemblyWatchdogToken = 0;
   /**
+   * Streams whose CURRENT id exists because a reassembly-stall verdict
+   * re-keyed them. Membership is the license for the FIRST-evidence deadline
+   * on a subscribe send: a stall verdict only ever follows accepted chunks,
+   * so these resolvers PROVABLY emit, and a replacement subscribe answered
+   * with nothing is the same stall one hop later. An event-only stream (one
+   * with no initial server frame) can never enter this set - it reaches the
+   * reopen regime only through a retryable FATAL - so it is never churned
+   * through zero-evidence CLOSE/resubscribe cycles; the restore-stall
+   * diagnostic remains its observer. Membership moves with each stall
+   * re-key and ends on any delivered frame, a host verdict on the id, or a
+   * caller close - a host that ANSWERS, even negatively, has disproven the
+   * silent-stall premise. Deliberately kept across connection drops: a
+   * session reconnect mid-loop replays the member through the same send
+   * path, and the loop must not reset with it.
+   */
+  private readonly stallReopenedStreamIds = new Set<number>();
+  /**
    * Whether this session has EVER reached its ready boundary.
    *
    * Separates "recovering" from "still trying for the first time", which two
@@ -1414,6 +1431,7 @@ export class RemoteSession<
     this.phase = "closed";
     this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
+    this.stallReopenedStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
@@ -1526,6 +1544,7 @@ export class RemoteSession<
     // timer would re-subscribe a stream the consumer has already abandoned.
     this.clearStreamReopen(streamId);
     this.clearReassemblyWatchdog(streamId);
+    this.stallReopenedStreamIds.delete(streamId);
     // Locally-closed is terminal: clear any partial inbound accumulator and
     // tombstone the id so an in-flight/delayed server frame can't reseed one.
     connection?.reassembler.forget(streamId);
@@ -2112,6 +2131,10 @@ export class RemoteSession<
         this.subscriptions.delete(message.streamId);
         const reopenAttempts = this.streamReopenAttempts.get(message.streamId);
         this.streamReopenAttempts.delete(message.streamId);
+        // The verdict is an ANSWER: a responding host has disproven the
+        // silent-stall premise, so the stall provenance does not carry to
+        // the fresh id and its subscribe earns no first-evidence deadline.
+        this.stallReopenedStreamIds.delete(message.streamId);
         const freshStreamId = this.allocateStreamId();
         stream.adoptStreamIdForReopen(freshStreamId);
         this.subscriptions.set(freshStreamId, stream);
@@ -2127,6 +2150,7 @@ export class RemoteSession<
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
       this.clearStreamReopen(message.streamId);
+      this.stallReopenedStreamIds.delete(message.streamId);
       this.maybeReachReadyBoundary();
       return;
     }
@@ -2149,6 +2173,7 @@ export class RemoteSession<
       // host closes BEFORE its first frame - a normal end for a short-lived
       // stream - leaked its entry in this long-lived session forever.
       this.clearStreamReopen(message.streamId);
+      this.stallReopenedStreamIds.delete(message.streamId);
       this.maybeReachReadyBoundary();
       return;
     }
@@ -2164,8 +2189,11 @@ export class RemoteSession<
           this.markStreamRestored(message.streamId);
           // A frame is the only proof the re-open actually worked, so the
           // escalation resets here rather than at subscribe time - a stream
-          // that fails init repeatedly must keep climbing the backoff.
+          // that fails init repeatedly must keep climbing the backoff. The
+          // stall provenance ends with it: the resolver answered, so a later
+          // silence is a fresh episode that must earn its own verdict.
           this.streamReopenAttempts.delete(message.streamId);
+          this.stallReopenedStreamIds.delete(message.streamId);
         }
       }
     }
@@ -2440,6 +2468,10 @@ export class RemoteSession<
     if (reopenAttempts !== undefined) {
       this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
     }
+    // The stall provenance moves with the re-key: this is the ONE transition
+    // that grants (and carries) the first-evidence deadline license.
+    this.stallReopenedStreamIds.delete(streamId);
+    this.stallReopenedStreamIds.add(freshStreamId);
     this.scheduleStreamReopen(stream);
     this.maybeReachReadyBoundary();
   }
@@ -2521,20 +2553,22 @@ export class RemoteSession<
       },
       binary: null,
     });
-    if (this.streamReopenAttempts.has(stream.streamId)) {
-      // A stream in the reopen-escalation regime has already stalled or
-      // failed once, so its replacement subscribe cannot be trusted to
-      // produce evidence on its own: its FIRST evidence is bounded exactly
-      // as inter-chunk progress is, from the moment the subscribe is sent.
-      // This is what makes the stall recovery a self-sustaining loop - an
-      // expiry with zero frames re-keys and re-subscribes again on the
-      // climbing per-stream backoff - and it covers the reconnect-mid-loop
-      // case too, since the openAck replay of a loop member passes through
-      // here as well. Ordinary subscribes stay unarmed: a method that
-      // legitimately emits nothing on subscribe must not be churned, and the
-      // attach fan-out's silent streams already have the stall diagnostic
-      // naming them. The arm retires through the same evidence/verdict/
-      // close/drop set as any other.
+    if (this.stallReopenedStreamIds.has(stream.streamId)) {
+      // A stall-reopened stream's resolver provably emits (the stall verdict
+      // only ever follows accepted chunks), so its replacement subscribe
+      // cannot be trusted to produce evidence on its own: its FIRST evidence
+      // is bounded exactly as inter-chunk progress is, from the moment the
+      // subscribe is sent. This is what makes the stall recovery a
+      // self-sustaining loop - an expiry with zero frames re-keys and
+      // re-subscribes again on the climbing per-stream backoff - and it
+      // covers the reconnect-mid-loop case too, since the openAck replay of
+      // a loop member passes through here as well. Every OTHER subscribe
+      // stays unarmed - including a retryable-FATAL reopen, whose method may
+      // legitimately emit nothing on subscribe (an event-only stream) and
+      // must not be churned through zero-evidence CLOSE/resubscribe cycles;
+      // the attach fan-out's silent streams have the stall diagnostic naming
+      // them. The arm retires through the same evidence/verdict/close/drop
+      // set as any other.
       this.armReassemblyWatchdog(this.connectGeneration, stream.streamId);
     }
   }

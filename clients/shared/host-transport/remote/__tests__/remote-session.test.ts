@@ -4969,6 +4969,82 @@ describe("RemoteSession reassembly progress watchdog", () => {
   );
 
   it(
+    "leaves a retryable-FATAL reopen unarmed - an event-only method is never churned through zero-evidence CLOSE/resubscribe cycles",
+    async () => {
+      // The first-evidence deadline's license is STALL provenance (the
+      // resolver provably emitted, then stopped mid-message). A stream that
+      // reaches the reopen regime through a retryable FATAL has no such
+      // proof - its method may legitimately emit nothing on subscribe - so
+      // its replacement subscribe must not be judged for silence, or a
+      // healthy event-only stream would CLOSE/resubscribe forever.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [seedFirst, seedLast] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const armsAfterDelivery = watchdogArms().length;
+
+        // A retryable per-stream FATAL re-keys the stream and re-subscribes
+        // it on the reopen backoff - a host that ANSWERS, not one that
+        // stalled.
+        await relay.sendStreamFatal(originalId, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[1]).not.toBe(originalId);
+        // The replacement subscribe armed NO first-evidence deadline...
+        expect(watchdogArms()).toHaveLength(armsAfterDelivery);
+        // ...and firing every arm recorded so far judges nothing: no CLOSE,
+        // no churned third subscribe, the quiet stream simply waits.
+        for (const call of watchdogArms()) {
+          (call[0] as () => void)();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(relay.closesSent).toEqual([]);
+        expect(relay.subscribeStreamIds).toHaveLength(2);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "judges only the silent stream - a sibling's completed transfer retires its arm, and firing that stale arm is inert",
     async () => {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
