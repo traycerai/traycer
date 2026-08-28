@@ -66,6 +66,27 @@ const OTHER_HOST_ID = "host-b";
 const PLATFORM_SIGN_IN_URL = "https://platform.dev.traycer.ai/sign-in";
 
 /**
+ * The whole description, written out rather than matched loosely - the
+ * sentence this pins used to end "or set up Traycer on this machine", and a
+ * substring check on the shared opening clause would pass on both.
+ *
+ * It is asserted on EVERY shell because the escape hatch it offers is only
+ * takeable on one of them: the phone and the tab cannot run a host, so a
+ * remedy naming the reader's own hardware is an instruction they cannot
+ * follow - the same defect the zero-host guidance carried
+ * (`zero-host-guidance-shell-neutral.test.tsx`), on the surface next door.
+ */
+const PLAN_RESTRICTED_DESCRIPTION =
+  "The hosts on this account are remote, and this plan can't attach to them. Upgrade to connect, or set up Traycer on a computer and work on that machine directly.";
+
+/**
+ * Any remedy pointing at the hardware the reader is holding. "that machine"
+ * is deliberately not here: it refers back to a computer the sentence has
+ * already named, which is the correct form.
+ */
+const DEVICE_LOCAL_REMEDY = /this (device|machine|phone|computer|browser|tab)/i;
+
+/**
  * Which surface the narration takes once the gate has latched.
  *
  * The one row that differs is the installed phone, and it differs for a
@@ -292,6 +313,12 @@ describe("plan-restricted narration per shell", () => {
       expect(
         screen.getByTestId("window-host-startup-card-title").textContent,
       ).toBe("Your plan doesn't include remote hosts");
+      // The remedy sentence, on a shell that may not be able to take it.
+      const description = screen.getByTestId(
+        "window-host-startup-card-description",
+      ).textContent;
+      expect(description).toBe(PLAN_RESTRICTED_DESCRIPTION);
+      expect(description).not.toMatch(DEVICE_LOCAL_REMEDY);
 
       // Nothing is starting, so nothing narrates a start. This is the arm the
       // web shell's `hasLocalHost: false` could have diverted into.
@@ -344,6 +371,13 @@ describe("plan-restricted narration per shell", () => {
       const narration = screen.getByTestId(expectedTestId);
       expect(narration.getAttribute("data-variant")).toBe("plan-restricted");
       expect(narration.getAttribute("data-cause")).toBe("no-usable-host");
+      // Same words in BOTH presentations - `modalCopy` is shared, and the two
+      // faces drifting apart about what a plan-gated user should do is the
+      // failure this pin exists for. Each face names its description slot by
+      // suffixing its own test id.
+      expect(
+        screen.getByTestId(`${expectedTestId}-description`).textContent,
+      ).toBe(PLAN_RESTRICTED_DESCRIPTION);
       // The other presentation is not also on screen - "one narrator per
       // scope" is the rule this surface exists to keep.
       expect(

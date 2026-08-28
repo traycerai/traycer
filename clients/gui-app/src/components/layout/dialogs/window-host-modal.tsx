@@ -554,8 +554,15 @@ function modalCopy(
   if (variant.kind === "plan-restricted") {
     return {
       title: "Your plan doesn't include remote hosts",
+      // The second remedy names a MACHINE, never the hardware the reader is
+      // holding. This surface is drawn on every shell, and the two that reach
+      // it most often - the installed phone app and a browser tab - are the
+      // two that cannot run a host at all, so "set up Traycer on this machine"
+      // was an escape hatch neither of them could take. Naming a computer
+      // keeps the escape honest on the desktop, where "a computer" is the one
+      // in front of the reader, without promising it anywhere it is false.
       description:
-        "The hosts on this account are remote, and this plan can't attach to them. Upgrade to connect, or set up Traycer on this machine.",
+        "The hosts on this account are remote, and this plan can't attach to them. Upgrade to connect, or set up Traycer on a computer and work on that machine directly.",
       reportTitle: "No host available on this plan",
       reportMessage: "Every host on this account is plan-restricted.",
       reportCode: "HOST_PLAN_RESTRICTED",
