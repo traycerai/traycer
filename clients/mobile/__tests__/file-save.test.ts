@@ -20,14 +20,14 @@ vi.mock("@capacitor/share", () => ({
   Share: { share: nativeMocks.share },
 }));
 
-/** The single `writeFile` payload, as the plugin received it. */
-function writtenFile(): {
+/** The nth `writeFile` payload, as the plugin received it. */
+function writtenFile(index: number): {
   path: string;
   data: string;
   directory: string;
   recursive: boolean;
 } {
-  const [call] = nativeMocks.writeFile.mock.calls;
+  const call = nativeMocks.writeFile.mock.calls[index];
   if (call === undefined) throw new Error("Nothing was written.");
   return call[0] as {
     path: string;
@@ -37,9 +37,20 @@ function writtenFile(): {
   };
 }
 
+/** The file name the OS would show, i.e. the last segment of a staged path. */
+function stagedBaseName(index: number): string {
+  return writtenFile(index).path.split("/").at(-1) ?? "";
+}
+
+/** The directory a request staged into, everything above its basename. */
+function stagingDirectory(index: number): string {
+  const segments = writtenFile(index).path.split("/");
+  return segments.slice(0, -1).join("/");
+}
+
 /** The bytes the plugin was handed, decoded back out of its base64 payload. */
 function writtenBytes(): Uint8Array {
-  const binary = atob(writtenFile().data);
+  const binary = atob(writtenFile(0).data);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
@@ -69,11 +80,14 @@ describe("MobileFileSave", () => {
       request("diagram.png", new Uint8Array([1, 2, 3])),
     );
 
-    expect(writtenFile()).toMatchObject({
-      path: "traycer-exports/diagram.png",
+    expect(writtenFile(0)).toMatchObject({
       directory: "CACHE",
       recursive: true,
     });
+    // The name the OS shows is the suggested one, staged somewhere under the
+    // export root - the directory in between is this module's business.
+    expect(stagedBaseName(0)).toBe("diagram.png");
+    expect(stagingDirectory(0).startsWith("traycer-exports/")).toBe(true);
     expect(nativeMocks.share).toHaveBeenCalledWith({
       title: "diagram.png",
       files: ["file:///cache/traycer-exports/diagram.png"],
@@ -135,7 +149,8 @@ describe("MobileFileSave", () => {
       request("../../escape/notes.md", new Uint8Array([1])),
     );
 
-    expect(writtenFile().path).toBe("traycer-exports/notes.md");
+    expect(stagedBaseName(0)).toBe("notes.md");
+    expect(writtenFile(0).path.split("/")).not.toContain("..");
   });
 
   it("falls back to a name rather than writing to the directory itself", async () => {
@@ -143,8 +158,22 @@ describe("MobileFileSave", () => {
       request("   ", new Uint8Array([1])),
     );
 
-    expect(writtenFile().path).toBe("traycer-exports/traycer-export");
+    expect(stagedBaseName(0)).toBe("traycer-export");
     expect(saved).toEqual({ name: "traycer-export", path: null });
+  });
+
+  it("stages a repeat of the same name somewhere else, so it cannot overwrite the first", async () => {
+    // The sheet resolves on dismissal, which on Android can precede the
+    // receiving app finishing its read of the granted URI. Two exports sharing
+    // a path would let the second replace bytes the first recipient is still
+    // consuming - the same late-read fact that makes deleting unsafe.
+    const host = new MobileFileSave();
+    await host.saveFile(request("mermaid-diagram.png", new Uint8Array([1])));
+    await host.saveFile(request("mermaid-diagram.png", new Uint8Array([2])));
+
+    expect(stagedBaseName(0)).toBe("mermaid-diagram.png");
+    expect(stagedBaseName(1)).toBe("mermaid-diagram.png");
+    expect(stagingDirectory(1)).not.toBe(stagingDirectory(0));
   });
 
   it("never offers a re-open route, having learned no path to re-open", () => {

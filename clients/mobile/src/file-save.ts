@@ -14,6 +14,29 @@ import type {
 const EXPORT_DIRECTORY = "traycer-exports";
 
 /**
+ * Each request stages into its OWN directory under that root, keeping the
+ * user-facing basename intact.
+ *
+ * One shared folder would give two exports of the same suggested name the same
+ * path - and the share sheet resolves when it is DISMISSED, which on Android
+ * can precede the receiving app finishing its read of the granted URI. A
+ * second `mermaid-diagram.png` would then overwrite bytes a first recipient is
+ * still consuming. This is the same late-read fact that makes deleting the
+ * staged file unsafe; reusing its path is the other half of it.
+ *
+ * The stamp is what makes that hold across launches: a counter alone restarts
+ * at zero, so a fresh launch would reuse the first directory of the previous
+ * one, which an earlier recipient may still hold a URI into.
+ */
+const stagingStamp = Date.now().toString(36);
+let stagedRequests = 0;
+
+function stagingPath(name: string): string {
+  stagedRequests += 1;
+  return `${EXPORT_DIRECTORY}/${stagingStamp}-${stagedRequests}/${name}`;
+}
+
+/**
  * `btoa` reads a binary string, and a binary string is built by spreading
  * bytes through `String.fromCharCode`. Spreading a whole export at once
  * exceeds the argument limit and throws for exactly the large files this path
@@ -69,11 +92,12 @@ function isShareDismissal(error: unknown): boolean {
  * ACTIVITY the user picked, never where that activity put the bytes, so this
  * shell cannot re-open what it saved and `openSavedFile` is `null`.
  *
- * The staged copy is deliberately left in place. The sheet resolves when it is
- * dismissed, which on Android is before the receiving app has necessarily
- * finished reading the content URI, so deleting on that edge would race a
- * still-pending read; the cache container is space the OS reclaims on its own
- * terms, which is what it is for.
+ * The staged copy is deliberately left in place, and each request gets its own
+ * directory (see {@link stagingPath}). The sheet resolves when it is dismissed,
+ * which on Android is before the receiving app has necessarily finished reading
+ * the content URI, so neither deleting on that edge nor reusing the path would
+ * be safe; the cache container is space the OS reclaims on its own terms, which
+ * is what it is for.
  */
 export class MobileFileSave implements IFileSaveHost {
   /**
@@ -85,7 +109,7 @@ export class MobileFileSave implements IFileSaveHost {
   async saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null> {
     const name = toFileName(request.name);
     const written = await Filesystem.writeFile({
-      path: `${EXPORT_DIRECTORY}/${name}`,
+      path: stagingPath(name),
       data: toBase64(request.bytes),
       directory: Directory.Cache,
       recursive: true,
