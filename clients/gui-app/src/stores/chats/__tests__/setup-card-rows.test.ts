@@ -1007,6 +1007,42 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     expect(rows[1].model.workspaces[0].workspacePath).toBe("/other");
   });
 
+  it("opens a NEW lifecycle past an OPEN window whose own rows are all COLD", () => {
+    // The half the empty-bucket inference cannot reach. Here the prior
+    // lifecycle contributed NOTHING to the slice, so its bucket is empty for
+    // the same reason a cold-opening tail's is - and the only thing telling the
+    // two apart is the boundary the slice happens to hold.
+    //
+    // `worktree.missing` forms no window, so the local partition consumes it
+    // and keeps nothing; carrying the stamps alongside is what lets an
+    // unbounded identity take one as the `closedAt` the host had not published.
+    const rows = buildSetupCardRows(
+      [
+        setupEvent("worktree.missing", { workspacePath: "/repo" }, 4_000),
+        setupEvent("setup.running", { workspacePath: "/other" }, 5_000),
+      ],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          closedAt: null,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+        },
+      ],
+    );
+
+    // Window 0 draws no card - the slice holds none of its events, so the
+    // transcript wants its skeleton placeholder rather than a blank card. What
+    // matters is that the LIVE lifecycle is numbered past it instead of
+    // wearing its identity.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].windowIndex).toBe(1);
+    expect(rows[0].createdAt).toBe(5_000);
+    expect(rows[0].model.workspaces[0].workspacePath).toBe("/other");
+  });
+
   it("anchors to an OPEN window whose bucket is still empty", () => {
     // The cold-opening tail, one field over from the test above: same open
     // window, but the slice supplied it NOTHING, so this live event is that

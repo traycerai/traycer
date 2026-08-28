@@ -343,6 +343,10 @@ export function publishedChatSessionState(
     pendingUserMessages: [],
     errorNotices: [],
     deliveredNoticeActionIds: new Set<string>(),
+    // Nothing streams into a published copy, so no card is ever opened here -
+    // but the field is part of the state shape and a second construction site
+    // that forgets one is how these two drift.
+    openedSubagentCardBlockIds: new Set<string>(),
     failedSendRestoration: null,
     currentComposerSettings: null,
     liveAssistantMessage: null,

@@ -902,6 +902,92 @@ describe("chat session viewport hydration: review fixes", () => {
     }
   });
 
+  it("retries a summary resnapshot that was dropped, and still stops at the cap", () => {
+    // The recovery had a hole exactly where it was needed: when the resnapshot
+    // ITSELF is dropped. Its timeout releases the dedup latch and calls
+    // `requestPlannedHydration`, which retries only what it can see in the
+    // transcript - an invalidated window, or a visible gap. A summary-only
+    // stall is neither: that transcript is valid and fully hydrated here, so
+    // the planner asks for nothing.
+    //
+    // Meanwhile the watchdog timer that started the recovery has fired and
+    // cleared itself, and it is re-armed only by delivery progress or a
+    // snapshot - neither of which is coming, since a dropped resnapshot is the
+    // premise. So the retry budget read as unspent while nothing would ever
+    // spend it, and the file list stayed short for the life of the connection.
+    //
+    // Both halves are pinned here deliberately: a retry loop whose bound is
+    // untested is the failure mode this store has shipped before.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      const base = snapshot({
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail", 20)],
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...base,
+        snapshot: { ...base.snapshot, accumulatedFileChangeCount: 3 },
+      });
+      harness.callbacks().onSkeletonChunk(skeletonChunk(0, 40, true));
+      const before = harness.resnapshotCount();
+
+      // The stall is noticed and the first resnapshot goes out.
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
+      expect(harness.resnapshotCount()).toBe(before + 1);
+
+      // Nothing answers it. Each round is the request's own deadline expiring,
+      // then the re-armed watchdog reaching its own - and the loop must run
+      // past the cap to prove the cap is what stops it, not the arithmetic.
+      for (
+        let round = 0;
+        round < MAX_WATCHDOG_RESTREAMS_PER_EPOCH + 3;
+        round += 1
+      ) {
+        vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
+        vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
+      }
+
+      expect(harness.resnapshotCount() - before).toBe(
+        MAX_WATCHDOG_RESTREAMS_PER_EPOCH,
+      );
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying once the resnapshot is answered", () => {
+    // The other direction, so the re-arm cannot become a timer that outlives
+    // its reason: a snapshot that completes the delivery disarms the watchdog
+    // through the same `readCompleteness` check every other arm site uses.
+    vi.useFakeTimers();
+    const harness = createViewportHarness();
+    try {
+      const base = snapshot({
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail", 20)],
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...base,
+        snapshot: { ...base.snapshot, accumulatedFileChangeCount: 0 },
+      });
+      harness.callbacks().onSkeletonChunk(skeletonChunk(0, 40, true));
+      const before = harness.resnapshotCount();
+
+      vi.advanceTimersByTime(
+        (STREAM_COMPLETION_TIMEOUT_MS + HYDRATION_REQUEST_TIMEOUT_MS + 2) * 4,
+      );
+
+      expect(harness.resnapshotCount()).toBe(before);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("a legacy snapshot after a windowed one resets the line", () => {
     const harness = createViewportHarness();
     try {

@@ -918,6 +918,15 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (target.kind === "end") {
       scrollToTranscriptEnd();
       consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      // Same release as the resolved-target path below, and it returns before
+      // reaching it. An `end` jump that REPLACED a parked request is the case:
+      // changing `pendingTranscriptJumpId` clears the previous request's TTL
+      // timer, and this pass consumes the new one, so the TTL effect returns
+      // early and never runs its release either. The ordinal then stays in
+      // `requiredHydrationOrdinalsOf` for the session - the planner re-fetches
+      // a row nothing is waiting for, and the budget holds that span against
+      // eviction.
+      requestTranscriptOrdinal(null);
       return;
     }
     const resolveTargetMessageId = (): string | null => {

@@ -20,12 +20,10 @@ import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic
  * the host runs the same decode to build a transcript row's preview. Re-exported
  * here so the GUI keeps one import path for composer types; the picker-facing
  * types below (suggestion entries, previews, slash commands) are GUI-only and
- * stay.
+ * stay. `browser-tab` moved there with the rest rather than staying local: its
+ * own doc calls it a wire spelling, and every other mention kind already
+ * answers to that module.
  */
-// The mention attachment types live in `@traycer/protocol` and are re-exported
-// here, so a consumer importing from this module keeps working. `browser-tab`
-// joined them there rather than staying local: its own doc calls it a wire
-// spelling, and every other mention kind already answers to that module.
 export type {
   BrowserTabMentionAttachment,
   BrowserTabMentionContextType,
@@ -204,9 +202,9 @@ export type ImageAttachment = {
   size: number | undefined;
 };
 
-// The mention definitions main declared inline here live in
-// `@traycer/protocol/common/composer-mention-attrs` and are re-exported above;
-// what survives from main's side is its WIDENING of this alias.
+// The mention members are re-exported above from
+// `@traycer/protocol/common/composer-mention-attrs`; what is declared here is
+// the union itself, which is wider than mentions alone.
 export type Attachment =
   | ImageAttachment
   | MentionAttachment

@@ -625,10 +625,17 @@ describe("sliceTranscriptTail", () => {
 
     const result = tail(wide.map(userRow), wide, [], 64 * 1024 * 1024);
 
-    const spent = result.rowIds.reduce(
-      (total, rowId, index) => total + rowCost(rowId, [result.messages[index]]),
-      0,
-    );
+    // Charged separately, because `rowIds` and `messages` are NOT parallel -
+    // this file proves it twice over, deduplicating a record set shared across
+    // rows and omitting one the lookup no longer holds. Pairing them by index
+    // happens to hold for this fixture's one-record-per-row shape, and would
+    // start measuring `undefined` the moment that stopped being true.
+    const spent =
+      result.rowIds.reduce((total, rowId) => total + rowCost(rowId, []), 0) +
+      result.messages.reduce(
+        (total, message) => total + recordByteLength(message) + 1,
+        0,
+      );
     expect(spent).toBeLessThanOrEqual(TRANSCRIPT_TAIL_MAX_BYTES);
     expect(result.rowIds.length).toBeLessThan(wide.length);
   });

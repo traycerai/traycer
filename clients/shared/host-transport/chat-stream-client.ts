@@ -381,7 +381,20 @@ export class ChatStreamClient {
    */
   private handleWindowedFrame(envelope: StreamFrameEnvelope): void {
     const parsed = chatSubscribeWindowedServerFrameSchema.safeParse(envelope);
-    if (!parsed.success) return;
+    if (!parsed.success) {
+      // Every other parse failure in this file is announced, and this one is
+      // the least self-evident of them: a dropped `snapshot` or `skeletonChunk`
+      // leaves the transcript blank or stuck on placeholders with nothing on
+      // screen or in the log to say a frame was refused - which reads as a
+      // routing bug rather than as a schema mismatch.
+      //
+      // A FIXED label, like every sibling call. `envelope.kind` would name the
+      // frame, but it is unvalidated wire data and this reporter's whole rule
+      // is that nothing off the envelope reaches the log - the issue paths
+      // identify the frame shape without taking that trade.
+      warnDroppedFrame("windowed frame", parsed.error.issues);
+      return;
+    }
     const frame: ChatSubscribeWindowedServerFrame = parsed.data;
     switch (frame.kind) {
       case "snapshot": {

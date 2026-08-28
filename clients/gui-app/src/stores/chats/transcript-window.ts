@@ -947,19 +947,6 @@ function insertSpan(
 }
 
 /**
- * Seat a windowed snapshot.
- *
- * A snapshot is authoritative about the epoch, the row count and the tail, and
- * about nothing else: the skeleton arrives separately, and the spans already
- * held stay held when the epoch is unchanged. That is what makes an aux-only
- * re-broadcast (a queue change, an approval) cheap - it must not throw away a
- * scrollback the reader is looking at.
- *
- * A CHANGED epoch is the opposite case and drops everything: ordinals under
- * the new epoch name different rows, so every held body is unaddressable and
- * every skeleton entry is stale.
- */
-/**
  * How a snapshot's revision relates to the one this window holds.
  *
  * Extracted so {@link applyWindowedSnapshot} states the three outcomes once
@@ -984,6 +971,19 @@ function classifySnapshotRevision(
   return indexRevision > window.indexRevision ? "gap" : "current";
 }
 
+/**
+ * Seat a windowed snapshot.
+ *
+ * A snapshot is authoritative about the epoch, the row count and the tail, and
+ * about nothing else: the skeleton arrives separately, and the spans already
+ * held stay held when the epoch is unchanged. That is what makes an aux-only
+ * re-broadcast (a queue change, an approval) cheap - it must not throw away a
+ * scrollback the reader is looking at.
+ *
+ * A CHANGED epoch is the opposite case and drops everything: ordinals under
+ * the new epoch name different rows, so every held body is unaddressable and
+ * every skeleton entry is stale.
+ */
 export function applyWindowedSnapshot(
   window: TranscriptWindow,
   input: {

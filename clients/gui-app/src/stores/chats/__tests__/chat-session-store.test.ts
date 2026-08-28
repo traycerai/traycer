@@ -9922,6 +9922,112 @@ describe("createChatSessionStore", () => {
     },
   );
 
+  // The door the opens-its-own-card exemption leaves open, and both sides of
+  // it. The accumulator deliberately accepts a `subagent.started` re-emitted
+  // AFTER its turn completed - Codex resolves the agent nickname
+  // asynchronously and re-emits when it lands - so "no row owns this block" can
+  // mean an evicted row rather than a new card. Nothing on the wire separates
+  // the two: a `blockDelta` carries no turn identity, and the re-emit is the
+  // same event shape as the start. Only the session's memory of what it has
+  // already opened can, so that is what decides it.
+  it.each([
+    ["subagent", "subagent.started", "subagent.progress"],
+    ["workflow", "workflow.started", "workflow.progress"],
+  ])(
+    "drops a late %s start re-emit whose card was evicted",
+    (_label, startedType, _progressType) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      const started: RuntimeEvent =
+        startedType === "subagent.started"
+          ? {
+              type: "subagent.started",
+              blockId: "run-1",
+              timestamp: 5,
+              name: "Explore",
+            }
+          : {
+              type: "workflow.started",
+              blockId: "run-1",
+              timestamp: 5,
+              name: "review",
+              intent: "Review",
+            };
+      const emit = (event: RuntimeEvent): void => {
+        callbacks.onBlockDelta({
+          kind: "blockDelta",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event,
+        });
+      };
+
+      // The genuine first start opens the card on the live turn.
+      emit(started);
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ blockId: "run-1" })]);
+
+      // That turn ends and a new one begins; the old row is not hydrated here,
+      // which is exactly what eviction looks like to this reducer.
+      settleTurnAndEvictItsRow(callbacks);
+      emitTextDelta(callbacks, "Second turn", 20);
+
+      // The nickname resolves and the adapter re-emits the SAME start.
+      emit({ ...started, timestamp: 21 });
+
+      // The new turn shows its own text and nothing else: the re-emit did not
+      // mint a copy of the old card here.
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  it("still opens a card for a DIFFERENT run started on the later turn", () => {
+    // The direction the memory must not break. A start whose block id this
+    // session has never seen is a first start no matter how many turns have
+    // been and gone, so the later turn's own subagent still gets its card.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "run-1",
+      timestamp: 5,
+      name: "Explore",
+    });
+
+    settleTurnAndEvictItsRow(callbacks);
+    emit({
+      type: "subagent.started",
+      blockId: "run-2",
+      timestamp: 21,
+      name: "Verify",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "run-2",
+        status: "streaming",
+      }),
+    ]);
+  });
+
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -11499,6 +11605,63 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
       reasoningEffort: null,
       serviceTier: null,
     },
+  });
+}
+
+/**
+ * Settle turn 1 into a row, EVICT that row, and start turn 2.
+ *
+ * Both halves matter and neither can be skipped. Seating the settled row is
+ * what releases `liveAssistantMessage` (`liveAssistantCoveredByMessages`
+ * matches it by `turnId`); without it the live row is re-stamped onto the new
+ * turn and carries its blocks along, so the old card is still owned and the
+ * detached path is never reached. Dropping the row on the next snapshot is
+ * eviction as this reducer sees it: `state.messages` is what is HYDRATED, and a
+ * row outside the retained window is simply not in it.
+ */
+function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
+  const settled: Extract<Message, { role: "assistant" }> = {
+    role: "assistant",
+    messageId: "assistant-turn-1",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: 5,
+    timestamp: 10,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [settled],
+    queue: { status: "idle", items: [] },
+    pendingFileEditApprovals: [],
+  });
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [],
+    queue: { status: "idle", items: [] },
+    pendingFileEditApprovals: [],
+    runStatus: "running",
+    activeTurn: {
+      ...runningActiveTurn(),
+      turnId: "turn-2",
+      userMessageId: "message-2",
+      startedAt: 20,
+      updatedAt: 20,
+    },
+    turnInProgress: true,
   });
 }
 

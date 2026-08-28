@@ -339,14 +339,6 @@ function deriveChatTurnMinimapItems(
 }
 
 /**
- * The keys of the rows that own no ordinal - the live turn, pending sends, and
- * records the index has not placed yet.
- *
- * Bounded, and that is the whole reason it exists: `transcriptListRows` appends
- * every ordinal-less row AFTER all the placed ones, so this walks back from the
- * end and stops at the first placed row rather than scanning the transcript.
- */
-/**
  * What must move for the derive to re-run, beyond the window's own identity.
  *
  * `rows.length` is here because a PLACED row can leave the list without the
@@ -370,6 +362,14 @@ function deriveCacheKey(rows: ReadonlyArray<TranscriptListRow>): string {
   return `${rows.length}:${unplacedRowKeys(rows)}`;
 }
 
+/**
+ * The keys of the rows that own no ordinal - the live turn, pending sends, and
+ * records the index has not placed yet.
+ *
+ * Bounded, and that is the whole reason it exists: `transcriptListRows` appends
+ * every ordinal-less row AFTER all the placed ones, so this walks back from the
+ * end and stops at the first placed row rather than scanning the transcript.
+ */
 function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
   let key = "";
   for (let index = rows.length - 1; index >= 0; index -= 1) {

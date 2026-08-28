@@ -137,6 +137,12 @@ export function mergeCumulativeDiffs(input: {
   // so the bound is the shorter of them: a short `fetches` resolves fewer
   // files, which is the same state as one still in flight.
   const paired = Math.min(fetchable.length, fetches.length);
+  // ...and stating that is not the same as acting on it. Every branch below
+  // that means "this file has not answered" raises `isLoading`; an entry with
+  // no fetch to pair against has not answered EITHER, and skipping it silently
+  // let the bundle return complete with those paths missing - the precise
+  // outcome the `isError` and `data === undefined` branches exist to prevent.
+  if (fetchable.length > paired) isLoading = true;
   for (let index = 0; index < paired; index += 1) {
     const entry = fetchable[index];
     const fetch = fetches[index];

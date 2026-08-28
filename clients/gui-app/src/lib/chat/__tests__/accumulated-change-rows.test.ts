@@ -632,4 +632,31 @@ describe("accumulatedSummarySetComplete", () => {
       }),
     ).toBe(true);
   });
+
+  it("is INCOMPLETE on an overshoot, which is the case the clamp erases", () => {
+    // The whole reason this is a separate question from
+    // `undeliveredHostChangeCount`. A revert LOWERS the host count while the
+    // client keeps the previous generation's array until a replacement chunk
+    // starting at index 0 lands - so a dropped first chunk leaves more
+    // summaries than the count claims. Under a shortfall-only reading that
+    // clamps to `0` and every gate calls it finished, leaving reverted paths
+    // and stale digests in the panel for the rest of the connection.
+    expect(
+      accumulatedSummarySetComplete({
+        windowed: true,
+        hostChangeCount: 2,
+        deliveredSummaryCount: 5,
+        generationSeated: true,
+      }),
+    ).toBe(false);
+    // And the sibling still answers `0` for it - the two disagreeing here is
+    // the point, not a drift between them.
+    expect(
+      undeliveredHostChangeCount({
+        windowed: true,
+        hostChangeCount: 2,
+        deliveredSummaryCount: 5,
+      }),
+    ).toBe(0);
+  });
 });

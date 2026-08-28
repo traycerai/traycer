@@ -1292,7 +1292,10 @@ describe("ChatStreamClient windowed line", () => {
       "resnapshot",
     ]);
 
-    // A `1.6` host's client-frame union has no case for either, so the frame
+    // `1.7` is the highest NON-windowed line - it shipped as the
+    // interview-settlement full-snapshot line, which is why `isOnWindowedLine`
+    // bounds at `>= 8` rather than the `>= 7` it was drafted with. Such a
+    // host's client-frame union has no case for either request, so the frame
     // would fail its parse and be dropped. Not sending it is the same outcome
     // without the round trip - and without a client that believes it asked.
     const legacy = stubClientAtVersion({ major: 1, minor: 7 });

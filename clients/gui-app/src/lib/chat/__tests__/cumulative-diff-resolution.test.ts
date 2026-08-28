@@ -219,4 +219,49 @@ describe("mergeCumulativeDiffs", () => {
     });
     expect(result.resolved.map((entry) => entry.filePath)).toEqual(["/a.ts"]);
   });
+
+  it("keeps loading when there are fewer fetches than fetchable paths", () => {
+    // The bound is `min(fetchable, fetches)`, so a `fetchable` entry past the
+    // end of `fetches` is simply never visited. It has not answered - the
+    // caller has not even asked yet - so it must read as outstanding. Skipping
+    // it returned a bundle that claimed to be whole while silently omitting
+    // those files, which is what every other "no answer" branch here prevents.
+    const result = mergeCumulativeDiffs({
+      filePaths: ["/a.ts", "/b.ts"],
+      inline: [],
+      fetchable: [
+        { filePath: "/a.ts", digest: "d-a" },
+        { filePath: "/b.ts", digest: "d-b" },
+      ],
+      fetches: [
+        {
+          isLoading: false,
+          isError: false,
+          data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
+        },
+      ],
+      undeliveredPaths: 0,
+    });
+
+    expect(result.isLoading).toBe(true);
+    expect(result.failed).toBe(false);
+    expect(result.resolved.map((entry) => entry.filePath)).toEqual(["/a.ts"]);
+  });
+
+  it("reports a failure when a fetch errors", () => {
+    // `failed` is its own channel rather than an empty `resolved`: the tile
+    // says the source could not be read instead of rendering a diff with the
+    // file quietly missing from it.
+    const result = mergeCumulativeDiffs({
+      filePaths: ["/a.ts"],
+      inline: [],
+      fetchable,
+      fetches: [{ isLoading: false, isError: true, data: undefined }],
+      undeliveredPaths: 0,
+    });
+
+    expect(result.failed).toBe(true);
+    expect(result.isLoading).toBe(false);
+    expect(result.resolved).toEqual([]);
+  });
 });

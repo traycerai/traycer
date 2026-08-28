@@ -617,6 +617,57 @@ describe("buildPinnedTodoRenderState", () => {
       expect(state.messages[0]?.segments).toEqual([]);
     });
 
+    it("keeps a steer-split turn's PRE-STEER slice, which carries the create", () => {
+      // The `activeTurnId` branch of `liveTurnSlice`, and the only thing that
+      // reaches it: every other host-mode case here passes `activeTurnId: null`
+      // and so decides membership on `runState` alone.
+      //
+      // A safe-point steer splits one turn across two rows and the renderer
+      // puts `runState` on the TRAILING one only. When the task was created
+      // before the steer, the `TaskCreate` is in the slice without it - so a
+      // `runState`-only filter drops the create and the trailing `TaskUpdate`
+      // then names a task the fold never heard of. Membership by turn key is
+      // what keeps the pair together.
+      const messages = [
+        makeAssistantMessage(
+          "assistant:turn-1:part:0",
+          [
+            toolSegment("task-create-pre-steer", "TaskCreate", {
+              subject: "Split task",
+            }),
+          ],
+          null,
+        ),
+        makeAssistantMessage(
+          "assistant:turn-1:part:1",
+          [
+            toolSegment("task-update-live", "TaskUpdate", {
+              taskId: "task-create-pre-steer",
+              state: "in_progress",
+            }),
+          ],
+          "running",
+        ),
+      ];
+      const hostTodo: PinnedTodoSnapshot = {
+        id: "host-todo-1",
+        items: [todoItem("host task", "in_progress")],
+      };
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        todo: hostTodo,
+        taskItems: hostTodo.items,
+        activeTurnId: "turn-1",
+      });
+
+      // The turn's OWN task, not the host's stale baseline: the create was
+      // seen, so the fold has something for the update to land on.
+      expect(state.todo?.items.map((item) => item.text)).toEqual([
+        "Split task",
+      ]);
+    });
+
     it("derive-mode behaves as before over the same input (control)", () => {
       const messages = [
         makeAssistantMessage(

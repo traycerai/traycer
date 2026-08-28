@@ -117,7 +117,11 @@ export function buildSetupCardRows(
   wholeLogWindows: ReadonlyArray<SetupCardWindowIdentity>,
 ): ReadonlyArray<SetupCardRow> {
   const local = partitionSetupCardWindows(events);
-  return alignToWholeLog(local, wholeLogWindows).map((aligned) => ({
+  return alignToWholeLog(
+    local,
+    wholeLogWindows,
+    observedBoundaries(events),
+  ).map((aligned) => ({
     createdAt: aligned.identity.createdAt,
     windowIndex: aligned.identity.windowIndex,
     isActive: aligned.identity.isActive,
@@ -132,11 +136,186 @@ export function buildSetupCardRows(
   }));
 }
 
+/**
+ * The `worktree.missing` stamps this slice holds, ascending.
+ *
+ * Sorted rather than taken in array order: `events` is chronological by
+ * construction everywhere this is called, but {@link observedBoundaryClosing}
+ * takes the FIRST match as the earliest, so it depends on the order rather than
+ * merely benefiting from it.
+ */
+function observedBoundaries(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<number> {
+  return events
+    .filter((event) => event.type === "worktree.missing")
+    .map((event) => event.timestamp)
+    .sort((left, right) => left - right);
+}
+
 /** One card to draw: whose lifecycle it is, and the events the slice holds. */
 interface AlignedSetupCardWindow {
   readonly identity: SetupCardWindowIdentity;
   readonly events: ReadonlyArray<ChatEvent>;
   readonly triggeringMessageId: string | null;
+}
+
+/**
+ * Does this unmatched local window belong to the host window just behind it?
+ *
+ * The question the equality match cannot answer, and the two cases look
+ * identical in every other input: a lifecycle whose OPENING events are still
+ * cold is stamped at its later events (so it matches no host `createdAt`), and
+ * so is a genuinely NEW lifecycle the host has not published yet.
+ *
+ * ## `closedAt` answers it outright
+ *
+ * A window closed at T contains no event stamped at or after T - that is what
+ * closing means - so a local window anchored there opens a new lifecycle, while
+ * one anchored before T is that window's cold-opening tail.
+ *
+ * ## `closedAt: null` answers NOTHING, and reading it as "joins" merged two
+ *
+ * An open window has no bound, and the tempting next step - "no bound, so a
+ * later window is its tail" - is false. `null` is a fact about the SNAPSHOT: it
+ * says the host had not closed that lifecycle at the moment it published the
+ * list. Every local window this question is ever asked about is built partly or
+ * wholly from events that arrived AFTER that, and the boundary closing it can
+ * be one of them (`worktree.missing` is live-delivered and forms no window of
+ * its own). So the published `null` is the STALER of the two accounts, and
+ * letting it answer overrode the client's own partition with it: a re-bind
+ * observed live was reattached to the historical identity, reusing its row id
+ * and lifecycle flags, and the two lifecycles drew one card between them.
+ *
+ * ## The slice can SUPPLY the missing bound, and that is better than inferring
+ *
+ * `closedAt` is unpublishable from a slice only because the closing event forms
+ * no window - not because the slice cannot HOLD it. When it does hold one, that
+ * `worktree.missing` is the same fact the host would have published, learned
+ * earlier: the boundary is stamped by the host on its own persisted record, so
+ * both sides of the comparison stay host-stamped.
+ *
+ * So an unbounded preceding identity takes the earliest boundary the slice
+ * holds at or after its `createdAt` as its effective `closedAt`, and the
+ * ordinary comparison below decides from there - tie rule included. This is
+ * what answers the case the empty-bucket inference cannot: a prior lifecycle
+ * whose rows are entirely COLD leaves an empty bucket whether the live events
+ * after it opened a new lifecycle or not, and the observed boundary is the only
+ * thing that tells those apart.
+ *
+ * With no boundary in the slice there is nothing to supply, and it falls
+ * through to the same inference `undefined` uses - not because `null` and
+ * `undefined` mean the same thing, but because neither one BOUNDS anything and
+ * the empty-bucket reading is what is left.
+ *
+ * The TIE is `>=`, i.e. an event stamped exactly at `closedAt` is treated as
+ * past the boundary. `closedAt` is the closing event's own timestamp and a
+ * window's events all strictly precede it, so equality means the local event is
+ * the boundary's contemporary rather than the closed window's - and on this
+ * seam the costly direction is the other one, which re-attaches a new lifecycle
+ * to a historical row.
+ *
+ * The comparison is host-stamped on BOTH sides, which is load-bearing because
+ * this seam's previous defect was exactly a local stamp passing for a host one.
+ * Verified rather than assumed: live events reach the window only through
+ * `onEventAppended`, which seats `frame.event` - the host's persisted record,
+ * `eventAppended` carrying a `chatEvent` on the wire - and the one other
+ * `appendLiveRecords` caller passes `events: []`. No client-minted timestamp
+ * can reach here.
+ *
+ * ## Without it, the legacy inference stands
+ *
+ * A host predating `closedAt` omits it, and `precedingBucketEmpty` is what this
+ * file did before: an empty preceding bucket reads as "the tail of that
+ * window". That inference is genuinely ambiguous - a new lifecycle arriving
+ * after a window whose events are ALL cold leaves the same empty bucket - and
+ * it is retained only as skew behaviour for old hosts, never as a claim that it
+ * is sound.
+ */
+function belongsToPrecedingWindow(input: {
+  readonly window: SetupCardWindow;
+  readonly preceding: SetupCardWindowIdentity;
+  readonly precedingBucketEmpty: boolean;
+  /**
+   * Every `worktree.missing` stamp the slice holds, ascending. These are the
+   * boundaries the local partition consumed - it splits on them and then keeps
+   * none of them, since a boundary belongs to no window - so they have to be
+   * carried alongside rather than read back off the windows.
+   */
+  readonly observedBoundaries: ReadonlyArray<number>;
+}): boolean {
+  const closedAt =
+    input.preceding.closedAt ??
+    // `?? undefined` rather than a `!== null` branch: a host that never sends
+    // the field and one that sends `null` are both "no bound published", and
+    // an observed boundary answers for either.
+    observedBoundaryClosing(
+      input.preceding.createdAt,
+      input.observedBoundaries,
+    );
+  // A KNOWN bound settles it outright, whether the host published it or the
+  // slice supplied it. Without one, the empty-bucket inference is what is left.
+  if (closedAt === undefined) return input.precedingBucketEmpty;
+  return input.window.createdAt < closedAt;
+}
+
+/**
+ * The earliest observed boundary that could have closed a lifecycle opened at
+ * `createdAt`, or `undefined` when the slice holds none.
+ *
+ * `>=` rather than `>`: a boundary stamped in the identity's own millisecond is
+ * ambiguous, and this seam's costly direction is the one that re-attaches a new
+ * lifecycle to a historical row - so the tie splits, exactly as the `closedAt`
+ * tie below does.
+ */
+function observedBoundaryClosing(
+  createdAt: number,
+  observedBoundaries: ReadonlyArray<number>,
+): number | undefined {
+  return observedBoundaries.find((boundary) => boundary >= createdAt);
+}
+
+/**
+ * Distribute one local window's events across the host windows it covers.
+ *
+ * Extracted from {@link alignToWholeLog} rather than inlined, because the two
+ * are different questions - which host window a local one anchors at, and where
+ * each of its events lands - and keeping them in one body put that function
+ * over the complexity ceiling. Returns the FURTHEST host window reached, which
+ * is where the caller's forward cursor resumes.
+ *
+ * Each event goes to the last host window that had started by the time it was
+ * stamped, never earlier than the anchor. A host window stamped in the SAME
+ * millisecond as the anchor cannot take anything, and that guard is
+ * load-bearing rather than defensive: without it the anchor's own earliest
+ * event - the one whose timestamp IS the anchor - would shift to the sibling,
+ * leaving the anchor with an empty bucket and drawing no card for it at all.
+ * Two lifecycles a millisecond apart have no timestamp boundary to be split on,
+ * so that pair stays merged exactly as it was before this alignment existed,
+ * which is a degradation and not a loss.
+ */
+function bucketWindowEvents(input: {
+  readonly window: SetupCardWindow;
+  readonly wholeLog: ReadonlyArray<SetupCardWindowIdentity>;
+  readonly anchor: number;
+  readonly held: ChatEvent[][];
+}): number {
+  const { window, wholeLog, anchor, held } = input;
+  const anchoredAt = wholeLog[anchor].createdAt;
+  let furthest = anchor;
+  for (const event of window.events) {
+    let target = anchor;
+    while (
+      target + 1 < wholeLog.length &&
+      wholeLog[target + 1].createdAt <= event.timestamp &&
+      wholeLog[target + 1].createdAt > anchoredAt
+    ) {
+      target += 1;
+    }
+    held[target].push(event);
+    if (target > furthest) furthest = target;
+  }
+  return furthest;
 }
 
 /**
@@ -193,124 +372,10 @@ interface AlignedSetupCardWindow {
  * after an EMPTY host window is that window's cold-opening tail instead, and is
  * anchored to it rather than numbered past the end.
  */
-/**
- * Distribute one local window's events across the host windows it covers.
- *
- * Extracted from {@link alignToWholeLog} rather than inlined, because the two
- * are different questions - which host window a local one anchors at, and where
- * each of its events lands - and keeping them in one body put that function
- * over the complexity ceiling. Returns the FURTHEST host window reached, which
- * is where the caller's forward cursor resumes.
- *
- * Each event goes to the last host window that had started by the time it was
- * stamped, never earlier than the anchor. A host window stamped in the SAME
- * millisecond as the anchor cannot take anything, and that guard is
- * load-bearing rather than defensive: without it the anchor's own earliest
- * event - the one whose timestamp IS the anchor - would shift to the sibling,
- * leaving the anchor with an empty bucket and drawing no card for it at all.
- * Two lifecycles a millisecond apart have no timestamp boundary to be split on,
- * so that pair stays merged exactly as it was before this alignment existed,
- * which is a degradation and not a loss.
- */
-/**
- * Does this unmatched local window belong to the host window just behind it?
- *
- * The question the equality match cannot answer, and the two cases look
- * identical in every other input: a lifecycle whose OPENING events are still
- * cold is stamped at its later events (so it matches no host `createdAt`), and
- * so is a genuinely NEW lifecycle the host has not published yet.
- *
- * ## `closedAt` answers it outright
- *
- * A window closed at T contains no event stamped at or after T - that is what
- * closing means - so a local window anchored there opens a new lifecycle, while
- * one anchored before T is that window's cold-opening tail.
- *
- * ## `closedAt: null` answers NOTHING, and reading it as "joins" merged two
- *
- * An open window has no bound, and the tempting next step - "no bound, so a
- * later window is its tail" - is false. `null` is a fact about the SNAPSHOT: it
- * says the host had not closed that lifecycle at the moment it published the
- * list. Every local window this question is ever asked about is built partly or
- * wholly from events that arrived AFTER that, and the boundary closing it can
- * be one of them (`worktree.missing` is live-delivered and forms no window of
- * its own). So the published `null` is the STALER of the two accounts, and
- * letting it answer overrode the client's own partition with it: a re-bind
- * observed live was reattached to the historical identity, reusing its row id
- * and lifecycle flags, and the two lifecycles drew one card between them.
- *
- * It therefore falls through to the same inference `undefined` uses - not
- * because the two mean the same thing, but because neither one BOUNDS
- * anything, and the empty-bucket reading is what is left. That reading gets the
- * live-boundary case right on its own: the preceding window has already
- * received events, so a later local window is not its cold-opening tail.
- *
- * The TIE is `>=`, i.e. an event stamped exactly at `closedAt` is treated as
- * past the boundary. `closedAt` is the closing event's own timestamp and a
- * window's events all strictly precede it, so equality means the local event is
- * the boundary's contemporary rather than the closed window's - and on this
- * seam the costly direction is the other one, which re-attaches a new lifecycle
- * to a historical row.
- *
- * The comparison is host-stamped on BOTH sides, which is load-bearing because
- * this seam's previous defect was exactly a local stamp passing for a host one.
- * Verified rather than assumed: live events reach the window only through
- * `onEventAppended`, which seats `frame.event` - the host's persisted record,
- * `eventAppended` carrying a `chatEvent` on the wire - and the one other
- * `appendLiveRecords` caller passes `events: []`. No client-minted timestamp
- * can reach here.
- *
- * ## Without it, the legacy inference stands
- *
- * A host predating `closedAt` omits it, and `precedingBucketEmpty` is what this
- * file did before: an empty preceding bucket reads as "the tail of that
- * window". That inference is genuinely ambiguous - a new lifecycle arriving
- * after a window whose events are ALL cold leaves the same empty bucket - and
- * it is retained only as skew behaviour for old hosts, never as a claim that it
- * is sound.
- */
-function belongsToPrecedingWindow(input: {
-  readonly window: SetupCardWindow;
-  readonly preceding: SetupCardWindowIdentity;
-  readonly precedingBucketEmpty: boolean;
-}): boolean {
-  const closedAt = input.preceding.closedAt;
-  // A KNOWN bound settles it outright. `null` and `undefined` do not, and they
-  // fail over to the same inference for opposite reasons - one has no bound
-  // yet, the other has no field - so neither may answer on its own.
-  if (closedAt !== null && closedAt !== undefined) {
-    return input.window.createdAt < closedAt;
-  }
-  return input.precedingBucketEmpty;
-}
-
-function bucketWindowEvents(input: {
-  readonly window: SetupCardWindow;
-  readonly wholeLog: ReadonlyArray<SetupCardWindowIdentity>;
-  readonly anchor: number;
-  readonly held: ChatEvent[][];
-}): number {
-  const { window, wholeLog, anchor, held } = input;
-  const anchoredAt = wholeLog[anchor].createdAt;
-  let furthest = anchor;
-  for (const event of window.events) {
-    let target = anchor;
-    while (
-      target + 1 < wholeLog.length &&
-      wholeLog[target + 1].createdAt <= event.timestamp &&
-      wholeLog[target + 1].createdAt > anchoredAt
-    ) {
-      target += 1;
-    }
-    held[target].push(event);
-    if (target > furthest) furthest = target;
-  }
-  return furthest;
-}
-
 function alignToWholeLog(
   local: ReadonlyArray<SetupCardWindow>,
   wholeLog: ReadonlyArray<SetupCardWindowIdentity>,
+  observed: ReadonlyArray<number>,
 ): ReadonlyArray<AlignedSetupCardWindow> {
   if (wholeLog.length === 0) {
     // The legacy line: the host sent no list because `events` IS the whole log,
@@ -370,6 +435,7 @@ function alignToWholeLog(
         window,
         preceding: wholeLog[cursor - 1],
         precedingBucketEmpty: held[cursor - 1].length === 0,
+        observedBoundaries: observed,
       })
         ? cursor - 1
         : null;

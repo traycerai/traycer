@@ -867,6 +867,31 @@ export interface ChatSessionState {
    * grows for the life of a chat.
    */
   readonly deliveredNoticeActionIds: ReadonlySet<string>;
+  /**
+   * Block ids this session has already OPENED a subagent/workflow card for.
+   *
+   * The one thing that tells a first `subagent.started` from a late re-emit of
+   * it, because nothing on the wire does: a `blockDelta` frame carries no turn
+   * identity, and the two events are otherwise the same shape. A repeat is
+   * definitionally a SECOND start for a block id, so remembering the first is
+   * the whole discriminator.
+   *
+   * It matters because the two want opposite answers when no row owns the
+   * block. A first start must create its card - that is the birth of every
+   * subagent card. A re-emit must not: the accumulator deliberately permits one
+   * after its turn has completed (Codex resolves the agent nickname
+   * asynchronously and re-emits `subagent.started` when it lands), so on the
+   * windowed line its row may have been evicted by then, and creating from it
+   * would mint a copy of an OLD turn's card under whatever turn is running now.
+   *
+   * Bounded by the same FIFO shape as {@link deliveredNoticeActionIds}: an
+   * unbounded set keyed by block id grows for the life of a chat. Eviction is
+   * safe in the direction that matters - a forgotten id only means a re-emit
+   * that old is treated as a first start again, which is the behaviour this
+   * replaces, and block ids are unique per run so a stale entry cannot deny a
+   * genuinely new card.
+   */
+  readonly openedSubagentCardBlockIds: ReadonlySet<string>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly currentComposerSettings: ChatRunSettings | null;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
@@ -1271,6 +1296,16 @@ export const MAX_ERROR_NOTICE_RECORDS = 32;
  * memory bounded.
  */
 export const MAX_DELIVERED_CLIENT_ACTION_IDS = MAX_ERROR_NOTICE_RECORDS * 4;
+
+/**
+ * How many opened subagent/workflow card block ids a session remembers.
+ *
+ * Sized for "cards a live chat can open before an old one's re-emit stops
+ * mattering" rather than for the transcript: the window the memory has to
+ * cover is one async nickname lookup, and a chat that has opened 256 further
+ * cards since is long past it.
+ */
+export const MAX_OPENED_SUBAGENT_CARD_BLOCK_IDS = 256;
 /** Bounds string-key retention while comfortably covering recent restores. */
 export const MAX_DELIVERED_RESTORE_COMPLETIONS = 32;
 
@@ -2680,10 +2715,17 @@ export function createChatSessionStoreWithNotificationDependencies(
      * every ordinal belongs to a coordinate space this client has left, so
      * nothing on screen can be repaired until a snapshot lands.
      *
-     * Same bounded wait, and the retry is the same shape: the latch is released
-     * and the next windowed frame asks again. A late answer to the abandoned
-     * request costs nothing - a resnapshot is idempotent, and the snapshot it
-     * produces clears the latch whichever request it answers.
+     * Same bounded wait, and the retry has TWO shapes because this request
+     * serves two recoveries. Releasing the latch is enough for the invalidated
+     * index: the next windowed frame re-plans, sees the invalidation and asks
+     * again. It is not enough for a stalled summary stream, whose transcript is
+     * valid and often fully hydrated - the planner measures the transcript, so
+     * it looks at that state and asks for nothing. That one is re-armed on the
+     * completion watchdog instead, inside the timeout below.
+     *
+     * A late answer to the abandoned request costs nothing either way - a
+     * resnapshot is idempotent, and the snapshot it produces clears the latch
+     * whichever request it answers.
      */
     const requestResnapshotOnceForEpoch = (epoch: number): void => {
       const client = streamClient;
@@ -2696,6 +2738,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || resnapshotRequestedForEpoch !== epoch) return;
         resnapshotRequestedForEpoch = null;
         requestPlannedHydration();
+        // `requestPlannedHydration` retries only what it can SEE, and it looks
+        // at the transcript: an invalidated window re-asks here, and a planned
+        // range covers a visible gap. Neither describes a summary-only stall -
+        // that transcript is valid and often fully hydrated, so the planner
+        // returns having asked for nothing, while the watchdog timer that
+        // started this recovery has already fired and cleared itself.
+        //
+        // Nothing else re-arms it. The watchdog is restarted by delivery
+        // progress or a snapshot, and the whole premise of this timeout is that
+        // neither arrived - so on an idle chat the summary set stays incomplete
+        // for the life of the connection while the retry budget still reads as
+        // unspent.
+        //
+        // Re-arming here is what makes that budget real. It cannot spin: the
+        // watchdog spends `MAX_WATCHDOG_RESTREAMS_PER_EPOCH` before it will ask
+        // again, and `readCompleteness` disarms it outright once the delivery
+        // is whole - so an answered resnapshot ends the loop on the next fire
+        // rather than starting another.
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
       }, HYDRATION_REQUEST_TIMEOUT_MS);
       client.requestResnapshot();
     };
@@ -4984,6 +5048,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessages: [],
       errorNotices: [],
       deliveredNoticeActionIds: new Set<string>(),
+      openedSubagentCardBlockIds: new Set<string>(),
       failedSendRestoration: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
@@ -6806,12 +6871,15 @@ function applyContentDelta(
 // The distinction it draws is whether this event OPENS its own card or updates
 // one:
 //
-//   - `subagent.started` / `workflow.started` open it. `accumulateTurnContent`
-//     builds the block FROM this event, so "no message owns it" is the
-//     ordinary birth of every such card, not evidence of a detached one.
-//     Dropping it there means the card is never created - and then its own
-//     progress and completion have no owner either, so nothing about that run
-//     ever renders.
+//   - `subagent.started` / `workflow.started` open it - the FIRST time.
+//     `accumulateTurnContent` builds the block FROM this event, so "no message
+//     owns it" is the ordinary birth of every such card, not evidence of a
+//     detached one. Dropping it there means the card is never created - and
+//     then its own progress and completion have no owner either, so nothing
+//     about that run ever renders. A REPEAT of one is an update wearing a
+//     start's clothes and is held to the update rule instead; the caller
+//     supplies that, since only the session's memory knows which it is (see
+//     `ChatSessionState.openedSubagentCardBlockIds`).
 //   - the matching `progress` / `completed` update it. They ALSO build a card
 //     when none exists (see the accumulator), which is exactly the synthesis
 //     that must not happen under an unrelated turn: their card's row is
@@ -6823,6 +6891,19 @@ function applyContentDelta(
 // with the active turn's own row consulted (see `activeTurnOwnsBlock`) a live
 // call's terminal never reaches here, so what is left is a terminal whose
 // `started` was genuinely never seen, and completing it beats stranding it.
+// Does this event OPEN a subagent/workflow card, as opposed to updating one?
+// Named because two places need the same answer for different reasons: the
+// owner rule below, and the session memory that tells a first one from a
+// repeat.
+function isSubagentCardOpeningEvent(
+  event: RuntimeEvent,
+): event is Extract<
+  RuntimeEvent,
+  { type: "subagent.started" | "workflow.started" }
+> {
+  return event.type === "subagent.started" || event.type === "workflow.started";
+}
+
 // The `subagent.*` / `workflow.*` arm, split out so the opens-versus-updates
 // rule reads as two branches rather than a negated conjunction hidden in a
 // flag - and so the parent function stays under the complexity ceiling as the
@@ -6831,7 +6912,7 @@ function applyContentDelta(
 function subagentCardOwnerTarget(
   event: RuntimeEvent,
 ): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
-  if (event.type === "subagent.started" || event.type === "workflow.started") {
+  if (isSubagentCardOpeningEvent(event)) {
     return { ownerBlockId: event.blockId, ownerMustExist: false };
   }
   if (
@@ -7007,35 +7088,6 @@ function requiredHydrationOrdinalsOf(
 }
 
 /**
- * Rewrite one row in place, on whichever line this session is on.
- *
- * The shared path for the row-targeted delta appliers - an image resolving, a
- * detached subagent's card, a block carried to the frozen half of a split turn.
- * Each locates its own target (they key on a block, not a message id), then
- * hands the row and its rewrite here.
- *
- * On the windowed line the write goes into the WINDOW. That is not a detail of
- * where the data lives: `state.messages` is rebuilt from the window by the next
- * windowed frame of ANY kind, so an applier that spliced the published array
- * would have its work erased by the next skeleton chunk, index delta, range or
- * appended event - whichever arrived first. `05577d2f` settled that for records
- * arriving with no ordinal; this is the same rule for records that have one.
- *
- * `null` means the row is not reachable and the change is DROPPED. That is
- * sound rather than lossy, and only because of the host's emit-after-persist
- * invariant: the host wrote the row before it told us about the change, so the
- * `loadRange` that eventually hydrates that ordinal serves a body that already
- * contains it. Dropping loses nothing; applying to a copy the next frame
- * overwrites loses the same thing while looking like it worked.
- *
- * `charge` says when the window's byte figure is brought back in line, and it
- * follows from how often the caller runs rather than from what it wants. The
- * row-targeted appliers pass `"now"`. The ACTIVE TURN's streaming row passes
- * `"deferred"`, because charging it exactly would serialize a growing record
- * on every buffered delta - see `unsettledByteMessageIds` in
- * `transcript-window`.
- */
-/**
  * `state.coldRewrittenMessageIds` with one more id, bounded.
  *
  * A new Set per call, because the value is state and the store's consumers
@@ -7067,6 +7119,35 @@ function withColdRewrite(
   return next;
 }
 
+/**
+ * Rewrite one row in place, on whichever line this session is on.
+ *
+ * The shared path for the row-targeted delta appliers - an image resolving, a
+ * detached subagent's card, a block carried to the frozen half of a split turn.
+ * Each locates its own target (they key on a block, not a message id), then
+ * hands the row and its rewrite here.
+ *
+ * On the windowed line the write goes into the WINDOW. That is not a detail of
+ * where the data lives: `state.messages` is rebuilt from the window by the next
+ * windowed frame of ANY kind, so an applier that spliced the published array
+ * would have its work erased by the next skeleton chunk, index delta, range or
+ * appended event - whichever arrived first. `05577d2f` settled that for records
+ * arriving with no ordinal; this is the same rule for records that have one.
+ *
+ * `null` means the row is not reachable and the change is DROPPED. That is
+ * sound rather than lossy, and only because of the host's emit-after-persist
+ * invariant: the host wrote the row before it told us about the change, so the
+ * `loadRange` that eventually hydrates that ordinal serves a body that already
+ * contains it. Dropping loses nothing; applying to a copy the next frame
+ * overwrites loses the same thing while looking like it worked.
+ *
+ * `charge` says when the window's byte figure is brought back in line, and it
+ * follows from how often the caller runs rather than from what it wants. The
+ * row-targeted appliers pass `"now"`. The ACTIVE TURN's streaming row passes
+ * `"deferred"`, because charging it exactly would serialize a growing record
+ * on every buffered delta - see `unsettledByteMessageIds` in
+ * `transcript-window`.
+ */
 function rewriteMessageInPlace(
   state: ChatSessionState,
   messageId: string,
@@ -7502,11 +7583,39 @@ function applyEventToOwningMessage(
   );
 }
 
+/**
+ * Reduces a single runtime delta event onto the session state, and remembers
+ * the cards it opened.
+ *
+ * The memory is kept HERE rather than inside the reducer because it is one
+ * fact about one event kind, and every branch below would otherwise have to
+ * carry it. Recorded only when the event actually landed - `applied === state`
+ * is the reducer's own identity signal for "dropped" - so a start that was
+ * refused (no active turn, say) does not leave a note that would make its
+ * legitimate re-delivery look like a repeat.
+ */
+function applyContentBlockDelta(
+  state: ChatSessionState,
+  event: RuntimeEvent,
+): Partial<ChatSessionState> {
+  const applied = reduceContentBlockDelta(state, event);
+  if (applied === state) return applied;
+  if (!isSubagentCardOpeningEvent(event)) return applied;
+  if (state.openedSubagentCardBlockIds.has(event.blockId)) return applied;
+  const opened = new Set(state.openedSubagentCardBlockIds);
+  addWithFifoEviction(
+    opened,
+    event.blockId,
+    MAX_OPENED_SUBAGENT_CARD_BLOCK_IDS,
+  );
+  return { ...applied, openedSubagentCardBlockIds: opened };
+}
+
 // Reduces a single runtime delta event onto the session state. The branches map
 // one-to-one to the distinct block/delta kinds; flattening that mapping is
 // clearer than threading the dispatch through extra indirection.
 // eslint-disable-next-line complexity
-function applyContentBlockDelta(
+function reduceContentBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
 ): Partial<ChatSessionState> {
@@ -7543,16 +7652,31 @@ function applyContentBlockDelta(
     // - and synthesizes its progress or completion under whatever turn happens
     // to be active. Those two are `ownerMustExist` now, so they still drop.
     //
-    // What must NOT drop is an event that opens its own card, because "no
-    // owner" is its normal starting condition rather than evidence of
-    // anything. `subagent.started` is that event, and dropping it took the
-    // subagent card with it - see `detachedSubagentOwnerTarget`.
+    // What must NOT drop is an event that opens its own card FOR THE FIRST
+    // TIME, because "no owner" is its normal starting condition rather than
+    // evidence of anything. `subagent.started` is that event, and dropping it
+    // took the subagent card with it - see `detachedSubagentOwnerTarget`.
+    //
+    // A REPEAT of a start is the other thing entirely, and the exemption above
+    // is a door it would otherwise walk straight through. The accumulator
+    // deliberately accepts a `subagent.started` re-emitted after its turn has
+    // COMPLETED - Codex resolves the agent nickname asynchronously and re-emits
+    // when it lands - so on the windowed line that late arrival can find its
+    // row evicted while a newer turn is running, which is the synthesis case
+    // exactly. The session's own memory is what separates the two, because
+    // nothing on the wire does: a `blockDelta` carries no turn identity, and a
+    // re-emit is otherwise indistinguishable from a start.
     //
     // Dropping is safe precisely because eviction is recoverable: the row is
     // re-served whole by the range that re-hydrates it, carrying this update
     // already folded in. Falling through is not - it writes a card under a turn
     // that never spawned it, and no later frame corrects that.
-    if (detachedTarget.ownerMustExist) return state;
+    if (
+      detachedTarget.ownerMustExist ||
+      state.openedSubagentCardBlockIds.has(detachedTarget.ownerBlockId)
+    ) {
+      return state;
+    }
   }
   // Steer-split carryover: a block that was still STREAMING when a steered
   // user message split the turn lives in an EARLIER assistant row of the SAME
