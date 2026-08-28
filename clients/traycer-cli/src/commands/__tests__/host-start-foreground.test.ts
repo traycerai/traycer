@@ -55,14 +55,14 @@ vi.mock("../../host/log-tail", async (importOriginal) => {
     ...actual,
     startLogTail: (options: LogTailOptions): LogTail => {
       mocks.startTailCalls.push(options.path);
-      return { stop: () => undefined, drainSync: () => undefined };
+      return { stop: () => undefined };
     },
   };
 });
 
 import { buildProgram } from "../../index";
 
-function setIsTty(value: boolean): void {
+function setIsTty(value: boolean | undefined): void {
   Object.defineProperty(process.stdout, "isTTY", {
     value,
     configurable: true,
@@ -81,7 +81,7 @@ describe("host start - foreground console wiring", () => {
   });
 
   afterEach(() => {
-    setIsTty(originalIsTty === true);
+    setIsTty(originalIsTty);
   });
 
   it("writes the banner before runHostStart's first await on an interactive (TTY, no flags) invocation", async () => {

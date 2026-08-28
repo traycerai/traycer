@@ -14,10 +14,10 @@ import {
 // as `result.data.tail`; human mode prints it directly so users get a
 // `tail -f`-equivalent experience without leaving the CLI.
 //
-// `--follow` delegates the offset/rotation bookkeeping to `host/log-tail.ts`,
-// which the foreground `host start` mirror shares - see that module for why
-// it polls rather than watches. This file owns only the signal handling that
-// ends an interactive follow.
+// `--follow` delegates the offset/rotation bookkeeping to `host/log-tail.ts` -
+// see that module for why it polls rather than watches, and for the identity
+// and continuity rules that stop a rotation swallowing the new file's prefix.
+// This file owns only the signal handling that ends an interactive follow.
 
 export interface HostLogsArgs {
   readonly follow: boolean;
@@ -107,9 +107,10 @@ function followLog(path: string, quiet: boolean): Promise<void> {
     // listeners attached. That leak is invisible in a real CLI process (it
     // exits anyway) but accumulates in in-process test runners that invoke
     // followLog repeatedly across tests.
-    // Assigned immediately below; held in a mutable binding because the tail
-    // and its cleanup refer to each other (`onExhausted` stops the follow,
-    // and stopping the follow stops the tail).
+    //
+    // `tail` is a mutable binding because it and its cleanup refer to each
+    // other: `onExhausted` ends the follow, and ending the follow stops the
+    // tail.
     let tail: LogTail | null = null;
     const cleanup = (): void => {
       if (stopped) return;
@@ -128,9 +129,6 @@ function followLog(path: string, quiet: boolean): Promise<void> {
         if (!quiet) writeStdoutBytes(chunk);
       },
       onExhausted: cleanup,
-      // `--follow` never calls `drainSync` (it ends on a signal, not on a
-      // process exit it has to beat), so no skip can be reported here.
-      onSkipped: () => undefined,
       pollIntervalMs: LOG_TAIL_POLL_INTERVAL_MS,
       maxMissingRetries: LOG_TAIL_MAX_MISSING_RETRIES,
     });

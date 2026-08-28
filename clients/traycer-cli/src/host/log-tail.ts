@@ -1,11 +1,13 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { open } from "node:fs/promises";
 
-// `tail -f` over a file OTHER processes append to, shared by the two callers
-// that need it: `host logs --follow` and the foreground `host start` mirror.
+// `tail -f` over a file OTHER processes append to, behind `host logs --follow`.
 //
-// One definition because the two would otherwise have to agree, byte for byte,
-// on the rotation rule that makes this correct. A stat-based poll rather than
+// It was extracted to be shared with a foreground `host start` mirror; that
+// mirror was removed (writing log volume from the supervisor's own event loop
+// blocks on a TTY and can stop Ctrl-C reaching the host), so this is again a
+// single-caller module - but a considerably more correct one than the inline
+// version it replaced. A stat-based poll rather than
 // `fs.watch`: `fs.watch` does not reliably surface FSEvents truncation on
 // macOS and races on the read offset under concurrent appends, and the host
 // log is rotated (renamed aside, recreated) by `rotateHostLogIfOversized`
@@ -18,12 +20,6 @@ import { open } from "node:fs/promises";
 export const LOG_TAIL_POLL_INTERVAL_MS = 500;
 /** ~30s at the default poll interval. */
 export const LOG_TAIL_MAX_MISSING_RETRIES = 60;
-
-// Bound for the single synchronous catch-up read `drainSync` performs on the
-// way out. The whole point of that path is that it costs a bounded, known
-// amount of work on an exit that is otherwise synchronous, so it reads a tail
-// rather than an arbitrarily large backlog.
-const MAX_SYNC_DRAIN_BYTES = 256 * 1024;
 
 // Bound for ONE poll's read. `host.log` is unbounded within a host's lifetime
 // (nothing truncates it; rotation only happens at a start), so a follower that
@@ -56,12 +52,6 @@ export interface LogTailOptions {
   onBytes(chunk: Buffer): void;
   /** The file stayed unreadable past `maxMissingRetries`; the tail has stopped. */
   onExhausted(): void;
-  /**
-   * `drainSync` had more pending than it is allowed to read in one go and
-   * skipped `bytes` to reach the tail. Reported rather than swallowed: output
-   * with a silent hole in it is worse than output that says where the hole is.
-   */
-  onSkipped(bytes: number): void;
   readonly pollIntervalMs: number;
   readonly maxMissingRetries: number;
 }
@@ -69,22 +59,11 @@ export interface LogTailOptions {
 export interface LogTail {
   /** Stop polling. Idempotent; never emits again afterwards. */
   stop(): void;
-  /**
-   * Emit anything appended since the last poll, SYNCHRONOUSLY.
-   *
-   * For callers that end the process with a bare `process.exit` and would
-   * otherwise drop up to one poll interval of output - notably the host
-   * supervisor, whose exit is deliberately synchronous (see runner/exit.ts).
-   * Best-effort: any I/O failure is swallowed, because a drain on the way out
-   * must never be the reason a process fails to exit.
-   */
-  drainSync(): void;
 }
 
 /**
  * Follow `path` from its CURRENT end, so a follower never replays history it
- * was not asked for. Callers that want the existing tail print it themselves
- * first (`host logs`) or deliberately do not (`host start`).
+ * was not asked for. `host logs` prints the existing tail itself first.
  */
 export function startLogTail(options: LogTailOptions): LogTail {
   // Size AND identity together. Recording the size alone left `fileIdentity`
@@ -123,10 +102,9 @@ export function startLogTail(options: LogTailOptions): LogTail {
   let establishEofOnFirstRead = start.kind === "unreadable";
 
   /**
-   * Shared replacement rule, so the poll and the synchronous drain cannot
-   * disagree about what "same file" means. A drain that skipped this check
-   * re-read a post-final-poll replacement from the old offset and dropped its
-   * prefix - the identical defect, on the exit path.
+   * Is the file under `path` still the one `offset` counts bytes in? Rewinds
+   * when it is not, so a rotation cannot make the follower skip the new file's
+   * first N bytes.
    */
   const rewindIfReplaced = (
     identity: number | null,
@@ -159,7 +137,16 @@ export function startLogTail(options: LogTailOptions): LogTail {
   const schedule = (): void => {
     if (stopped) return;
     timer = setTimeout(() => {
-      void tick();
+      // `tick` catches its own I/O, but a throwing sink (or anything else
+      // unexpected) would otherwise surface as an unhandled rejection from a
+      // detached timer. Stop polling and contain it.
+      void tick().catch(() => {
+        stopped = true;
+        if (timer !== null) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      });
     }, options.pollIntervalMs);
   };
 
@@ -278,83 +265,6 @@ export function startLogTail(options: LogTailOptions): LogTail {
     schedule();
   };
 
-  const drainSync = (): void => {
-    let fd: number | null = null;
-    let chunk: Buffer | null = null;
-    try {
-      fd = openSync(options.path, "r");
-      const stats = fstatSync(fd);
-      const size = stats.size;
-      if (establishEofOnFirstRead) {
-        // The same transition the poll performs. A drain that ran BEFORE the
-        // first async poll ignored this and read from offset 0, replaying the
-        // whole pre-existing log - the opposite of what an unreadable start is
-        // supposed to degrade to.
-        offset = size;
-        establishEofOnFirstRead = false;
-        fileIdentity = stats.ino > 0 ? stats.ino : null;
-        sawFileMissing = false;
-        const seed = Math.min(size, CONTINUITY_BYTES);
-        continuity = null;
-        if (seed > 0) {
-          const seedBuffer = Buffer.alloc(seed);
-          if (readSync(fd, seedBuffer, 0, seed, size - seed) === seed) {
-            continuity = seedBuffer;
-          }
-        }
-        return;
-      }
-      // Same replacement rule the poll uses - see `rewindIfReplaced`. A file
-      // swapped out between the final poll and this drain is otherwise read
-      // from the old offset, silently dropping the new file's prefix on the
-      // one path that has no later poll to correct it.
-      let continuityHolds = true;
-      if (continuity !== null && offset >= continuity.length) {
-        const probe = Buffer.alloc(continuity.length);
-        const probeRead = readSync(
-          fd,
-          probe,
-          0,
-          continuity.length,
-          offset - continuity.length,
-        );
-        continuityHolds =
-          probeRead === continuity.length && probe.equals(continuity);
-      }
-      rewindIfReplaced(stats.ino > 0 ? stats.ino : null, size, continuityHolds);
-      if (size > offset) {
-        // Read the TAIL of the backlog, not its head. This runs immediately
-        // before `process.exit`, so whatever it does not emit is lost - and
-        // the lines worth saving are the last ones the host wrote on its way
-        // down, not the oldest 256 KiB of a burst. Skipping forward is what
-        // makes the cap honest about which end it keeps.
-        const pending = size - offset;
-        const skipped = Math.max(0, pending - MAX_SYNC_DRAIN_BYTES);
-        const readFrom = offset + skipped;
-        const length = pending - skipped;
-        const buffer = Buffer.alloc(length);
-        const bytesRead = readSync(fd, buffer, 0, length, readFrom);
-        if (bytesRead > 0) {
-          offset = readFrom + bytesRead;
-          chunk = buffer.subarray(0, bytesRead);
-          rememberTail(chunk);
-          if (skipped > 0) options.onSkipped(skipped);
-        }
-      }
-    } catch {
-      // Best effort - see the doc comment.
-    } finally {
-      if (fd !== null) {
-        try {
-          closeSync(fd);
-        } catch {
-          // Nothing useful to do with a failed close on the way out.
-        }
-      }
-    }
-    if (chunk !== null) options.onBytes(chunk);
-  };
-
   schedule();
 
   return {
@@ -366,7 +276,6 @@ export function startLogTail(options: LogTailOptions): LogTail {
         timer = null;
       }
     },
-    drainSync,
   };
 }
 

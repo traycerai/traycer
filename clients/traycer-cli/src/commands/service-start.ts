@@ -8,6 +8,7 @@ import {
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
 import type { Environment } from "../runner/environment";
+import type { ILogger } from "../logger";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
 
 // `traycer host service start` - ask the OS service manager to start the
@@ -61,14 +62,28 @@ async function isHostPositivelyServing(
   }
 }
 
-/** Never lets a descriptive probe decide the command's outcome. */
+/**
+ * Never lets a descriptive probe decide the command's outcome - but does not
+ * swallow it silently either: a status read that fails changes what this
+ * command can SAY, and an operator debugging a confusing message needs to know
+ * the probe is why.
+ */
 async function statusBestEffort(
   controller: { status(label: ServiceLabel): Promise<ServiceStatus> },
   label: ServiceLabel,
+  logger: ILogger,
+  phase: "pre-start" | "post-start",
 ): Promise<ServiceStatus | null> {
   try {
     return await controller.status(label);
-  } catch {
+  } catch (err) {
+    logger.warn("Service start could not read the service status", {
+      environment: label.environment,
+      label: label.id,
+      phase,
+      errorName: err instanceof Error ? err.name : "Error",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
@@ -99,7 +114,12 @@ export const serviceStartCommand: CommandFn = async (
       // `launchctl print` can simply fail. Neither may stop the authoritative
       // start attempt: that would leave a registered, stopped host down
       // because an INSPECTION failed. This read only decides what to SAY.
-      const before = await statusBestEffort(controller, label);
+      const before = await statusBestEffort(
+        controller,
+        label,
+        ctx.runtime.logger,
+        "pre-start",
+      );
       // Already running: report it and touch NOTHING. The platform start is
       // skipped deliberately rather than relied on to no-op, because on
       // Windows it does not. The Scheduled Task is registered
@@ -169,7 +189,12 @@ export const serviceStartCommand: CommandFn = async (
       // Also best-effort: the start was ACCEPTED, and a descriptive readback
       // that fails afterwards must not turn that into a nonzero result. This
       // command promises an accepted request, not readiness.
-      const after = await statusBestEffort(controller, label);
+      const after = await statusBestEffort(
+        controller,
+        label,
+        ctx.runtime.logger,
+        "post-start",
+      );
       ctx.runtime.logger.info("Service start command completed", {
         environment: ctx.runtime.environment,
         label: label.id,

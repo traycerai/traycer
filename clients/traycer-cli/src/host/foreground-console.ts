@@ -1,14 +1,7 @@
 import type { Environment } from "../runner/environment";
 import type { ProgressEvent } from "../runner/output";
-import { writeStdoutBytes, writeStdoutSync } from "../runner/std-write";
+import { writeStdoutSync } from "../runner/std-write";
 import { hostLogPath } from "../store/paths";
-import {
-  LOG_TAIL_MAX_MISSING_RETRIES,
-  LOG_TAIL_POLL_INTERVAL_MS,
-  startLogTail,
-  type LogTail,
-  type LogTailOptions,
-} from "./log-tail";
 
 // Terminal feedback for `traycer host start`, which is BOTH the user-facing
 // verb and the long-running supervisor entrypoint every service definition
@@ -18,14 +11,13 @@ import {
 // the child's stdout is bound to the host-log descriptor and the supervisor's
 // stderr tee appends to that same file, so a person who typed
 // `traycer host start` got an unresponsive terminal with no output and no
-// indication that anything had happened. This module is the repair -
-// announce what the invocation is doing, then mirror newly appended
-// `host.log` content for as long as it runs.
+// indication that anything had happened. This module is the repair - it
+// announces what the invocation is doing, names the log, and says how to stop
+// and how to follow that log from another terminal.
 //
-// The child's stdio contract is deliberately UNCHANGED: the mirror reads the
-// log file by path, so it picks up supervisor markers and child stdout/stderr
-// alike while the single log sink stays exactly where every other reader
-// (Doctor, `host logs`, Desktop) already looks.
+// The child's stdio contract is deliberately UNCHANGED, and nothing here reads
+// or streams the log: see the mode doc below for why streaming it from this
+// process is unsafe.
 
 /**
  * What a `host start` invocation is allowed to print.
@@ -55,8 +47,7 @@ import {
  * The banner keeps everything the audit actually asked for - the invocation
  * identifies itself immediately, names the log, and says how to stop - and
  * points at `traycer host logs --follow`, which streams the same file from a
- * process that is not supervising anything. The shared follower this module
- * used still exists and is still used there.
+ * process that is not supervising anything.
  */
 export type ForegroundStartMode = "banner" | "events" | "silent";
 
@@ -121,39 +112,27 @@ export interface ForegroundConsoleOptions {
 export interface ForegroundConsoleDeps {
   readonly logPath: (environment: Environment) => string;
   readonly writeText: (text: string) => void;
-  readonly writeBytes: (chunk: Buffer) => void;
-  readonly startTail: (options: LogTailOptions) => LogTail;
   readonly now: () => string;
 }
 
 export const defaultForegroundConsoleDeps: ForegroundConsoleDeps = {
   logPath: hostLogPath,
-  // The console's OWN small, one-shot lines (banner, the `--json` lifecycle
-  // event, skip/exhaustion notices) go out synchronously: they are written
+  // Synchronous: these lines are written before the first long wait, they are
+  // exactly the output a fast exit would otherwise lose, and each is far below
+  // a pipe buffer. they are written
   // before the first long wait, they are the output a fast exit would
   // otherwise lose, and each is far below a pipe buffer.
   writeText: (text) => writeStdoutSync(Buffer.from(text, "utf8")),
-  // Mirrored LOG bytes do not. `writeSync` blocks inside the syscall - a
-  // flow-stopped terminal (Ctrl-S) or a stalled reader can hold it
-  // indefinitely, and there is no retry count to bound that because JS never
-  // regains control. Doing it at exit would let a stuck terminal stop the
-  // supervisor from ever reaching `process.exit`, which is far worse than the
-  // problem it was solving: these bytes are a MIRROR, and every one of them is
-  // already durable in host.log.
-  writeBytes: writeStdoutBytes,
-  startTail: startLogTail,
   now: () => new Date().toISOString(),
 };
 
 export interface ForegroundConsole {
   /**
-   * Stop mirroring.
+   * Release anything the console holds.
    *
-   * Called from the supervisor's injected `exit`, which is deliberately a bare
-   * synchronous `process.exit` (see runner/exit.ts). It does NOT drain: a
-   * synchronous catch-up write can block indefinitely on a flow-stopped
-   * terminal, and hanging the supervisor's exit is worse than losing up to one
-   * poll interval of mirrored output that host.log already holds.
+   * Nothing does today - the banner is one-shot and there is no follower - but
+   * the handle is kept so the supervisor's injected `exit` has a stable seam
+   * and callers never branch on the mode.
    */
   close(): void;
 }
@@ -163,10 +142,8 @@ const INERT_CONSOLE: ForegroundConsole = {
 };
 
 /**
- * Announce the invocation and start mirroring, per `options.mode`.
- *
- * Returns an inert handle in `silent` mode so callers never branch on the
- * mode themselves.
+ * Announce the invocation, per `options.mode`. Returns an inert handle in
+ * `silent` mode so callers never branch on the mode themselves.
  */
 export function openForegroundConsole(
   options: ForegroundConsoleOptions,

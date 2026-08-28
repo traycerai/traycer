@@ -33,10 +33,7 @@ import {
 //             "optionally removes the OS service" suggests, so both the help
 //             text and this command's own output name it explicitly.
 //   --all   → deregister the OS service first, then cooperatively stop the
-//             host, then remove the bytes. Environment runtime state (pid
-//             metadata, log) is purged only once the host is CONFIRMED gone -
-//             the stop call resolving is not that confirmation, because every
-//             Linux/Windows teardown call tolerates its own failure. Runtime
+//             host, then remove the bytes. Runtime
 //             state (pid metadata, log) is NEVER purged here: a `host start`
 //             supervisor outlives its child and keeps writing, and nothing
 //             available from this side proves it has stopped. Reported
@@ -177,15 +174,16 @@ export async function runHostUninstall(
   // evidence: on Windows `uninstallService` removes pid metadata even when its
   // `taskkill` calls failed or timed out, so a probe that runs afterwards is
   // guaranteed to find nothing and would read a surviving host as gone.
-  const published = await readPublishedHostBestEffort(deps, ctx);
-  // The default path never stops anything, so it can answer now. `--all`
-  // answers AFTER its teardown - and only then. Probing here as well was
-  // wasted work whose result was discarded, and on Windows it cost seconds
-  // (a `tasklist` sweep plus an identity read) of extra window in which the
-  // supervisor's relaunch loop could produce a successor.
-  let liveness: LivenessObservation = args.all
-    ? "unknown"
-    : await observeLiveness(deps, ctx, published);
+  //
+  // Only `--all` needs the pre-teardown capture; the default path tears
+  // nothing down and reads at the boundary instead, so reading here too was
+  // wasted work whose result was discarded - and on Windows it cost seconds
+  // (a `tasklist` sweep plus an identity read) of extra window in which a
+  // relaunch loop could produce a successor.
+  const published = args.all
+    ? await readPublishedHostBestEffort(deps, ctx)
+    : null;
+  let liveness: LivenessObservation = "unknown";
   // Observed BEFORE anything is removed, on the default path: it is the only
   // way this command can say what it is about to leave behind. `--all` reads
   // its registration AFTER acting instead (see below), since what matters
@@ -314,7 +312,8 @@ export async function runHostUninstall(
     removedStagedDir: result.removedStagedDir,
     purgedRuntime: result.purgedRuntime,
     hadInstallRecord: result.removedRecord !== null,
-    retainedServiceState: retainedService?.state ?? null,
+    retainedServiceState:
+      (args.all ? retainedAfterAll : retainedService)?.state ?? null,
   });
   // Both fields report only what was OBSERVED. Neither is derived from a
   // backend call having resolved: on Linux and Windows every teardown call
@@ -403,10 +402,7 @@ export async function runHostUninstall(
       // the same result reports `serviceRegistrationRetained: true` had the
       // prose and the payload contradicting each other in one breath, and an
       // unanswerable probe must not count as agreement either.
-      // The prose never claims a deregistration nothing verified.
-      serviceUninstalled: false,
       deregisterRequested: serviceUninstalled,
-      purgedRuntime: result.purgedRuntime,
       serviceRegistrationRetained,
       hostStillRunning,
     }),
@@ -508,11 +504,8 @@ async function readServiceStateBestEffort(
 
 function humanSummary(args: {
   readonly removedVersion: string | null;
-  /** The deregistration was requested AND the readback agrees it landed. */
-  readonly serviceUninstalled: boolean;
   /** The deregistration was requested at all (i.e. this was `--all`). */
   readonly deregisterRequested: boolean;
-  readonly purgedRuntime: boolean;
   readonly serviceRegistrationRetained: boolean | null;
   readonly hostStillRunning: boolean | null;
 }): string {

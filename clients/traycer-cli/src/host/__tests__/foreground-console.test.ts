@@ -5,11 +5,10 @@ import {
   type ForegroundConsoleDeps,
   type ForegroundStartModeInput,
 } from "../foreground-console";
-import type { LogTail, LogTailOptions } from "../log-tail";
 
-// `resolveForegroundStartMode`: pure decision table for what `host start`
-// is allowed to print. `openForegroundConsole`: the announce-then-mirror
-// side effects for each mode, fully dependency-injected.
+// `resolveForegroundStartMode`: pure decision table for what `host start` is
+// allowed to print. `openForegroundConsole`: the announce side effects for each
+// mode, fully dependency-injected.
 
 describe("resolveForegroundStartMode", () => {
   const BASE: ForegroundStartModeInput = {
@@ -35,6 +34,13 @@ describe("resolveForegroundStartMode", () => {
       "events",
     ],
     ["json, non-interactive", { json: true }, "events"],
+    // `--quiet` suppresses HUMAN output, not the structured event - matching
+    // the runner, whose JSON progress path checks `noProgress` alone.
+    [
+      "json + quiet still emits the lifecycle event",
+      { json: true, quiet: true },
+      "events",
+    ],
     // The only structured thing this command emits is a `progress` event, so
     // `--no-progress` - documented as "suppress progress events" - has to
     // suppress it. Without this, `--json --no-progress` put a
@@ -49,9 +55,8 @@ describe("resolveForegroundStartMode", () => {
       { json: true, noProgress: true, interactive: true },
       "silent",
     ],
-    // `--no-progress` on its own is not a mirror gate: the mirror is log
-    // content, not progress reporting, and `--quiet` is the flag that silences
-    // human output.
+    // `--no-progress` targets the structured event, not the human banner;
+    // `--quiet` is the flag that silences human output.
     [
       "--no-progress alone leaves the interactive banner alone",
       { noProgress: true, interactive: true },
@@ -91,35 +96,6 @@ describe("resolveForegroundStartMode", () => {
   });
 });
 
-function makeTailStub(): {
-  stub: LogTail;
-  startCalls: LogTailOptions[];
-  stopCalls: number;
-  drainSyncCalls: number;
-} {
-  const startCalls: LogTailOptions[] = [];
-  let stopCalls = 0;
-  let drainSyncCalls = 0;
-  const stub: LogTail = {
-    stop: () => {
-      stopCalls += 1;
-    },
-    drainSync: () => {
-      drainSyncCalls += 1;
-    },
-  };
-  return {
-    stub,
-    startCalls,
-    get stopCalls() {
-      return stopCalls;
-    },
-    get drainSyncCalls() {
-      return drainSyncCalls;
-    },
-  };
-}
-
 describe("openForegroundConsole", () => {
   // There is no mirroring mode at all: writing arbitrary log volume from the
   // supervisor's own event-loop thread blocks on a TTY (measured: 64 KiB into
@@ -127,19 +103,12 @@ describe("openForegroundConsole", () => {
   // reaching the host. The banner carries everything the audit asked for and
   // points at `host logs --follow`, which streams from a process that is not
   // supervising anything.
-  it("banner mode: announces and points at 'host logs --follow', but starts NO tail", () => {
+  it("banner mode: announces once and points at 'host logs --follow'", () => {
     const written: string[] = [];
-    const byteChunks: Buffer[] = [];
-    const tailControl = makeTailStub();
 
     const deps: Partial<ForegroundConsoleDeps> = {
       logPath: () => "/tmp/host.log",
       writeText: (text) => written.push(text),
-      writeBytes: (chunk) => byteChunks.push(chunk),
-      startTail: (options) => {
-        tailControl.startCalls.push(options);
-        return tailControl.stub;
-      },
       now: () => "2026-08-27T00:00:00.000Z",
     };
 
@@ -155,26 +124,15 @@ describe("openForegroundConsole", () => {
     expect(banner).toContain("traycer host logs --follow");
     expect(banner).toContain("traycer host service start");
 
-    // The whole point: no polling, no reads, no bytes.
-    expect(tailControl.startCalls).toHaveLength(0);
-    expect(byteChunks).toHaveLength(0);
-
     console.close();
-    expect(tailControl.stopCalls).toBe(0);
-    expect(tailControl.drainSyncCalls).toBe(0);
   });
 
-  it("events mode (--json): emits exactly one NDJSON progress line with stage host-supervise, and never calls writeBytes", () => {
+  it("events mode (--json): emits exactly one NDJSON progress line with stage host-supervise", () => {
     const written: string[] = [];
-    const byteChunks: Buffer[] = [];
 
     const deps: Partial<ForegroundConsoleDeps> = {
       logPath: () => "/tmp/host.log",
       writeText: (text) => written.push(text),
-      writeBytes: (chunk) => byteChunks.push(chunk),
-      startTail: () => {
-        throw new Error("events mode must never start a tail");
-      },
       now: () => "2026-08-27T00:00:00.000Z",
     };
 
@@ -191,24 +149,16 @@ describe("openForegroundConsole", () => {
       type: "progress",
       stage: "host-supervise",
     });
-    expect(byteChunks).toHaveLength(0);
 
     console.close();
-    expect(byteChunks).toHaveLength(0);
   });
 
-  it("silent mode: writes nothing, starts no tail, and close() is a no-op", () => {
+  it("silent mode: writes nothing and close() is a no-op", () => {
     const written: string[] = [];
-    let startTailCalled = false;
 
     const deps: Partial<ForegroundConsoleDeps> = {
       logPath: () => "/tmp/host.log",
       writeText: (text) => written.push(text),
-      writeBytes: () => undefined,
-      startTail: () => {
-        startTailCalled = true;
-        throw new Error("silent mode must never start a tail");
-      },
       now: () => "2026-08-27T00:00:00.000Z",
     };
 
@@ -218,7 +168,6 @@ describe("openForegroundConsole", () => {
     );
 
     expect(written).toHaveLength(0);
-    expect(startTailCalled).toBe(false);
     expect(() => console.close()).not.toThrow();
     expect(written).toHaveLength(0);
   });

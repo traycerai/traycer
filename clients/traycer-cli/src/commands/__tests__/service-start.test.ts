@@ -238,6 +238,51 @@ describe("serviceStartCommand", () => {
     expect(result.data).toMatchObject({ alreadyRunning: false });
   });
 
+  // `externally-managed` is macOS with Desktop's SMAppService owning the
+  // label. Deliberately NOT refused: a registration exists, the user asked for
+  // the host to be running, and the macOS backend redirects the start to the
+  // agent label launchd can actually start.
+  it("starts an externally-managed (Desktop-owned) registration rather than refusing it", async () => {
+    mocks.hostServing = false;
+    mocks.statusResponses = [
+      {
+        state: "externally-managed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      },
+      { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
+    ];
+
+    const result = await serviceStartCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual(["start"]);
+    expect(result.data).toMatchObject({ priorState: "externally-managed" });
+    expect(result.exitCode).toBe(0);
+  });
+
+  // A failed pre-start probe must not turn into install guidance: we never
+  // learned that nothing was registered, so the raw platform failure is the
+  // honest error to surface.
+  it("rethrows the raw start failure when the pre-start probe itself threw", async () => {
+    mocks.startFails = true;
+    mocks.statusResponses = []; // the mock status call throws
+
+    let err: unknown;
+    try {
+      await serviceStartCommand(fakeCtx());
+    } catch (caught) {
+      err = caught;
+    }
+
+    expect(mocks.controllerCalls).toEqual(["start"]);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("schtasks /Run failed");
+    expect((err as Error).message).not.toContain(
+      "traycer host service install",
+    );
+  });
+
   it("runs the whole command inside one withCliLock acquisition with reason 'service-start'", async () => {
     mocks.statusResponses = [
       { state: "stopped", version: null, listenUrl: null, pid: null },
