@@ -12,6 +12,7 @@ import {
 import { BrowserLinkRoutingContext } from "@/lib/browser-view/link-routing/browser-link-routing-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 
 export function useBrowserLinkRouter(): (
   kind: BrowserLinkKind,
@@ -30,6 +31,7 @@ export function useBrowserLinkRouterForRunnerHost(
 ) => BrowserLinkOpenResult {
   const context = use(BrowserLinkRoutingContext);
   const sessions = useMaybeBrowserSessionsContext();
+  const singleTileViewport = useIsMobileViewport();
   const openInApp = useCallback(
     (source: BrowserLinkSource, url: string): boolean => {
       if (
@@ -46,14 +48,23 @@ export function useBrowserLinkRouterForRunnerHost(
             ...source,
             ...opened,
             url,
+            placement: singleTileViewport ? "same-pane" : "split-right",
           });
         })
         .catch(() => {
-          toast.error("Couldn't open the browser tab.");
+          // The answer is committed before the host round trip settles - the
+          // click has to be handled in its own turn - so a refusal cannot be
+          // reported by returning false any more. Sending the link where it
+          // would have gone had the session never been live keeps a failed
+          // open from swallowing the navigation outright.
+          toast.error(
+            "Couldn't open the browser tab. Opened it outside Traycer instead.",
+          );
+          void runnerHost.openExternalLink(url);
         });
       return true;
     },
-    [sessions],
+    [runnerHost, sessions, singleTileViewport],
   );
   return useCallback(
     (kind, url, event) =>

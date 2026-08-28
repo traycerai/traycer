@@ -62,6 +62,12 @@ function singlePane(canvas: EpicCanvasState) {
   return pane;
 }
 
+function paneCount(): number {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+  if (canvas === undefined) return 0;
+  return collectPanes(canvas.root).length;
+}
+
 function browserSessionTiles(): ReadonlyArray<BrowserSessionTileRef> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
   if (canvas === undefined) return [];
@@ -192,6 +198,7 @@ describe("browser link routing", () => {
       sessionId: "session-popup",
       tabId: "tab-popup",
       url: "https://popup.example/oauth",
+      placement: "split-right",
     });
 
     expect(opened).toBe(true);
@@ -204,6 +211,25 @@ describe("browser link routing", () => {
         viewportPreset: "responsive",
       },
     ]);
+    expect(paneCount()).toBe(2);
+  });
+
+  it("takes over the pane rather than splitting it on a one-tile viewport", () => {
+    const source = seedCanvas(SOURCE_TILE);
+
+    const opened = openBrowserSessionTileFromPage({
+      ...source,
+      sessionId: "session-popup",
+      tabId: "tab-popup",
+      url: "https://popup.example/oauth",
+      placement: "same-pane",
+    });
+
+    expect(opened).toBe(true);
+    expect(browserSessionTiles()).toHaveLength(1);
+    // A second pane on a viewport that shows one tile is a tile the user can
+    // neither see nor close.
+    expect(paneCount()).toBe(1);
   });
 });
 
