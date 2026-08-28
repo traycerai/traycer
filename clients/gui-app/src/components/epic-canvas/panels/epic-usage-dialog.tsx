@@ -371,7 +371,7 @@ function EpicUsageLoadedBody(props: {
   const dateRangeLabel = formatDateRangeLabel(days);
 
   return (
-    // `usage-chart-root` scopes the `--usage-series-*` palette over BOTH
+    // `usage-chart-root` scopes the series and harness palettes over BOTH
     // consumers - the chart and its sibling harness split - the same
     // reason Settings hangs it on their common ancestor.
     <div className="usage-chart-root flex flex-col gap-5">

@@ -1332,7 +1332,11 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  return reconcileSpansWithSkeleton(next, chunk);
+  return reconcileSpansWithSkeleton(
+    next,
+    chunk.fromOrdinal,
+    chunk.fromOrdinal + chunk.entries.length,
+  );
 }
 
 /**
@@ -1353,31 +1357,37 @@ function coversEveryOrdinal(
 }
 
 /**
- * Reconcile the spans a skeleton chunk now has authority over.
+ * Reconcile the spans an index delivery now has authority over, across
+ * `[fromOrdinal, toOrdinal)`.
  *
- * Two things, because the chunk answers both at once for the same rows. A span
- * whose held ids CONTRADICT the chunk is dropped - that body belongs to a
- * different row. A span holding UNVERIFIED ids (the empty string, which only
+ * Two things, because the delivery answers both at once for the same rows. A
+ * span whose held ids CONTRADICT the skeleton is dropped - that body belongs to
+ * a different row. A span holding UNVERIFIED ids (the empty string, which only
  * the inline tail produces) adopts them.
  *
  * The adopt half is not cosmetic. The tail is seated by the snapshot, which is
  * emitted BEFORE the skeleton streams, so on a fresh session every tail row's
- * id is empty; this chunk is the first authority to reach them. Left empty,
+ * id is empty; this delivery is the first authority to reach them. Left empty,
  * `transcriptListRows` cannot match those ordinals to their rendered models,
  * suppresses the ordinals, and re-emits the models as ordinal-less live rows -
  * so the inline tail never participates in viewport reporting or row-height
  * memory, on every windowed session, for exactly the rows the reader starts on.
+ *
+ * Both callers owe this, and by ordinal range rather than by frame shape: the
+ * skeleton stream reaches a fresh session's tail ({@link applySkeletonChunk}),
+ * and an `appended` delta reaches the rows that arrive AFTER that stream
+ * finished ({@link applyIndexChange}) - which no chunk will ever revisit.
  */
 function reconcileSpansWithSkeleton(
   window: TranscriptWindow,
-  chunk: ChatSkeletonChunk,
+  fromOrdinal: number,
+  toOrdinal: number,
 ): TranscriptWindow {
-  const chunkEnd = chunk.fromOrdinal + chunk.entries.length;
   let changed = false;
   const kept: HydratedSpan[] = [];
   for (const span of window.spans) {
     const disjoint =
-      spanEnd(span) <= chunk.fromOrdinal || span.fromOrdinal >= chunkEnd;
+      spanEnd(span) <= fromOrdinal || span.fromOrdinal >= toOrdinal;
     if (disjoint) {
       kept.push(span);
       continue;
@@ -1646,15 +1656,10 @@ export function applyIndexChange(
   // rather than a gap: applying it again is what the atomic-frame rule already
   // forbids, so it is dropped rather than treated as loss.
   //
-  // This runs BEFORE the append-count check below, and the order is the whole
-  // point rather than a style choice. A duplicate carrying `appended` entries
-  // was already applied here, so this window's `rowCount` already includes
-  // those rows and the frame's own count equals it - which the count check
-  // reads as `0 !== appendedRows`, the exact signature of a LOST frame. Ask
-  // that question of a frame already known to be stale and the most harmless
-  // thing a stream can do becomes a blanked transcript and a full refetch. The
-  // count is a consistency claim ABOUT a frame's changes; it is only meaningful
-  // once the frame is established as one this window has not seen.
+  // This runs BEFORE the append-count check below: the count is a consistency
+  // claim ABOUT a frame's changes, so it is only asked of a frame this window
+  // has not already seen - a duplicate or straggler is dropped on its
+  // revision alone, never re-judged for loss.
   //
   // Both readings compare against a counter this window is assumed to share
   // with the sender, so both are suspended for exactly one frame after a
@@ -1683,26 +1688,45 @@ export function applyIndexChange(
   //
   // The count is the whole detector for that, because `appended` is the only
   // member that moves `rowCount` and it always appends contiguously at the end.
+  //
+  // The baseline is the FRAME's own pre-delta count, never this window's. The
+  // two disagree on every append republish: the host's broadcast emits the
+  // bounded snapshot FIRST - stamped with the post-append `rowCount` but the
+  // subscriber's pre-delta `indexRevision` (see `applyWindowedSnapshot`'s
+  // straggler doc for why that pair is the contract) - and the delta for that
+  // same append lands on a window whose `rowCount` already includes it. Read
+  // against `window.rowCount`, every such delta has the `0 !== appendedRows`
+  // signature of a lost frame, so the whole transcript voids and resnapshots
+  // once per append for the life of the turn. The frame is self-consistent:
+  // its entries occupy exactly `[rowCount - appendedRows, rowCount)`, so a
+  // genuine loss is a BASE the window has not reached - a hole no entry in
+  // this frame fills - and an overlap is just the snapshot having run ahead,
+  // re-seating entries the count already covers (idempotently: the entries are
+  // the host's current truth for those ordinals either way).
   const appendedRows = input.changes.reduce(
     (total, change) =>
       change.type === "appended" ? total + change.entries.length : total,
     0,
   );
-  if (input.rowCount - window.rowCount !== appendedRows) {
+  const appendBase = input.rowCount - appendedRows;
+  if (appendBase > window.rowCount) {
     return voidedTranscriptWindow(window, input);
   }
 
   const skeleton = [...window.skeleton];
   // Appended entries are seated at the ordinals they NAME - which begin at the
-  // PRE-delta `rowCount` - and never at `skeleton.length`. The two are equal
-  // only once the skeleton is complete, and the skeleton is deliberately
-  // sparse while its chunks are still streaming: its length is then "one past
-  // the highest ordinal delivered so far", which is BELOW `rowCount`.
-  // Appending by length in that window seats the new tail rows over ordinals
-  // whose real entries have not arrived yet, so every identity check against
-  // those ordinals rejects a valid range or drops a held span, while the
-  // ordinals the rows actually occupy stay holes forever.
-  let appendCursor = window.rowCount;
+  // frame's own pre-delta `rowCount` (`appendBase`) - and never at
+  // `skeleton.length`. The skeleton is deliberately sparse while its chunks
+  // are still streaming: its length is then "one past the highest ordinal
+  // delivered so far", which is BELOW `rowCount`. Appending by length in that
+  // window seats the new tail rows over ordinals whose real entries have not
+  // arrived yet, so every identity check against those ordinals rejects a
+  // valid range or drops a held span, while the ordinals the rows actually
+  // occupy stay holes forever. `window.rowCount` is wrong for the other
+  // reason: on the snapshot-ran-ahead interleave above it already counts the
+  // rows this delta delivers, and seating from it would shift every entry one
+  // past its real ordinal.
+  let appendCursor = appendBase;
   for (const change of input.changes) {
     if (change.type === "appended") {
       for (const entry of change.entries) {
@@ -1717,6 +1741,24 @@ export function applyIndexChange(
       }
     }
   }
+  // How far the skeleton STREAM has contiguously reached once this frame is
+  // folded in.
+  //
+  // An `appended` delta seats its entries at the end and is part of the same
+  // delivery, so a prefix that had caught up to where this append BEGINS
+  // follows `rowCount` rather than being left behind - otherwise the next
+  // stream-completeness question would report a gap the delta itself just
+  // filled. `appendCursor` is where the appends stopped.
+  //
+  // Measured against `appendBase` for the same reason the loss check above is.
+  // On the append republish the snapshot has already carried `window.rowCount`
+  // past this prefix, so an equality against it can never hold again and the
+  // prefix freezes at the pre-append count for the rest of the epoch. The two
+  // agree on every frame the snapshot has NOT run ahead of.
+  const coveredThrough =
+    window.skeletonStreamCoveredThrough === appendBase
+      ? Math.max(appendCursor, input.rowCount)
+      : window.skeletonStreamCoveredThrough;
   const next: TranscriptWindow = {
     ...window,
     skeleton,
@@ -1726,33 +1768,56 @@ export function applyIndexChange(
     // compared against, whether it was adopted under the boundary or earned by
     // being the immediate successor.
     indexRevisionRebuilding: false,
-    // A delta that grew the index past what the client has assembled means the
-    // skeleton is no longer complete, even though it was.
+    // Whether the client holds a COMPLETE index once this frame is folded in,
+    // re-derived from the two conditions {@link applySkeletonChunk} uses - and
+    // deliberately NOT gated on the completeness this window arrived with.
     //
-    // By COVERAGE, not by length - the same distinction `applySkeletonChunk`
-    // draws and for the same reason. The skeleton is sparse, so an append that
-    // seats new entries at `rowCount` can extend the array to exactly the new
-    // length while interior ordinals a dropped frame should have filled stay
-    // holes, and a length test reads that as complete.
+    // That gate was a third rule for the same question, and the append
+    // republish is where it bites: the snapshot lands first at a `rowCount`
+    // whose last ordinals only the delta behind it fills, so it correctly
+    // declares the skeleton short - and a delta that then fills exactly those
+    // ordinals could never say otherwise. Sticky-false completeness is not
+    // inert: `chunkedDeliveryIncomplete()` reads it, so the completion
+    // watchdog reads every healthy append as a stalled skeleton stream and
+    // spends its whole per-epoch restream budget on resnapshots that repair
+    // nothing.
+    //
+    // Both conditions are kept because they catch different losses. The PREFIX
+    // catches a delivery that never arrived - a dropped chunk, or an append
+    // frame the snapshot got ahead of - and is what still keeps a genuinely
+    // short skeleton from reading as complete here. The SCAN catches a hole
+    // from any other cause: the skeleton is sparse, so an append that seats
+    // entries at `rowCount` can extend the array to exactly the new length
+    // while an interior ordinal stays a hole, and a length test reads that as
+    // complete.
     skeletonComplete:
-      window.skeletonComplete && coversEveryOrdinal(skeleton, input.rowCount),
-    // An `appended` delta seats its entries at the end and is part of the same
-    // delivery, so the prefix follows `rowCount` rather than being left behind
-    // - otherwise the next stream-completeness question would report a gap the
-    // delta itself just filled. `appendCursor` is where the appends stopped.
-    skeletonStreamCoveredThrough:
-      window.skeletonStreamCoveredThrough === window.rowCount
-        ? Math.max(appendCursor, input.rowCount)
-        : window.skeletonStreamCoveredThrough,
+      coveredThrough >= input.rowCount &&
+      coversEveryOrdinal(skeleton, input.rowCount),
+    skeletonStreamCoveredThrough: coveredThrough,
     clock: window.clock + 1,
   };
+  // This delta is the first authority to name the ordinals it just appended, so
+  // it owes them the identity resolution a skeleton chunk owes its own - and it
+  // is the LAST authority that will ever reach them, because the skeleton
+  // stream that would otherwise adopt them finished before these rows existed.
+  //
+  // A tail seated positionally holds the empty string at exactly those
+  // ordinals (a host that sends no `tail.rowIds`; see {@link tailRowIdsFor}).
+  // Left unadopted, `transcriptListRows` finds no model named `""`, suppresses
+  // the ordinal, and then drops the real model as one the skeleton has already
+  // placed - so a row this client HOLDS renders nowhere until the next
+  // snapshot re-seats the tail.
+  const reconciled =
+    appendCursor > appendBase
+      ? reconcileSpansWithSkeleton(next, appendBase, appendCursor)
+      : next;
   // Widened to the turn BEFORE the reach is computed: the containing-span seed
   // below is exact only when the rewritten row is hydrated, and a sibling slice
   // holding the same turn's records is the case where it is not. See
   // {@link recordSharingOrdinals}.
   return dropSpansForUpdatedOrdinals(
-    next,
-    recordSharingOrdinals(next, invalidated),
+    reconciled,
+    recordSharingOrdinals(reconciled, invalidated),
   );
 }
 

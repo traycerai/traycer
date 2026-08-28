@@ -1524,9 +1524,10 @@ describe("accumulated-change chunks", () => {
         state.accumulatedFileChangeCount -
           state.accumulatedFileChangeSummaries.length,
       ).toBe(3);
-      // Dropping alone would strand the panel: the host streams these chunks
-      // only while rebuilding an index, so nothing on the ordinary path sends
-      // them again. The resnapshot is the restart.
+      // Dropping alone would strand the panel: the host records the set it
+      // just sent, so a chunk lost in transit leaves it believing this
+      // subscriber holds that generation - ordinary traffic over an unchanged
+      // set sends nothing. The resnapshot is the restart.
       expect(harness.resnapshotCount()).toBe(1);
     } finally {
       harness.handle.dispose();
@@ -1535,11 +1536,11 @@ describe("accumulated-change chunks", () => {
 
   /**
    * An aux-only re-broadcast - a queue change, an approval - re-sends the
-   * snapshot against an unchanged skeleton, and the host emits accumulated
-   * chunks only while REBUILDING a subscriber's index. So a snapshot is not
-   * proof that a re-stream is coming, and clearing the assembled summaries on
-   * one empties the panel for the rest of the session while the header goes on
-   * counting files it can no longer list.
+   * snapshot against summaries the host has already sent, and it never re-sends
+   * an unchanged set. So a snapshot is not proof that a re-stream is coming,
+   * and clearing the assembled summaries on one empties the panel for the rest
+   * of the session while the header goes on counting files it can no longer
+   * list.
    */
   it("keeps the assembled summaries across an aux-only snapshot re-broadcast", () => {
     const harness = createWindowedHarness();

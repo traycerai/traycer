@@ -56,7 +56,7 @@ export interface UsageExportImageParams {
  * so the frame uses the app's real fonts, theme tokens, and layout.
  *
  * The wrapper carries `usage-chart-root` (the class-scoped
- * `--usage-series-*` palette) and `@container` (the loaded bodies' content
+ * series/harness palette variables) and `@container` (the loaded bodies' content
  * folds are container-keyed; without a container ancestor the hero would
  * collapse to its narrow layout), and its width is pinned to the live
  * region's so the clone lays out exactly as on screen.
