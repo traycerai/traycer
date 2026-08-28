@@ -12,6 +12,7 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import { appLogger } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   appendImageAttachmentAtoms,
@@ -496,7 +497,20 @@ async function resolveAnnotationImageAtoms(
   for (const record of records) {
     const sessionBytes = sessionImageBytes(record.imageHash);
     const bytes =
-      sessionBytes ?? (await getImageBytes(record.imageHash)) ?? null;
+      sessionBytes ??
+      // An IndexedDB open/transaction failure is "the crop is not available",
+      // the same outcome as a missing key - and it must reach the caller as
+      // `null` rather than a rejection, which nothing above awaits with a
+      // `catch` and which would silently abandon the submit with no toast.
+      (await getImageBytes(record.imageHash).catch((error: unknown) => {
+        appLogger.error(
+          "[chat-composer] annotation image read failed",
+          { imageHash: record.imageHash },
+          error,
+        );
+        return undefined;
+      })) ??
+      null;
     if (bytes === null) return null;
     atoms.push({
       id: uuidv4(),

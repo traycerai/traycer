@@ -47,6 +47,12 @@ export interface DraftState {
    * adapter captures this alongside the taskId as a compare-and-swap token:
    * a stash only clears this draft when the revision it captured still
    * matches, so an edit made while the stash was durably saving is kept.
+   *
+   * The sidecar mutations bump it too, unlike `resetEpoch`: the stash carries
+   * only the DOCUMENT, while the `clearDraft` it performs on a matching token
+   * wipes `browserAnnotations` and `browserContextAttachments` as well. An
+   * annotation attached while that IndexedDB save was in flight would
+   * otherwise be destroyed with nothing holding it.
    */
   readonly revision: number;
 }
@@ -217,6 +223,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
                   ...current.browserContextAttachments,
                   attachment,
                 ],
+                revision: current.revision + 1,
               },
             },
           };
@@ -236,6 +243,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [taskId]: {
                 ...current,
                 browserAnnotations: next,
+                revision: current.revision + 1,
               },
             },
           };
@@ -254,6 +262,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [taskId]: {
                 ...current,
                 browserAnnotations: next,
+                revision: current.revision + 1,
               },
             },
           };
@@ -273,6 +282,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [taskId]: {
                 ...current,
                 browserAnnotations: next,
+                revision: current.revision + 1,
               },
             },
           };

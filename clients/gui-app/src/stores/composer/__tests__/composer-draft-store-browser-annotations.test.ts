@@ -433,6 +433,41 @@ describe("composer draft store browserAnnotations", () => {
     expect(draftOf("chat-epoch").content).toEqual(before.content);
   });
 
+  it("Sidecar mutations DO bump revision (the prompt-stash clear-if-unchanged token)", async () => {
+    // A stash captures {content, revision}, saves to IndexedDB, then clears
+    // the draft only if the revision still matches - and `clearDraft` wipes
+    // the sidecars the stash never captured. Without a bump here, an
+    // annotation attached during that save is destroyed with nothing holding
+    // it.
+    useComposerDraftStore
+      .getState()
+      .setSnapshot("chat-cas", EMPTY_DOC, { from: 1, to: 1 });
+    const captured = draftOf("chat-cas").revision;
+
+    await attachNamed("chat-cas", {
+      annotationId: "ann-cas",
+      tabId: "tab-cas",
+      sessionId: "session-cas",
+      comment: "attached while the stash was saving",
+    });
+    expect(draftOf("chat-cas").revision).toBe(captured + 1);
+
+    useComposerDraftStore.getState().addBrowserContextAttachment(
+      "chat-cas",
+      createBrowserConsoleAttachment({
+        tile: TILE,
+        pageUrl: "https://example.com/page",
+        entry: CONSOLE_ENTRY,
+      }),
+    );
+    expect(draftOf("chat-cas").revision).toBe(captured + 2);
+
+    useComposerDraftStore
+      .getState()
+      .removeBrowserAnnotation("chat-cas", "ann-cas");
+    expect(draftOf("chat-cas").revision).toBe(captured + 3);
+  });
+
   it("Accepted send: clearDraft clears browserAnnotations and browserContextAttachments", async () => {
     const attached = await attachNamed("chat-send", {
       annotationId: "ann-send",

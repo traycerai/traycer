@@ -207,9 +207,22 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const respond = appLifecycle?.respondBrowserHandoffsDrained;
     if (onDrain === undefined || respond === undefined) return;
     const subscription = onDrain((request) => {
-      void drainElectronTabHandoffs()
+      // `allSettled`, not `then`: a drain REJECTS when `browser.sessions`
+      // disconnects mid-handoff (`rejectOwnedElectronTabHandoffAcks`), and
+      // swallowing that without replying left main's waiter to sit out its
+      // full `BROWSER_HANDOFF_DRAIN_TIMEOUT_MS` - a 10s stall on every quit
+      // and every window close that hits it. A failed drain is still "drained
+      // as far as this renderer can tell", so it must be reported, not
+      // withheld. Same shape as the fresh-snapshot reply above.
+      void Promise.allSettled([drainElectronTabHandoffs()])
         .then(() => respond({ requestId: request.requestId }))
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          appLogger.error(
+            "[quit-intercept] browser handoff drain reply failed",
+            { requestId: request.requestId },
+            error,
+          );
+        });
     });
     return () => {
       subscription.dispose();

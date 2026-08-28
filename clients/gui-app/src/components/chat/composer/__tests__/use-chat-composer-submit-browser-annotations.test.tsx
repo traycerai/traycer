@@ -28,6 +28,16 @@ const imageStoreMocks = vi.hoisted(() => ({
   ),
 }));
 
+const toastMocks = vi.hoisted(() => ({
+  reportableErrorToast: vi.fn(),
+}));
+
+vi.mock("@/lib/reportable-error-toast", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/reportable-error-toast")>();
+  return { ...actual, reportableErrorToast: toastMocks.reportableErrorToast };
+});
+
 vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
@@ -211,6 +221,7 @@ beforeEach(() => {
   imageStoreMocks.sessionImageBytes.mockReturnValue(null);
   imageStoreMocks.getImageBytes.mockReset();
   imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
+  toastMocks.reportableErrorToast.mockReset();
 });
 
 afterEach(() => {
@@ -320,6 +331,42 @@ describe("useChatComposerSubmit browser annotations", () => {
     expect(submit).not.toHaveBeenCalled();
     expect(imageStoreMocks.sessionImageBytes).toHaveBeenCalledWith(IMAGE_HASH);
     expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith(IMAGE_HASH);
+  });
+
+  it("reports the missing-image failure when the crop read REJECTS", async () => {
+    // An IndexedDB open/transaction failure is a rejection, not `undefined`.
+    // Unhandled, it abandoned the submit with no toast at all - the composer
+    // just stopped sending with nothing on screen to act on.
+    const taskId = "chat-ann-idb-throws";
+    useComposerDraftStore
+      .getState()
+      .addBrowserAnnotation(taskId, annotationRecord(null));
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    imageStoreMocks.getImageBytes.mockRejectedValue(
+      new Error("IndexedDB unavailable"),
+    );
+
+    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
+    const { result } = mountSubmit({
+      taskId,
+      editor: fakeEditor(EMPTY_DOC),
+      imagesUnsupported: false,
+      onSubmitMessage: submit,
+    });
+
+    act(() => {
+      result.current.submitDraft("enter");
+    });
+
+    await waitFor(() => {
+      expect(toastMocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+    });
+    expect(toastMocks.reportableErrorToast.mock.calls[0][0]).toBe(
+      "Couldn't attach the annotation image.",
+    );
+    expect(submit).not.toHaveBeenCalled();
+    // The single-flight gate must be released so a retry is possible.
+    expect(result.current.annotationPreparationPending).toBe(false);
   });
 
   it("single-flights a second submit while crop bytes are still resolving", async () => {
