@@ -107,6 +107,7 @@ function fakeStatus(
   removedByUser: boolean,
 ): HostControllerStatus {
   return {
+    localAttempt: null,
     download: null,
     mutation: null,
     installedVersion: "1.4.0",

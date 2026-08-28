@@ -380,7 +380,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       livePath: liveBinaryPath,
       stagedBinaryPath,
       errorMessage: "MoveFileEx error 5: Access denied",
-      serviceStartError: null,
+      serviceStartError: "launchctl kickstart failed: Input/output error",
     });
     writeFileSync(markerPath, markerBody);
 
@@ -399,6 +399,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(failed).toBeDefined();
     expect(failed?.severity).toBe("warning");
     expect(failed?.message).toContain("MoveFileEx error 5: Access denied");
+    expect(failed?.message).toContain("Input/output error");
+    expect(failed?.details?.serviceStartError).toBe(
+      "launchctl kickstart failed: Input/output error",
+    );
     // Not consumed - a diagnostic must be safe to run twice.
     expect(readFileSync(markerPath, "utf8")).toBe(markerBody);
   });
@@ -533,7 +537,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
         livePath: liveBinaryPath,
         stagedBinaryPath,
         errorMessage: "EBUSY",
-        serviceStartError: null,
+        serviceStartError: "launchctl kickstart failed: Input/output error",
       }),
       { encoding: "utf8", mode: 0o600 },
     );
@@ -551,6 +555,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     expect(pending).toBeDefined();
     expect(pending?.title).toContain("missing");
     expect(pending?.terminalCommand).toMatch(/traycer cli upgrade/);
+    expect(pending?.message).toContain("Input/output error");
+    expect(pending?.details?.serviceStartError).toBe(
+      "launchctl kickstart failed: Input/output error",
+    );
   });
 
   // The NORMAL on-disk state for "helper swapped the CLI, then could not start
@@ -612,6 +620,80 @@ describe("runDoctor pending CLI upgrade surface", () => {
     ).toBeUndefined();
     // Still observational.
     expect(existsSync(markerPath)).toBe(true);
+  });
+
+  it("reports an identity-less swap-failed marker's serviceStartError when no upgrade is pending", async () => {
+    stageDoctorMocks();
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    const markerPath = join(cliDir, "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: "",
+        stagedBinaryPath: "",
+        errorMessage:
+          "no pending CLI upgrade remained when the finalize helper ran",
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.message).toContain("Input/output error");
+    expect(issue?.message).toContain("No pending CLI upgrade remained");
+    expect(issue?.terminalCommand).toMatch(/traycer host restart/);
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
+  it("preserves an uncovered failed swap's paths and error when no upgrade is pending", async () => {
+    stageDoctorMocks();
+    const cliDir = join(workHome, ".traycer", "cli");
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(cliDir, "post-finalize.json"),
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    const issue = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_SERVICE_START_FAILED",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.message).toContain(stagedBinaryPath);
+    expect(issue?.message).toContain(liveBinaryPath);
+    expect(issue?.message).toContain("MoveFileEx error 5: Access denied");
+    expect(issue?.message).toContain("Input/output error");
+    expect(issue?.message).not.toContain("No pending CLI upgrade remained");
+    expect(issue?.details?.errorMessage).toBe(
+      "MoveFileEx error 5: Access denied",
+    );
   });
 
   // The marker records what happened at `attemptedAt` and then persists until

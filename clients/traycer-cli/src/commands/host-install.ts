@@ -1,5 +1,4 @@
 import {
-  commitHostInstallSource,
   currentInstallPlatform,
   discardStagedHostInstallSource,
   stageHostInstallSource,
@@ -27,7 +26,14 @@ import {
   createServiceInstallLifecycle,
   type ServiceInstallLifecycleHandle,
 } from "../service/install-lifecycle";
-import { withCliLock } from "../store/cli-lock";
+import {
+  requireCliUpdateMutationCapability,
+  withCliAttemptMutation,
+  withCliUpdateExecutionSegment,
+} from "../host/update-contender";
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
+import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -113,6 +119,8 @@ export interface HostInstallArgs {
   // other kills it). Inert on the bytes-only path (`noServiceRegister`):
   // that path performs no stop for force to escalate.
   readonly force: boolean;
+  /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
+  readonly attemptAdoption: string | null;
 }
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
@@ -160,15 +168,6 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             versionRequest: args.versionRequest,
           };
 
-    const staged = await stageHostInstallSource({
-      environment: ctx.runtime.environment,
-      source,
-      onProgress: (info) => ctx.progress(info),
-      // `host install` records the registry version or the derived
-      // local-file version - it is not stamping this build's identity.
-      recordVersionOverride: null,
-    });
-
     // `--no-service-register` must be truly bytes-only: no stop, no
     // register/rewrite, no start - even when a service is already
     // registered. `createServiceInstallLifecycle`'s `bootstrap: null`
@@ -198,36 +197,65 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       bytesOnly: handle === null,
     });
 
-    let result;
-    try {
-      result = await withCliLock(
-        {
+    const contenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "host-install",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "legacy-update-shadow" as const,
+      adoption: await resolveAttemptAdoptionFromNonce(
+        hostHomeDir(ctx.runtime.environment),
+        args.attemptAdoption,
+        Date.now(),
+      ),
+    };
+    const result = await withCliUpdateExecutionSegment(
+      contenderOptions,
+      async (capability) => {
+        const verify = (): Promise<void> =>
+          requireCliUpdateMutationCapability(capability, contenderOptions);
+        // The outer attempt capability intentionally spans staging. This
+        // preserves the existing no-download-under-cli-lock rule while
+        // refusing active/corrupt attempt state before the first byte.
+        const staged = await stageHostInstallSource({
           environment: ctx.runtime.environment,
-          reason: "host-install",
-          waitMs: 30_000,
-          pollIntervalMs: 100,
-        },
-        async () => {
-          if (args.ifIdle) {
-            await assertHostNotBusy(ctx.runtime.environment);
-          }
-          return commitHostInstallSource({
-            environment: ctx.runtime.environment,
+          source,
+          onProgress: (info) => ctx.progress(info),
+          recordVersionOverride: null,
+          verifyMutationCapability: verify,
+        });
+        try {
+          return await withCliAttemptMutation(
+            capability,
+            contenderOptions,
+            async () => {
+              if (args.ifIdle) {
+                await assertHostNotBusy(ctx.runtime.environment);
+              }
+              return commitHostInstallSourceWithAttempt(
+                capability,
+                contenderOptions,
+                {
+                  environment: ctx.runtime.environment,
+                  staged,
+                  onProgress: (info) => ctx.progress(info),
+                  lifecycle,
+                },
+              );
+            },
+          );
+        } catch (err) {
+          // A failed final mutation leaves the pre-staged temp owned by this
+          // execution segment. Scrub it before capability release.
+          await discardStagedHostInstallSource(
+            ctx.runtime.environment,
             staged,
-            onProgress: (info) => ctx.progress(info),
-            lifecycle,
-          });
-        },
-      );
-    } catch (err) {
-      // Any failure that prevented `commitHostInstallSource` from ever
-      // running (the busy probe, a cli-lock timeout) leaves the
-      // extracted temp orphaned - scrub it (a no-op if
-      // `commitHostInstallSource` already cleaned up itself before
-      // this error reached us).
-      await discardStagedHostInstallSource(ctx.runtime.environment, staged);
-      throw err;
-    }
+            verify,
+          );
+          throw err;
+        }
+      },
+    );
 
     ctx.runtime.logger.info("Host install command completed", {
       environment: ctx.runtime.environment,

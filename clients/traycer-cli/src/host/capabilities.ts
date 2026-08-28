@@ -24,12 +24,21 @@
 
 /** `traycer host start --service-label <label>` - reclaim probe identity binding. */
 export const HOST_CAPABILITY_SERVICE_LABEL = "service-label";
+/** A service wrapper can fetch and present an exact v2 start-adoption nonce. */
+export const HOST_CAPABILITY_HOST_START_ADOPTION_V2 = "host-start-adoption-v2";
+/** Root-script lease protocol for non-CLI-owned Desktop maintenance. */
+export const HOST_CAPABILITY_MAINTENANCE_LEASE_V1 = "maintenance-lease-v1";
+/** Target-bound root-maintenance executor protocol. */
+export const HOST_CAPABILITY_MAINTENANCE_LEASE_V2 = "maintenance-lease-v2";
 
 /** Schema version of the `--json` document, not of the token set. */
 export const HOST_CAPABILITIES_VERSION = 1;
 
 export const HOST_CAPABILITIES: readonly string[] = [
   HOST_CAPABILITY_SERVICE_LABEL,
+  HOST_CAPABILITY_HOST_START_ADOPTION_V2,
+  HOST_CAPABILITY_MAINTENANCE_LEASE_V1,
+  HOST_CAPABILITY_MAINTENANCE_LEASE_V2,
 ];
 
 export type HostCapabilitiesRequest =

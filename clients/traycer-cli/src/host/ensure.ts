@@ -1,3 +1,4 @@
+import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/host-update";
 import { config } from "../config";
 import { currentInstallPlatform, type InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
@@ -70,6 +71,8 @@ export interface EnsureHostOptions {
   // installing, registering or starting a host, never on the no-op fast
   // path. `host ensure` hangs its sign-in pre-flight here.
   readonly beforeMutate: (() => Promise<void>) | null;
+  /** See `ProvisionHostOptions.adoption`. Forwarded verbatim. */
+  readonly adoption: UpdateMutationCapabilityAdoption | undefined;
 }
 
 export async function ensureHost(
@@ -127,6 +130,7 @@ export async function ensureHost(
     registerService: !opts.noServiceRegister,
   });
   const result = await provisionHost({
+    adoption: opts.adoption,
     runtime: opts.runtime,
     resolveInstallSource: () => Promise.resolve(source),
     satisfaction,
