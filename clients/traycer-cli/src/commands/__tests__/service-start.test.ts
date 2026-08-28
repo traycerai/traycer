@@ -42,9 +42,20 @@ vi.mock("../../service", async (importOriginal) => {
         mocks.controllerCalls.push("start");
         if (mocks.startFails) throw new Error("schtasks /Run failed");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The attempt-gated start facade publishes a host-start adoption and waits
+// for the spawn; nothing real can spawn here, so stub the wait exactly as
+// host-restart.test.ts does.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 vi.mock("../../host/incumbent-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../host/incumbent-check")>()),

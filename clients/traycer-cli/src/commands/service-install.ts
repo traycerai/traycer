@@ -7,7 +7,14 @@ import {
   windowsTaskName,
   type DesktopRegistrationTakeover,
 } from "../service";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContender } from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
+import {
+  installHostServiceWithAttempt,
+  takeoverDesktopRegistrationWithAttempt,
+} from "../host/update-mutation";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import {
   formatCredentialProvisionNote,
@@ -32,6 +39,8 @@ export interface ServiceInstallArgs {
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
   readonly takeover: boolean;
+  /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
+  readonly attemptAdoption: string | null;
 }
 
 export function buildServiceInstallCommand(
@@ -47,14 +56,25 @@ export function buildServiceInstallCommand(
     // human takes, and nothing it touches (the credentials file) is guarded
     // by the CLI lock.
     const authPreflight = await runSignInPreflight(ctx, false);
-    const locked = await withCliLock(
-      {
-        environment: ctx.runtime.environment,
-        reason: "service-install",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-      },
-      async () => {
+    const adoption = await resolveAttemptAdoptionFromNonce(
+      hostHomeDir(ctx.runtime.environment),
+      args.attemptAdoption,
+      Date.now(),
+    );
+    // ONE options value for acquisition and every in-attempt revalidation:
+    // three literals that must stay identical are how admission policies
+    // drift.
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "service-install",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "service-maintenance",
+      adoption,
+    };
+    const locked = await withCliUpdateContender(
+      contenderOptions,
+      async (capability) => {
         const label = serviceLabelFor(ctx.runtime.environment);
         const cli = await resolveServiceCliInvocation({
           environment: ctx.runtime.environment,
@@ -77,7 +97,12 @@ export function buildServiceInstallCommand(
             totalBytes: null,
             workUnits: null,
           });
-          takeover = await controller.takeoverDesktopRegistration(label);
+          takeover = await takeoverDesktopRegistrationWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            label,
+          );
           ctx.runtime.logger.info("Service install takeover step completed", {
             environment: ctx.runtime.environment,
             label: label.id,
@@ -92,11 +117,16 @@ export function buildServiceInstallCommand(
           totalBytes: null,
           workUnits: null,
         });
-        await controller.install({
-          label,
-          cli,
-          enableLinger: args.enableLinger,
-        });
+        await installHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          controller,
+          {
+            label,
+            cli,
+            enableLinger: args.enableLinger,
+          },
+        );
         const platform = process.platform;
         const manifestPath =
           platform === "win32"

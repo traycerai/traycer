@@ -806,6 +806,12 @@ describe("maintenanceInstallationInfo IPC", () => {
         signatureKeyId: "key-1",
         sizeBytes: 2048,
         executablePath: "/tmp/traycer/1.1.11/host",
+        // Ticket 03 added an executable digest to the shared installation
+        // schema and normalises a MISSING one to `null` for legacy records.
+        // The fixture above deliberately omits it - that is the legacy-read
+        // path this case exercises - so the decoded record carries the
+        // explicit `null` rather than dropping the key.
+        executableSha256: null,
       },
       stagedRecord: {
         schemaVersion: 1,
@@ -820,6 +826,7 @@ describe("maintenanceInstallationInfo IPC", () => {
         executablePath: "host",
         platform: "darwin",
         arch: "arm64",
+        executableSha256: null,
       },
       cliManifest: {
         version: "1.4.0",

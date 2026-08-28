@@ -4,6 +4,7 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
+import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 import {
   readHostInstallRecord,
   type HostInstallRecord,
@@ -13,7 +14,7 @@ import { hostStagedDir } from "../store/paths";
 import { assertHostNotBusy } from "../host/busy-check";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
-import { reconcileHostStage } from "./stage-reconcile";
+import { reconcileHostStageWithAttempt } from "./stage-reconcile";
 import { commitInstallFromSource, currentInstallPlatform } from "./install";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
@@ -45,6 +46,14 @@ export interface ApplyHostOptions {
   // bearing for releasing file handles the rename needs.
   readonly noService: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
+  /** See `commitInstallFromSource` for the final-actuator contract. */
+  readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Published immediately before a lifecycle-controlled OS service launch.
+   * A parent contender supplies this one-shot supervisor adoption proof so
+   * `host start` does not deadlock trying to reacquire the same outer lock.
+   */
+  readonly publishHostStartAdoption?: HostStartAdoptionPublisher;
 }
 
 // The facts `createServiceInstallLifecycle` observed around the swap -
@@ -117,7 +126,10 @@ export async function applyHost(
     });
   }
 
-  await reconcileHostStage(opts.environment);
+  await reconcileHostStageWithAttempt(
+    opts.environment,
+    opts.verifyMutationCapability,
+  );
 
   const installed = await readHostInstallRecord(opts.environment);
   if (installed === null) {
@@ -180,6 +192,11 @@ export async function applyHost(
         // anyway.
         force: opts.force,
       });
+  if (lifecycleHandle !== null && opts.publishHostStartAdoption !== undefined) {
+    lifecycleHandle.lifecycle.setHostStartAdoptionPublisher?.(
+      opts.publishHostStartAdoption,
+    );
+  }
 
   const stagedDir = hostStagedDir(opts.environment);
   const { record, previous } = await commitInstallFromSource({
@@ -196,6 +213,7 @@ export async function applyHost(
     onProgress: opts.onProgress,
     lifecycle: lifecycleHandle?.lifecycle ?? null,
     onCommitted: () => {},
+    verifyMutationCapability: opts.verifyMutationCapability,
   });
 
   // `createServiceInstallLifecycle`'s `afterSwap` already swallows its own

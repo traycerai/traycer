@@ -99,7 +99,12 @@ describe("buildHostFreePortCommand", () => {
 
     expect(mocks.lockCalls).toEqual([{ reason: "host-free-port" }]);
     expect(mocks.killCalls).toEqual([
-      { pid: 4242, port: 51820, commandName: "host free-port" },
+      expect.objectContaining({
+        pid: 4242,
+        port: 51820,
+        commandName: "host free-port",
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toEqual({
       port: 51820,

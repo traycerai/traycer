@@ -51,7 +51,11 @@ export const COMPATIBLE_HOST_START_SCRIPT_PREFIX =
  * unreachable; when it fails, `&&` short-circuits and `|| exec C` runs.
  */
 export function buildCompatibleHostStartScript(serviceLabel: string): string {
-  return `${COMPATIBLE_HOST_START_SCRIPT_PREFIX} >/dev/null 2>&1 && exec "$0" "$@" host start --service-label ${posixShellQuote(serviceLabel)} || exec "$0" "$@" host start`;
+  const label = posixShellQuote(serviceLabel);
+  const capability = `${COMPATIBLE_HOST_START_SCRIPT_PREFIX} >/dev/null 2>&1`;
+  const adoptionCapability = `"$0" "$@" host capabilities --has host-start-adoption-v2 >/dev/null 2>&1`;
+  const adoptionNonce = `"$0" "$@" host adoption-nonce --service-label ${label} 2>/dev/null`;
+  return `${capability} && ${adoptionCapability} && nonce="$(${adoptionNonce})" && [ -n "$nonce" ] && exec "$0" "$@" host start --service-label ${label} --adoption-nonce "$nonce" || ${capability} && exec "$0" "$@" host start --service-label ${label} || exec "$0" "$@" host start`;
 }
 
 /**
@@ -86,12 +90,13 @@ export const HOST_START_LAUNCHER_BASENAME = SHARED_HOST_START_LAUNCHER_BASENAME;
  * non-zero from the probe and starts the host exactly as it always did.
  */
 export function buildHostStartLauncherScript(serviceLabel: string): string {
+  const label = posixShellQuote(serviceLabel);
   return `#!/bin/sh
 # Traycer host launcher. Written by 'traycer host service install'; the
 # LaunchAgent plist executes this file with the CLI invocation as its
 # arguments. It exists as a FILE (not an inline 'sh -c' program) so macOS
 # names the login item after it instead of after /bin/sh.
-"$@" host capabilities --has service-label >/dev/null 2>&1 && exec "$@" host start --service-label ${posixShellQuote(serviceLabel)} || exec "$@" host start
+"$@" host capabilities --has service-label >/dev/null 2>&1 && "$@" host capabilities --has host-start-adoption-v2 >/dev/null 2>&1 && nonce="$("$@" host adoption-nonce --service-label ${label} 2>/dev/null)" && [ -n "$nonce" ] && exec "$@" host start --service-label ${label} --adoption-nonce "$nonce" || "$@" host capabilities --has service-label >/dev/null 2>&1 && exec "$@" host start --service-label ${label} || exec "$@" host start
 `;
 }
 
