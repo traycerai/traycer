@@ -63,6 +63,8 @@ async function bootstrap(): Promise<void> {
     pkce: webCryptoPkce,
   });
   if (mint.kind === "navigating") {
+    // The boot surface stays up: this document is leaving, and clearing the
+    // screen first would flash a blank page on the way out.
     return;
   }
   if (mint.kind === "device-flow-fallback") {
@@ -73,6 +75,11 @@ async function bootstrap(): Promise<void> {
   if (container === null) {
     throw new Error("#root element not found in index.html");
   }
+  // Retired here rather than left for `createRoot` to clear, because it is not
+  // inside the root: it covers the viewport from the first byte of HTML, which
+  // is the whole point of it, and only the render below can know the app is
+  // ready to take the screen.
+  document.getElementById("boot-surface")?.remove();
   createRoot(container).render(
     <StrictMode>
       <TraycerApp

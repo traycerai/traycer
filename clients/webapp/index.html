@@ -15,8 +15,62 @@
     />
     <meta name="color-scheme" content="dark light" />
     <title>Traycer</title>
+    <!-- The boot surface, inline and dependency-free on purpose.
+         Nothing renders here until the app bundle has loaded AND the sign-in
+         handoff has settled, and that second part is a network round trip this
+         page cannot bound: a slow or blackholed auth backend holds it open for
+         as long as the bounded HTTP helpers allow. An empty body for that long
+         reads as a broken deployment, so something has to be on screen that
+         does not wait for React, the stylesheet, or a webfont.
+         `Canvas` / `CanvasText` are the browser's own surface colors, which
+         follow the `color-scheme` above - so this matches the app's eventual
+         theme closely enough with no flash and no theme guess of its own. -->
+    <style>
+      #boot-surface {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        align-items: center;
+        justify-content: center;
+        background: Canvas;
+        color: CanvasText;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        text-align: center;
+      }
+      #boot-surface .boot-wordmark {
+        font-size: 1.125rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      #boot-surface .boot-status {
+        font-size: 0.875rem;
+        opacity: 0.6;
+        animation: boot-pulse 2s ease-in-out infinite;
+      }
+      @keyframes boot-pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-surface .boot-status {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-surface">
+      <div class="boot-wordmark">Traycer</div>
+      <div class="boot-status">Signing you in…</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
