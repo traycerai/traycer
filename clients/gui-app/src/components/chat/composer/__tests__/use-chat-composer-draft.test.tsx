@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 import {
   buildQuoteBlockquote,
   appendQuoteToDraft,
@@ -448,5 +450,73 @@ describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
       from: expectedEnd,
       to: expectedEnd,
     });
+  });
+});
+
+function draftAnnotation(annotationId: string): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId,
+    tabId: "t-1",
+    sessionId: "s-1",
+    origin: "https://example.com",
+    pageUrl: "https://example.com/",
+    pageTitle: "Example Domain",
+    capturedAt: 1_700_000_000_000,
+    comment: "annotate",
+    counts: { elements: 1, regions: 0, strokes: 0 },
+    elements: [STUB_ANNOTATION_ELEMENT],
+    imageFileName: `browser-annotation-${annotationId}.png`,
+    imageHash: `hash-${annotationId}`,
+    droppedElementCount: 0,
+  };
+}
+
+describe("useChatComposerDraft browser annotation image gating", () => {
+  it("sets draftHasImages when the draft has a browser annotation and no editor images", () => {
+    const taskId = "task-ann-images";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(taskId, draftAnnotation("ann-gate"));
+    });
+
+    const { result } = renderBridgeHook({
+      taskId,
+      editorRef,
+      editorReadyTick: 1,
+    });
+
+    expect(result.current.draftHasText).toBe(false);
+    expect(result.current.draftHasImages).toBe(true);
+  });
+
+  it("clears draftHasImages when the last browser annotation is removed", () => {
+    const taskId = "task-ann-remove";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(taskId, draftAnnotation("ann-remove"));
+    });
+
+    const { result } = renderBridgeHook({
+      taskId,
+      editorRef,
+      editorReadyTick: 1,
+    });
+    expect(result.current.draftHasImages).toBe(true);
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .removeBrowserAnnotation(taskId, "ann-remove");
+    });
+    expect(result.current.draftHasImages).toBe(false);
   });
 });

@@ -17,6 +17,10 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -39,6 +43,17 @@ const cloudChatListTestState = vi.hoisted(() => ({
 // cannot drift apart into a fixture that tests a host the tile never sees.
 // Hoisted because the module mocks below read it from their factories.
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+
+const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
+  hostId: HOST_ID,
+  lifecycle: "live",
+  inventoryReady: true,
+  items: [],
+  errorMessage: null,
+  retry: () => undefined,
+  openTab: () => Promise.reject(new Error("not used")),
+  closeTab: () => Promise.resolve(),
+};
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -637,6 +652,7 @@ function hostUserMessage(): Message {
           },
         ],
       },
+      browserAnnotations: [],
     },
     timestamp: 1,
     sessionAnchor: null,
@@ -942,15 +958,22 @@ function chatTileTestTree(
             })
           }
         >
-          <TooltipProvider>
-            <TestEpicSessionWrapper epicId={EPIC_ID}>
-              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                {chatVisible ? (
-                  <ChatTile node={node} viewTabId="tab-test" isActive />
-                ) : null}
-              </TabHostProvider>
-            </TestEpicSessionWrapper>
-          </TooltipProvider>
+          <BrowserSessionsContext.Provider value={EMPTY_BROWSER_SESSIONS_STATE}>
+            <TooltipProvider>
+              <TestEpicSessionWrapper epicId={EPIC_ID}>
+                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                  {chatVisible ? (
+                    <ChatTile
+                      node={node}
+                      viewTabId="tab-test"
+                      tileId="pane-test"
+                      isActive
+                    />
+                  ) : null}
+                </TabHostProvider>
+              </TestEpicSessionWrapper>
+            </TooltipProvider>
+          </BrowserSessionsContext.Provider>
         </RunnerHostProvider>
       </QueryClientProvider>
     </TestRouterProvider>
@@ -1050,6 +1073,7 @@ describe("<ChatTile />", () => {
         [CHAT_ARTIFACT.id]: {
           content: PENDING_DRAFT_CONTENT,
           selection: null,
+          browserAnnotations: [],
           resetEpoch: 0,
           revision: 0,
         },
@@ -2368,6 +2392,7 @@ describe("<ChatTile />", () => {
           message: {
             kind: "user",
             content: INITIAL_HANDOFF_CONTENT,
+            browserAnnotations: [],
           },
           timestamp: 3,
           sessionAnchor: null,
@@ -2668,6 +2693,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2687,6 +2713,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2777,6 +2804,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2811,6 +2839,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2845,6 +2874,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2919,6 +2949,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -2974,6 +3005,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -3031,6 +3063,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -3050,6 +3083,7 @@ describe("<ChatTile />", () => {
         message: {
           kind: "user",
           content: SECOND_QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,

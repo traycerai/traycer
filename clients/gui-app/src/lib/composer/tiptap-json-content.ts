@@ -4,6 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type {
   Attachment,
+  BrowserTabMentionAttachment,
   EntityMentionContextType,
   GithubMentionAttachment,
   GithubMentionContextType,
@@ -219,6 +220,23 @@ export function mentionAttrsFromAttachment(
     };
   }
 
+  if (isBrowserTabMentionAttachment(mention)) {
+    return {
+      contextType: "browser-tab",
+      id: mention.tabId,
+      path: mention.path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: mention.label,
+      description: mention.description,
+      tabId: mention.tabId,
+      sessionId: mention.sessionId,
+      url: mention.url,
+    };
+  }
+
   if (isEntityMentionAttachment(mention)) {
     return {
       contextType: mention.contextType,
@@ -260,6 +278,9 @@ export function mentionAttachmentFromAttrs(
   }
   if (contextType === "github_pull_request" || contextType === "github_issue") {
     return githubMentionAttachmentFromAttrs(attrs, contextType);
+  }
+  if (contextType === "browser-tab") {
+    return browserTabMentionAttachmentFromAttrs(attrs);
   }
   if (
     contextType === "epic" ||
@@ -832,6 +853,34 @@ function githubMentionAttachmentFromAttrs(
   };
 }
 
+/**
+ * Rebuilds a browser-tab chip from its node attributes. `tabId` is the only
+ * thing that must survive - it is what `page.attachTab({tabId})` resolves,
+ * and `path` is derived from it rather than trusted verbatim so a node that
+ * somehow carries a stale `path` still round-trips to the tab its `tabId`
+ * names.
+ */
+function browserTabMentionAttachmentFromAttrs(
+  attrs: Record<string, unknown>,
+): MentionAttachment | null {
+  const tabId = stringValue(attrs.tabId) ?? stringValue(attrs.id);
+  if (tabId === null) return null;
+  return {
+    kind: "mention",
+    contextType: "browser-tab",
+    path: `browser-tab:${tabId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: stringValue(attrs.label) ?? "Browser",
+    description: stringValue(attrs.description) ?? stringValue(attrs.url) ?? "",
+    tabId,
+    sessionId: stringValue(attrs.sessionId) ?? "",
+    url: stringValue(attrs.url) ?? "",
+  };
+}
+
 function entityMentionAttachmentFromAttrs(
   attrs: Record<string, unknown>,
   contextType: EntityMentionContextType,
@@ -958,4 +1007,10 @@ function isGithubMentionAttachment(
     mention.contextType === "github_pull_request" ||
     mention.contextType === "github_issue"
   );
+}
+
+function isBrowserTabMentionAttachment(
+  mention: MentionAttachment,
+): mention is BrowserTabMentionAttachment {
+  return mention.contextType === "browser-tab";
 }

@@ -143,7 +143,11 @@ function queuedItem(
     kind: "prompt",
     queueItemId,
     messageId: `m-${queueItemId}`,
-    message: { kind: "user" as const, content: CONTENT },
+    message: {
+      kind: "user" as const,
+      content: CONTENT,
+      browserAnnotations: [],
+    },
     sender: { type: "user" as const, userId: OWNER_ID },
     settings,
     accountContext: { type: "PERSONAL" as const },

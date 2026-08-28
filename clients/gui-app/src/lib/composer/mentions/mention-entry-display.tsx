@@ -3,17 +3,21 @@ import {
   Folder,
   FolderGit2,
   GitBranch,
+  Globe2,
   Layers,
   type LucideIcon,
 } from "lucide-react";
 import type { ReactElement } from "react";
 import { MaterialFileIcon } from "@/components/material-file-icon";
+import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
+import { browserTabFaviconUrl } from "@/lib/browser-view/browser-tab-display";
 import {
   EPIC_NODE_ICONS,
   TUI_AGENT_HARNESS_LABELS,
 } from "@/lib/artifacts/node-display";
 import type {
   AgentMentionInterface,
+  BrowserTabMentionEntry,
   EpicAgentMentionEntry,
   MentionPreview,
   MentionSuggestionEntry,
@@ -102,6 +106,8 @@ export function detailForSuggestion(entry: MentionSuggestionEntry): string {
   // directory is what tells them apart.
   if (entry.kind === "epic-terminal") return entry.cwd;
   if (entry.kind === "epic-artifact") return entry.epicTitle;
+  // The row's trailing subtitle for a browser tab is its url, per the design.
+  if (entry.kind === "browser-tab") return entry.url;
   return "";
 }
 
@@ -114,6 +120,10 @@ export function descriptionForSuggestion(
   if (isAgentEntry(entry) && entry.description === entry.epicTitle) {
     return "";
   }
+  // A browser tab carries no separate `description` field - the row's detail
+  // slot already shows the url (see `detailForSuggestion`), so the picker's
+  // description slot stays empty rather than repeating it.
+  if (entry.kind === "browser-tab") return "";
   return entry.description;
 }
 
@@ -166,6 +176,13 @@ export function previewForSuggestion(
         kind: "path",
         tree: mentionPathTree(entry.cwd, false),
         footer: null,
+      };
+    case "browser-tab":
+      return {
+        kind: "text",
+        primary: entry.label,
+        secondary: entry.url,
+        mono: false,
       };
   }
 }
@@ -223,7 +240,26 @@ export function iconForSuggestion(entry: MentionSuggestionEntry): ReactElement {
       return epicNodeIcon("terminal-agent");
     case "epic-terminal":
       return epicNodeIcon("terminal");
+    case "browser-tab":
+      return browserTabRowIcon(entry);
   }
+}
+
+/**
+ * Live favicon for a browser-tab row - `useMaybeBrowserSessionsContext()` is
+ * not needed here (unlike the composer chip's decorator): the entry is
+ * already sourced from that same live context, so its `url` is current for
+ * as long as the row is on screen. Falls back to `Globe2` when the tab has
+ * no resolvable http(s) favicon or the image fails to load.
+ */
+function browserTabRowIcon(entry: BrowserTabMentionEntry): ReactElement {
+  return (
+    <BrowserFavicon
+      faviconUrl={browserTabFaviconUrl(entry.url)}
+      isolated={false}
+      className={MENU_ICON_CLASS}
+    />
+  );
 }
 
 /**
@@ -238,6 +274,11 @@ export function agentCategoryIcon(): ReactElement {
 /** Icon for the **Terminals** mention category and its rows. */
 export function terminalCategoryIcon(): ReactElement {
   return epicNodeIcon("terminal");
+}
+
+/** Icon for the **Browser** mention category itself (not its rows, which favicon). */
+export function browserTabCategoryIcon(): ReactElement {
+  return <Globe2 className={MENU_ICON_CLASS} aria-hidden />;
 }
 
 export function folderIcon(): ReactElement {

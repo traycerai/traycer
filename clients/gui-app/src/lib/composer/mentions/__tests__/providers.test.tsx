@@ -13,6 +13,7 @@ import {
   ROOT_MENTION_STEP,
 } from "../providers";
 import type {
+  BrowserTabMentionEntry,
   EpicChatMentionEntry,
   EpicTerminalAgentMentionEntry,
   EpicTerminalMentionEntry,
@@ -32,6 +33,7 @@ function context(
     currentEpicId: null,
     agentEntries: [],
     terminalEntries: [],
+    browserTabEntries: [],
     epicAttachedRoots: new Set(),
     github: {
       pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
@@ -116,6 +118,28 @@ function terminalAgent(fields: {
     archived: false,
     agentInterface: "terminal",
     runtimeSupportsMessageDelivery,
+  };
+}
+
+function browserTab(fields: {
+  tabId: string;
+  sessionId: string;
+  label: string;
+  url: string;
+  coLocated: boolean;
+  lastActivityAt: number;
+  dormant: boolean;
+}): BrowserTabMentionEntry {
+  return {
+    kind: "browser-tab",
+    id: `browser-tab:${fields.sessionId}:${fields.tabId}`,
+    tabId: fields.tabId,
+    sessionId: fields.sessionId,
+    label: fields.label,
+    url: fields.url,
+    coLocated: fields.coLocated,
+    lastActivityAt: fields.lastActivityAt,
+    dormant: fields.dormant,
   };
 }
 
@@ -1597,5 +1621,159 @@ describe("githubMentionCategoryAvailable", () => {
 
   it("is unavailable with no roots to scope to, even on a supporting host", () => {
     expect(githubMentionCategoryAvailable(true, 0)).toBe(false);
+  });
+});
+
+describe("Browser mention category", () => {
+  it("is hidden at root when there are no browser tabs", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ browserTabEntries: [] }),
+    );
+    expect(labels(entries)).not.toContain("Browser");
+  });
+
+  it("lists every tab flat across sessions, co-located tab ranked first", () => {
+    const browserTabEntries = [
+      browserTab({
+        tabId: "tab-old",
+        sessionId: "session-1",
+        label: "Docs",
+        url: "https://docs.example.com",
+        coLocated: false,
+        lastActivityAt: 100,
+        dormant: false,
+      }),
+      browserTab({
+        tabId: "tab-new",
+        sessionId: "session-2",
+        label: "Issue tracker",
+        url: "https://issues.example.com",
+        coLocated: false,
+        lastActivityAt: 200,
+        dormant: false,
+      }),
+      browserTab({
+        tabId: "tab-viewed",
+        sessionId: "session-2",
+        label: "Dashboard",
+        url: "https://dash.example.com",
+        coLocated: true,
+        lastActivityAt: 50,
+        dormant: false,
+      }),
+    ];
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ currentEpicId: "epic-1", browserTabEntries }),
+    );
+    expect(labels(entries)).toContain("Browser");
+
+    const rows = mentionProviderRegistry.entries(
+      navigateEntry(entryByLabel(entries, "Browser")),
+      context({ currentEpicId: "epic-1", browserTabEntries }),
+    );
+    // Back row, then co-located first, then the rest by session recency.
+    expect(labels(rows)).toEqual([
+      "Back",
+      "Dashboard",
+      "Issue tracker",
+      "Docs",
+    ]);
+  });
+
+  it("demotes a dormant tab below a live tab of equal match quality and co-location, but a more recent dormant tab still beats an older live one", () => {
+    const browserTabEntries = [
+      browserTab({
+        tabId: "tab-dormant-newer",
+        sessionId: "session-1",
+        label: "Docs",
+        url: "https://docs.example.com",
+        coLocated: false,
+        lastActivityAt: 500,
+        dormant: true,
+      }),
+      browserTab({
+        tabId: "tab-live-older",
+        sessionId: "session-2",
+        label: "Notes",
+        url: "https://notes.example.com",
+        coLocated: false,
+        lastActivityAt: 10,
+        dormant: false,
+      }),
+    ];
+    const rows = mentionProviderRegistry.entries(
+      {
+        kind: "provider",
+        providerId: "browser-tab",
+        stepId: "root",
+        workspacePath: null,
+      },
+      context({ currentEpicId: "epic-1", browserTabEntries }),
+    );
+    // Dormancy is a tiebreak, not an override: it only applies among rows
+    // already equal on match quality and coLocated. With no query, every row
+    // scores 0, so the live tab sorts first despite being far less recent.
+    expect(labels(rows)).toEqual(["Back", "Notes", "Docs"]);
+  });
+
+  it("root search matches a tab's url as well as its title", () => {
+    const browserTabEntries = [
+      browserTab({
+        tabId: "tab-1",
+        sessionId: "session-1",
+        label: "Home",
+        url: "https://example.com/pricing",
+        coLocated: false,
+        lastActivityAt: 1,
+        dormant: false,
+      }),
+    ];
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ query: "pricing", browserTabEntries }),
+    );
+    expect(labels(entries)).toContain("Home");
+  });
+
+  it("completing a row builds a browser-tab mention keyed by the durable tabId", () => {
+    const browserTabEntries = [
+      browserTab({
+        tabId: "tab-1",
+        sessionId: "session-1",
+        label: "Home",
+        url: "https://example.com",
+        coLocated: false,
+        lastActivityAt: 1,
+        dormant: false,
+      }),
+    ];
+    const rows = mentionProviderRegistry.entries(
+      {
+        kind: "provider",
+        providerId: "browser-tab",
+        stepId: "root",
+        workspacePath: null,
+      },
+      context({ browserTabEntries }),
+    );
+    expect(completeEntry(entryByLabel(rows, "Home"))).toEqual({
+      kind: "mention",
+      contextType: "browser-tab",
+      path: "browser-tab:tab-1",
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: "Home",
+      // Dead field for this variant - kept only because `MentionAttachment`
+      // requires it on every member (see FIX 3/CLEANUP 4 in
+      // chat-user-message-content.tsx / attachments.ts).
+      description: "",
+      tabId: "tab-1",
+      sessionId: "session-1",
+      url: "https://example.com",
+    });
   });
 });

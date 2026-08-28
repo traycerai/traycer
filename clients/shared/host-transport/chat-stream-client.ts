@@ -7,7 +7,8 @@ import {
   type ChatSubscribeServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
-  normalizeInterviewBlocksInShallowSnapshot,
+  normalizeV16BrowserPayloadsInFrame,
+  normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
@@ -143,6 +144,12 @@ export interface ChatStreamCallbacks {
   ) => void;
 }
 
+/**
+ * The `chat.subscribe` minor that introduced browser context attachments and
+ * annotations on user messages. Anything below it cannot author them.
+ */
+const CHAT_SUBSCRIBE_BROWSER_PAYLOAD_MINOR = 7;
+
 export interface ChatStreamClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
@@ -150,17 +157,6 @@ export interface ChatStreamClientOptions {
   readonly callbacks: ChatStreamCallbacks;
 }
 
-/**
- * The oldest `chat.subscribe@1.x` minor whose server frames carry the LIVE
- * message/event SHAPE - i.e. every field the current types promise is present
- * on the wire, with no compatibility default needed to synthesize it.
- *
- * `1.6` is that floor: it shipped image support (`imageResolutions`, the
- * image-bearing `tool_call`) and the turn-tail anchor, and the only difference
- * between its serverFrame and the live `1.7` one is the harness enum, which
- * changes no field's presence. Raise this ONLY when a minor adds or removes a
- * FIELD, not when one merely widens an enum.
- */
 /**
  * Typed wrapper over `WsStreamClient` for a single host-owned GUI chat.
  *
@@ -276,6 +272,26 @@ export class ChatStreamClient {
     return version !== null && version.major === 1 && version.minor === 6;
   }
 
+  /**
+   * Whether THIS session negotiated any line BELOW `1.7` - the minor that put
+   * browser context attachments and annotations on the wire.
+   *
+   * Deliberately wider than {@link isOnV16SchemaLine}, which stays exact
+   * because it selects a FROZEN `1.6` parse. This one gates the browser-payload
+   * normalize on the live union, and every pre-`1.7` line has the same problem:
+   * the host that negotiated it cannot author those fields, so a payload
+   * carrying them is mislabeled, stale or hostile whether it says `1.6` or
+   * `1.2`.
+   */
+  private isOnPreAnnotationSchemaLine(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return (
+      version !== null &&
+      version.major === 1 &&
+      version.minor < CHAT_SUBSCRIBE_BROWSER_PAYLOAD_MINOR
+    );
+  }
+
   private handleServerFrame(
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
@@ -309,27 +325,45 @@ export class ChatStreamClient {
       // envelope is validated deeply against the FROZEN `1.6` shapes, so this
       // is exact rather than permissive; the histories stay structural.
       //
-      // The one thing `1.6` genuinely lacks is interview settlement, and it
-      // lives inside the arrays the shallow parse does not walk. The narrow
-      // normalizer below supplies exactly those defaults - the deep schema's
-      // job on this path - so consumers never read `undefined` through a type
-      // that promises a value.
+      // `1.6` lacks interview settlement and browser payload fields. The
+      // message history is structural on this path, so normalize those fields
+      // in place; then run the live SHALLOW schema to apply bounded defaults
+      // (notably queue payloads) and recover the exact live consumer type.
       const shallowV16 =
         chatSubscribeSnapshotServerFrameShallowSchemaV16.safeParse(envelope);
       if (shallowV16.success) {
-        normalizeInterviewBlocksInShallowSnapshot(
+        normalizeV16MessagesInShallowSnapshot(
           shallowV16.data.snapshot.chat.messages,
         );
-        this.callbacks.onSnapshot(shallowV16.data);
+        const upgraded =
+          chatSubscribeSnapshotServerFrameShallowSchema.safeParse(
+            shallowV16.data,
+          );
+        if (upgraded.success) {
+          this.callbacks.onSnapshot(upgraded.data);
+        } else {
+          warnDroppedFrame("1.6 snapshot re-parse", upgraded.error.issues);
+        }
+      } else {
+        warnDroppedFrame("1.6 snapshot", shallowV16.error.issues);
       }
       return;
     }
     const parsed = chatSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
+      warnDroppedFrame("live frame", parsed.error.issues);
       return;
     }
 
     const frame: ChatSubscribeServerFrame = parsed.data;
+    if (this.isOnPreAnnotationSchemaLine()) {
+      // The parse above is the LIVE union whatever line was negotiated, so a
+      // pre-`1.7` peer's browser payload on `messageAccepted` / `queueChanged`
+      // would arrive VALIDATED - the smuggling the 1.6 snapshot path already
+      // refuses, through the door beside it. Snapshots return above and are
+      // neutralized by their frozen parse; every other kind is untouched.
+      normalizeV16BrowserPayloadsInFrame(frame);
+    }
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot(frame);
@@ -430,4 +464,22 @@ export class ChatStreamClient {
       }
     }
   }
+}
+
+/**
+ * Warn-and-drop, matching the sibling stream clients: issue PATHS only, never
+ * the raw error or envelope - chat frames carry prompt text and attachments.
+ */
+function warnDroppedFrame(
+  what: string,
+  issues: ReadonlyArray<{ readonly path: ReadonlyArray<PropertyKey> }>,
+): void {
+  const issuePaths = issues
+    .map((issue) =>
+      issue.path.length > 0 ? issue.path.map(String).join(".") : "(root)",
+    )
+    .join(", ");
+  console.warn(
+    `[stream] chat.subscribe ${what} failed schema validation (issues=[${issuePaths}]); dropping frame`,
+  );
 }

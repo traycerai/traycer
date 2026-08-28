@@ -34,16 +34,12 @@ export type ErasedConditionPollPolicy<
   readonly resetLaneIds: ReadonlySet<string>;
 };
 
-export type HostMethodPollPolicy<
-  Method extends keyof HostRpcRegistry & string,
-> =
+type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
   | null
   | { readonly kind: "fixed"; readonly intervalMs: number }
   | ErasedConditionPollPolicy<Method>;
 
-export type HostMethodScheduling<
-  Method extends keyof HostRpcRegistry & string,
-> = {
+type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
   readonly mode:
     | RpcSchedulingMode
     | ((params: RequestOfMethod<HostRpcRegistry, Method>) => RpcSchedulingMode);
@@ -51,7 +47,7 @@ export type HostMethodScheduling<
   readonly poll: HostMethodPollPolicy<Method>;
 };
 
-export type HostMethodPolicyTable = {
+type HostMethodPolicyTable = {
   readonly [
     Method in keyof HostRpcRegistry & string
   ]: HostMethodScheduling<Method>;
@@ -537,6 +533,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "resources.listLocalServers": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 3 * SECOND_MS },
+  },
   // Shell lifecycle from the Shells list and the output window header. `fifo`
   // is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
@@ -1586,7 +1586,7 @@ export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   },
 };
 
-export type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
+type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
   readonly hostRpcMethod: Method;
 };
 

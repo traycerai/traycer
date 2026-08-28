@@ -314,6 +314,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
       <div
         role="presentation"
         data-slot="composer-menu"
+        data-browser-overlay="composer-menu"
         // top-0/left-0 so floating-ui's translate3d is the source of truth.
         // Width fits content (w-max) so short menus stay compact and long command
         // names render in full, with a comfortable floor (min-w) and a

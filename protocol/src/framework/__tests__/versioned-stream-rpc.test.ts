@@ -11,7 +11,10 @@ import {
   checkStreamCompatibility,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
-import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import {
+  SERVES_EVERY_INSTALLED_MAJOR,
+  selectConnectionManifestForPeer,
+} from "@traycer/protocol/framework/capability-manifest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 const handshakeV10 = defineStreamRpcContract({
@@ -588,5 +591,86 @@ describe("stream compatibility", () => {
       "chat.subscribe",
     );
     expect(chatSubscribe.ok).toBe(true);
+  });
+
+  it("builds an old-host openAck without browser methods while existing streams remain compatible", () => {
+    const {
+      "browser.sessions": browserSessionsRegistry,
+      "browser.screencast": browserScreencastRegistry,
+      ...oldHostStreamRpcRegistry
+    } = hostStreamRpcRegistry;
+    void browserSessionsRegistry;
+    void browserScreencastRegistry;
+
+    const newGuiManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const oldHostManifest = buildStreamManifest(
+      oldHostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    // The host's openAck advertises its own manifest intersected with the
+    // peer's. `deriveOpenAckManifest` itself lives in the host and is not
+    // importable here, but both of its steps are protocol primitives, so the
+    // intersection is reproduced rather than assumed: drop the methods the
+    // peer never named, then select the shared major/minor per method.
+    const peerNamedHostManifest = Object.fromEntries(
+      Object.entries(oldHostManifest).filter(([method]) =>
+        Object.prototype.hasOwnProperty.call(newGuiManifest, method),
+      ),
+    );
+    const openAckManifest = selectConnectionManifestForPeer(
+      oldHostStreamRpcRegistry,
+      peerNamedHostManifest,
+      newGuiManifest,
+    );
+
+    // The new GUI names every method this old host serves, so the
+    // intersection is the old host's own manifest verbatim.
+    expect(openAckManifest).toEqual(oldHostManifest);
+    expect(openAckManifest["browser.sessions"]).toBeUndefined();
+    expect(openAckManifest["browser.screencast"]).toBeUndefined();
+    expect(openAckManifest["terminal.subscribe"]).toEqual({
+      major: 1,
+      minor: 6,
+      supportedMajors: [1],
+    });
+
+    const terminalAsHost = checkStreamMethodCompatibility(
+      oldHostStreamRpcRegistry,
+      oldHostManifest,
+      newGuiManifest,
+      "host",
+      "terminal.subscribe",
+    );
+    expect(terminalAsHost.ok).toBe(true);
+
+    const browserSessionsAsClient = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      newGuiManifest,
+      openAckManifest,
+      "client",
+      "browser.sessions",
+    );
+    expect(browserSessionsAsClient.ok).toBe(false);
+
+    const browserScreencastAsClient = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      newGuiManifest,
+      openAckManifest,
+      "client",
+      "browser.screencast",
+    );
+    expect(browserScreencastAsClient.ok).toBe(false);
+
+    const terminalAsClient = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      newGuiManifest,
+      openAckManifest,
+      "client",
+      "terminal.subscribe",
+    );
+    expect(terminalAsClient.ok).toBe(true);
   });
 });
