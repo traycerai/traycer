@@ -5,7 +5,7 @@ import {
 } from "@traycer/protocol/host/agent/profiles";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -53,7 +53,11 @@ export function buildAgentConfigureCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.configure", request),
     );
-    const response = parseHostResponse(agentConfigureResponseSchema, result);
+    const response = parseCanonicalHostResponse(
+      "agent.configure",
+      agentConfigureResponseSchema,
+      result,
+    );
     return {
       data: response,
       human: formatAgentConfigureResponse(opts.agentId, response),
