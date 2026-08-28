@@ -3,8 +3,12 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import { defineConfig, type UserConfig } from "vite";
+import { defineConfig, type Plugin, type UserConfig } from "vite";
 import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
+import {
+  TRAYCER_MARK_PATH_D,
+  TRAYCER_MARK_VIEWBOX,
+} from "../gui-app/src/lib/brand/traycer-mark";
 
 /**
  * The single path this bundle is served under, without a trailing slash.
@@ -149,6 +153,49 @@ function devConfig(): TraycerWebappBakedConfig {
   };
 }
 
+/**
+ * Stamps the tab icon into the served HTML.
+ *
+ * A document that declares no icon is not a document without one: the browser
+ * asks the origin for `/favicon.ico` on its own, and under a path-scoped zone
+ * that request has nothing to answer it, so every single load books a 404 in
+ * the console. Declaring an icon is what stops the request being made at all.
+ *
+ * It is a data URI rather than a file so the icon cannot become the thing it
+ * was added to prevent: there is no second request to serve, so no serving
+ * rule has to know this file exists for the console to stay clean. The mark's
+ * vector data is imported rather than copied, keeping the single definition
+ * the brand module exists to hold, and the fill follows the browser's own
+ * light/dark preference so the mark stays legible on either tab strip.
+ */
+function traycerFavicon(): Plugin {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${TRAYCER_MARK_VIEWBOX}">` +
+    `<style>path{fill:#0a0a0a}` +
+    `@media(prefers-color-scheme:dark){path{fill:#fafafa}}</style>` +
+    `<path d="${TRAYCER_MARK_PATH_D}"/></svg>`;
+  return {
+    name: "traycer-webapp-favicon",
+    transformIndexHtml: {
+      order: "pre",
+      handler: (html: string) => ({
+        html,
+        tags: [
+          {
+            tag: "link",
+            attrs: {
+              rel: "icon",
+              type: "image/svg+xml",
+              href: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+            },
+            injectTo: "head" as const,
+          },
+        ],
+      }),
+    },
+  };
+}
+
 export default defineConfig((): UserConfig => {
   const environment = resolveWebappEnvironment();
   const config =
@@ -172,6 +219,7 @@ export default defineConfig((): UserConfig => {
       __TRAYCER_WEBAPP_CONFIG__: JSON.stringify(config),
     },
     plugins: [
+      traycerFavicon(),
       tanstackRouter({
         enableRouteGeneration: false,
         target: "react",
