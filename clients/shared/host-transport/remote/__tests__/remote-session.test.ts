@@ -6498,6 +6498,27 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
 });
 
 describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
+  /**
+   * Slack for a rung delay measured off the REAL clock.
+   *
+   * Two assertions here sample `Date.now()` either side of a real
+   * `setTimeout(…, RECONNECT_INITIAL_BACKOFF_MS)`. Node may fire that timeout a
+   * hair early relative to `Date.now()`'s coarser resolution, so an exact
+   * `>= RECONNECT_INITIAL_BACKOFF_MS` carries a failure window one millisecond
+   * wide on every run - a measured gap of 999 against a bound of 1000 - which a
+   * loaded runner walks into.
+   *
+   * 5ms is two orders of magnitude below the distance these assertions exist to
+   * measure: the rung beneath this one is 0ms, so a regression that granted the
+   * immediate rung would read as a gap near zero, never as 995. Nothing the
+   * assertion catches can hide inside the slack.
+   *
+   * Only the clock-measured bounds take it. The other two tests in this
+   * describe assert the delay ARGUMENT handed to `setTimeout`, an exact integer
+   * the scheduler never perturbs - widening those would give away real
+   * precision for nothing.
+   */
+  const REAL_CLOCK_RUNG_SLACK_MS = 5;
   // These assertions bound EXACT rung delays, so the equal jitter every
   // non-immediate rung carries is pinned to its ceiling (factor 1.0 = the
   // un-jittered base). The jitter's own behaviour is covered by the wake and
@@ -6592,7 +6613,9 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
       // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
       // case does not leak into later rungs.
       const secondGap = redialTimestamps[1] - redialTimestamps[0];
-      expect(secondGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      expect(secondGap).toBeGreaterThanOrEqual(
+        RECONNECT_INITIAL_BACKOFF_MS - REAL_CLOCK_RUNG_SLACK_MS,
+      );
       expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
     } finally {
       session.close();
@@ -6623,7 +6646,9 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         { timeout: 8_000, interval: 20 },
       );
       const firstGap = createTimestamps[1] - createTimestamps[0];
-      expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      expect(firstGap).toBeGreaterThanOrEqual(
+        RECONNECT_INITIAL_BACKOFF_MS - REAL_CLOCK_RUNG_SLACK_MS,
+      );
     } finally {
       session.close();
     }
