@@ -4928,7 +4928,8 @@ describe("RemoteSession reassembly progress watchdog", () => {
           () => expect(relay.subscribeStreamIds).toHaveLength(2),
           WAIT,
         );
-        expect(relay.subscribeStreamIds[1]).not.toBe(staleId);
+        const replacementId = relay.subscribeStreamIds[1];
+        expect(replacementId).not.toBe(staleId);
         // Stream-local means NO session churn: no redial happened.
         expect(relay.openBearers).toHaveLength(dialsBefore);
         expect(
@@ -4936,6 +4937,26 @@ describe("RemoteSession reassembly progress watchdog", () => {
             String(call[0]).includes("no reassembly progress"),
           ),
         ).toBe(true);
+
+        // The recovery must be a LOOP, not a single shot: the replacement
+        // subscribe armed a first-evidence deadline of its own at send time,
+        // so an upstream stall that answers the fresh id with NOTHING gets
+        // judged again - another CLOSE, another fresh id - with the session
+        // ready and free of redial churn throughout.
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
+        (watchdogArms()[1][0] as () => void)();
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(replacementId),
+          WAIT,
+        );
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[2]).not.toBe(staleId);
+        expect(relay.subscribeStreamIds[2]).not.toBe(replacementId);
+        expect(session.isReady()).toBe(true);
+        expect(relay.openBearers).toHaveLength(dialsBefore);
         expect(relay.errors).toEqual([]);
       } finally {
         warnSpy.mockRestore();

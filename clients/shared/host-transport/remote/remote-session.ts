@@ -443,7 +443,8 @@ export interface IRemoteSession<
   terminalFatal(): FatalErrorDetails | null;
   /**
    * Subscribes to positive evidence that the session just reached its ready
-   * boundary (full attach + every live stream restored) - EVERY boundary,
+   * boundary (full attach + accepted restore evidence for every live
+   * stream; completed delivery stays each stream's own status) - EVERY boundary,
    * including the clean first open. The remote analog of the recovery
    * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
    * consumed to un-strand errored host-scoped queries.
@@ -2520,6 +2521,22 @@ export class RemoteSession<
       },
       binary: null,
     });
+    if (this.streamReopenAttempts.has(stream.streamId)) {
+      // A stream in the reopen-escalation regime has already stalled or
+      // failed once, so its replacement subscribe cannot be trusted to
+      // produce evidence on its own: its FIRST evidence is bounded exactly
+      // as inter-chunk progress is, from the moment the subscribe is sent.
+      // This is what makes the stall recovery a self-sustaining loop - an
+      // expiry with zero frames re-keys and re-subscribes again on the
+      // climbing per-stream backoff - and it covers the reconnect-mid-loop
+      // case too, since the openAck replay of a loop member passes through
+      // here as well. Ordinary subscribes stay unarmed: a method that
+      // legitimately emits nothing on subscribe must not be churned, and the
+      // attach fan-out's silent streams already have the stall diagnostic
+      // naming them. The arm retires through the same evidence/verdict/
+      // close/drop set as any other.
+      this.armReassemblyWatchdog(this.connectGeneration, stream.streamId);
+    }
   }
 
   private handleUnaryResponse(json: Record<string, unknown> | null): void {

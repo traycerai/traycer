@@ -133,8 +133,8 @@ export class RemoteStreamClient<
   }
 
   /**
-   * Bridges the session's ready-boundary transition (full attach + every
-   * live stream restored; see
+   * Bridges the session's ready-boundary transition (full attach + accepted
+   * restore evidence for every live stream; see
    * `RemoteSession.subscribeAvailabilityRecovered`) to availability-recovered
    * listeners - the same "endpoint recovered" evidence `WsStreamClient`
    * surfaces when a session re-opens after a drop, PLUS the clean first open
