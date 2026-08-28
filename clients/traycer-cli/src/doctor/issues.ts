@@ -45,6 +45,45 @@ export const DOCTOR_ISSUE_CODES = {
   RECENT_CRASH_MARKERS: "RECENT_CRASH_MARKERS",
   REGISTRY_NOT_IMPLEMENTED: "REGISTRY_NOT_IMPLEMENTED",
   CLI_UPGRADE_PENDING: "CLI_UPGRADE_PENDING",
+  // The detached finalize helper already swapped the staged binary onto the
+  // live path, but the install manifest still records the upgrade as pending.
+  //
+  // This state used to be unobservable, because doctor RECONCILED the
+  // helper's marker before reading the manifest - deleting the marker and
+  // rewriting the manifest as a side effect of a diagnostic (CLI-007). Doctor
+  // now only reads, so the drift between "disk is upgraded" and "manifest
+  // says pending" has to be reportable rather than silently repaired.
+  //
+  // Info, deliberately: the CLI the user invokes IS the new one, nothing is
+  // failing, and promoting it would flip `host doctor`'s exit code for a
+  // machine whose only fault is a stale record that the next `host restart`
+  // clears.
+  CLI_UPGRADE_FINALIZED_UNRECONCILED: "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+  // The finalize helper ran and the swap itself failed - distinct from
+  // CLI_UPGRADE_PENDING, whose message ("the live binary is locked, restart
+  // to finalise") is actively wrong here: a helper already ran with the lock
+  // released. The operator needs the helper's own error, which this carries.
+  CLI_UPGRADE_FINALIZE_FAILED: "CLI_UPGRADE_FINALIZE_FAILED",
+  // The finalize helper's marker exists but could not be parsed. Reported
+  // independently of whether a pending upgrade is recorded: an unreadable
+  // marker is a fault whether or not the manifest happens to reference an
+  // upgrade right now, and staying silent about it would let doctor call the
+  // CLI-upgrade state clean while an unparseable file sits on disk.
+  CLI_UPGRADE_MARKER_UNREADABLE: "CLI_UPGRADE_MARKER_UNREADABLE",
+  // The marker's BYTES were read and are not a marker (bad JSON, wrong shape).
+  // Its own code rather than sharing UNREADABLE above, because the two have
+  // opposite remediations - reconciliation unlinks an unparseable marker, so
+  // `host restart` clears it, while a marker it cannot read is left in place -
+  // and a consumer that groups by `code` would otherwise have to parse message
+  // prose to tell which advice applies.
+  CLI_UPGRADE_MARKER_UNPARSEABLE: "CLI_UPGRADE_MARKER_UNPARSEABLE",
+  // The finalize helper swapped the CLI successfully and then could not start
+  // the host service. Its own error is the only artifact that explains a host
+  // that is down for this particular reason, and it is recorded in the marker
+  // AFTER `pendingUpgrade` has already been cleared by the successful swap -
+  // so it is only visible to a reader who looks at markers independently of
+  // pending state. Not an upgrade to retry: the upgrade worked.
+  CLI_UPGRADE_SERVICE_START_FAILED: "CLI_UPGRADE_SERVICE_START_FAILED",
   // The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the
   // Desktop app points into its own bundle; removing or replacing the app
   // leaves it dangling. `ls` (lstat) still shows the file while executing

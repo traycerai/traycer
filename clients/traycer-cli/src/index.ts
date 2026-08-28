@@ -94,7 +94,7 @@ import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
-import { whoamiCommand } from "./commands/whoami";
+import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import {
@@ -435,7 +435,9 @@ export function buildProgramWithAgentRoles(
   // positional/global-option parsing.
   program
     .name("traycer")
-    .description("Traycer CLI - auth, host supervisor, and config surface")
+    .description(
+      "Traycer CLI - sign in, run the Traycer host on this machine, and work with the agents in a Task",
+    )
     .version(cliVersion);
 
   // Global runner flags so `traycer --json <subcommand>` works even when
@@ -634,9 +636,16 @@ function registerAuthCommands(program: Command): void {
     program
       .command("login")
       .description("Sign in to Traycer via your browser")
-      .option(
-        "--token <token>",
-        "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+      // Hidden per the house convention for `"Internal:"` options: the payload
+      // is produced by a sign-in elsewhere and piped on stdin, so there is
+      // nothing a person at a terminal can usefully type here. Its contract is
+      // pinned by `commands/__tests__/login-token.test.ts` rather than by help
+      // text. It stays reachable - hiding is presentation, not removal.
+      .addOption(
+        new Option(
+          "--token <token>",
+          "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Scripted/support path; interactive sign-in uses no flag.",
+        ).hideHelp(),
       ),
     (opts) =>
       buildLoginCommand({
@@ -644,14 +653,93 @@ function registerAuthCommands(program: Command): void {
       }),
   );
 
+  // `logout` and `whoami` both do more than their verbs suggest, and the
+  // one-line description is the wrong place to say so - it is also the root
+  // help's command list, where a paragraph per command destroys the scan. The
+  // description names the full outcome in one line; the detail (what is
+  // deleted, what is spent, what a partial result means) goes in the leaf's
+  // `--help` body, which is where someone asking "what will this do to my
+  // machine" is already looking.
   withRunner(
-    program.command("logout").description("Forget the stored auth token"),
+    program
+      .command("logout")
+      .description(
+        "Sign out: forget the stored credentials and delete cached published-chat content",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "What this removes:",
+          "  - The stored credentials for this environment. Traycer Desktop and",
+          "    other clients read the same file, so they lose the session too, as",
+          "    each notices the change. A Traycer Host that is already running",
+          "    holds its own delegated credential and keeps it until it stops.",
+          "  - The local published-chat cache. Every entry is a copy of bytes the",
+          "    cloud still holds, so this only costs a re-fetch after signing in.",
+          "",
+          "Exit codes:",
+          "  0  credentials and cache both gone.",
+          "  1  something is unresolved - two different outcomes, and --json",
+          "     tells them apart:",
+          "       - the sign-out could not be CONFIRMED (another traycer process",
+          "         holds the credentials lock, or the commit did not complete).",
+          "         You may or may not still be signed in; logout is idempotent,",
+          "         so re-run it and check with `traycer whoami`. The cache is",
+          "         deliberately left alone. --json emits an error envelope.",
+          "       - the credentials were cleared but the cache directory could",
+          "         not be removed. --json emits an ok result with",
+          "         `data.loggedOut` and `data.chatCache` (path, `cleared`, and",
+          "         the reason).",
+          "",
+          "Exit 1 for the second case exists so an unattended caller does not treat",
+          "'content still on disk' as a clean hand-off.",
+          "",
+        ].join("\n"),
+      ),
     () => logoutCommand,
   );
 
   withRunner(
-    program.command("whoami").description("Print the signed-in user"),
-    () => whoamiCommand,
+    program
+      .command("whoami")
+      .description(
+        "Validate the stored credentials with Traycer and print the signed-in user",
+      )
+      .option(
+        "--local",
+        "Read the stored identity only: no authn call, no refresh, nothing written",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "This is a validate, not a local read. It calls the authn service, and to",
+          "answer it may rewrite the stored credentials: a profile that drifted is",
+          "written back, and a stale access token is replaced by SPENDING the stored",
+          "refresh token. `data.credentialUpdate` reports what actually happened:",
+          "'none', 'profile-refreshed', 'token-rotated', or one of the two",
+          "'-unconfirmed' values, meaning the change was attempted and this command",
+          "could not confirm what it left behind - so the stored credentials may or",
+          "may not have changed, and a later command may need a fresh",
+          "`traycer login`. A network error during the token REFRESH reports an",
+          "unconfirmed rotation for the same reason - the refresh may or may not",
+          "have reached the server - while one during the initial identity check",
+          "reports 'none', because nothing had been attempted yet.",
+          "",
+          "--local skips all of it and reports what is on disk. That answer is",
+          "weaker: it cannot see a revoked or expired session (`data.status` is",
+          "'stored', not 'valid').",
+          "",
+          "Exit codes:",
+          "  0  default: validated with Traycer. --local: a credential is stored",
+          "     here, which is NOT proof that it still works.",
+          "  1  signed out (either mode), or the stored credentials were rejected.",
+          "  2  the authn service could not be reached (default mode only).",
+          "",
+        ].join("\n"),
+      ),
+    (opts) => buildWhoamiCommand({ local: opts.local === true }),
   );
 
   withRunner(
@@ -661,13 +749,44 @@ function registerAuthCommands(program: Command): void {
       .option(
         "--no-qr",
         "Print only the typeable code (for terminals that mangle block glyphs)",
+      )
+      // The command's whole middle is a wait, and the one-line description
+      // read like a fire-and-forget print. Approval - not the scan - is what
+      // signs the phone in, so the terminal is part of the flow until it
+      // answers.
+      .addHelpText(
+        "after",
+        [
+          "",
+          "Requires an existing sign-in on this machine (`traycer login`) and an",
+          "interactive terminal. --json, a non-interactive environment (CI=1 or",
+          "TRAYCER_NONINTERACTIVE=1), and a stdin that is not a TTY are each refused",
+          "up front (exit 1), because only a human at this terminal can give the",
+          "approval this command exists to collect.",
+          "",
+          "This command waits, with no deadline of its own: it prints a code and",
+          "reprints a fresh one before each expires, then blocks until you approve",
+          "or reject the phone that scanned it. Ctrl-C is safe - an unclaimed code",
+          "is not a grant and dies with its own TTL. It installs and starts nothing.",
+          "",
+          "Exit codes: 0 approved - 1 rejected, refused as above, signed out, or the",
+          "registration was already decided elsewhere - 2 authn unreachable.",
+          "",
+        ].join("\n"),
       ),
     (opts) => buildLinkPhoneCommand({ showQr: opts.qr !== false }),
   );
 }
 
 function registerHostCommands(program: Command): void {
-  const host = program.command("host").description("Manage the local host");
+  // Names what the group actually spans, because the children differ enormously
+  // in consequence: reads (status, logs, available) sit beside commands that
+  // download and swap bytes, register an OS service, or kill a running host.
+  const host = program
+    .command("host")
+    .description(
+      "Install, run, update, and troubleshoot the Traycer host on this machine",
+    );
 
   // `host start` is the long-running supervisor invoked by service
   // manifests (launchd / systemd-user / Windows Scheduled Task) as
@@ -744,7 +863,13 @@ function registerHostCommands(program: Command): void {
   // see host/capabilities.ts.
   host
     .command("capabilities")
-    .description("Print the capability tokens this CLI supports")
+    // Says out loud that `--json` means something different here. Every other
+    // command's `--json` is the runner's NDJSON event stream; this one prints a
+    // single JSON document, because its readers are a /bin/sh script and a
+    // VBScript launcher rather than an event consumer.
+    .description(
+      "Print the capability tokens this CLI supports. Raw output for scripts: plain text or a single JSON document plus an exit code, not the NDJSON event stream other commands emit with --json.",
+    )
     .option("--json", "Print the capability document as JSON")
     .option(
       "--has <capability>",
@@ -770,7 +895,9 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("status")
-      .description("Show host status (pid, websocket URL, recent activity)"),
+      .description(
+        "Show host status (pid, websocket URL, recent activity). Read-only: never installs, registers, or starts the host - use 'host ensure' for that",
+      ),
     () => hostStatusCommand,
   );
 
@@ -786,7 +913,21 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("restart")
-      .description("Restart the host service")
+      // The CLI-upgrade clause is not padding: a restart is where a pending
+      // self-upgrade is finalised (`upgrade/finalize-helper.ts`), so this host
+      // command can replace the `traycer` binary itself. Someone restarting the
+      // host to clear a hang deserves to know that before their CLI version
+      // changes under them.
+      //
+      // "attempts"/"may" rather than "completes", because the finalize is
+      // explicitly non-fatal: a missing staged binary, a still-locked binary on
+      // a read-only install, or a Windows helper that only gets SCHEDULED all
+      // return exit 0 with the pending upgrade retained. Promising completion
+      // would be the same false-status defect this PR removes elsewhere; the
+      // human result already reports which of those actually happened.
+      .description(
+        "Restart the host service. If a CLI self-upgrade is waiting to be applied, this also attempts to finalize it, which may replace the 'traycer' binary.",
+      )
       // Hidden: the CLI-owned activation mode (desktop controller's
       // idle-gated restart cycle), not a user-facing switch - see
       // commands/host-restart.ts.
@@ -1222,12 +1363,22 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      .command("free-port-and-restart", { hidden: true })
+      // Public, unlike its kill-only sibling below: `host doctor` prints this
+      // exact command line - PID and port filled in - as the fix for a port
+      // conflict, so a user is asked to type it. A command the CLI tells
+      // people to run has to be in the CLI's own help.
+      .command("free-port-and-restart")
       .description(
-        "Terminate a foreign PID holding the host port and restart the service (internal - invoked by Doctor)",
+        "Kill the process holding the host's port, then restart the host - the fix 'traycer host doctor' prints for a port conflict. Pass --pid and --port together; the PID is re-checked against the port and nothing is killed if it no longer owns it. With neither flag this only restarts the host.",
       )
-      .option("--pid <pid>", "PID of the conflicting process to terminate")
-      .option("--port <port>", "Port the foreign process is bound to"),
+      .option(
+        "--pid <pid>",
+        "PID of the process holding the port, as reported by 'traycer host doctor'. Requires --port.",
+      )
+      .option(
+        "--port <port>",
+        "Port that PID is holding, as reported by 'traycer host doctor'. Requires --pid.",
+      ),
     (opts) => {
       const pid =
         typeof opts.pid === "string" ? parsePositiveIntegerArg(opts.pid) : null;
@@ -1251,6 +1402,18 @@ function registerHostCommands(program: Command): void {
           exitCode: 1,
         });
       }
+      // The both-or-neither rule lives in the HANDLER
+      // (`buildHostFreePortAndRestartCommand`), not here. #1505 and #1506
+      // fixed the same `--port`-without-`--pid` hole independently and agreed
+      // to keep one: the handler's, because it also covers direct callers of
+      // `buildHostFreePortAndRestartCommand` rather than only the Commander
+      // path, and because it sits next to the `--pid`-alone guard that was
+      // always there. The registration-level copy is deleted here rather than
+      // left as harmless duplication - two guards for one rule drift, and the
+      // messages had already diverged.
+      //
+      // The `--pid <pid>` / `--port <port>` help above still states the rule,
+      // which is where a reader looks for it.
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
@@ -1260,9 +1423,14 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
+      // Stays hidden where `free-port-and-restart` above went public, and the
+      // difference is who is asked to run it: nothing prints this spelling for
+      // a person to type. It is the half-repair Desktop's host controller
+      // drives when it owns the restart itself, and leaving the port freed but
+      // the host down is not an outcome to hand a user.
       .command("free-port", { hidden: true })
       .description(
-        "Terminate a foreign PID holding the host port, without restarting the service (internal - invoked by Doctor)",
+        "Internal: terminate a foreign PID holding the host port WITHOUT restarting the host. Machine contract for Desktop's host controller; people use 'traycer host free-port-and-restart'.",
       )
       .requiredOption(
         "--pid <pid>",
@@ -1348,10 +1516,14 @@ export function hostStartOptionsFromCommand(input: {
 }
 
 function registerServiceCommands(host: Command): void {
+  // "status" belongs in the summary because it is a third of this group, and
+  // "starts/stops it" because registering or deregistering is never only a
+  // bookkeeping edit - the OS starts the host on install and stops it on
+  // uninstall.
   const service = host
     .command("service")
     .description(
-      "Register / deregister the OS service that supervises the host",
+      "Set up, check, or remove the background registration that keeps the host running (registering starts it; deregistering stops it)",
     );
 
   withRunner(
@@ -1396,7 +1568,9 @@ function registerServiceCommands(host: Command): void {
 function registerCliCommands(program: Command): void {
   const cli = program
     .command("cli")
-    .description("Manage the installed CLI binary (upgrade, re-anchor)");
+    .description(
+      "Update the 'traycer' command itself, or point it at a binary you installed by hand",
+    );
 
   withRunner(
     cli
@@ -1491,11 +1665,13 @@ function registerCliCommands(program: Command): void {
 function registerConfigCommands(program: Command): void {
   const config = program
     .command("config")
-    .description("Read or write Traycer's machine-local config");
+    .description("Read or change the Traycer settings stored on this machine");
 
   const shell = config
     .command("shell")
-    .description("Shell used for host bootstrap and terminal tabs");
+    .description(
+      "Choose the shell Traycer uses to start the host and to open terminal tabs",
+    );
   withRunner(
     shell
       .command("get")
@@ -1618,7 +1794,9 @@ function registerConfigCommands(program: Command): void {
 
   const env = config
     .command("env")
-    .description("Env vars layered on top of host + terminal env");
+    .description(
+      "Environment variables Traycer adds when it starts the host and opens terminal tabs",
+    );
   withRunner(
     env.command("list").description("List env overrides"),
     () => async (ctx) => buildConfigEnvListCommand()(ctx),
@@ -1683,12 +1861,14 @@ function collectRepeatedOption(
 function registerWorkspaceCommands(program: Command): void {
   const workspace = program
     .command("workspace")
-    .description("Inspect workspace folders");
+    .description("Show the folders an agent in this Task can work in");
 
   withRunner(
     workspace
       .command("list")
-      .description("List workspace folders and Git worktrees for an epic"),
+      .description(
+        "List the folders and Git worktrees bound to this Task, and which agents hold each one",
+      ),
     () => buildWorkspaceListCommand({ epicId: null }),
   );
 }
@@ -1739,8 +1919,14 @@ function registerCommentsCommands(program: Command): void {
       .description(
         "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
       )
-      .argument("[artifactPaths...]", "Absolute artifact paths")
-      .option("--status <status>", "Thread status: all, open, or resolved"),
+      .argument(
+        "[artifactPaths...]",
+        "Artifact paths to list threads for. Absolute, or relative to the current directory (resolved before the request). Omit to list every artifact in this Task.",
+      )
+      .option(
+        "--status <status>",
+        "Thread status: all, open, or resolved (defaults to all)",
+      ),
     (opts, args) =>
       buildCommentsListCommand({
         epicId: null,
@@ -1757,7 +1943,10 @@ function registerCommentsCommands(program: Command): void {
       .description(
         "Set artifact comment threads to open or resolved after addressing or reopening feedback. Prefer telling the user which threads look addressed and letting them decide, unless they have already asked you to resolve threads yourself.",
       )
-      .requiredOption("--artifact <path>", "Absolute artifact path")
+      .requiredOption(
+        "--artifact <path>",
+        "Artifact the threads belong to. Absolute, or relative to the current directory (resolved before the request).",
+      )
       .requiredOption("--status <status>", "Thread status: open or resolved")
       .argument("<threadIds...>", "Thread ids to update"),
     (opts, args) =>
@@ -1785,7 +1974,9 @@ function registerWorktreeCommands(program: Command): void {
   };
   const worktree = program
     .command("worktree")
-    .description("Create, inspect, and remove Git worktree paths");
+    .description(
+      "Create, list, and remove the Git worktrees Traycer manages on this machine",
+    );
 
   withRunner(
     worktree
@@ -1845,7 +2036,7 @@ function registerWorktreeCommands(program: Command): void {
       )
       .option(
         "--carry-uncommitted",
-        "Carry tracked and untracked changes from the source workspace when valid",
+        "Carry tracked and untracked changes from the source workspace when valid. Only with --branch; rejected with --existing.",
       ),
     (opts) =>
       buildWorktreeCreateCommand({
@@ -1889,15 +2080,17 @@ function registerAgentCommands(
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program
     .command("agent")
-    .description("Agent inspection and communication for the calling agent");
+    .description(
+      "List, inspect, message, and manage the other agents in this Task",
+    );
 
   withRunner(
     agent
       .command("list")
-      .description("List every agent in the epic")
+      .description("List every agent in this Task")
       .option(
         "-a, --all",
-        "List all agents in the epic, not just agents belonging to this user",
+        "List all agents in this Task, not just agents belonging to this user",
       ),
     (opts) =>
       buildAgentListCommand({
@@ -2222,14 +2415,14 @@ function registerAgentCommands(
     const role = agent
       .command("role")
       .description(
-        "Claim, list, and relinquish durable Task-local roles for the calling agent",
+        "Claim, list, and relinquish the named roles that record which agent owns what in this Task",
       );
 
     withRunner(
       role
         .command("claim", readonlyHidden)
         .description(
-          "Claim a durable role for the calling agent in this Task's role registry",
+          "Claim a named role for yourself in this Task, so other agents can see who owns what",
         )
         .requiredOption(
           "--role <name>",
@@ -2267,7 +2460,7 @@ function registerAgentCommands(
     withRunner(
       role
         .command("relinquish", readonlyHidden)
-        .description("Relinquish a role claim held by the calling agent")
+        .description("Give up a role you are currently holding in this Task")
         .requiredOption(
           "--claim-id <id>",
           "Claim id to relinquish (see 'traycer agent role list')",

@@ -5,7 +5,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -46,5 +46,9 @@ async function listSingleHarnessModels(
   const result = await toAgentCliError(
     callHostRpc("agent.listHarnessModels", request),
   );
-  return parseHostResponse(listHarnessModelsResponseSchema, result);
+  return parseCanonicalHostResponse(
+    "agent.listHarnessModels",
+    listHarnessModelsResponseSchema,
+    result,
+  );
 }
