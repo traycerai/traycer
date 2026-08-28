@@ -9790,6 +9790,138 @@ describe("createChatSessionStore", () => {
     },
   );
 
+  // `workflow.*` is the same card by another name: all three write the SAME
+  // `subagent` block through `makeSubAgentBlock`, addressed by `event.blockId`,
+  // and all three build one when none exists - the accumulator's `started`
+  // opens, `progress`/`completed` update-or-synthesize, exactly as `subagent.*`
+  // does. A Workflow run is a fleet that outlives its spawning turn for the
+  // same reason a background subagent does, so it inherits the same hazard and
+  // must inherit the same rule.
+  it("creates the active turn's own workflow card from its first workflow.started", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitTextDelta(callbacks, "Active turn", 4);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "workflow.started",
+        blockId: "live-workflow",
+        timestamp: 5,
+        name: "review-changes",
+        intent: "Review changed files across dimensions",
+      },
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-workflow",
+        status: "streaming",
+      }),
+    ]);
+  });
+
+  it("keeps applying progress and completion to the workflow card it created", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "workflow.started",
+      blockId: "live-workflow",
+      timestamp: 5,
+      name: "review-changes",
+      intent: "Review changed files",
+    });
+    emit({
+      type: "workflow.progress",
+      blockId: "live-workflow",
+      timestamp: 6,
+      activity: { kind: "phase", text: "Review" },
+      agentsStarted: 3,
+      agentsFinished: 1,
+    });
+    emit({
+      type: "workflow.completed",
+      blockId: "live-workflow",
+      timestamp: 7,
+      outcome: "completed",
+      result: "3 findings",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-workflow",
+        status: "completed",
+        progressUpdates: ["Review"],
+        result: "3 findings",
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      "progress",
+      {
+        type: "workflow.progress",
+        blockId: "evicted-workflow",
+        timestamp: 5,
+        activity: { kind: "phase", text: "Verify" },
+        agentsStarted: 4,
+        agentsFinished: 2,
+      } satisfies RuntimeEvent,
+    ],
+    [
+      "completed",
+      {
+        type: "workflow.completed",
+        blockId: "evicted-workflow",
+        timestamp: 5,
+        outcome: "completed",
+        result: "done",
+      } satisfies RuntimeEvent,
+    ],
+  ])(
+    "still drops an ownerless workflow %s rather than opening a card for it",
+    (_label, event) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      emitTextDelta(callbacks, "Active turn", 4);
+
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();

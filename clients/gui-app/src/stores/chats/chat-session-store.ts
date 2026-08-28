@@ -6784,7 +6784,7 @@ function applyContentDelta(
 
 // The block id whose OWNING message a detached backgrounded-subagent event
 // targets, plus whether that owner MUST already exist:
-//   - `subagent.*`             → the subagent block (`event.blockId`).
+//   - `subagent.*` / `workflow.*` → the subagent block (`event.blockId`).
 //   - a terminal `tool_call.*` / `command.completed` → its non-empty
 //     `parentBlockId` when it is a subagent CHILD; otherwise its own `blockId`
 //     (a genuinely top-level background terminal - Claude backgrounds through a
@@ -6793,21 +6793,29 @@ function applyContentDelta(
 // Null for everything else (text/reasoning/top-level tool deltas), so the
 // common high-frequency path skips the owner lookup.
 //
+// `workflow.*` is here because it is the SAME CARD: all three write a
+// `subagent` block through `makeSubAgentBlock`, addressed by `event.blockId`,
+// with `started` opening and `progress`/`completed` updating-or-synthesizing -
+// the accumulator's workflow arm mirrors its subagent arm case for case. A
+// Workflow run is a fleet that outlives its spawning turn exactly as a
+// background subagent does, so leaving it out of this table was not a
+// narrower policy, it was the same hazard with no guard on it.
+//
 // `ownerMustExist` decides what happens when the scan finds NO owner, and it
 // says what it means rather than proxying it through how the owner is named.
 // The distinction it draws is whether this event OPENS its own card or updates
 // one:
 //
-//   - `subagent.started` opens it. `accumulateTurnContent` builds the block
-//     FROM this event, so "no message owns it" is the ordinary birth of every
-//     subagent card, not evidence of a detached one. Dropping it there means
-//     the card is never created - and then its own progress and completion
-//     have no owner either, so nothing about that subagent ever renders.
-//   - `subagent.progress` / `subagent.completed` update it. They ALSO build a
-//     card when none exists (see the accumulator), which is exactly the
-//     synthesis that must not happen under an unrelated turn: their card's row
-//     is evictable on the windowed line, so an ownerless one means gone, not
-//     new.
+//   - `subagent.started` / `workflow.started` open it. `accumulateTurnContent`
+//     builds the block FROM this event, so "no message owns it" is the
+//     ordinary birth of every such card, not evidence of a detached one.
+//     Dropping it there means the card is never created - and then its own
+//     progress and completion have no owner either, so nothing about that run
+//     ever renders.
+//   - the matching `progress` / `completed` update it. They ALSO build a card
+//     when none exists (see the accumulator), which is exactly the synthesis
+//     that must not happen under an unrelated turn: their card's row is
+//     evictable on the windowed line, so an ownerless one means gone, not new.
 //   - a `parentBlockId` owner, or a parentless BACKGROUND terminal, belongs to
 //     an older row for the same reason and never falls through.
 //
@@ -6815,6 +6823,28 @@ function applyContentDelta(
 // with the active turn's own row consulted (see `activeTurnOwnsBlock`) a live
 // call's terminal never reaches here, so what is left is a terminal whose
 // `started` was genuinely never seen, and completing it beats stranding it.
+// The `subagent.*` / `workflow.*` arm, split out so the opens-versus-updates
+// rule reads as two branches rather than a negated conjunction hidden in a
+// flag - and so the parent function stays under the complexity ceiling as the
+// pair grows. Both triples address the SAME card by their own `blockId`; the
+// only thing that differs between them is which event opens it.
+function subagentCardOwnerTarget(
+  event: RuntimeEvent,
+): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
+  if (event.type === "subagent.started" || event.type === "workflow.started") {
+    return { ownerBlockId: event.blockId, ownerMustExist: false };
+  }
+  if (
+    event.type === "subagent.progress" ||
+    event.type === "subagent.completed" ||
+    event.type === "workflow.progress" ||
+    event.type === "workflow.completed"
+  ) {
+    return { ownerBlockId: event.blockId, ownerMustExist: true };
+  }
+  return null;
+}
+
 function detachedSubagentOwnerTarget(
   event: RuntimeEvent,
 ): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
@@ -6824,16 +6854,8 @@ function detachedSubagentOwnerTarget(
     event.parentBlockId.length > 0
       ? event.parentBlockId
       : null;
-  if (
-    event.type === "subagent.started" ||
-    event.type === "subagent.progress" ||
-    event.type === "subagent.completed"
-  ) {
-    return {
-      ownerBlockId: event.blockId,
-      ownerMustExist: event.type !== "subagent.started",
-    };
-  }
+  const cardTarget = subagentCardOwnerTarget(event);
+  if (cardTarget !== null) return cardTarget;
   if (
     event.type === "tool_call.completed" ||
     event.type === "tool_call.errored" ||
