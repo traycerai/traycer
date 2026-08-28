@@ -1191,7 +1191,8 @@ function TerminalAgentHeaderControls(props: {
   if (self === null || controls.descendants.length === 0) return null;
 
   // Include the root agent in the badge when it is itself active.
-  const runningCount = controls.descendants.length + (self.active ? 1 : 0);
+  const runningCount =
+    controls.descendants.length + (self.activity === false ? 0 : 1);
 
   return (
     <div className="flex shrink-0 items-center gap-1">
