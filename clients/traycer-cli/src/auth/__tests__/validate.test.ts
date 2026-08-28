@@ -306,7 +306,11 @@ describe("validateStoredCredentials", () => {
     });
   });
 
-  it("maps a transient rotate failure to network-error", async () => {
+  // `refresh-network` is spend-AMBIGUOUS on its own: the refresh POST left the
+  // process and the reply was lost, so the server may have rotated. The store
+  // keeps its spent-base marker armed for that reason, and `none` is defined
+  // here as a certainty - so this outcome must never report it.
+  it("maps a lost refresh reply to network-error with an UNCONFIRMED rotation, never 'none'", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({
       outcome: "refresh-network",
@@ -314,9 +318,23 @@ describe("validateStoredCredentials", () => {
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
-      effect: "none",
+      effect: "token-rotation-unconfirmed",
     });
   });
+
+  // The contrast that gives the case above its meaning: these two are guards
+  // that return BEFORE the attempt spends anything, so `none` is a fact.
+  it.each(["lock-busy", "spend-pending"] as const)(
+    "maps %s to network-error with effect='none' - it returns before any spend",
+    async (outcome) => {
+      identityMock.mockResolvedValue({ kind: "rejected" });
+      rotateMock.mockResolvedValue({ outcome, credentials: null });
+      expect(await validateStoredCredentials()).toEqual({
+        kind: "network-error",
+        effect: "none",
+      });
+    },
+  );
 
   it("maps user-mismatch to rejected WITHOUT reporting the foreign account", async () => {
     // rotate carries the OTHER account's pair on user-mismatch; whoami must NOT

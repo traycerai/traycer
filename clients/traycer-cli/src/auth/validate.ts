@@ -23,10 +23,16 @@ import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
  *                                      untouched.
  *   - `profile-refresh-unconfirmed` -> the profile write was attempted and the
  *                                      commit did not confirm.
- *   - `token-rotated`               -> the refresh token was SPENT and the
- *                                      stored pair is now the fresh one.
- *   - `token-rotation-unconfirmed`  -> the refresh token was SPENT and the
- *                                      commit did not confirm.
+ *   - `token-rotated`               -> a rotation happened: the refresh token
+ *                                      was spent, and the stored pair is a
+ *                                      fresh, live one. It does NOT assert
+ *                                      that the pair on disk is the one this
+ *                                      process minted - see below.
+ *   - `token-rotation-unconfirmed`  -> a rotation was attempted and this
+ *                                      process could not confirm what it left
+ *                                      behind: the spend may or may not have
+ *                                      reached the server, and a mint may or
+ *                                      may not have landed.
  *
  * ## Why two of these say "unconfirmed" rather than "failed"
  *
@@ -41,6 +47,18 @@ import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
  * only job is to stop this command from overstating what it did. The user's
  * next move is the same under either branch (re-authenticate if the next
  * command fails), so the honest label loses nothing.
+ *
+ * ## Why `token-rotated` says nothing about WHOSE pair is on disk
+ *
+ * After a lost commit, a retried rotate returns `superseded` in two situations
+ * this process cannot tell apart: its own continuation landed, or a sibling
+ * signed the same user in and the store dropped the continuation because the
+ * file token moved. Both leave the refresh token spent and a live pair on
+ * disk, which is the whole of what a caller can act on.
+ *
+ * Encoding the difference would be encoding a distinction that is not
+ * observable anyway - a sibling can land its write the instant after this
+ * process looks - and both branches carry the same remedy, which is none.
  */
 export type ValidationEffect =
   | "none"
@@ -230,6 +248,17 @@ async function rotateStaleCredentials(
           }
         : { kind: "rejected", effect: spentEffect(spentRefreshToken) };
     case "refresh-network":
+      logger.warn("Stored credential validation rotate hit transient failure", {
+        environment: config.environment,
+        outcome: result.outcome,
+        spentRefreshToken,
+      });
+      // `refresh-network` is spend-AMBIGUOUS in its own right, whatever earlier
+      // attempts did: the refresh POST left this process, and the reply was
+      // lost. The store keeps its spent-base marker armed for exactly that
+      // reason - it cannot know either. So this never reports `none`, which
+      // this file defines as a certainty.
+      return { kind: "network-error", effect: "token-rotation-unconfirmed" };
     case "lock-busy":
     case "spend-pending":
       logger.warn("Stored credential validation rotate hit transient failure", {
@@ -237,6 +266,8 @@ async function rotateStaleCredentials(
         outcome: result.outcome,
         spentRefreshToken,
       });
+      // Both are guards that return BEFORE this attempt spends anything, so
+      // only an earlier attempt's spend can be in play here.
       return { kind: "network-error", effect: spentEffect(spentRefreshToken) };
     case "deleted":
     case "tombstoned":
@@ -257,9 +288,12 @@ async function rotateStaleCredentials(
  * A failure can still arrive after a spend: the first attempt mints a pair and
  * loses the commit, and by the retry a concurrent logout or account switch has
  * turned the file into something this rotate refuses (`deleted`, `tombstoned`,
- * `user-mismatch`) or unreachable (`refresh-network`). The command failed, but
- * it did not fail WITHOUT consuming the refresh token, and a caller auditing
- * what this invocation touched needs the difference.
+ * `user-mismatch`). The command failed, but it did not fail WITHOUT consuming
+ * the refresh token, and a caller auditing what this invocation touched needs
+ * the difference.
+ *
+ * Only for outcomes whose own attempt provably spent nothing. `refresh-network`
+ * is not one of them and does not come through here.
  */
 function spentEffect(spentRefreshToken: boolean): ValidationEffect {
   return spentRefreshToken ? "token-rotation-unconfirmed" : "none";
@@ -274,8 +308,11 @@ function spentEffect(spentRefreshToken: boolean): ValidationEffect {
  *                        the fresh one (see `ValidationEffect`) and this
  *                        process cannot tell which, so the report says exactly
  *                        that.
- *   - `superseded`    -> the file already holds a different, live pair. Whether
- *                        that is a rotation depends entirely on whether WE
+ *   - `superseded`    -> the file already holds a different, live pair, from
+ *                        our own landed continuation or from a sibling - a
+ *                        difference this process cannot see and does not
+ *                        claim (see `ValidationEffect`). Whether that is a
+ *                        rotation depends entirely on whether WE
  *                        spent to produce it: our own retried continuation
  *                        landing looks identical to a sibling that rotated
  *                        while we were only reading.
