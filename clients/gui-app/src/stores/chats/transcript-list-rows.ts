@@ -190,6 +190,10 @@ function liveRecordRowIds(window: TranscriptWindow): ReadonlySet<string> {
   return rowIds;
 }
 
+function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
+  return model.statusLabel === "Pending" || model.statusLabel === "Streaming";
+}
+
 /**
  * Placeholder rows already built, keyed by the skeleton they were built from.
  *
@@ -328,9 +332,10 @@ export function transcriptListRows(input: {
     const unplacedRendered = rendered.filter(
       (model) =>
         !spanRowIds.has(model.id) &&
-        (model.persistentMessageId === null ||
+        (isExplicitlyPendingOrStreaming(model) ||
           liveRowIds.has(model.id) ||
-          liveRowIds.has(model.persistentMessageId)),
+          (model.persistentMessageId !== null &&
+            liveRowIds.has(model.persistentMessageId))),
     );
     return [
       ...invalidatedPlaceholderRows(window.rowCount),

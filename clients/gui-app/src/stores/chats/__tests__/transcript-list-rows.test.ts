@@ -67,6 +67,14 @@ function modelWithoutPersistentMessageId(id: string): ChatMessageModel {
   return { ...model(id), persistentMessageId: null };
 }
 
+function pendingModel(id: string): ChatMessageModel {
+  return {
+    ...modelWithoutPersistentMessageId(id),
+    role: "user",
+    statusLabel: "Pending",
+  };
+}
+
 function skeletonEntry(rowId: string): RowSkeletonEntry {
   return {
     rowId,
@@ -439,10 +447,26 @@ describe("transcriptListRows", () => {
         skeletonComplete: false,
         invalidated: true,
       }),
-      rendered: [modelWithoutPersistentMessageId("pending-user")],
+      rendered: [pendingModel("pending-user")],
     });
 
     expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
+  });
+
+  it("does not append a synthetic row from an unresolved tail span", () => {
+    const syntheticId = "forked-chat-link:event-unresolved";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [span(0, [""])],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [modelWithoutPersistentMessageId(syntheticId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
   });
 
   it("reuses invalidated placeholder objects across streaming renders", () => {
@@ -456,7 +480,7 @@ describe("transcriptListRows", () => {
     const first = transcriptListRows({ window, rendered: [] });
     const streamed = transcriptListRows({
       window,
-      rendered: [modelWithoutPersistentMessageId("pending-user")],
+      rendered: [pendingModel("pending-user")],
     });
 
     expect(streamed[0]).toBe(first[0]);
