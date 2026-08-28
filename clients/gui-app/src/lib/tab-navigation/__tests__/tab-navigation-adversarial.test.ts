@@ -1,5 +1,5 @@
 /**
- * T3 rev-3 adversarial verification (frozen provenance-design §9).
+ * Adversarial navigation verification (frozen provenance-design §9).
  *
  * Net-new race/ledger tests only — no production edits. Drives the real
  * controller, coordinator, and stores; fakes only the navigate promise /
@@ -557,7 +557,7 @@ function resetForPreHydration(): void {
   __resetTabNavigationHydrationForTesting();
 }
 
-describe("T3 rev-3 adversarial: authority clock & compaction", () => {
+describe("adversarial navigation: authority clock & compaction", () => {
   beforeEach(async () => {
     resetStores();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -813,7 +813,7 @@ describe("T3 rev-3 adversarial: authority clock & compaction", () => {
   });
 });
 
-describe("T3 rev-3 adversarial: corrective ignoreBlocker + finite failure", () => {
+describe("adversarial navigation: corrective ignoreBlocker + finite failure", () => {
   beforeEach(async () => {
     resetStores();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -1022,7 +1022,7 @@ describe("T3 rev-3 adversarial: corrective ignoreBlocker + finite failure", () =
   });
 });
 
-describe("T3 rev-3 adversarial: permanent observer & hydration queue", () => {
+describe("adversarial navigation: permanent observer & hydration queue", () => {
   beforeEach(async () => {
     resetForPreHydration();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -1278,7 +1278,7 @@ describe("T3 rev-3 adversarial: permanent observer & hydration queue", () => {
   });
 });
 
-describe("T3 rev-3 adversarial: prepared Draft→Epic split swap", () => {
+describe("adversarial navigation: prepared Draft→Epic split swap", () => {
   beforeEach(async () => {
     resetStores();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -1451,7 +1451,7 @@ describe("T3 rev-3 adversarial: prepared Draft→Epic split swap", () => {
   });
 });
 
-describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => {
+describe("adversarial navigation: coordinator ledger & structural restore", () => {
   beforeEach(async () => {
     resetStores();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -2105,7 +2105,7 @@ describe("T3 rev-3 adversarial: coordinator ledger & structural restore", () => 
   });
 });
 
-describe("T3 rev-3 adversarial: Resource Monitor nested + Phase completion", () => {
+describe("adversarial navigation: Resource Monitor nested + Phase completion", () => {
   beforeEach(async () => {
     resetStores();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -2280,7 +2280,7 @@ describe("T3 rev-3 adversarial: Resource Monitor nested + Phase completion", () 
   });
 });
 
-describe("T3 rev-3 adversarial: external supersede + POP + envelope fields", () => {
+describe("adversarial navigation: external supersede + POP + envelope fields", () => {
   beforeEach(async () => {
     resetStores();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });

@@ -294,7 +294,11 @@ function runnableQueue(itemCount: number): ChatQueueState {
       kind: "prompt" as const,
       queueItemId: `item-${index}`,
       messageId: `message-${index}`,
-      message: { kind: "user" as const, content: CONTENT },
+      message: {
+        kind: "user" as const,
+        content: CONTENT,
+        browserAnnotations: [],
+      },
       sender: { type: "user" as const, userId: "owner-1" },
       settings: SETTINGS,
       accountContext: { type: "PERSONAL" as const },
@@ -609,10 +613,10 @@ describe("chatActivityIndicator", () => {
           backgroundItems: [
             MONITOR_ITEM,
             {
-              taskId: "t3",
+              taskId: "workflow-task",
               kind: "workflow" as const,
               title: "review-changes",
-              blockId: "t3",
+              blockId: "workflow-task",
               parentTaskId: null,
               phase: null,
               activeLabel: null,
@@ -748,7 +752,9 @@ describe("canModifyChatMessages", () => {
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
     deliveryPolicy: null,
+    attachments: [],
     timestamp: 0,
+    restore: { content: CONTENT, browserAnnotations: [] },
     restoreWorktreeIntent: null,
   };
 
@@ -1136,7 +1142,7 @@ function persistedUserMessage(
     role: "user",
     messageId,
     sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: CONTENT },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
     timestamp: 4,
     sessionAnchor: null,
   };
@@ -1148,11 +1154,13 @@ function pendingUserMessage(clientActionId: string): PendingUserMessage {
     clientActionId,
     messageId: `message-${clientActionId}`,
     content: CONTENT,
+    attachments: [],
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
     timestamp: 4,
     accountContext,
     deliveryPolicy: null,
+    restore: { content: CONTENT, browserAnnotations: [] },
     restoreWorktreeIntent: null,
   };
 }

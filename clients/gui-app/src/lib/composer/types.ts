@@ -6,11 +6,13 @@ import type {
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { MentionPathTree } from "@/lib/path";
 import type {
+  BrowserTabMentionContextType,
   EntityMentionContextType,
   GithubMentionContextType,
   MentionAttachment,
   PathKind,
 } from "@traycer/protocol/common/composer-mention-attrs";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 
 /**
  * The mention ATTACHMENT half of this module - what a chip's node attributes
@@ -20,7 +22,13 @@ import type {
  * types below (suggestion entries, previews, slash commands) are GUI-only and
  * stay.
  */
+// The mention attachment types live in `@traycer/protocol` and are re-exported
+// here, so a consumer importing from this module keeps working. `browser-tab`
+// joined them there rather than staying local: its own doc calls it a wire
+// spelling, and every other mention kind already answers to that module.
 export type {
+  BrowserTabMentionAttachment,
+  BrowserTabMentionContextType,
   EntityMentionAttachment,
   EntityMentionContextType,
   FileMentionAttachment,
@@ -37,7 +45,8 @@ export type MentionContextType =
   | "git"
   | "worktree"
   | EntityMentionContextType
-  | GithubMentionContextType;
+  | GithubMentionContextType
+  | BrowserTabMentionContextType;
 
 export type ComposerPromptSegment =
   | { type: "text"; text: string }
@@ -139,10 +148,47 @@ export interface EpicTerminalMentionEntry {
 }
 
 export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
+
+/**
+ * One browser tab as the @-mention picker lists it - sourced live from
+ * `useMaybeBrowserSessionsContext()`, not a host RPC, so every field is
+ * already resolved when the entry is built.
+ *
+ * `coLocated` and `lastActivityAt` are ranking hints only, never rendered:
+ * the co-located-pane-group ranking the design calls for needs the chat's
+ * `viewTabId`/tile identity threaded into the mention context, which is
+ * disproportionately invasive here (see `providers.tsx`'s
+ * `rankBrowserTabEntries`). `coLocated` is `tab.viewed` - the session
+ * stream's own "currently viewed" hint - used as the closest cheap proxy:
+ * a real pane-group walk ranks a sibling-pane tab first regardless of which
+ * tab a person is looking at, while this ranks whichever tab the stream
+ * already marks as viewed, so the two agree only when that also happens to
+ * be the co-located one.
+ */
+export interface BrowserTabMentionEntry {
+  readonly kind: "browser-tab";
+  readonly id: string;
+  readonly tabId: string;
+  readonly sessionId: string;
+  readonly label: string;
+  readonly url: string;
+  readonly coLocated: boolean;
+  readonly lastActivityAt: number;
+  /**
+   * `tab.status === "dormant"` (the sidebar's own source of truth for its
+   * Moon glyph - `epic-browser-sidebar-row.tsx`). Dormant tabs ARE listed
+   * and mentionable: `page.attachTab` auto-wakes a dormant session before
+   * leasing it, so this is a display hint (renders the Moon glyph, demotes
+   * the row a notch in ranking) and never a filter.
+   */
+  readonly dormant: boolean;
+}
+
 export type MentionSuggestionEntry =
   | WorkspaceEntry
   | EpicMentionEntry
-  | EpicTerminalMentionEntry;
+  | EpicTerminalMentionEntry
+  | BrowserTabMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";
@@ -158,7 +204,13 @@ export type ImageAttachment = {
   size: number | undefined;
 };
 
-export type Attachment = ImageAttachment | MentionAttachment;
+// The mention definitions main declared inline here live in
+// `@traycer/protocol/common/composer-mention-attrs` and are re-exported above;
+// what survives from main's side is its WIDENING of this alias.
+export type Attachment =
+  | ImageAttachment
+  | MentionAttachment
+  | BrowserAnnotationRecord;
 
 /**
  * Full, untruncated preview content for a picker row - the side preview panel

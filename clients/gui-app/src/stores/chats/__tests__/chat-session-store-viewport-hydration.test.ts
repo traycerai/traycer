@@ -33,7 +33,7 @@ function userMessage(messageId: string, timestamp: number): Message {
     role: "user",
     messageId,
     sender: { type: "user", userId: OWNER_ID },
-    message: { kind: "user", content: CONTENT },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
     timestamp,
     sessionAnchor: null,
   };
@@ -222,6 +222,7 @@ function hugeUserMessage(messageId: string, timestamp: number): Message {
           },
         ],
       },
+      browserAnnotations: [],
     },
     timestamp,
     sessionAnchor: null,

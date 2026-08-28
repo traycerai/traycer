@@ -1,4 +1,6 @@
 import type {
+  BrowserTabMentionAttachment,
+  BrowserTabMentionEntry,
   EntityMentionAttachment,
   GitMentionAttachment,
   MentionAttachment,
@@ -16,6 +18,9 @@ export function mentionAttachmentFromSuggestion(
   if (entry.kind === "git") return gitMentionAttachmentFromSuggestion(entry);
   if (entry.kind === "worktree") {
     return worktreeMentionAttachmentFromSuggestion(entry);
+  }
+  if (entry.kind === "browser-tab") {
+    return browserTabMentionAttachmentFromSuggestion(entry);
   }
   if (
     entry.kind === "epic" ||
@@ -172,6 +177,28 @@ function worktreeMentionAttachmentFromSuggestion(
     worktreePath: entry.worktreePath,
     branch: entry.branch,
     isMain: entry.isMain,
+  };
+}
+
+function browserTabMentionAttachmentFromSuggestion(
+  entry: BrowserTabMentionEntry,
+): BrowserTabMentionAttachment {
+  return {
+    kind: "mention",
+    contextType: "browser-tab",
+    path: `browser-tab:${entry.tabId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: entry.label,
+    // Dead field kept only because `MentionAttachment` requires it - the sent
+    // message chip renders a static Globe2 icon and no consumer reads this
+    // for browser-tab entries anymore (see FIX 3 in chat-user-message-content).
+    description: "",
+    tabId: entry.tabId,
+    sessionId: entry.sessionId,
+    url: entry.url,
   };
 }
 

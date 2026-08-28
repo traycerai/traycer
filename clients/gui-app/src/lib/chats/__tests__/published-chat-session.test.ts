@@ -312,6 +312,7 @@ function publishedUserMessage(
     message: {
       kind: "user",
       content: { type: "doc", content: [] },
+      browserAnnotations: [],
     },
     timestamp: 4,
     sessionAnchor: null,

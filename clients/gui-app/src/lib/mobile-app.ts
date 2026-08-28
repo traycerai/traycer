@@ -32,3 +32,26 @@ export function setMobileApp(value: boolean): void {
 export function isMobileApp(): boolean {
   return mobileApp;
 }
+
+/** The native shells the installed app ships in. */
+export type MobileAppPlatform = "ios" | "android";
+
+let mobileAppPlatform: MobileAppPlatform | null = null;
+
+/**
+ * WHICH native shell this installed app is, set alongside `setMobileApp` by
+ * the Capacitor entry and `null` everywhere else - including the mobile
+ * stream's dev browser tab, which is native to neither store.
+ *
+ * Same discipline as the flag above: product copy that must name the right
+ * update channel (TestFlight / the App Store vs Google Play) reads this;
+ * layout reads the viewport and capabilities read `IRunnerHost`. A `null`
+ * platform is answered with store-neutral copy, never a guess.
+ */
+export function setMobileAppPlatform(value: MobileAppPlatform | null): void {
+  mobileAppPlatform = value;
+}
+
+export function getMobileAppPlatform(): MobileAppPlatform | null {
+  return mobileAppPlatform;
+}

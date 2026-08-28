@@ -51,7 +51,7 @@ function userMessage(messageId: string, timestamp: number): Message {
     role: "user",
     messageId,
     sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: CONTENT },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
     timestamp,
     sessionAnchor: null,
   };
@@ -1141,6 +1141,7 @@ describe("reading a long chat upward from the tail", () => {
             },
           ],
         },
+        browserAnnotations: [],
       },
       timestamp,
       sessionAnchor: null,
@@ -2157,6 +2158,7 @@ function messageWithText(message: Message, text: string): Message {
         type: "doc",
         content: [{ type: "paragraph", content: [{ type: "text", text }] }],
       },
+      browserAnnotations: [],
     },
   };
 }

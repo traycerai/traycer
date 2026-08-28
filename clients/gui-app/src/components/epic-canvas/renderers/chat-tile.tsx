@@ -282,6 +282,7 @@ interface CompactChatState {
 interface ChatTileProps {
   node: EpicNodeRef;
   viewTabId: string;
+  tileId: string;
   /**
    * True when this tile is the active leaf in the epic canvas. The
    * value is drilled into `ChatComposer` so only the active tile's
@@ -295,6 +296,7 @@ interface ChatTileSessionViewProps {
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
+  readonly tileId: string;
   readonly isActive: boolean;
   readonly currentEpicId: string;
   /**
@@ -539,6 +541,7 @@ export function ChatTile(props: ChatTileProps) {
           handle={handle}
           node={node}
           viewTabId={viewTabId}
+          tileId={props.tileId}
           isActive={isActive}
           currentEpicId={epicId}
           readOnlyNotice={null}
@@ -1262,7 +1265,7 @@ function teardownSendRefusalReason(
 
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
-  const { handle, node, viewTabId, isActive, currentEpicId } = props;
+  const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
   const viewModelHostId = useTabHostId();
   const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
   // Surface visibility for the stream-flush coordinator's tiered flush rate:
@@ -2126,12 +2129,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           content: input.content,
         },
       );
-      const sent = chatActions.sendMessage(
-        input.content,
+      const sent = chatActions.sendMessage({
+        content: input.content,
         sender,
-        input.settings,
-        input.deliveryPolicy,
-      );
+        settings: input.settings,
+        attachments: input.attachments,
+        deliveryPolicy: input.deliveryPolicy,
+        restore: input.restore,
+      });
       if (sent === null) return false;
       if (shouldMarkTitlePending) {
         useEpicCanvasStore
@@ -2248,8 +2253,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         slashCatalog,
       );
       return (
-        chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
-        null
+        chatActions.sendMessage({
+          content,
+          sender,
+          settings: nextStepSettings,
+          attachments: [],
+          deliveryPolicy: "auto",
+          restore: { content, browserAnnotations: [] },
+        }) !== null
       );
     },
     [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
@@ -2311,12 +2322,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       states.set(handle.chatId, state);
       const { activeTurn, queue } = handle.store.getState();
       const runNow = activeTurn === null && queue.items.length === 0;
-      const sent = chatActions.sendMessage(
+      const sent = chatActions.sendMessage({
         content,
         sender,
-        nextStepSettings,
-        runNow ? "auto" : "after_turn",
-      );
+        settings: nextStepSettings,
+        attachments: [],
+        deliveryPolicy: runNow ? "auto" : "after_turn",
+        restore: { content, browserAnnotations: [] },
+      });
       if (sent === null || runNow) return;
       state.cancelPromotion?.();
       state.cancelPromotion = promoteQueuedMessageToFront({
@@ -2351,8 +2364,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       slashCatalog,
     );
     return (
-      chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
-      null
+      chatActions.sendMessage({
+        content,
+        sender,
+        settings: nextStepSettings,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: { content, browserAnnotations: [] },
+      }) !== null
     );
   }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
@@ -2715,6 +2734,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     handle,
     node,
     viewTabId,
+    tileId,
     tabHostId: activeHostId,
     linkResolutionRoots,
     currentEpicId,

@@ -306,6 +306,7 @@ function emitChatSnapshot(
                   },
                 ],
               },
+              browserAnnotations: [],
             },
             timestamp: 1,
             sessionAnchor: null,
@@ -412,6 +413,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -448,6 +450,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "after_safe_point",
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
       });
       expect(accepted).toBe(true);
     });
@@ -489,6 +492,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -525,6 +529,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "auto",
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
       });
       expect(accepted).toBe(true);
     });
@@ -565,6 +570,7 @@ function renderChatTile(): void {
                 <ChatTile
                   node={CHAT_ARTIFACT}
                   viewTabId="tab-queue-edit-steer"
+                  tileId="pane-queue-edit-steer"
                   isActive
                 />
               </TabHostProvider>

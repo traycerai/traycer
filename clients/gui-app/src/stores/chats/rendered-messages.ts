@@ -59,6 +59,7 @@ import {
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+
 import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
@@ -2906,6 +2907,8 @@ function renderUserMessage(
         : [],
     structuredContent: message.message.content,
     attachments: buildAttachmentsFromJSONContent(message.message.content),
+    browserAnnotations:
+      message.message.kind === "user" ? message.message.browserAnnotations : [],
     settings: null,
     createdAt: message.timestamp,
     completedAt: null,
@@ -2946,7 +2949,10 @@ function renderPendingUserMessage(
           ]
         : [],
     structuredContent: message.content,
-    attachments: buildAttachmentsFromJSONContent(message.content),
+    attachments: message.attachments,
+    browserAnnotations: message.attachments.filter(
+      (attachment) => attachment.kind === "browser-annotation",
+    ),
     settings: message.settings,
     createdAt: message.timestamp,
     completedAt: null,

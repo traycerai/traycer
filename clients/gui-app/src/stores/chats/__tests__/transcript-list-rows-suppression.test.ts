@@ -51,6 +51,7 @@ function liveMessage(messageId: string): Message {
           { type: "paragraph", content: [{ type: "text", text: "hi" }] },
         ],
       },
+      browserAnnotations: [],
     },
     timestamp: 1000,
     sessionAnchor: null,

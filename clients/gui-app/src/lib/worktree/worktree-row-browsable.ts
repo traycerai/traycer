@@ -1,5 +1,5 @@
 import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
-import { hasBlockingWorktreeSelectorReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import { hasBlockingWorktreeSelectorReason } from "@traycer-clients/shared/worktree/worktree-row-state";
 
 /**
  * Whether a worktree binding row is browsable by non-git surfaces (file tree,

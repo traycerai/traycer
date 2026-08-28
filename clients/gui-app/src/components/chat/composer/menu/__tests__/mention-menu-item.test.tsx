@@ -10,6 +10,7 @@ function entry(fields: {
   updatedAt: number | null;
   archived: boolean;
   detail: string;
+  dormant: boolean;
 }): MentionMenuEntry {
   return {
     id: "chat:epic-1:c1",
@@ -23,12 +24,16 @@ function entry(fields: {
     action: { kind: "back" },
     updatedAt: fields.updatedAt,
     archived: fields.archived,
+    dormant: fields.dormant,
     preview: null,
   };
 }
 
 function entryWithId(id: string, updatedAt: number): MentionMenuEntry {
-  return { ...entry({ updatedAt, archived: false, detail: "" }), id };
+  return {
+    ...entry({ updatedAt, archived: false, detail: "", dormant: false }),
+    id,
+  };
 }
 
 describe("MentionMenuItem", () => {
@@ -39,6 +44,7 @@ describe("MentionMenuItem", () => {
           updatedAt: Date.now() - 2 * HOUR_MS,
           archived: false,
           detail: "",
+          dormant: false,
         })}
       />,
     );
@@ -53,12 +59,27 @@ describe("MentionMenuItem", () => {
           updatedAt: Date.now() - 3 * 24 * HOUR_MS,
           archived: true,
           detail: "Claude Code",
+          dormant: false,
         })}
       />,
     );
     expect(screen.getByText("Archived")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(screen.getByText("3d")).toBeTruthy();
+  });
+
+  it("renders the dormant Moon glyph for a dormant browser tab", () => {
+    render(
+      <MentionMenuItem
+        entry={entry({
+          updatedAt: null,
+          archived: false,
+          detail: "https://docs.example.com",
+          dormant: true,
+        })}
+      />,
+    );
+    expect(screen.getByLabelText("Browser asleep")).toBeTruthy();
   });
 
   it("resamples the time when a ranked reorder puts a different Agent in the row", () => {
@@ -88,7 +109,12 @@ describe("MentionMenuItem", () => {
   it("renders no time slot for rows without an activity clock", () => {
     render(
       <MentionMenuItem
-        entry={entry({ updatedAt: null, archived: false, detail: "src/lib" })}
+        entry={entry({
+          updatedAt: null,
+          archived: false,
+          detail: "src/lib",
+          dormant: false,
+        })}
       />,
     );
     expect(screen.getByText("src/lib")).toBeTruthy();

@@ -55,6 +55,14 @@ export interface WindowRegistryRecord<
 
 type WindowRegistryListener = () => void;
 
+/**
+ * `change` = the windows list itself changed (add/remove/focus/visibility/
+ * title), i.e. a new `WindowSummary[]`. `geometry` = one window minimized /
+ * restored / (un)maximized - nothing the summary carries, so only listeners
+ * that actually reposition native content subscribe to it.
+ */
+type WindowRegistryEvent = "change" | "geometry";
+
 export class WindowRegistry<
   TWindow extends RegistryManagedWindow = BrowserWindow,
 > {
@@ -134,16 +142,30 @@ export class WindowRegistry<
     const onChange = (): void => {
       this.emitChange();
     };
+    // Geometry transitions carry nothing `WindowSummary` exposes, so they get
+    // their own signal rather than fanning a full windows-list broadcast at
+    // every renderer on each maximize.
+    const onGeometry = (): void => {
+      this.events.emit("geometry");
+    };
     window.on("closed", onClosed);
     window.on("focus", onFocus);
     window.on("show", onChange);
     window.on("hide", onChange);
+    window.on("minimize", onGeometry);
+    window.on("restore", onGeometry);
+    window.on("maximize", onGeometry);
+    window.on("unmaximize", onGeometry);
     window.on("page-title-updated", onChange);
     this.disposersByWindowId.set(windowId, () => {
       window.off("closed", onClosed);
       window.off("focus", onFocus);
       window.off("show", onChange);
       window.off("hide", onChange);
+      window.off("minimize", onGeometry);
+      window.off("restore", onGeometry);
+      window.off("maximize", onGeometry);
+      window.off("unmaximize", onGeometry);
       window.off("page-title-updated", onChange);
     });
     this.emitChange();
@@ -261,11 +283,11 @@ export class WindowRegistry<
     return this.getRecordById(windowId);
   }
 
-  on(event: "change", listener: WindowRegistryListener): void {
+  on(event: WindowRegistryEvent, listener: WindowRegistryListener): void {
     this.events.on(event, listener);
   }
 
-  off(event: "change", listener: WindowRegistryListener): void {
+  off(event: WindowRegistryEvent, listener: WindowRegistryListener): void {
     this.events.off(event, listener);
   }
 

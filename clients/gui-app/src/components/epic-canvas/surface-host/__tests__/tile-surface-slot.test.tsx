@@ -24,8 +24,13 @@ import {
   pane,
   TEST_HOST_ID,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  EpicSessionContext,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   PaneFocusProbeContext,
   PanePortalContainerContext,
@@ -51,6 +56,7 @@ const CHAT_NODE = {
 };
 
 const OPEN_EPIC_HANDLE = {} as OpenEpicStoreHandle;
+const HOST_CLIENT = {} as HostClient<HostRpcRegistry>;
 
 function canvasWithChat(): EpicCanvasState {
   return {
@@ -103,22 +109,24 @@ function renderSlot(args: {
     readonly focused: boolean;
   }): ReactNode => (
     <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
-      <PaneVisibilityContext.Provider value={providers.visible}>
-        <PaneSurfaceActivityContext.Provider
-          value={{ visible: providers.visible, focused: providers.focused }}
-        >
-          <PaneFocusProbeContext.Provider value={() => providers.focused}>
-            <TileSurfaceSlot
-              node={CHAT_NODE}
-              epicId={EPIC_ID}
-              paneId={PANE_ID}
-              viewTabId={VIEW_TAB_ID}
-              tabSelected={args.tabSelected}
-              canvasPaneActive={args.canvasPaneActive}
-            />
-          </PaneFocusProbeContext.Provider>
-        </PaneSurfaceActivityContext.Provider>
-      </PaneVisibilityContext.Provider>
+      <EpicSessionHostClientContext.Provider value={HOST_CLIENT}>
+        <PaneVisibilityContext.Provider value={providers.visible}>
+          <PaneSurfaceActivityContext.Provider
+            value={{ visible: providers.visible, focused: providers.focused }}
+          >
+            <PaneFocusProbeContext.Provider value={() => providers.focused}>
+              <TileSurfaceSlot
+                node={CHAT_NODE}
+                epicId={EPIC_ID}
+                paneId={PANE_ID}
+                viewTabId={VIEW_TAB_ID}
+                tabSelected={args.tabSelected}
+                canvasPaneActive={args.canvasPaneActive}
+              />
+            </PaneFocusProbeContext.Provider>
+          </PaneSurfaceActivityContext.Provider>
+        </PaneVisibilityContext.Provider>
+      </EpicSessionHostClientContext.Provider>
     </EpicSessionContext.Provider>
   );
 
@@ -167,6 +175,7 @@ describe("TileSurfaceSlot environment publish", () => {
       canvasPaneActive: true,
     });
     expect(env.services.openEpicHandle).toBe(OPEN_EPIC_HANDLE);
+    expect(env.services.hostClient).toBe(HOST_CLIENT);
     expect(env.services.geometryAnchorElement).toBeInstanceOf(HTMLElement);
     // No `PanePortalContainerContext.Provider` wraps this render, so the
     // ambient value is the context's own `null` default.

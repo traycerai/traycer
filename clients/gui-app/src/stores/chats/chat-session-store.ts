@@ -96,6 +96,11 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import type { Attachment } from "@/lib/composer/types";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import type {
   RuntimeApprovalDecision,
@@ -246,13 +251,30 @@ type SendActionInput = {
   readonly pendingUserMessage: PendingUserMessage | null;
 };
 
+/**
+ * What a send hands back to the composer if it never lands - the pre-submit
+ * document plus the annotation cards that left with it. One value so a new
+ * restorable composer artifact costs no call-site edits.
+ */
+export interface ChatSendRestore {
+  readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+}
+
 export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
   readonly content: JsonContent;
+  readonly attachments: ReadonlyArray<Attachment>;
   readonly sender: UserMessageSender;
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
+  /**
+   * Pre-submit composer document (no crop atoms) plus its annotation cards.
+   * Used when a settled turn never recorded the send, so restore does not
+   * inline the wire image atoms or drop the records.
+   */
+  readonly restore: ChatSendRestore;
   /**
    * The billing context this send was stamped with at dispatch. Retained for
    * the same reason `settings` is: it dies with the action, so a resend picks
@@ -304,7 +326,7 @@ export interface PendingChatAction {
   /** Immutable retry identity; null for all non-delivery-retry actions. */
   readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
-  readonly restoreContent: JsonContent | null;
+  readonly restore: ChatSendRestore | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
@@ -345,6 +367,7 @@ export type PendingChatActionSeed = Omit<PendingChatAction, "connectionEpoch">;
 export interface FailedSendRestorationState {
   readonly clientActionId: string;
   readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
   /**
    * Whether the path that created this slot ALREADY said the reason on a
@@ -438,7 +461,7 @@ export interface AcceptedChatAction {
    * {@link reconcileSnapshotChange}. `null` for non-`send` actions and after
    * the content has been consumed once by `takeSetupFailedRestoration`.
    */
-  readonly restoreContent: JsonContent | null;
+  readonly restore: ChatSendRestore | null;
   /**
    * The rest of the recovery tuple, for `send` records only.
    *
@@ -920,12 +943,14 @@ export interface ChatSessionState {
    * re-sent while the one in flight is unanswered.
    */
   reportVisibleTranscriptRange: (range: OrdinalRange | null) => void;
-  sendMessage: (
-    content: JsonContent,
-    sender: UserMessageSender,
-    settings: ChatRunSettings,
-    deliveryPolicy: ChatQueueDeliveryPolicy,
-  ) => SentChatMessageAction | null;
+  sendMessage: (input: {
+    readonly content: JsonContent;
+    readonly sender: UserMessageSender;
+    readonly settings: ChatRunSettings;
+    readonly attachments: ReadonlyArray<Attachment>;
+    readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+    readonly restore: ChatSendRestore;
+  }) => SentChatMessageAction | null;
   /**
    * Sends the initial handoff message reusing its pre-minted ids (shared with
    * the host turn-overlap idempotency gate). The driver's fallback `send`
@@ -1048,7 +1073,7 @@ export interface ChatSessionState {
    *
    * Subsequent calls for the same `messageId` return `null` (the
    * `pendingUserMessages` entry is removed; `pendingActions` /
-   * `acceptedActions` entries have their `restoreContent` field nulled
+   * `acceptedActions` entries have their `restore` field nulled
    * out) so a duplicate or replayed `setup.failed` event does not
    * double-restore. The matching action records stay in their slots so
    * downstream ack/accept reconciliation continues to work.
@@ -1443,11 +1468,11 @@ function rejectionNotice(input: {
     input.displaced &&
     pending !== null &&
     pending.action === "send" &&
-    pending.restoreContent !== null
+    pending.restore !== null
   ) {
     return unrecoverableSendNotice({
       clientActionId: input.frame.clientActionId,
-      content: pending.restoreContent,
+      content: pending.restore.content,
       circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
       account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
     });
@@ -1482,7 +1507,7 @@ function rejectionEvidence(
   currentSettings: ChatRunSettings | null,
 ): DeadSendAccount | null {
   if (pending === null || pending.action !== "send") return null;
-  if (pending.restoreContent === null) return null;
+  if (pending.restore === null) return null;
   return {
     worktree: { ...worktree, superseded },
     sentSettings: pending.settings,
@@ -1512,12 +1537,13 @@ function rejectionRestoration(input: {
 }): FailedSendRestorationState | null {
   const { state, pending, frame } = input;
   if (state.failedSendRestoration !== null) return null;
-  if (pending?.action !== "send" || pending.restoreContent === null) {
+  if (pending?.action !== "send" || pending.restore === null) {
     return null;
   }
   return {
     clientActionId: frame.clientActionId,
-    content: pending.restoreContent,
+    content: pending.restore.content,
+    browserAnnotations: pending.restore.browserAnnotations,
     reason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
@@ -1684,6 +1710,33 @@ function restoreStagedWorktreeIntent(
     .restoreIntentForDispatch(stagingKey, survivors, source.clientActionId);
   return true;
 }
+
+const liveChatSessionStores = new Set<{
+  getState: () => ChatSessionState;
+}>();
+
+function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
+  const records: BrowserAnnotationRecord[] = [];
+  for (const sessionStore of liveChatSessionStores) {
+    const state = sessionStore.getState();
+    for (const pending of Object.values(state.pendingActions)) {
+      if (pending.restore !== null) {
+        records.push(...pending.restore.browserAnnotations);
+      }
+    }
+    for (const message of state.pendingUserMessages) {
+      records.push(...message.restore.browserAnnotations);
+    }
+    if (state.failedSendRestoration !== null) {
+      records.push(...state.failedSendRestoration.browserAnnotations);
+    }
+  }
+  return collectAnnotationImageHashes(records);
+}
+
+registerExtraImageRootSource({
+  hashes: collectPendingAnnotationImageHashes,
+});
 
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
@@ -5002,7 +5055,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set({ missingWorktreePaths: next });
       },
-      sendMessage: (content, sender, settings, deliveryPolicy) => {
+      sendMessage: (input) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
         // A worktree staged mid-chat ("Create new worktree") rides on this send;
@@ -5017,6 +5070,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         };
         if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
+        const browserAnnotations = input.attachments.filter(
+          (attachment): attachment is BrowserAnnotationRecord =>
+            attachment.kind === "browser-annotation",
+        );
         const frame: ChatOwnerActionFrame = {
           kind: "send",
           hasBinaryPayload: false,
@@ -5024,12 +5081,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           chatId: options.chatId,
           clientActionId,
           messageId,
-          content,
-          sender,
-          settings,
+          content: input.content,
+          sender: input.sender,
+          settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
-          deliveryPolicy,
+          deliveryPolicy: input.deliveryPolicy,
           worktreeIntent,
+          browserAnnotations,
         };
         // Consume before dispatch so the pending action captures precisely the
         // revision it may later restore. A synchronous action rejection cannot
@@ -5060,9 +5118,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: content,
-            sender,
-            settings,
+            restore: input.restore,
+            sender: input.sender,
+            settings: input.settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
             deliveryPolicy: frame.deliveryPolicy,
@@ -5082,10 +5140,12 @@ export function createChatSessionStoreWithNotificationDependencies(
             ? {
                 clientActionId,
                 messageId,
-                content,
-                sender,
-                settings,
+                content: input.content,
+                attachments: input.attachments,
+                sender: input.sender,
+                settings: input.settings,
                 timestamp: Date.now(),
+                restore: input.restore,
                 accountContext: frame.accountContext,
                 deliveryPolicy: frame.deliveryPolicy,
                 restoreWorktreeIntent: worktreeIntent,
@@ -5106,9 +5166,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           state: get(),
           clientActionId,
           messageId,
-          content,
-          sender,
-          settings,
+          content: input.content,
+          sender: input.sender,
+          settings: input.settings,
         });
         if (optimisticQueuedItem !== null) {
           set((state) => ({
@@ -5168,6 +5228,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The landing handoff carries its worktree intent via `epic.create`,
           // not the send frame.
           worktreeIntent: null,
+          browserAnnotations: [],
         };
         const sentClientActionId = sendAction({
           set,
@@ -5179,7 +5240,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
-            restoreContent: input.content,
+            restore: { content: input.content, browserAnnotations: [] },
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
@@ -5195,11 +5256,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: input.clientActionId,
             messageId: input.messageId,
             content: input.content,
+            attachments: buildAttachmentsFromJSONContent(input.content),
             sender: input.sender,
             settings: input.settings,
             accountContext: frame.accountContext,
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
+            restore: { content: input.content, browserAnnotations: [] },
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
             restoreWorktreeIntent: null,
@@ -5282,7 +5345,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: null,
+            restore: null,
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
@@ -5354,7 +5417,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
-            restoreContent: null,
+            restore: null,
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
@@ -5962,7 +6025,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (restored === null) return null;
         // Clear every restorable slot in lockstep so a duplicate
         // `setup.failed` event cannot double-restore. The action records
-        // themselves stay in place - only their `restoreContent` slot is
+        // themselves stay in place - only their `restore` slot is
         // nulled - so downstream ack/accept reconciliation continues to
         // work.
         set({
@@ -5979,7 +6042,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                   ...state.pendingActions,
                   [pendingActionMatch.entry.clientActionId]: {
                     ...pendingActionMatch.entry,
-                    restoreContent: null,
+                    restore: null,
                   },
                 },
           acceptedActions:
@@ -5989,7 +6052,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                   ...state.acceptedActions,
                   [acceptedActionMatch.entry.clientActionId]: {
                     ...acceptedActionMatch.entry,
-                    restoreContent: null,
+                    restore: null,
                   },
                 },
         });
@@ -5998,6 +6061,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        liveChatSessionStores.delete(store);
         unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
@@ -6043,6 +6107,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         },
       );
   }
+
+  liveChatSessionStores.add(store);
 
   return {
     epicId: options.epicId,
@@ -6098,7 +6164,7 @@ function basicPending(
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,
-    restoreContent: null,
+    restore: null,
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
@@ -6423,7 +6489,7 @@ function findRestorableSendByMessageId<
     readonly clientActionId: string;
     readonly action: ChatOwnerActionFrame["kind"];
     readonly messageId: string | null;
-    readonly restoreContent: JsonContent | null;
+    readonly restore: ChatSendRestore | null;
   },
 >(
   entries: ReadonlyArray<T>,
@@ -6433,9 +6499,9 @@ function findRestorableSendByMessageId<
     if (
       entry.action === "send" &&
       entry.messageId === messageId &&
-      entry.restoreContent !== null
+      entry.restore !== null
     ) {
-      return { entry, content: entry.restoreContent };
+      return { entry, content: entry.restore.content };
     }
   }
   return null;
@@ -6487,6 +6553,9 @@ function optimisticQueuedItemForSend(
     message: {
       kind: "user",
       content: input.content,
+      // Optimistic local echo only - the real `queue.added` event reconciles
+      // this row once it arrives.
+      browserAnnotations: [],
     },
     sender: input.sender,
     settings: input.settings,

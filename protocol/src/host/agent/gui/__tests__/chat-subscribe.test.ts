@@ -54,6 +54,7 @@ const userMessage: UserMessage = {
   message: {
     kind: "user",
     content: { type: "doc", content: [] },
+    browserAnnotations: [],
   },
   timestamp: 1000,
   sessionAnchor: null,

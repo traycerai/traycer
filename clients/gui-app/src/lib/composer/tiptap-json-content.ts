@@ -2,6 +2,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type {
   Attachment,
+  BrowserTabMentionAttachment,
   GithubMentionAttachment,
   ImageAttachment,
   MentionAttachment,
@@ -226,6 +227,23 @@ export function mentionAttrsFromAttachment(
       organizationLogin: mention.organizationLogin,
       repositoryName: mention.repositoryName,
       issueNumber: mention.issueNumber,
+      url: mention.url,
+    };
+  }
+
+  if (isBrowserTabMentionAttachment(mention)) {
+    return {
+      contextType: "browser-tab",
+      id: mention.tabId,
+      path: mention.path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: mention.label,
+      description: mention.description,
+      tabId: mention.tabId,
+      sessionId: mention.sessionId,
       url: mention.url,
     };
   }
@@ -598,4 +616,10 @@ function isGithubMentionAttachment(
     mention.contextType === "github_pull_request" ||
     mention.contextType === "github_issue"
   );
+}
+
+function isBrowserTabMentionAttachment(
+  mention: MentionAttachment,
+): mention is BrowserTabMentionAttachment {
+  return mention.contextType === "browser-tab";
 }

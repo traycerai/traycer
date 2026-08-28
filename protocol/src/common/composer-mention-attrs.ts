@@ -55,6 +55,14 @@ import { githubMentionTokenReference } from "./github-mention-identity";
 
 export type PathKind = "file" | "folder";
 
+/**
+ * Wire spelling, not a local one: matches `ContextType.BrowserTab` in the
+ * json-content serializer. A browser tab is readable but not itself an Agent,
+ * so it stays a SIBLING of the entity kinds rather than folding into them -
+ * those carry epic-scoped fields a tab has no use for.
+ */
+export type BrowserTabMentionContextType = "browser-tab";
+
 export type EntityMentionContextType =
   | "epic"
   | "chat"
@@ -166,12 +174,36 @@ export type GithubMentionAttachment = {
   url: string;
 };
 
+/**
+ * A browser tab chip. `tabId` is the only field that must survive - it is what
+ * `page.attachTab({tabId})` resolves - so `path` is DERIVED from it rather than
+ * trusted verbatim, and a node carrying a stale `path` still round-trips to the
+ * tab its `tabId` names. `label`/`url` are display-only (the live decorator's
+ * tooltip fallback once the tab is gone); `description` is unused for this
+ * variant and kept at `""` only because every member carries the field.
+ */
+export type BrowserTabMentionAttachment = {
+  kind: "mention";
+  contextType: BrowserTabMentionContextType;
+  path: string;
+  pathKind: null;
+  relPath: null;
+  absolutePath: null;
+  workspacePath: null;
+  label: string;
+  description: string;
+  tabId: string;
+  sessionId: string;
+  url: string;
+};
+
 export type MentionAttachment =
   | FileMentionAttachment
   | WorktreeMentionAttachment
   | GitMentionAttachment
   | EntityMentionAttachment
-  | GithubMentionAttachment;
+  | GithubMentionAttachment
+  | BrowserTabMentionAttachment;
 
 /** Same shape and same reason as {@link GIT_TYPES} - a subset would compile. */
 const ARTIFACT_CONTEXT_TYPES: Readonly<Record<EpicArtifactKind, true>> = {
@@ -211,6 +243,9 @@ export function mentionAttachmentFromAttrs(
   }
   if (contextType === "git") {
     return gitMentionAttachmentFromAttrs(attrs);
+  }
+  if (contextType === "browser-tab") {
+    return browserTabMentionAttachmentFromAttrs(attrs);
   }
   if (contextType === "github_pull_request" || contextType === "github_issue") {
     return githubMentionAttachmentFromAttrs(attrs, contextType);
@@ -466,6 +501,28 @@ function isGitType(value: unknown): value is WorkspaceMentionGitType {
 
 function gitTypeValue(value: unknown): WorkspaceMentionGitType | null {
   return isGitType(value) ? value : null;
+}
+
+/** See {@link BrowserTabMentionAttachment} for why `path` is derived. */
+function browserTabMentionAttachmentFromAttrs(
+  attrs: Record<string, unknown>,
+): MentionAttachment | null {
+  const tabId = stringValue(attrs.tabId) ?? stringValue(attrs.id);
+  if (tabId === null) return null;
+  return {
+    kind: "mention",
+    contextType: "browser-tab",
+    path: `browser-tab:${tabId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: stringValue(attrs.label) ?? "Browser",
+    description: stringValue(attrs.description) ?? stringValue(attrs.url) ?? "",
+    tabId,
+    sessionId: stringValue(attrs.sessionId) ?? "",
+    url: stringValue(attrs.url) ?? "",
+  };
 }
 
 function statusValue(value: unknown): string | number | null {

@@ -57,7 +57,7 @@ function userMessage(
     role: "user",
     messageId,
     sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: CONTENT },
+    message: { kind: "user", content: CONTENT, browserAnnotations: [] },
     timestamp,
     sessionAnchor: null,
   };

@@ -217,6 +217,10 @@ import {
 } from "@/lib/worktree/bindings-failure";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  BrowsersPanelActions,
+  BrowsersPanelBody,
+} from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
 const CHATS_PANEL_SKELETON = <ChatsPanelSkeleton />;
 const ARTIFACTS_PANEL_SKELETON = <ArtifactsPanelSkeleton />;
 const COMMENTS_PANEL_SKELETON = <CommentsPanelSkeleton />;
@@ -485,6 +489,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
       Subtitle: null,
     },
     loading: emptyLoadingSlots(TerminalsLoadingPanelBody),
+  },
+  browsers: {
+    live: {
+      Body: BrowsersPanelBody,
+      Actions: BrowsersPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
   artifacts: {
     live: {

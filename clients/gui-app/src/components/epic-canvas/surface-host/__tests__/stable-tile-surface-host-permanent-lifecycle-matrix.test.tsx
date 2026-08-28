@@ -340,14 +340,15 @@ const CHAT_RUN_SETTINGS: ChatRunSettings = {
 };
 
 function buildChatYMap(chat: EpicCanvasTileRef): Y.Map<unknown> {
+  const name = chat.name;
   const chatMap = new Y.Map<unknown>();
   chatMap.set("id", chat.id);
-  chatMap.set("title", chat.name);
+  chatMap.set("title", name);
   chatMap.set("parentId", null);
   chatMap.set("createdAt", 0);
   chatMap.set("updatedAt", 0);
   const messages = new Y.Array<unknown>();
-  messages.push([{ role: "user", content: `${chat.name} seed`, timestamp: 1 }]);
+  messages.push([{ role: "user", content: `${name} seed`, timestamp: 1 }]);
   chatMap.set("messages", messages);
   return chatMap;
 }
@@ -417,6 +418,7 @@ function buildUserSnapshotMessage(
           },
         ],
       },
+      browserAnnotations: [],
     },
     timestamp: index + 1,
     sessionAnchor: null,
