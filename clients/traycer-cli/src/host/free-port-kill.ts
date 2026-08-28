@@ -581,10 +581,23 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
   readonly available: boolean;
   readonly timedOut: boolean;
   readonly outputOverflow: boolean;
+  // This proto exited non-zero for a reason we chose to tolerate (the
+  // "TCPv6 is disabled" leniency below). Tracked separately from
+  // `available` because the leniency is only safe when the OTHER proto
+  // answers the question: a tolerated failure that produces zero rows is
+  // indistinguishable from a genuine empty result, and the caller must not
+  // read the second as the first. See `windowsPidOwnsPort`.
+  readonly lenientFailure: boolean;
 }> {
   try {
     const { stdout } = await executePortProbe("netstat", ["-ano", "-p", proto]);
-    return { stdout, available: true, timedOut: false, outputOverflow: false };
+    return {
+      stdout,
+      available: true,
+      timedOut: false,
+      outputOverflow: false,
+      lenientFailure: false,
+    };
   } catch (err) {
     const info = readExecFileError(err);
     if (info.outputOverflow) {
@@ -593,6 +606,7 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
         available: false,
         timedOut: false,
         outputOverflow: true,
+        lenientFailure: false,
       };
     }
     // A hang past `PORT_PROBE_TIMEOUT_MS` must never fall into the
@@ -608,6 +622,7 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
         available: false,
         timedOut: true,
         outputOverflow: false,
+        lenientFailure: false,
       };
     }
     if (info.code === "ENOENT") {
@@ -616,16 +631,20 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
         available: false,
         timedOut: false,
         outputOverflow: false,
+        lenientFailure: false,
       };
     }
     // Some hosts disable TCPv6 entirely - `netstat -p TCPv6` exits
     // non-zero but TCP still works. Treat as "no data for this proto"
-    // rather than a probe failure so the IPv4 path can still answer.
+    // rather than a probe failure so the IPv4 path can still answer - but
+    // FLAG it, because this branch catches every unexpected netstat failure,
+    // not just the disabled-TCPv6 one it was written for.
     return {
       stdout: typeof info.stdout === "string" ? info.stdout : "",
       available: true,
       timedOut: false,
       outputOverflow: false,
+      lenientFailure: true,
     };
   }
 }
@@ -659,6 +678,25 @@ async function windowsPidOwnsPort(
       return Number.isFinite(parsed) ? [parsed] : [];
     });
   if (owningPids.length === 0) {
+    // ZERO ROWS IS ONLY "no listener" IF BOTH PROBES ACTUALLY RAN.
+    //
+    // The leniency in `netstatListenersForProto` exists for one situation -
+    // TCPv6 disabled on the host - but it catches every unexpected `netstat`
+    // failure, returning `available: true` with whatever (possibly empty)
+    // stdout came back. When that happens and the other family also produced
+    // no matching rows, the combined result is empty for a reason we never
+    // observed, and `no-listener` would be a claim rather than a finding.
+    //
+    // That distinction is load-bearing now in a way it was not before. Prior
+    // to post-kill verification, `no-listener` only ever caused a REFUSAL
+    // ("port has no listener; nothing to free"), so mistaking it cost an
+    // unnecessary error. `verifyPortReleased` treats it as the sole success
+    // verdict, so the same mistake would certify a release nobody checked and
+    // let the restart proceed onto a port that may still be held - the exact
+    // failure this change exists to remove, arriving through the Windows door.
+    if (ipv4.lenientFailure || ipv6.lenientFailure) {
+      return { owns: false, actualPid: null, probe: "unsupported" };
+    }
     return { owns: false, actualPid: null, probe: "no-listener" };
   }
   return {

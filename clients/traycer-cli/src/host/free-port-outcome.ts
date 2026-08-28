@@ -54,6 +54,35 @@ export function portRepairFailure(opts: {
     restartSkipped: opts.restartWasSkipped,
   };
 
+  // A VERIFIED REPLACEMENT HOLDER OUTRANKS THE SIGNAL ERROR, and the order
+  // here is the whole point.
+  //
+  // These two conditions co-occur in the ESRCH race: the original owner exits
+  // between the ownership probe and the SIGTERM (so `killError` is set) while
+  // a supervisor has already replaced it (so verification identified a
+  // different holder). Checking `killError` first - as this did - emitted
+  // "could not terminate pid <original>, terminate it yourself", naming a
+  // process that is already gone and silently discarding the one piece of
+  // evidence that could act on: the pid actually holding the port now.
+  //
+  // The signal error is still reported in `details.killError`; it is simply
+  // not the most useful thing to say when we know who holds the port.
+  const replacementHolder =
+    result.holderPid !== null && result.holderPid !== pid
+      ? result.holderPid
+      : null;
+  if (replacementHolder !== null) {
+    return replacementHolderError({
+      commandName,
+      pid,
+      port,
+      replacementHolder,
+      releaseDetail: result.releaseDetail,
+      restartNote,
+      details,
+    });
+  }
+
   if (result.killError !== null) {
     return cliError({
       code: CLI_ERROR_CODES.HOST_PORT_KILL_FAILED,
@@ -80,29 +109,6 @@ export function portRepairFailure(opts: {
     });
   }
 
-  // Two very different situations share the `still-held` verdict, and they
-  // need different advice. If the port is held by a DIFFERENT pid than the one
-  // we signalled, the original process is already gone - telling the reader to
-  // "stop pid <original>" names a process that no longer exists, so following
-  // the advertised recovery cannot possibly free the port. That is the
-  // supervised-listener case: something respawned it, and killing the new pid
-  // by hand just yields another one.
-  const replacementHolder =
-    result.holderPid !== null && result.holderPid !== pid
-      ? result.holderPid
-      : null;
-  if (replacementHolder !== null) {
-    return cliError({
-      code: CLI_ERROR_CODES.HOST_PORT_STILL_HELD,
-      message:
-        `${commandName}: pid ${pid} released port ${port}, but pid ${replacementHolder} is now listening on it - ${result.releaseDetail}.` +
-        restartNote +
-        ` The port is still occupied, so the conflict is unresolved. pid ${replacementHolder} is most likely a supervised process being restarted automatically ` +
-        "(killing it by hand will just produce another one) - stop whatever supervises it, or reconfigure that service off this port, then re-run 'traycer host doctor'.",
-      details,
-      exitCode: 1,
-    });
-  }
   return cliError({
     code: CLI_ERROR_CODES.HOST_PORT_STILL_HELD,
     message:
@@ -110,6 +116,32 @@ export function portRepairFailure(opts: {
       restartNote +
       ` Stop pid ${pid} yourself (it is trapping or ignoring SIGTERM, so it needs a stronger signal or its own shutdown command), then re-run 'traycer host doctor'.`,
     details,
+    exitCode: 1,
+  });
+}
+
+// The replacement-listener message, shared by the two orderings that reach it
+// (a delivered SIGTERM whose target was replaced, and the ESRCH race where the
+// target had already exited). Split out so both cases give byte-identical
+// guidance: the reader's situation is the same either way, and only the
+// signal's own fate differs - which is what `details.killError` is for.
+function replacementHolderError(opts: {
+  readonly commandName: string;
+  readonly pid: number;
+  readonly port: number;
+  readonly replacementHolder: number;
+  readonly releaseDetail: string;
+  readonly restartNote: string;
+  readonly details: Record<string, unknown>;
+}): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_PORT_STILL_HELD,
+    message:
+      `${opts.commandName}: pid ${opts.pid} no longer holds port ${opts.port}, but pid ${opts.replacementHolder} is now listening on it - ${opts.releaseDetail}.` +
+      opts.restartNote +
+      ` The port is still occupied, so the conflict is unresolved. pid ${opts.replacementHolder} is most likely a supervised process being restarted automatically ` +
+      "(killing it by hand will just produce another one) - stop whatever supervises it, or reconfigure that service off this port, then re-run 'traycer host doctor'.",
+    details: opts.details,
     exitCode: 1,
   });
 }

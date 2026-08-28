@@ -280,6 +280,39 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(mocks.controllerCalls).toEqual([]);
   });
 
+  // The ESRCH race AND a replacement listener at once: the signal failed
+  // because the target had already exited, and verification then identified a
+  // different holder. Shaping the error off `killError` first would name the
+  // dead original and discard the only actionable fact we have.
+  it("prefers the verified replacement holder over the signal error when both are present", async () => {
+    mocks.controllerCalls = [];
+    mocks.killResult = {
+      killed: false,
+      killError: "kill ESRCH",
+      release: "still-held",
+      releaseDetail:
+        "pid 4242 released port 51820, but pid 7777 is now listening on it",
+      holderPid: 7777,
+    };
+
+    const command = buildHostFreePortAndRestartCommand({
+      pid: 4242,
+      port: 51820,
+    });
+    const rejection = await command(fakeCtx()).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(rejection).toMatchObject({ code: "E_HOST_PORT_STILL_HELD" });
+    const message = (rejection as { message: string }).message;
+    expect(message).toContain("7777");
+    expect(message).not.toMatch(/could not terminate pid 4242/);
+    // The signal's own fate is still recorded, just not the headline.
+    expect(rejection).toMatchObject({ details: { killError: "kill ESRCH" } });
+    expect(mocks.controllerCalls).toEqual([]);
+  });
+
   it("release: unverified throws E_HOST_PORT_RELEASE_UNVERIFIED and never calls restart", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
