@@ -23,13 +23,22 @@ function commandDeps(args: {
   // Defaults to a published host that is positively dead, so the existing
   // cases read as a confirmed teardown; the cases that care override it.
   readonly liveness: PublishedProcessIdentityVerdict | "unpublished" | null;
+  // Does a host publish pid metadata AFTER the teardown? Null models the
+  // ordinary case (the teardown removed it); true models the supervisor's
+  // relaunch loop having produced a successor in the probe window.
+  readonly successorAfterTeardown: boolean | null;
+  readonly publishedPid: number | null;
 }): RunHostUninstallDeps {
   const liveness = args.liveness ?? "dead";
+  let reads = 0;
   return {
-    readPublishedHost: async () =>
-      liveness === "unpublished"
+    readPublishedHost: async () => {
+      reads += 1;
+      const gone = reads > 1 && args.successorAfterTeardown !== true;
+      return liveness === "unpublished" || gone
         ? null
-        : { pid: 4242, startIdentity: "start-identity" },
+        : { pid: args.publishedPid ?? 4242, startIdentity: "start-identity" };
+    },
     probeProcessExited: async () => {
       if (liveness === "unpublished") throw new Error("unreachable");
       return liveness;
@@ -105,6 +114,8 @@ describe("runHostUninstall", () => {
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -127,6 +138,8 @@ describe("runHostUninstall", () => {
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -155,6 +168,8 @@ describe("runHostUninstall", () => {
         receivedOptions,
         status: async () => NOT_INSTALLED_STATUS,
         liveness: "current",
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -185,13 +200,104 @@ describe("runHostUninstall", () => {
           pid: null,
         }),
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
+      }),
+    );
+
+    // `serviceUninstalled` is the VERIFIED fact, not the request. Desktop's
+    // `parseUninstallResult` projects it straight to `deregisteredService`, so
+    // leaving it true against a readback saying "still registered" published
+    // the exact false outcome the readback had just caught.
+    expect(result.data).toMatchObject({
+      serviceUninstalled: false,
+      deregisterRequested: true,
+      serviceRegistrationRetained: true,
+      retainedServiceState: "stopped",
+      // A surviving registration is a restart source: `host start`
+      // supervisors outlive their children and relaunch them, so the purge
+      // that deletes pid metadata and rotates the log must not run.
+      purgedRuntime: false,
+    });
+    expect(result.human ?? "").toContain("still registered");
+    expect(result.human ?? "").not.toContain("deregistered OS service");
+  });
+
+  // An unanswerable readback is NOT agreement. `!== true` counted it as
+  // agreement and printed "deregistered OS service" for a deregistration
+  // nothing had confirmed.
+  it("says the deregistration could not be verified when the readback throws", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => {
+          throw new Error("launchctl unavailable");
+        },
+        liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
     expect(result.data).toMatchObject({
-      serviceUninstalled: true,
-      serviceRegistrationRetained: true,
-      retainedServiceState: "stopped",
+      serviceUninstalled: false,
+      deregisterRequested: true,
+      serviceRegistrationRetained: null,
+      purgedRuntime: false,
+    });
+    expect(result.human ?? "").toContain("could not verify");
+    expect(result.human ?? "").not.toContain("deregistered OS service");
+  });
+
+  // The captured child dying does not mean the supervisor did not already
+  // start its replacement while these probes were running - which on Windows
+  // can take seconds. A successor publishing at the purge boundary is
+  // positive evidence something is writing the files the purge destroys.
+  it("withholds the purge when a successor published while the probes ran", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions,
+        status: async () => NOT_INSTALLED_STATUS,
+        liveness: "dead", // the CAPTURED child is positively gone
+        successorAfterTeardown: true,
+        publishedPid: null,
+      }),
+    );
+
+    expect(receivedOptions).toEqual([
+      { environment: "dev", purgeChannelRuntime: false },
+    ]);
+    expect(result.data).toMatchObject({ purgedRuntime: false });
+  });
+
+  // `readHostPidMetadata` accepts any JSON number; the identity helper answers
+  // `dead` for anything non-integral or <= 0. A record carrying `pid: -5` was
+  // therefore read as proof the host exited, and licensed the purge.
+  it("treats an unusable published pid as unknown, never as death", async () => {
+    const result = await runHostUninstall(
+      { all: true },
+      COMMAND_CONTEXT,
+      commandDeps({
+        stop: async () => undefined,
+        receivedOptions: [],
+        status: async () => NOT_INSTALLED_STATUS,
+        liveness: "dead",
+        successorAfterTeardown: null,
+        publishedPid: -5,
+      }),
+    );
+
+    expect(result.data).toMatchObject({
+      purgedRuntime: false,
+      hostStillRunning: null,
     });
   });
 
@@ -204,6 +310,8 @@ describe("runHostUninstall", () => {
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
         liveness: "indeterminate",
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -227,6 +335,8 @@ describe("runHostUninstall", () => {
           pid: 4242,
         }),
         liveness: "current",
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -249,6 +359,8 @@ describe("runHostUninstall", () => {
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -276,6 +388,8 @@ describe("runHostUninstall", () => {
           throw new Error("launchctl unavailable");
         },
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -308,6 +422,8 @@ describe("runHostUninstall", () => {
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 
@@ -333,6 +449,8 @@ describe("runHostUninstall", () => {
         receivedOptions: [],
         status: async () => NOT_INSTALLED_STATUS,
         liveness: null,
+        successorAfterTeardown: null,
+        publishedPid: null,
       }),
     );
 

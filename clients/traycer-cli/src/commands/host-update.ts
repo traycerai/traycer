@@ -35,8 +35,11 @@ import { withCliLock } from "../store/cli-lock";
 // staged version attached to `details`, rather than the generic
 // `details: null` `assertHostNotBusy` throws on its own.
 //
-// SUCCESS CONTRACT: exit 0 here means the host is RUNNING the requested
-// version. The post-apply `probeHostHealth` below is what earns that claim,
+// SUCCESS CONTRACT: when an update is actually applied, exit 0 here means the
+// host is RUNNING the requested version. An install already at the target is a
+// no-op that short-circuits before the probe and re-checks nothing - it
+// reports the installed version, not a live one.
+// The post-apply `probeHostHealth` below is what earns the claim when it runs,
 // and a host that committed cleanly but never came back exits non-zero with
 // `E_HOST_UPDATE_HEALTH_CHECK_FAILED` (no rollback - see the note at the
 // probe). This is deliberately stronger than `host apply`'s exit 0, which

@@ -36,8 +36,11 @@ import {
 //             host, then remove the bytes. Environment runtime state (pid
 //             metadata, log) is purged only once the host is CONFIRMED gone -
 //             the stop call resolving is not that confirmation, because every
-//             Linux/Windows teardown call tolerates its own failure. Both the
-//             purge and the reported liveness come from an endpoint probe.
+//             Linux/Windows teardown call tolerates its own failure. The purge
+//             needs FOUR things: the stop resolved, the captured child is
+//             positively dead, the registration is verifiably gone (a
+//             surviving one is a restart source), and nothing has published
+//             since. Reported liveness comes from process identity.
 // User data under ~/.traycer/ (chats, sqlite, downloaded models, credentials)
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
@@ -101,9 +104,9 @@ interface StopServiceBeforeRuntimePurgeArgs {
 }
 
 // Did the stop CALL resolve? Necessary for the runtime purge but not
-// sufficient - the caller pairs this with an endpoint probe, because on Linux
-// and Windows every teardown call tolerates its own failure and resolving
-// proves nothing about the process. Service deregistration and install removal
+// sufficient - the caller pairs this with process-identity, registration and
+// successor checks, because on Linux and Windows every teardown call tolerates
+// its own failure and resolving proves nothing about the process. Service deregistration and install removal
 // remain best-effort either way.
 export async function stopServiceBeforeRuntimePurge(
   args: StopServiceBeforeRuntimePurgeArgs,
@@ -147,12 +150,11 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
             uninstallHost,
             readPublishedHost: async (environment) => {
               const metadata = await readHostPidMetadata(environment);
-              return metadata === null
-                ? null
-                : {
-                    pid: metadata.pid,
-                    startIdentity: metadata.processStartIdentity,
-                  };
+              if (metadata === null) return null;
+              return {
+                pid: metadata.pid,
+                startIdentity: metadata.processStartIdentity,
+              };
             },
             probeProcessExited: getPublishedProcessIdentityVerdict,
           },
@@ -174,11 +176,14 @@ export async function runHostUninstall(
   // `taskkill` calls failed or timed out, so a probe that runs afterwards is
   // guaranteed to find nothing and would read a surviving host as gone.
   const published = await readPublishedHostBestEffort(deps, ctx);
-  let liveness: LivenessObservation = await observeLiveness(
-    deps,
-    ctx,
-    published,
-  );
+  // The default path never stops anything, so it can answer now. `--all`
+  // answers AFTER its teardown - and only then. Probing here as well was
+  // wasted work whose result was discarded, and on Windows it cost seconds
+  // (a `tasklist` sweep plus an identity read) of extra window in which the
+  // supervisor's relaunch loop could produce a successor.
+  let liveness: LivenessObservation = args.all
+    ? "unknown"
+    : await observeLiveness(deps, ctx, published);
   // Observed BEFORE anything is removed, on the default path: it is the only
   // way this command can say what it is about to leave behind. `--all` reads
   // its registration AFTER acting instead (see below), since what matters
@@ -232,23 +237,45 @@ export async function runHostUninstall(
     // means the kill did not land. Only "asked, and nothing answers" earns the
     // purge that deletes pid metadata and rotates the active log.
     liveness = await observeLiveness(deps, ctx, published);
-    // BOTH halves, and `gone` here means POSITIVE death of the exact process
-    // captured above - not "no incumbent found". The purge deletes pid
-    // metadata and rotates the active log, so the only thing that licenses it
-    // is evidence that nobody is writing them.
-    purgeChannelRuntime = stopResolved && liveness === "gone";
-    if (!purgeChannelRuntime) {
-      ctx.logger.warn("Host uninstall withheld the runtime purge", {
-        environment: ctx.environment,
-        stopResolved,
-        liveness,
-      });
-    }
     // Registration is verified too, for the same reason: on Linux the unit
     // file is removed even when `disable --now` timed out, and on Windows
     // `/Delete` tolerates failure. Ask the controller what is actually
     // registered now rather than inferring it from a resolved call.
     retainedAfterAll = await readServiceStateBestEffort(deps, ctx);
+    // Re-read at the PURGE BOUNDARY, after every probe above has had its
+    // chance to take time. `published` describes the child we captured; this
+    // asks whether anything is publishing NOW.
+    const successor = await readPublishedHostBestEffort(deps, ctx);
+    // Four conditions, and each rules out a different writer of the files the
+    // purge destroys:
+    //   - `stopResolved`: the host was actually asked to stand down.
+    //   - `liveness === "gone"`: the captured child is positively dead.
+    //   - registration NOT retained: `host start` supervisors outlive their
+    //     children - they write terminal and crash markers into host.log and
+    //     run a relaunch loop - so a surviving registration is positive
+    //     evidence that a restart source remains and nothing here orders it
+    //     not to fire after the purge. A weak negative status cannot license
+    //     the purge, but a positive retained one can veto it.
+    //   - no successor published: the captured child dying does not mean the
+    //     supervisor did not already start its replacement in the window
+    //     these probes take. A same-pid replacement even reads as `mismatch`,
+    //     which proves the CAPTURED process is gone and says nothing about
+    //     the live occupant.
+    const registrationClear = retainedAfterAll?.state === "not-installed";
+    purgeChannelRuntime =
+      stopResolved &&
+      liveness === "gone" &&
+      registrationClear &&
+      successor === null;
+    if (!purgeChannelRuntime) {
+      ctx.logger.warn("Host uninstall withheld the runtime purge", {
+        environment: ctx.environment,
+        stopResolved,
+        liveness,
+        registrationClear,
+        successorPublished: successor !== null,
+      });
+    }
   }
   ctx.progress({
     stage: "uninstall",
@@ -295,7 +322,15 @@ export async function runHostUninstall(
       removedRecord: result.removedRecord,
       removedInstallDir: result.removedInstallDir,
       removedStagedDir: result.removedStagedDir,
-      serviceUninstalled,
+      // Verified, not merely requested. Desktop's `parseUninstallResult`
+      // projects this straight to `deregisteredService`, so leaving it true
+      // against a readback that says "still registered" published the exact
+      // false outcome the readback had just caught. `null` (the probe could
+      // not answer) is NOT agreement - it stays false, and
+      // `deregisterRequested` carries the attempt.
+      serviceUninstalled:
+        serviceUninstalled && serviceRegistrationRetained === false,
+      deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       // What the machine is left holding, so an automated caller does not
       // have to infer the default path's end state from the absence of
@@ -309,9 +344,10 @@ export async function runHostUninstall(
       removedVersion: result.removedRecord?.version ?? null,
       // The READBACK, not the request. Saying "deregistered OS service" while
       // the same result reports `serviceRegistrationRetained: true` had the
-      // prose and the payload contradicting each other in one breath.
+      // prose and the payload contradicting each other in one breath - and
+      // `!== true` wrongly counted an unanswerable probe as agreement.
       serviceUninstalled:
-        serviceUninstalled && serviceRegistrationRetained !== true,
+        serviceUninstalled && serviceRegistrationRetained === false,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       serviceRegistrationRetained,
@@ -365,6 +401,13 @@ async function observeLiveness(
   published: PublishedHost | null,
 ): Promise<LivenessObservation> {
   if (published === null) return "unknown";
+  // `readHostPidMetadata` accepts any JSON number, while the identity helper
+  // answers `dead` for anything non-integral or <= 0. A record carrying
+  // `pid: -5` would otherwise read as proof the host exited and license the
+  // purge. A pid that cannot name a process is unknown, not death. Validated
+  // HERE rather than in the reader, so the successor check at the purge
+  // boundary still sees that something published.
+  if (!Number.isInteger(published.pid) || published.pid <= 0) return "unknown";
   try {
     const verdict = await deps.probeProcessExited(
       published.pid,
@@ -422,7 +465,15 @@ function humanSummary(args: {
   } else {
     parts.push(`removed host ${args.removedVersion}`);
   }
-  if (args.serviceUninstalled) parts.push("deregistered OS service");
+  if (args.serviceUninstalled) {
+    parts.push("deregistered OS service");
+  } else if (args.deregisterRequested) {
+    parts.push(
+      args.serviceRegistrationRetained === true
+        ? "requested OS service deregistration, but it is still registered"
+        : "requested OS service deregistration, but could not verify it - run 'traycer host service status'",
+    );
+  }
   if (args.purgedRuntime) {
     parts.push("confirmed the host stopped and cleared its runtime state");
   } else if (args.deregisterRequested) {
