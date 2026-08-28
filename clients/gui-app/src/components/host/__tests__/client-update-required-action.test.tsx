@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
+import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import type {
@@ -49,7 +50,10 @@ vi.mock("@/lib/runner-error-toast", () => ({
  * the loop they refuse to open.
  */
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  setMobileApp(false);
+});
 
 /**
  * Lets every already-queued microtask settle.
@@ -829,5 +833,24 @@ describe("<ClientUpdateRequiredAction /> restart-to-clear-staged arm", () => {
     ).toBeTruthy();
     expect(screen.queryByTestId("client-update-required-install")).toBeNull();
     expect(screen.queryByTestId("client-update-required-enable-rc")).toBeNull();
+  });
+});
+
+describe("<ClientUpdateRequiredAction /> mobile shell", () => {
+  it("shows the store note instead of the releases page button", () => {
+    // No desktop arm above applies without an updater bridge, so a mobile
+    // build always falls through to here - and the releases page is a
+    // desktop remedy a phone cannot act on.
+    setMobileApp(true);
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      null,
+    );
+    expect(
+      screen.getByTestId("client-update-required-mobile-note"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("client-update-required-download-page"),
+    ).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -175,6 +176,25 @@ export function ClientUpdateRequiredAction(props: {
         </p>
         <ReleasesPageButton openExternalLink={openExternalLink} />
       </>
+    );
+  }
+
+  // THE MOBILE SHELL. Every desktop arm above needs the updater bridge (or a
+  // recovery plan, which is bridge-gated), so a Capacitor build always falls
+  // through to here - and the releases page below is a desktop remedy a phone
+  // cannot act on: mobile builds ship through the stores, not GitHub. There
+  // is no store URL this repository can vouch for across lanes (internal
+  // testing installs update through the TestFlight app / Play opt-in track),
+  // so the remedy is named rather than linked.
+  if (isMobileApp()) {
+    return (
+      <p
+        className="w-full text-left text-xs text-muted-foreground"
+        data-testid="client-update-required-mobile-note"
+      >
+        Update the Traycer app from where you installed it - TestFlight or the
+        App Store on iPhone and iPad, Google Play on Android - then reopen it.
+      </p>
     );
   }
 
