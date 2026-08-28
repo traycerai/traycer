@@ -36,7 +36,7 @@ export type SurfaceVersion = {
 export type SurfaceMajorLine = {
   readonly latestMinor: number;
   readonly installedMinors: readonly number[];
-  /** Majors reachable via `downgradePathsFromLatest`. Always [] for streams. */
+  /** Majors reachable via a unary `downgradePathsFromLatest` bridge. */
   readonly downgradeTargets: readonly number[];
 };
 
@@ -288,7 +288,8 @@ export function buildProtocolSurface(args: {
       majors[major] = {
         latestMinor: line.latestMinor,
         versions: line.versions,
-        // v1 streams have no cross-major bridges; reconnect on major mismatch.
+        // Stream major selection uses the installed-major lines themselves,
+        // rather than unary-style payload downgrade paths.
         downgradeTargets: [],
       };
     }

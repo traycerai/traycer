@@ -7,6 +7,8 @@ import {
   composerSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
  * The landing composer's host picker is a SURFACE PIN (redesign P1.2,
@@ -159,6 +161,7 @@ function renderComposerPicker(
         readonly hostId: string;
         readonly hostClient: null;
       },
+  draftId: string | null = null,
 ): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -168,7 +171,7 @@ function renderComposerPicker(
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", hostId: null, draftId: null }}
+          stagingKey={{ surface: "landing", hostId: null, draftId }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}
@@ -197,8 +200,15 @@ function pickBuildHost(): void {
   fireEvent.click(screen.getByRole("option", { name: /Build Box/ }));
 }
 
+function pickHomeHost(): void {
+  fireEvent.click(screen.getByRole("button", { name: /^Host:/ }));
+  fireEvent.click(screen.getByRole("option", { name: /Home Mac/ }));
+}
+
 beforeEach(() => {
   useSurfaceHostSelectionStore.getState().resetForTests();
+  useWorkspaceFoldersStore.setState({ byHost: {} });
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   mocks.selectById.mockClear();
   mocks.effectiveHostId.current = "host-home";
 });
@@ -215,6 +225,158 @@ describe("composer host picker writes a surface pin", () => {
     // The whole point of the row: placing one chat elsewhere must not move
     // the window. `selectById` belongs to the selection-authority bridge now.
     expect(mocks.selectById).not.toHaveBeenCalled();
+  });
+
+  it("restores the picked host's folders before publishing the new pin", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/project",
+        name: "project",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-build", [
+      {
+        path: "/build/project",
+        name: "project",
+        repoIdentifier: null,
+        hostId: "host-build",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .restoreDraftWorkspaceForHost(draftId, "host-home");
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickBuildHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/build/project"]);
+    expect(pinnedHostId()).toBe("host-build");
+  });
+
+  it("does not replace a draft workspace during automatic host following", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-build", [
+      {
+        path: "/build/fallback-project",
+        name: "fallback-project",
+        repoIdentifier: null,
+        hostId: "host-build",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().addDraftResolvedFolders(draftId, [
+      {
+        path: "/home/draft-only",
+        name: "draft-only",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    cleanup();
+    mocks.effectiveHostId.current = "host-build";
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/draft-only"]);
+
+    pickBuildHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/build/fallback-project"]);
+    expect(pinnedHostId()).toBe("host-build");
+  });
+
+  it("does not replace a draft workspace when reselecting its current host", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/global-from-another-draft",
+        name: "global-from-another-draft",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().addDraftResolvedFolders(draftId, [
+      {
+        path: "/home/this-draft",
+        name: "this-draft",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(COMPOSER_KEY, "host-home");
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickHomeHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/this-draft"]);
+    expect(pinnedHostId()).toBe("host-home");
+  });
+
+  it("restores remembered folders when an unpinned follower pins its displayed host", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/remembered",
+        name: "remembered",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .restoreDraftWorkspaceForHost(draftId, "host-with-empty-bucket");
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickHomeHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/remembered"]);
+    expect(pinnedHostId()).toBe("host-home");
+  });
+
+  it("restores the fallback host when replacing a deposed pin", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/fallback-project",
+        name: "fallback-project",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().addDraftResolvedFolders(draftId, [
+      {
+        path: "/retired-host/project",
+        name: "project",
+        repoIdentifier: null,
+        hostId: "host-retired",
+      },
+    ]);
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(COMPOSER_KEY, "host-retired");
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickHomeHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/fallback-project"]);
+    expect(pinnedHostId()).toBe("host-home");
   });
 
   it("keys the pin per WINDOW, so both composer instances agree", () => {

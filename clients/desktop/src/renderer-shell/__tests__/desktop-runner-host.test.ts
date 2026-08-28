@@ -1087,7 +1087,13 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
 
     expect(fake.systemResumedBridgeSubscriptionCount()).toBe(1);
     fake.emitSystemResumed();
-    for (const handler of calls) expect(handler).toHaveBeenCalledTimes(1);
+    for (const handler of calls) {
+      expect(handler).toHaveBeenCalledTimes(1);
+      // Desktop cannot measure sleep duration (`powerMonitor` reports none),
+      // so its resume event must say so - a number here would put every
+      // desktop wake through the mobile duration gate.
+      expect(handler).toHaveBeenCalledWith({ backgroundedForMs: null });
+    }
 
     subscriptions[0]?.dispose();
     fake.emitSystemResumed();

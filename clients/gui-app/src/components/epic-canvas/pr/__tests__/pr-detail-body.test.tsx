@@ -42,8 +42,8 @@ import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-stor
  * `useChatById` / `useEpicTerminalAgent` (rules-of-hooks - the id argument
  * gates only which one resolves a record, not whether the hook itself
  * runs). Both read `useEpicStore()` -> `useOpenEpicHandle()`, which throws
- * outside `<EpicSessionProvider>`. That per-Epic Y.doc chain is unrelated to
- * PR-detail behavior under test here (every fixture's `owners` is empty),
+ * outside `<EpicSessionProvider>`. That per-Epic projection chain is unrelated
+ * to PR-detail behavior under test here (every fixture's `owners` is empty),
  * so it is stubbed the same way `pr-panel-body.test.tsx` stubs it for
  * `PrListRow`'s identical dependency - `importActual` keeps every other
  * selector in the module real.
@@ -86,8 +86,8 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
   useEpicTerminalAgent: () => null,
   // The quote-target picker enumerates the epic's chats and terminal agents.
   // Both selectors reach the same `useOpenEpicHandle()` chain the two above do,
-  // so they are stubbed for the same reason: that per-epic Y.doc is unrelated
-  // to the PR-detail behaviour under test.
+  // so they are stubbed for the same reason: that per-epic projection is
+  // unrelated to the PR-detail behaviour under test.
   useEpicChatRecords: () => chatRecordsRef.value,
   useEpicTerminalAgentRecords: () => EMPTY_EPIC_RECORDS,
 }));

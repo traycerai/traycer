@@ -1404,7 +1404,9 @@ export function rowFromCloudFeedRow(
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
-    row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+    nonEmptyCloudPresentationTitle(row.presentation.epicTitle) ??
+    nonEmptyCloudPresentationTitle(row.presentation.chatTitle) ??
+    fallback.title;
   const providerPackAttribution = parseProviderPackNotificationAttribution(
     row.entry.payload,
   );
@@ -1430,6 +1432,10 @@ export function rowFromCloudFeedRow(
     providerPackAttribution,
     category: categoryForNotificationSource("cloud"),
   };
+}
+
+function nonEmptyCloudPresentationTitle(title: string | null): string | null {
+  return title !== null && title.length > 0 ? title : null;
 }
 
 function parseFeedId(feedId: string): ParsedFeedId | null {

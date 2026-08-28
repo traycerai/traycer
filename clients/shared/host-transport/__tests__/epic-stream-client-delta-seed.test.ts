@@ -189,7 +189,7 @@ describe("EpicStreamClient delta-seeded reattach (epic.subscribe@1.3)", () => {
     expect(subscribeEnvelope).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
     expect(
@@ -216,7 +216,7 @@ describe("EpicStreamClient delta-seeded reattach (epic.subscribe@1.3)", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: {
         epicId: "epic-1",
         seedOffer: { stateVectorBase64: "AQ==", roomId: "room-1" },

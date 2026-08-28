@@ -17,6 +17,7 @@ let package = Package(
         .package(name: "CapacitorBarcodeScanner", path: "../../../../../node_modules/.bun/@capacitor+barcode-scanner@3.1.0+f68449e264960a74/node_modules/@capacitor/barcode-scanner"),
         .package(name: "CapacitorDevice", path: "../../../../../node_modules/.bun/@capacitor+device@8.0.0+f68449e264960a74/node_modules/@capacitor/device"),
         .package(name: "CapacitorKeyboard", path: "../../../../../node_modules/.bun/@capacitor+keyboard@8.0.5+f68449e264960a74/node_modules/@capacitor/keyboard"),
+        .package(name: "CapacitorNetwork", path: "../../../../../node_modules/.bun/@capacitor+network@8.0.1+f68449e264960a74/node_modules/@capacitor/network"),
         .package(name: "CapacitorPushNotifications", path: "../../../../../node_modules/.bun/@capacitor+push-notifications@8.1.2+f68449e264960a74/node_modules/@capacitor/push-notifications"),
         .package(name: "CapacitorNativeSettings", path: "../../../../../node_modules/.bun/capacitor-native-settings@8.2.0+f68449e264960a74/node_modules/capacitor-native-settings"),
         .package(name: "CapacitorSecureStoragePlugin", path: "../../../../../node_modules/.bun/capacitor-secure-storage-plugin@0.13.0+f68449e264960a74/node_modules/capacitor-secure-storage-plugin")
@@ -32,6 +33,7 @@ let package = Package(
                 .product(name: "CapacitorBarcodeScanner", package: "CapacitorBarcodeScanner"),
                 .product(name: "CapacitorDevice", package: "CapacitorDevice"),
                 .product(name: "CapacitorKeyboard", package: "CapacitorKeyboard"),
+                .product(name: "CapacitorNetwork", package: "CapacitorNetwork"),
                 .product(name: "CapacitorPushNotifications", package: "CapacitorPushNotifications"),
                 .product(name: "CapacitorNativeSettings", package: "CapacitorNativeSettings"),
                 .product(name: "CapacitorSecureStoragePlugin", package: "CapacitorSecureStoragePlugin")

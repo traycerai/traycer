@@ -29,7 +29,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type MouseEvent,
   type RefObject,
 } from "react";
@@ -41,7 +40,6 @@ import type {
   FileTreeItemHandle,
   GitStatusEntry,
 } from "@pierre/trees";
-import { Search } from "lucide-react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import type {
   WorkspaceListFileTreeResponse,
@@ -62,15 +60,12 @@ import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tr
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
 import {
   useWorkspaceFileListSubscription,
@@ -116,19 +111,6 @@ const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
 /** Filter-box pause before either filter source runs. */
 const SEARCH_DEBOUNCE_MS = 200;
-
-/**
- * Tree row height (px) under a touch viewport, where the panel is the phone tab
- * switcher's File tree category rather than a sidebar column. Pierre's
- * `compact` preset is 24px, and its rows live in a shadow root that the mobile
- * shell's hit-area stylesheet cannot reach - so the row itself has to be the
- * 44px target the rest of the phone surfaces use (`min-h-11`).
- *
- * `useFileTree` constructs its model from these options once and exposes no
- * height setter, so the body is keyed on the viewport class to rebuild it -
- * see {@link FileTreePanelBodyForWorkspace}.
- */
-const TOUCH_TREE_ROW_HEIGHT_PX = 44;
 
 const EMPTY_TREE_PATHS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_GIT_STATUS: ReadonlyArray<GitStatusEntry> = Object.freeze([]);
@@ -511,23 +493,14 @@ export function FileTreePanelBodyForWorkspace(
   // The value to PROVIDE: ambient while following, the pin's own binding once
   // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(props.hostId);
-  // Keyed on the viewport CLASS, which is the one remount this body wants.
-  // Pierre reads `density` / `itemHeight` when it constructs the model and
-  // offers no setter for either, and its row height is not merely painted -
-  // it is the virtualizer's arithmetic (total height, sticky-row tops, scroll
-  // offsets), so re-painting the CSS variables alone would leave the layout
-  // disagreeing with the positions. Without the key a window crossing the
-  // breakpoint gets the other class's filter box over rows that kept their
-  // original geometry. Expansion survives the rebuild - it is persisted per
-  // (epic, host, workspace) and re-seeded on the next reset; the filter query
-  // does not, which is the right answer for a layout change.
-  const isTouchViewport = useIsMobileViewport();
+  // No viewport key: pierre bakes `density` / `itemHeight` at construction and
+  // offers no setter, so this body used to remount across the breakpoint to
+  // rebuild a touch-sized model. Both viewports now build the same geometry,
+  // leaving nothing to rebuild - and a remount is not free, since it drops the
+  // filter query.
   return (
     <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
-      <FileTreeBodyForResolvedHost
-        key={isTouchViewport ? "touch" : "pointer"}
-        {...props}
-      />
+      <FileTreeBodyForResolvedHost {...props} />
     </StreamRuntimeContext.Provider>
   );
 }
@@ -639,8 +612,15 @@ function FileTreeBodyForResolvedHost(
   const { model } = useFileTree({
     paths: treePaths,
     initialExpansion: "closed",
-    density: isMobileViewport ? "default" : "compact",
-    itemHeight: isMobileViewport ? TOUCH_TREE_ROW_HEIGHT_PX : undefined,
+    // One geometry everywhere: the tree is the desktop tree, and its row pitch
+    // is pierre's own on every viewport. Touch used to inflate this to a 44px
+    // row because the rows are in a shadow root the mobile hit-area stylesheet
+    // cannot reach - the compact pitch is deliberately kept instead, so the
+    // phone shows the same tree as the desktop app. If the rows ever need to be
+    // easier to hit, the lever is pierre's `--trees-item-padding`, which grows
+    // the target without forking the pitch.
+    density: "compact",
+    itemHeight: undefined,
     icons: "complete",
     stickyFolders: true,
     gitStatus,
@@ -654,12 +634,9 @@ function FileTreeBodyForResolvedHost(
       handlersRef.current.onSelect(selectedPath);
     },
   });
-  const handleSearchQueryChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      setSearchQuery(event.target.value);
-    },
-    [],
-  );
+  const handleSearchQueryChange = useCallback((next: string) => {
+    setSearchQuery(next);
+  }, []);
 
   // Runs BEFORE the path reset below, deliberately. Clearing the tree
   // adapter's filter restores the expansion it captured when the filter was
@@ -785,6 +762,7 @@ function FileTreeBodyForResolvedHost(
     ),
     resolveSourceData: resolveDragSourceData,
   });
+  const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
     <div
@@ -794,22 +772,43 @@ function FileTreeBodyForResolvedHost(
       {/* The sidebar's 28px filter row is below the touch target every other
           phone control meets, and this one is a text field the user has to hit
           precisely rather than a control with room for invisible hit-slop. */}
-      <InputGroup
-        className={cn("mb-1.5 shrink-0", isMobileViewport ? "h-11" : "h-7")}
-      >
-        <InputGroupAddon align="inline-start">
-          <Search className="size-3.5" aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="text"
+      <div className="mb-1.5 shrink-0">
+        <PanelSearchField
           value={searchQuery}
-          onChange={handleSearchQueryChange}
+          onValueChange={handleSearchQueryChange}
+          onClear={clearSearchQuery}
+          onClose={null}
+          onKeyDown={null}
+          ref={null}
+          combobox={null}
           placeholder="Filter files by name…"
-          aria-label="Filter files by name"
-          className="text-ui-sm"
+          label="Filter files by name"
+          clearLabel="Clear file filter"
+          closeLabel=""
+          testIdPrefix="epic-file-tree-filter"
+          className="h-7"
         />
-      </InputGroup>
-      <div {...bridge.wrapperProps} className="relative min-h-0 flex-1">
+      </div>
+      {/* `data-vaul-no-drag`: inside the mobile switcher sheet this tree is a
+          vaul drawer descendant, and vaul's `shouldDrag` walks up from the
+          touch target looking for a scroller. Pierre's scroller lives in a
+          SHADOW ROOT and a touch inside one retargets to the host, so that walk
+          sees nothing scrollable and would claim a downward swipe as a drawer
+          dismiss. The attribute states what vaul cannot observe: this subtree
+          owns its own scrolling.
+
+          It governs the DISMISS path only. An upward finger returns earlier via
+          `isDraggingInDirection` and never reaches the walk - and this marker is
+          NOT what makes the tree scroll on touch: that is `touchShieldRef`,
+          which keeps the sheet's modal scroll lock from freezing the
+          shadow-rooted scroller (see `useShadowScrollerTouchShield`). Both are
+          inert on desktop, which mounts no drawer. */}
+      <div
+        {...bridge.wrapperProps}
+        ref={touchShieldRef}
+        data-vaul-no-drag=""
+        className="relative min-h-0 flex-1"
+      >
         {/* `invisible`, not unmount: the model keeps its DOM/state for the
             instant the query changes to something that does match. */}
         <div className={cn("h-full", noMatches && "invisible")}>

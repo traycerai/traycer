@@ -48,7 +48,6 @@ import {
   projectFullState,
   projectTerminalAgent,
   projectTreeSlice,
-  readMaybeBoolean,
   readMaybeNumber,
   readMaybeString,
   terminalAgentProjectionsEq,
@@ -57,6 +56,8 @@ import {
   unionChatsSlice,
   unionTerminalAgentsSlice,
 } from "./projection-helpers";
+import type { ProjectionInputs } from "./projection-helpers";
+import type { PendingMetadataOverlay } from "./pending-metadata-overlay";
 import type {
   AgentRolesSlice,
   ArtifactsSlice,
@@ -95,7 +96,6 @@ interface ProjectorPatches {
   terminalAgentsCreated: Set<string>;
   titleChanged: boolean;
   updatedAtChanged: boolean;
-  isTitleEditedByUserChanged: boolean;
   structuralTreeDirty: boolean;
   /**
    * True when the `epic.artifacts` container map itself was added /
@@ -127,7 +127,6 @@ function emptyPatches(): ProjectorPatches {
     terminalAgentsCreated: new Set(),
     titleChanged: false,
     updatedAtChanged: false,
-    isTitleEditedByUserChanged: false,
     structuralTreeDirty: false,
     artifactsContainerReseeded: false,
     deletedArtifactsContainerReseeded: false,
@@ -157,7 +156,6 @@ function patchFlagsEmpty(p: ProjectorPatches): boolean {
   return (
     !p.titleChanged &&
     !p.updatedAtChanged &&
-    !p.isTitleEditedByUserChanged &&
     !p.structuralTreeDirty &&
     !p.artifactsContainerReseeded &&
     !p.deletedArtifactsContainerReseeded &&
@@ -195,31 +193,65 @@ export interface EpicProjector {
 }
 
 /**
- * `getCurrentUserId` resolves the signed-in user's id at projection time so the
- * projector can hide chats and terminal agents owned by a different user.
- * It is a getter, not a fixed value, so a session that projects before the auth
- * profile has hydrated picks up the real id on the next projection. Reads the
- * id lazily rather than threading it through every `createOpenEpicStore` caller.
+ * Everything the projector reads besides the doc, grouped for the same reason
+ * {@link ProjectionInputs} groups its fields: each one arrives on its own
+ * schedule and must be resolved AT projection time, never captured when the
+ * session was constructed - which is why every member is a getter or callback
+ * rather than a value.
  */
-export function createEpicProjector(
-  getCurrentUserId: () => string | null,
+export interface EpicProjectorSources {
   /**
-   * The host's store-backed chat records (`epic.listChatRecords`), read at
-   * projection time for the same reason `getCurrentUserId` is: they arrive on
-   * their own schedule (a unary read, polled), and every projection that runs
-   * before or after one lands must fold in whatever is current rather than a
-   * value captured when the session was constructed. Returns the shared empty
-   * slice in doc-only mode, which makes the union a reference pass-through.
+   * The signed-in user's id, so the projector can hide chats and terminal
+   * agents owned by a different user. A getter so a session that projects
+   * before the auth profile has hydrated picks up the real id on the next
+   * projection, without threading it through every `createOpenEpicStore`
+   * caller.
    */
-  getChatRecords: () => ChatsSlice,
+  readonly getCurrentUserId: () => string | null;
+  /**
+   * The host's store-backed chat records (`epic.listChatRecords`). They
+   * arrive on their own schedule (a unary read, polled), and every projection
+   * that runs before or after one lands must fold in whatever is current.
+   * Returns the shared empty slice in doc-only mode, which makes the union a
+   * reference pass-through.
+   */
+  readonly getChatRecords: () => ChatsSlice;
   /**
    * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`),
    * with exactly the chat records' rationale and doc-only contract.
    */
-  getTuiAgentRecords: () => TerminalAgentsSlice,
+  readonly getTuiAgentRecords: () => TerminalAgentsSlice;
+  /**
+   * Metadata mutations this client has stamped and has no answer for yet.
+   * Returns the shared empty map when nothing is in flight, which makes
+   * every applier a reference pass-through.
+   */
+  readonly getPendingOverlay: () => PendingMetadataOverlay;
+  /**
+   * Deletes finished overlay chains from the retained map when a full
+   * projection proves them dead (row caught up to the acked value, or a peer
+   * overwrote it). Must NOT republish - a dead chain already displays the
+   * authoritative value, so the deletion is invisible by construction.
+   */
+  readonly onDeadMutations: (requestIds: readonly string[]) => void;
+}
+
+export function createEpicProjector(
+  sources: EpicProjectorSources,
 ): EpicProjector {
+  const { getCurrentUserId, getChatRecords, getTuiAgentRecords } = sources;
+  const { getPendingOverlay, onDeadMutations } = sources;
   let attached: AttachedConfig | null = null;
   let suspended = false;
+
+  function currentInputs(): ProjectionInputs {
+    return {
+      chatRecords: getChatRecords(),
+      tuiAgentRecords: getTuiAgentRecords(),
+      pendingOverlay: getPendingOverlay(),
+      reportDeadMutations: onDeadMutations,
+    };
+  }
 
   function detachInternal(): void {
     if (attached === null) return;
@@ -238,6 +270,35 @@ export function createEpicProjector(
       if (suspended) return;
       const patches = collectPatches(events, doc);
       if (patchesEmpty(patches)) return;
+      // With a metadata mutation in flight, take the FULL path. The
+      // incremental path recomputes rows from the doc alone, so it would
+      // publish a projection with the optimistic overlay missing and the row
+      // would visibly snap back until the next full projection - and a doc
+      // patch during that window is not rare, it is what the mutation's own
+      // dual-write produces.
+      //
+      // Threading the overlay through `applyPatches` instead would mean a
+      // second implementation of the same rule beside the one in
+      // `projectFullState`, kept in agreement by nothing. That is the defect
+      // shape this branch has already paid for three times. The overlay is
+      // empty in the overwhelmingly common case and non-empty only for the
+      // few hundred ms a mutation is unanswered, so the full pass is bounded
+      // and rare.
+      const pendingOverlay = getPendingOverlay();
+      if (pendingOverlay.size > 0) {
+        // Stabilized against the published state: a full projection rebuilds
+        // every row object, and without the reconcile pass one rename in a
+        // 100-artifact epic would hand the other 99 rows fresh references -
+        // exactly the churn the incremental path's per-entry identity
+        // contract exists to prevent.
+        store.setState(
+          stabilizeProjectedSlices(
+            store.getState(),
+            projectFullState(doc, getCurrentUserId(), currentInputs()),
+          ),
+        );
+        return;
+      }
       store.setState(
         applyPatches({
           state: store.getState(),
@@ -257,11 +318,9 @@ export function createEpicProjector(
     // ingest can apply bytes and then call `projectFull` once.
     if (!suspended) {
       store.setState(
-        projectFullState(
-          doc,
-          getCurrentUserId(),
-          getChatRecords(),
-          getTuiAgentRecords(),
+        stabilizeProjectedSlices(
+          store.getState(),
+          projectFullState(doc, getCurrentUserId(), currentInputs()),
         ),
       );
     }
@@ -281,11 +340,9 @@ export function createEpicProjector(
 
   function projectFull(): EpicProjectedSlices {
     if (attached === null) return EMPTY_PROJECTED_SLICES;
-    return projectFullState(
-      attached.doc,
-      getCurrentUserId(),
-      getChatRecords(),
-      getTuiAgentRecords(),
+    return stabilizeProjectedSlices(
+      attached.store.getState(),
+      projectFullState(attached.doc, getCurrentUserId(), currentInputs()),
     );
   }
 
@@ -363,8 +420,6 @@ function classifyEpicRoot(
       patches.titleChanged = true;
     } else if (key === "updatedAt") {
       patches.updatedAtChanged = true;
-    } else if (key === "isTitleEditedByUser") {
-      patches.isTitleEditedByUserChanged = true;
     } else if (key === "artifacts") {
       patches.artifactsContainerReseeded = true;
       patches.structuralTreeDirty = true;
@@ -543,9 +598,8 @@ function classifyEvent(
     return;
   }
 
-  // Y.Map "epic" root: title / isTitleEditedByUser / artifacts /
-  // chats. Container additions are uncommon (lazy `ensureMap`) but
-  // handled defensively.
+  // Y.Map "epic" root: title / artifacts / chats. Container additions
+  // are uncommon (lazy `ensureMap`) but handled defensively.
   if (path.length === 0 && event instanceof Y.YMapEvent) {
     classifyEpicRoot(event, patches);
     return;
@@ -687,23 +741,17 @@ function applyEpicHeader(
   patches: ProjectorPatches,
   next: MutableProjectedPatch,
 ): void {
-  if (
-    !patches.titleChanged &&
-    !patches.updatedAtChanged &&
-    !patches.isTitleEditedByUserChanged
-  ) {
+  if (!patches.titleChanged && !patches.updatedAtChanged) {
     return;
   }
   const epic = getEpicMap(doc);
   const header = {
     title: readMaybeString(epic, "title"),
     updatedAt: readMaybeNumber(epic, "updatedAt"),
-    isTitleEditedByUser: readMaybeBoolean(epic, "isTitleEditedByUser"),
   };
   if (
     header.title !== state.epic.title ||
-    header.updatedAt !== state.epic.updatedAt ||
-    header.isTitleEditedByUser !== state.epic.isTitleEditedByUser
+    header.updatedAt !== state.epic.updatedAt
   ) {
     next.epic = header;
   }
@@ -1173,6 +1221,172 @@ function spliceNodeById(
     }
   }
   return { value: out, identical };
+}
+
+// ─── Full-projection stabilization ────────────────────────────────────────
+
+/**
+ * Splice previously published row references into a freshly-computed
+ * `byId`/`allIds` slice. Returns the PREVIOUS slice by reference when every
+ * row and the id order survived, so a full projection that changed nothing in
+ * this slice is invisible to its subscribers.
+ */
+function spliceIdSlice<T>(
+  next: {
+    readonly byId: Readonly<Record<string, T>>;
+    readonly allIds: readonly string[];
+  },
+  prev: {
+    readonly byId: Readonly<Record<string, T>>;
+    readonly allIds: readonly string[];
+  },
+  eq: (a: T, b: T) => boolean,
+): {
+  readonly byId: Readonly<Record<string, T>>;
+  readonly allIds: readonly string[];
+} {
+  const nextKeys = Object.keys(next.byId);
+  let identical = nextKeys.length === Object.keys(prev.byId).length;
+  let sameAsNext = true;
+  const byId: Record<string, T> = {};
+  for (const key of nextKeys) {
+    const row = next.byId[key];
+    if (Object.hasOwn(prev.byId, key) && eq(prev.byId[key], row)) {
+      byId[key] = prev.byId[key];
+      if (prev.byId[key] !== row) sameAsNext = false;
+    } else {
+      byId[key] = row;
+      identical = false;
+    }
+  }
+  const allIds = pickStableIds(next.allIds, prev.allIds);
+  if (identical && allIds === prev.allIds) return prev;
+  // Nothing borrowed from `prev`: hand `next` through by reference rather
+  // than a structural copy. Projection-level aliasing (doc-only mode
+  // publishes `chats` AS `docChats`) survives stabilization this way.
+  if (sameAsNext && allIds === next.allIds) return next;
+  return { byId, allIds };
+}
+
+function spliceAgentRoles(
+  next: AgentRolesSlice,
+  prev: AgentRolesSlice,
+): AgentRolesSlice {
+  const nextKeys = Object.keys(next.byAgentId);
+  let identical = nextKeys.length === Object.keys(prev.byAgentId).length;
+  const byAgentId: Record<string, readonly RoleClaim[]> = {};
+  for (const key of nextKeys) {
+    const claims = next.byAgentId[key];
+    if (
+      Object.hasOwn(prev.byAgentId, key) &&
+      roleClaimsEq(prev.byAgentId[key], claims)
+    ) {
+      byAgentId[key] = prev.byAgentId[key];
+    } else {
+      byAgentId[key] = claims;
+      identical = false;
+    }
+  }
+  return identical ? prev : { byAgentId };
+}
+
+function stabilizeTree(next: TreeSlice, prev: TreeSlice): TreeSlice {
+  const rootIds = arrayShallowEq(next.rootIds, prev.rootIds)
+    ? prev.rootIds
+    : next.rootIds;
+  const children = spliceChildrenByParent(
+    next.childrenByParent,
+    prev.childrenByParent,
+  );
+  const nodes = spliceNodeById(next.nodeById, prev.nodeById);
+  if (rootIds === prev.rootIds && children.identical && nodes.identical) {
+    return prev;
+  }
+  return { rootIds, childrenByParent: children.value, nodeById: nodes.value };
+}
+
+/**
+ * Reconcile a freshly-computed FULL projection against the previously
+ * published state so identities only change where content did.
+ *
+ * The incremental patch path earns this contract entry by entry; the full
+ * path rebuilds every row object from the doc, so without this pass any full
+ * projection (overlay change, record-slice ingest, snapshot re-project) would
+ * hand every subscriber in the epic a fresh reference for unchanged content -
+ * one rename re-rendering the entire sidebar. Uses the same `eq` helpers as
+ * the incremental path so the two paths cannot disagree about what "changed"
+ * means.
+ */
+function stabilizeProjectedSlices(
+  prev: OpenEpicState,
+  next: EpicProjectedSlices,
+): EpicProjectedSlices {
+  const epic =
+    next.epic.title === prev.epic.title &&
+    next.epic.updatedAt === prev.epic.updatedAt
+      ? prev.epic
+      : next.epic;
+  // Doc-only mode publishes the union slice AS the doc slice - same object,
+  // which `chats === docChats` consumers (and the union's own change gate)
+  // read as "no record layer here". Splicing the two independently would
+  // rebuild them as separate deep-equal objects, so the aliased side reuses
+  // the other's spliced result instead of splicing again.
+  //
+  // The invariant is IFF, both directions: the published pair aliases exactly
+  // when the raw pair does. The reverse hazard is an un-aliasing transition
+  // with structurally equal content (the first record answer carrying the
+  // same rows the legacy doc slice held): both splices would hand back the
+  // one shared `prev` object and the published state would keep signalling
+  // "no record layer" after the record layer arrived. When that collapse
+  // happens, re-wrap the union side - outer object only, rows and id array
+  // still shared - so identity tells the truth at the cost of one wrapper.
+  const docChats = spliceIdSlice(
+    next.docChats,
+    prev.docChats,
+    chatProjectionsEq,
+  );
+  let chats =
+    next.chats === next.docChats
+      ? docChats
+      : spliceIdSlice(next.chats, prev.chats, chatProjectionsEq);
+  if (next.chats !== next.docChats && chats === docChats) {
+    chats = { byId: chats.byId, allIds: chats.allIds };
+  }
+  const docTuiAgents = spliceIdSlice(
+    next.docTuiAgents,
+    prev.docTuiAgents,
+    terminalAgentProjectionsEq,
+  );
+  let tuiAgents =
+    next.tuiAgents === next.docTuiAgents
+      ? docTuiAgents
+      : spliceIdSlice(
+          next.tuiAgents,
+          prev.tuiAgents,
+          terminalAgentProjectionsEq,
+        );
+  if (next.tuiAgents !== next.docTuiAgents && tuiAgents === docTuiAgents) {
+    tuiAgents = { byId: tuiAgents.byId, allIds: tuiAgents.allIds };
+  }
+  return {
+    epic,
+    artifacts: spliceIdSlice(
+      next.artifacts,
+      prev.artifacts,
+      artifactProjectionsEq,
+    ),
+    deletedArtifacts: spliceIdSlice(
+      next.deletedArtifacts,
+      prev.deletedArtifacts,
+      deletedArtifactProjectionsEq,
+    ),
+    docChats,
+    chats,
+    docTuiAgents,
+    tuiAgents,
+    agentRoles: spliceAgentRoles(next.agentRoles, prev.agentRoles),
+    tree: stabilizeTree(next.tree, prev.tree),
+  };
 }
 
 /** Everything one transaction's reconcile reads. */

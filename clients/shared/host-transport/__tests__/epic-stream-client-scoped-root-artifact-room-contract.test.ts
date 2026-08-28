@@ -341,7 +341,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3 },
+      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
     client.close();

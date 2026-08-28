@@ -1664,15 +1664,44 @@ export function RootDndProvider(props: RootDndProviderProps) {
       const reparent = lastReparentDropRef.current;
       if (reparent !== null) {
         restorePromotedPreview();
-        commitSidebarReparentDrop({
-          epicId: reparent.epicId,
-          sourceNodeId: reparent.sourceNodeId,
-          newParentId: reparent.newParentId,
-          panelId: reparent.panelId,
-          viewTabId: reparent.viewTabId,
-          queryClient,
-        });
-        endGesture();
+        // ENDING THE GESTURE IS NOT CONDITIONAL ON THE COMMIT SUCCEEDING.
+        // `endGesture()` used to sit plainly after this call, so a throw out
+        // of the commit skipped it and left the store mid-drag with stale
+        // refs: a dead sidebar until the tree remounted. One ordinary drop
+        // did it (a doc-only terminal agent onto a record-backed chat, where
+        // the doc evaluator rejects what the projected gate allowed).
+        //
+        // Extracting `endGesture` widened this rather than closing it. The
+        // skipped cleanup used to be four refs; it is now everything that
+        // function clears - `activeTileDrag`, `promotedPreviewOnDrag`, the
+        // replay latch - each of which its own doc describes corrupting the
+        // NEXT drag when it survives this one.
+        //
+        // Rethrowing would defeat the point, since the cleanup is exactly
+        // what has to survive the failure, so the error is logged and
+        // swallowed and the commit's own handler owns anything user-facing.
+        try {
+          commitSidebarReparentDrop({
+            epicId: reparent.epicId,
+            sourceNodeId: reparent.sourceNodeId,
+            newParentId: reparent.newParentId,
+            panelId: reparent.panelId,
+            viewTabId: reparent.viewTabId,
+            queryClient,
+          });
+        } catch (error: unknown) {
+          appLogger.error(
+            "[epic-dnd] sidebar reparent commit threw; ending the gesture anyway",
+            {
+              epicId: reparent.epicId,
+              sourceNodeId: reparent.sourceNodeId,
+              newParentId: reparent.newParentId,
+            },
+            error,
+          );
+        } finally {
+          endGesture();
+        }
         return;
       }
       if (composerDrop !== null) {

@@ -3,12 +3,34 @@ import path from "node:path";
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "@traycer-clients/shared": path.resolve(__dirname, "../shared"),
-      "@traycer-clients/gui-app": path.resolve(__dirname, "../gui-app"),
-      "@traycer-clients/mobile": path.resolve(__dirname, "./src"),
-      "@": path.resolve(__dirname, "../gui-app/src"),
-    },
+    // The `@traycer/protocol` pair mirrors `clients/shared/vitest.config.ts`:
+    // the workspace package resolves through the compiler's paths for `tsc`,
+    // but vitest's vite resolver needs the same mapping stated here or a test
+    // whose module graph reaches the protocol fails to resolve it on a fresh
+    // checkout.
+    alias: [
+      {
+        find: "@traycer-clients/shared",
+        replacement: path.resolve(__dirname, "../shared"),
+      },
+      {
+        find: "@traycer-clients/gui-app",
+        replacement: path.resolve(__dirname, "../gui-app"),
+      },
+      {
+        find: "@traycer-clients/mobile",
+        replacement: path.resolve(__dirname, "./src"),
+      },
+      { find: "@", replacement: path.resolve(__dirname, "../gui-app/src") },
+      {
+        find: /^@traycer\/protocol\/utils\/(.*)$/,
+        replacement: path.resolve(__dirname, "../../protocol/utils/$1"),
+      },
+      {
+        find: /^@traycer\/protocol\/(.*)$/,
+        replacement: path.resolve(__dirname, "../../protocol/src/$1"),
+      },
+    ],
   },
   test: {
     environment: "jsdom",

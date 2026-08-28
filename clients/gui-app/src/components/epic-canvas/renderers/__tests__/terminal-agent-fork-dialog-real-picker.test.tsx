@@ -622,6 +622,9 @@ function titleInputValue(): string {
 function sourceAgent(): TuiAgentProjection {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises the fork
+    // dialog's profile picker, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",
