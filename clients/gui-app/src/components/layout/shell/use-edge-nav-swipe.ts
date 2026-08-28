@@ -301,6 +301,14 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       started.following = true;
       started.travelPx = travelPx;
       started.lastAt = event.timeStamp;
+      // The ground covered reaching activation is the release's first speed
+      // sample. Without it, a flick fast enough to activate on its only move
+      // and release in place would be judged at zero velocity and spring back
+      // - the quicker the flick, the more likely nothing updates this again.
+      const elapsedMs = event.timeStamp - started.at;
+      if (elapsedMs > 0) {
+        started.velocityPxPerS = (travelPx / elapsedMs) * 1000;
+      }
       handlersRef.current.onDragMove(travelPx);
     };
 

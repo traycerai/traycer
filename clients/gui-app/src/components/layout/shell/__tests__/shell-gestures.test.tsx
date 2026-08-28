@@ -2159,8 +2159,36 @@ describe("useEdgeNavSwipe", () => {
       move(60, 100);
       lift("pointercancel", 200);
 
+      // 520 is the activation seed - 52px over the 100ms it took to activate.
+      // It is reported faithfully even here; cancellation beats velocity in
+      // the release rule, so nothing downstream may read it as intent.
       expect(probe.releases).toEqual([
-        { travelPx: 52, velocityPxPerS: 0, cancelled: true },
+        { travelPx: 52, velocityPxPerS: 520, cancelled: true },
+      ]);
+    });
+
+    // A flick fast enough to activate on its only move and release in place
+    // has exactly one speed sample: the ground covered reaching activation.
+    // Judged at zero it would spring back - punishing precisely the quickest
+    // gestures.
+    it("commits a flick whose only sample is the activating move", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 50);
+      dispatchPointer("pointerup", {
+        clientX: 60,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 60,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      // 52px over 50ms: a 1040 px/s flick, far past the commit threshold
+      // despite travel far short of the distance rule.
+      expect(probe.releases).toEqual([
+        { travelPx: 52, velocityPxPerS: 1040, cancelled: false },
       ]);
     });
 
@@ -2205,7 +2233,7 @@ describe("useEdgeNavSwipe", () => {
       });
 
       expect(probe.releases).toEqual([
-        { travelPx: 52, velocityPxPerS: 0, cancelled: true },
+        { travelPx: 52, velocityPxPerS: 520, cancelled: true },
       ]);
     });
 
@@ -2222,7 +2250,7 @@ describe("useEdgeNavSwipe", () => {
       for (const unmount of activeUnmounts.splice(0)) unmount();
 
       expect(probe.releases).toEqual([
-        { travelPx: 52, velocityPxPerS: 0, cancelled: true },
+        { travelPx: 52, velocityPxPerS: 520, cancelled: true },
       ]);
     });
   });

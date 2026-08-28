@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { motion, useTransform, type MotionValue } from "motion/react";
 import {
   composeSwipeNavLayers,
@@ -171,13 +171,20 @@ function planeSnapshot(
  * assignment one moment earlier would be discarded and every scrollable region
  * would freeze at its top. Re-applied on every mount rather than once, because
  * a snapshot is remounted each time it changes plane.
+ *
+ * A LAYOUT effect, not a passive one, and the timing is load-bearing: the
+ * overlay commits with this host empty, and activation comes from a native
+ * pointer listener rather than a React event, so nothing batches the commit
+ * away from the browser's next frame - a passive effect leaves a window where
+ * the empty full-screen overlay paints before the screens arrive, which shows
+ * as a blank flash at the exact moment the finger starts a drag.
  */
 function SnapshotMount(props: {
   readonly snapshot: ScreenSnapshot;
 }): ReactNode {
   const { snapshot } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const host = hostRef.current;
     if (host === null) return;
     host.appendChild(snapshot.node);
