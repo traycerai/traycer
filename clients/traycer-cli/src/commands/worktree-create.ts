@@ -1,11 +1,12 @@
 import {
   type WorktreeBranchSelection,
+  type WorktreeCreatePathsResponse,
   worktreeCreatePathsRequestSchema,
   worktreeCreatePathsResponseSchema,
 } from "@traycer/protocol/host";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -56,6 +57,19 @@ export async function resolveWorktreeBranchSelection(
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message:
           "traycer: --source-branch only applies to --branch (creating a new branch); it cannot be combined with --existing.",
+        details: null,
+        exitCode: 1,
+      });
+    }
+    // Same rule, same reason: the `existing` selection carries no
+    // `carryUncommittedChanges` field, so this flag had been accepted and then
+    // silently dropped - the user asked for their work to come along and it
+    // did not. Refuse rather than quietly do nothing.
+    if (opts.carryUncommittedChanges) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "traycer: --carry-uncommitted only applies to --branch (creating a new branch); it cannot be combined with --existing.",
         details: null,
         exitCode: 1,
       });
@@ -136,11 +150,128 @@ export function buildWorktreeCreateCommand(
     const result = await toAgentCliError(
       callHostRpc("worktree.createPaths", request),
     );
-    const parsed = parseHostResponse(worktreeCreatePathsResponseSchema, result);
+    const parsed = parseCanonicalHostResponse(
+      "worktree.createPaths",
+      worktreeCreatePathsResponseSchema,
+      result,
+    );
     return {
       data: parsed,
-      human: JSON.stringify(parsed, null, 2),
+      human: formatWorktreeCreateResult(parsed, branch),
       exitCode: parsed.perEntry.every((entry) => entry.ok) ? 0 : 1,
     };
   };
+}
+
+/**
+ * Human summary of a create. Pure so the layout is testable without a host, and
+ * deliberately not the response object: `--json` still returns the protocol
+ * shape verbatim for anyone parsing this, while a person gets the four facts
+ * they came for - where it landed, on which branch, from what, and what to do
+ * with it.
+ *
+ * The `branch` selection is threaded in rather than read back off the response
+ * because it is the only place the *intent* survives: the wire response reports
+ * a branch name, not whether that branch was created or checked out, nor
+ * whether uncommitted changes were carried along.
+ */
+export function formatWorktreeCreateResult(
+  response: WorktreeCreatePathsResponse,
+  branch: WorktreeBranchSelection,
+): string {
+  const failures = response.perEntry.filter((entry) => !entry.ok);
+  if (failures.length > 0) {
+    return failures
+      .map((entry) =>
+        [
+          `Could not create a worktree for ${entry.workspacePath}`,
+          `  ${entry.errorMessage ?? "The host reported no reason."}`,
+        ].join("\n"),
+      )
+      .join("\n\n");
+  }
+  if (response.entries.length === 0) {
+    // `perEntry` says every entry succeeded, so an empty `entries` is the host
+    // contradicting itself. Say so plainly instead of printing a confident
+    // summary of nothing.
+    return "The host reported success but returned no worktree path. Run with --json to see the full response.";
+  }
+  const lines: string[] = [];
+  for (const entry of response.entries) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`Created worktree ${entry.path}`);
+    lines.push(
+      ...kvBlock([
+        ["Branch", formatBranch(entry.branch, branch)],
+        ["Source", entry.workspacePath],
+        [
+          "Repo",
+          entry.repoIdentifier === null
+            ? "(no parseable Git remote - filed under a local path)"
+            : `${entry.repoIdentifier.owner}/${entry.repoIdentifier.repo}`,
+        ],
+        ["Mode", entry.mode],
+        // Only the `new` selection can carry work across, and
+        // `resolveWorktreeBranchSelection` rejects `--carry-uncommitted`
+        // alongside `--existing`, so an `existing` create has nothing to
+        // report here rather than a "no" a reader would have to interpret.
+        //
+        // The carrying case is reported as INTENT, not as an outcome, and the
+        // distinction is load-bearing. The response says a worktree was
+        // created; it does not say whether any WIP came with it. Carry is
+        // best-effort on the host - an unresolvable carry root, a failed stash
+        // replay, an unreadable untracked file - and none of those turn the
+        // create into a failed `perEntry`. Printing "carried" off the request
+        // flag would state as fact something this command cannot observe, which
+        // is the class of false human status CLI-020 exists to remove. The
+        // not-carrying case IS certain: nothing was asked for, so nothing moved.
+        ...(branch.type === "existing"
+          ? []
+          : ([
+              [
+                "Uncommitted changes",
+                branch.carryUncommittedChanges
+                  ? "carry requested - best effort, confirm in the new worktree"
+                  : "left in the source workspace",
+              ],
+            ] satisfies [string, string][])),
+      ]),
+    );
+  }
+  lines.push("");
+  lines.push("Run an agent in it with `traycer agent create --cwd <path>`.");
+  return lines.join("\n");
+}
+
+/**
+ * The host's `branch` when it reported one, and an explicit "it did not" when
+ * it did not.
+ *
+ * This used to fall back to `branch.name` - the name we ASKED for - and then
+ * describe it with the same "(new branch, forked from x)" / "(checked out)"
+ * confidence as a reported one. `worktreeCreatedPathEntrySchema` makes the
+ * returned branch nullable, so a null is the host declining to state the
+ * outcome, and echoing the request back dressed as a result is the same
+ * false-status defect this file already fixed for the carry row. The requested
+ * name is still shown, because it is the useful thing to print - it is just
+ * labelled as the request rather than as what happened.
+ */
+function formatBranch(
+  created: string | null,
+  branch: WorktreeBranchSelection,
+): string {
+  if (created === null) {
+    return `${branch.name} (requested; the host did not report the resulting branch)`;
+  }
+  return branch.type === "existing"
+    ? `${created} (checked out; the branch already existed)`
+    : `${created} (new branch, forked from ${branch.source})`;
+}
+
+function kvBlock(rows: readonly [string, string][]): string[] {
+  const keyWidth = rows.reduce(
+    (width, [key]) => Math.max(width, key.length),
+    0,
+  );
+  return rows.map(([key, value]) => `  ${key.padEnd(keyWidth)}  ${value}`);
 }

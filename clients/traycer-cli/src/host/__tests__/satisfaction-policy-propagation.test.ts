@@ -5,9 +5,6 @@ import { noopLogger } from "../../logger";
 const mocks = vi.hoisted(() => ({
   provisionHostMock: vi.fn(),
   resolveBundledHostArchiveMock: vi.fn(),
-  readHostInstallRecordMock: vi.fn(),
-  createServiceControllerMock: vi.fn(),
-  serviceLabelForMock: vi.fn(),
 }));
 
 vi.mock("../provision", () => ({
@@ -18,26 +15,10 @@ vi.mock("../../installer/bundled-host", () => ({
   resolveBundledHostArchive: mocks.resolveBundledHostArchiveMock,
 }));
 
-vi.mock("../../manifest/host-install", () => ({
-  readHostInstallRecord: mocks.readHostInstallRecordMock,
-}));
-
-vi.mock("../../service", () => ({
-  createServiceController: mocks.createServiceControllerMock,
-  serviceLabelFor: mocks.serviceLabelForMock,
-}));
-
-const {
-  provisionHostMock,
-  resolveBundledHostArchiveMock,
-  readHostInstallRecordMock,
-  createServiceControllerMock,
-  serviceLabelForMock,
-} = mocks;
+const { provisionHostMock, resolveBundledHostArchiveMock } = mocks;
 
 import { config } from "../../config";
 import { ensureHost, type EnsureHostOptions } from "../ensure";
-import { maybeAutoBootstrap } from "../auto-bootstrap";
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
   return {
@@ -82,40 +63,11 @@ function makeResult() {
   };
 }
 
-function makeServiceController(state: "running" | "not-installed") {
-  let current = state;
-  return {
-    status: vi.fn(async () => ({
-      state: current,
-      version: null,
-      listenUrl: null,
-      pid: null,
-    })),
-    install: vi.fn(async () => {
-      current = "running";
-    }),
-    uninstall: vi.fn(async () => {
-      current = "not-installed";
-    }),
-    start: vi.fn(async () => {
-      current = "running";
-    }),
-    stop: vi.fn(async () => undefined),
-    restart: vi.fn(async () => undefined),
-  };
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   config.supportedHostVersion = null;
   resolveBundledHostArchiveMock.mockResolvedValue(null);
   provisionHostMock.mockResolvedValue(makeResult());
-  serviceLabelForMock.mockReturnValue({
-    id: "ai.traycer.host",
-    displayName: "Traycer Host",
-    environment: "production",
-    devSlot: null,
-  });
 });
 
 describe("ensureHost satisfaction policy propagation", () => {
@@ -178,72 +130,5 @@ describe("ensureHost satisfaction policy propagation", () => {
     await expect(
       provisionHostMock.mock.calls[0]?.[0].resolveInstallSource(),
     ).resolves.toEqual({ kind: "local-file", path: "/tmp/host.tar.gz" });
-  });
-});
-
-describe("auto-bootstrap satisfaction policy propagation", () => {
-  it("forces presence on service-registered repair even when the source is a local build", async () => {
-    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
-    readHostInstallRecordMock.mockResolvedValue({ version: "2.0.0" });
-    createServiceControllerMock.mockReturnValue(
-      makeServiceController("not-installed"),
-    );
-
-    await maybeAutoBootstrap({
-      runtime: makeRuntime({}),
-      trigger: "login",
-      onProgress: null,
-    });
-
-    expect(provisionHostMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        satisfaction: { kind: "presence" },
-        recordVersionOverride: null,
-      }),
-    );
-  });
-
-  it("uses the source-derived exact policy only on the install branch", async () => {
-    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
-    readHostInstallRecordMock.mockResolvedValue(null);
-    createServiceControllerMock.mockReturnValue(
-      makeServiceController("not-installed"),
-    );
-
-    await maybeAutoBootstrap({
-      runtime: makeRuntime({}),
-      trigger: "login",
-      onProgress: null,
-    });
-
-    expect(provisionHostMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        satisfaction: { kind: "exact", version: config.version },
-        recordVersionOverride: config.version,
-      }),
-    );
-  });
-
-  it("uses the source-derived implicit minimum for a configured registry install", async () => {
-    config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue(null);
-    createServiceControllerMock.mockReturnValue(
-      makeServiceController("not-installed"),
-    );
-
-    await maybeAutoBootstrap({
-      runtime: makeRuntime({}),
-      trigger: "host-status",
-      onProgress: null,
-    });
-
-    expect(provisionHostMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        satisfaction: {
-          kind: "implicit-registry-minimum",
-          version: "1.7.2",
-        },
-      }),
-    );
   });
 });

@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import {
+  type AgentActivityTier,
   useDescendantIds,
-  useEpicActiveAgentIds,
+  useEpicAgentActivityTiers,
   useEpicArtifactRecords,
 } from "@/lib/epic-selectors";
 
@@ -10,7 +11,7 @@ export interface AgentRow {
   readonly id: string;
   readonly title: string;
   readonly surface: "gui" | "tui";
-  readonly active: boolean;
+  readonly activity: AgentActivityTier | false;
   /** The host this agent runs on - the stop action routes here. */
   readonly hostId: string;
 }
@@ -40,8 +41,11 @@ function surfaceOf(type: string): "gui" | "tui" | null {
  * agent on top with Stop all, its active descendants beneath.
  *
  * Structure + titles come from the reactive epic tree (instant on spawn); the
- * live `active` bit comes from the global activity awareness source
- * (`useEpicActiveAgentIds`) - push-driven, no polling.
+ * live activity tier comes from the global activity awareness source
+ * (`useEpicAgentActivityTiers`) - push-driven, no polling. Preserving the tier
+ * keeps these rows visually aligned with the same agent's sidebar and tab
+ * glyphs: active turns spin, while background-only work uses the calm process
+ * glyph.
  */
 export function useAgentStopControls(input: {
   readonly epicId: string;
@@ -49,7 +53,7 @@ export function useAgentStopControls(input: {
 }): AgentStopControls {
   const descendantIds = useDescendantIds(input.rootAgentId);
   const records = useEpicArtifactRecords();
-  const activeIds = useEpicActiveAgentIds();
+  const activityTiers = useEpicAgentActivityTiers();
 
   return useMemo(() => {
     const recordById = new Map(records.map((record) => [record.id, record]));
@@ -64,15 +68,16 @@ export function useAgentStopControls(input: {
             id: input.rootAgentId,
             title: selfRecord.name,
             surface: selfSurface,
-            active: activeIds.has(input.rootAgentId),
+            activity: activityTiers.get(input.rootAgentId) ?? false,
             hostId: selfRecord.hostId,
           };
 
-    if (activeIds.size === 0) return { self, descendants: EMPTY };
+    if (activityTiers.size === 0) return { self, descendants: EMPTY };
 
     const descendants: AgentRow[] = [];
     for (const id of descendantIds) {
-      if (!activeIds.has(id)) continue;
+      const activity = activityTiers.get(id);
+      if (activity === undefined) continue;
       const record = recordById.get(id);
       if (record === undefined) continue;
       const surface = surfaceOf(record.type);
@@ -81,7 +86,7 @@ export function useAgentStopControls(input: {
         id,
         title: record.name,
         surface,
-        active: true,
+        activity,
         hostId: record.hostId,
       });
     }
@@ -89,5 +94,5 @@ export function useAgentStopControls(input: {
       self,
       descendants: descendants.length === 0 ? EMPTY : descendants,
     };
-  }, [descendantIds, records, activeIds, input.rootAgentId]);
+  }, [descendantIds, records, activityTiers, input.rootAgentId]);
 }

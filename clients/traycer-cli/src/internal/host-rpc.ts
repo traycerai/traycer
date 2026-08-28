@@ -5,6 +5,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
 import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aware-messenger";
 import {
@@ -429,6 +430,84 @@ export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
     details: null,
     exitCode: 1,
   });
+}
+
+/**
+ * Validate a host response against the CANONICAL (latest installed) response
+ * schema for `method`, resolved from the same `hostRpcRegistry` the transport
+ * negotiates against. Prefer this over {@link parseHostResponse} everywhere the
+ * payload is just "the response to the call we made".
+ *
+ * Why this exists rather than each call site naming a schema: the transport
+ * hands back a payload already at the client's canonical version - either the
+ * host spoke it directly (returned unvalidated, so this parse IS the validation
+ * boundary) or `upgradeResponseAlongChain` bridged an older host's reply up to
+ * it. A call site that names an older `...SchemaVNN` therefore validates the
+ * wrong contract AND, because Zod strips unknown keys, silently discards every
+ * field added since - turning a host fact the CLI was told into one it never
+ * saw. That skew is invisible to the type checker, because `parseHostResponse`
+ * takes `value: unknown` and returns whatever the schema it was handed infers.
+ *
+ * Naming the METHOD alongside the schema is what closes that hole. The schema
+ * parameter is typed as the method's canonical `ResponseOfMethod` - the same
+ * type `callHostRpc` already promises for the value being parsed - so handing
+ * it a stale `...SchemaVNN` is a compile error at the call site instead of a
+ * silent field drop at runtime. When a protocol minor lands, every CLI call
+ * site on that method stops compiling until someone decides what the new field
+ * means here, which is the loud, reviewable moment the old signature never had.
+ * `assertCanonicalResponseSchema` covers the residue the types cannot see.
+ *
+ * {@link parseHostResponse} stays for the callers that genuinely mean a
+ * specific historical version - the streaming frame bridge in `monitor.ts`
+ * decodes v1.0/v1.1/v1.2 envelopes on purpose.
+ */
+export function parseCanonicalHostResponse<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  schema: ZodType<ResponseOfMethod<HostRpcRegistry, Method>>,
+  value: unknown,
+): ResponseOfMethod<HostRpcRegistry, Method> {
+  assertCanonicalResponseSchema(method, schema);
+  return parseHostResponse(schema, value);
+}
+
+/**
+ * The canonical (latest installed) response schema the registry declares for
+ * `method` - the contract the transport negotiates and therefore the only one a
+ * plain response parse may use. Exported so a test can assert the pairing for
+ * every method without re-deriving the traversal.
+ */
+export function canonicalResponseSchemaFor(
+  method: keyof HostRpcRegistry & string,
+): ZodType<unknown> {
+  return getLatestContract(hostRpcRegistry[method], undefined).responseSchema;
+}
+
+/**
+ * Backstop for the drift the signature alone cannot catch. The
+ * `ZodType<ResponseOfMethod<...>>` parameter rejects a stale schema whenever the
+ * versions differ by a REQUIRED field - which is what an additive protocol minor
+ * normally adds, since its upgrade path has to supply a value for older hosts.
+ * It does not reject a schema that merely differs by an optional field, and it
+ * cannot see a base-name alias that tracks the latest line today but is free to
+ * stop doing so (`agentGetProviderProfileRateLimitsResponseSchema` is exactly
+ * that shape).
+ *
+ * So compare identity against the registry as well. This is an O(1) property
+ * walk against a call that just crossed a WebSocket, and it fails as a plain
+ * `Error`, not a `CliError`: reaching it means the CLI was built with a
+ * mismatched pairing, which is a bug in this repo rather than anything the user
+ * or the host did.
+ */
+function assertCanonicalResponseSchema(
+  method: keyof HostRpcRegistry & string,
+  schema: ZodType<unknown>,
+): void {
+  if (canonicalResponseSchemaFor(method) === schema) return;
+  throw new Error(
+    `traycer: internal error - '${method}' is parsed with a non-canonical response schema. Parse the latest contract in the versioned-RPC registry; an older '...SchemaVNN' silently strips every field added since.`,
+  );
 }
 
 function hostRpcToCliError(err: unknown): unknown {

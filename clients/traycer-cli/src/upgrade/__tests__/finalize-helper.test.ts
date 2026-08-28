@@ -317,6 +317,164 @@ describe("reconcilePostFinalizeMarker", () => {
     expect(reread.pendingUpgrade).toBeNull();
   });
 
+  // The corruption this correlation exists to prevent. A helper that swapped
+  // 1.5.0 can leave its marker behind unconsumed; a later `cli upgrade` then
+  // records pendingUpgrade 1.6.0 next to it. Applying the stale marker would
+  // promote 1.6.0 to installed and clear the pending record without 1.6.0's
+  // staged binary ever reaching the live path - the manifest would claim a
+  // version the bytes on disk are not, with nothing left to detect it from.
+  //
+  // Doctor refuses the same stale marker and routes the user to `host
+  // restart`, i.e. straight into this function, so the read side alone would
+  // not have been enough.
+  it("on a 'swapped' marker for a DIFFERENT staged upgrade, discards it without touching the manifest", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const pendingStagedPath = join(workHome, "bin", "traycer-1.6.0");
+    const staleStagedPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(pendingStagedPath, "staged-1.6.0-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath: pendingStagedPath,
+      version: "1.6.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        // Belongs to the PRIOR 1.5.0 swap, not the pending 1.6.0 one.
+        stagedBinaryPath: staleStagedPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerStagedBinaryPath).toBe(staleStagedPath);
+      expect(outcome.pendingStagedBinaryPath).toBe(pendingStagedPath);
+    }
+    // The pending 1.6.0 upgrade is untouched and still pending - the whole
+    // point, since it genuinely has not been applied.
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.version).toBe("1.4.0");
+    expect(reread.pendingUpgrade?.version).toBe("1.6.0");
+    // The stale marker is removed: it describes a swap nobody is waiting on,
+    // and leaving it would re-pose the same question to every future caller.
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  // The staged filename carries the version, so it alone defeats a stale-
+  // VERSION marker - but not a re-anchor. `cli re-anchor` repoints
+  // `manifest.binaryPath` without deleting the marker, so a SAME-version retry
+  // produces the same deterministic staged filename and would match on staged
+  // path alone, promoting a version whose bytes never reached the re-anchored
+  // destination.
+  it("discards a same-version marker whose livePath predates a 'cli re-anchor'", async () => {
+    const reanchoredLivePath = join(workHome, "bin", "traycer-cli");
+    const oldLivePath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(reanchoredLivePath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath: reanchoredLivePath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        // Same staged path (same version), but the PRE-re-anchor destination.
+        livePath: oldLivePath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerLivePath).toBe(oldLivePath);
+      expect(outcome.manifestBinaryPath).toBe(reanchoredLivePath);
+    }
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  // BOTH paths are reusable by design, so matching them is not identity.
+  // `cli re-anchor` supports replacing the binary at the same path, and
+  // `cli upgrade` derives the staged filename deterministically from the
+  // version - so retrying the same version reproduces the exact tuple a prior
+  // marker carries. Only the ordering separates them: a marker written BEFORE
+  // the pending upgrade was staged cannot be describing it.
+  it("discards a path-identical marker that predates the pending upgrade's staging", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "freshly-staged-bytes");
+    // `writeManifest` stamps stagedAt = 2026-05-10T00:00:00Z.
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        // A DAY EARLIER than the pending staging - so this marker belongs to
+        // an earlier attempt that happened to use the same two paths.
+        attemptedAt: "2026-05-09T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerAttemptedAt).toBe("2026-05-09T00:00:00Z");
+      expect(outcome.pendingStagedAt).toBe("2026-05-10T00:00:00Z");
+    }
+    // The freshly staged 1.5.0 is still pending - it genuinely has not been
+    // applied, and stamping it from the old marker is the corruption.
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it("on 'swap-failed' marker, preserves pendingUpgrade and returns the helper's error message", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");

@@ -34,8 +34,40 @@ const mocks = vi.hoisted(() => ({
     readonly port: number;
     readonly commandName: string;
   }>,
+  serviceControllerCalls: [] as string[],
   progressEvents: [] as ProgressInfo[],
 }));
+
+// `host free-port-and-restart`'s handler calls `createServiceController().restart(...)`
+// once its two guards clear. Mocked so a real (both-flags) parse in this
+// file's "genuinely exercise the index.ts guard" tests below never reaches
+// an actual OS service manager - the restart/lock/attestation plumbing past
+// the guards is exercised for real in `host-free-port-and-restart.test.ts`.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    createServiceController: () => ({
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      status: async () => ({
+        state: "stopped" as const,
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
+      stop: async () => {
+        mocks.serviceControllerCalls.push("stop");
+      },
+      start: async () => {
+        mocks.serviceControllerCalls.push("start");
+      },
+      restart: async () => {
+        mocks.serviceControllerCalls.push("restart");
+      },
+    }),
+  };
+});
 
 vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: async (opts: {
@@ -143,7 +175,13 @@ vi.mock("../../host/free-port-kill", () => ({
       port: opts.port,
       commandName: opts.commandName,
     });
-    return { killed: true, killError: null };
+    return {
+      killed: true,
+      killError: null,
+      release: "released",
+      releaseDetail: "pid 4242 exited after SIGTERM",
+      holderPid: null,
+    };
   },
 }));
 
@@ -367,6 +405,118 @@ describe("traycer CLI entrypoint registration", () => {
     const cmd = expectCommand(program, ["login"]);
     const flags = cmd.options.map((o) => o.long);
     expect(flags).toContain("--token");
+  });
+
+  it("login's --token is hidden from --help: reachable, but no longer advertised as a public flag", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["login"]);
+    // `expectCommand`/the flags check above already prove it is still wired;
+    // `.hideHelp()` only changes what `--help` prints.
+    expect(cmd.helpInformation()).not.toContain("--token");
+  });
+
+  it("whoami exposes --local for the observational read", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["whoami"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--local");
+  });
+
+  it("whoami's --help discloses that the default validates and may refresh the stored credentials", () => {
+    // `addHelpText` content is invisible to `helpInformation()` (see the
+    // "host update --help" test above for why) - assert on what `--help`
+    // actually prints via `outputHelp()`.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["whoami"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("SPENDING");
+      expect(printedHelp).toContain("credentialUpdate");
+      // Describes the pair of "-unconfirmed" values rather than enumerating a
+      // stale one; regression guard below pins that the old, since-corrected
+      // 'token-rotation-unsaved' spelling is gone.
+      expect(printedHelp).toContain("-unconfirmed");
+      expect(printedHelp).not.toContain("token-rotation-unsaved");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("whoami's --help states exit-code meaning per mode, not a single flat claim that 0 means signed in", () => {
+    // Regression guard for the "flat exit-codes line contradicts the --local
+    // paragraph above it" fix: exit 0 means something weaker under --local
+    // (a credential is merely stored, not validated) than under the default
+    // mode, and the help text has to say so rather than claim one meaning
+    // for both.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["whoami"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).not.toContain("0 signed in");
+      expect(printedHelp).toContain("NOT proof");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("logout's --help discloses that it deletes the local published-chat cache", () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["logout"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("published-chat cache");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("logout's --help discloses both exit-1 outcomes separately, including the still-signed-in one a script must not confuse with a completed sign-out", () => {
+    // Regression guard for two things: (1) the old exit-code flip ("Partial
+    // cleanup is still a successful sign-out ... exits 0" must not still be
+    // claimed), and (2) the follow-up correction - exit 1 does NOT always
+    // mean "signed out, cache failed"; a `signOut` outcome other than
+    // `deleted` throws before the cache is even touched, and the user is
+    // still signed in. A script branching on exit code alone needs the help
+    // to say both cases exist.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["logout"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).not.toContain("exits 0");
+      // The sign-out arm must not be described as a certainty in EITHER
+      // direction: `commitMutation` deletes the file before it finalizes, so a
+      // failed commit can leave the user signed out after all.
+      expect(printedHelp).not.toContain("STILL SIGNED IN");
+      expect(printedHelp).toContain("could not be CONFIRMED");
+      expect(printedHelp).toContain("may or may not still be signed in");
+      expect(printedHelp).toContain("cache directory could");
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("host install exposes --release, --from, and the bootstrap-flow options", () => {
@@ -1133,6 +1283,78 @@ describe("traycer CLI entrypoint registration", () => {
       thrown = err;
     }
     expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  // `host free-port-and-restart` went public because `host doctor` prints
+  // this exact command line as the fix for a port conflict - a half-typed
+  // `--port` alone used to skip the kill entirely, restart the host, and
+  // still exit 0 as if the conflict had been resolved. These four route
+  // through the REAL registered command (`program.parseAsync`, not the
+  // handler in isolation) so the guard added in `index.ts` is genuinely
+  // exercised - `host-free-port-and-restart.test.ts` covers the deeper
+  // lock/kill/restart wiring once the guards clear.
+  it("host free-port-and-restart rejects --port without --pid, naming --pid in the message", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port-and-restart", "--port", "51820"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      message: expect.stringContaining("--pid"),
+    });
+  });
+
+  it("host free-port-and-restart still rejects --pid without --port (pre-existing handler guard, not regressed)", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port-and-restart", "--pid", "4242"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  it("host free-port-and-restart parses and forwards both --pid and --port as integers when both are given", async () => {
+    mocks.freePortKillCalls.length = 0;
+    mocks.serviceControllerCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(
+      ["host", "free-port-and-restart", "--pid", "4242", "--port", "51820"],
+      { from: "user" },
+    );
+
+    expect(mocks.freePortKillCalls).toEqual([
+      { pid: 4242, port: 51820, commandName: "host free-port-and-restart" },
+    ]);
+    expect(mocks.serviceControllerCalls).toEqual(["restart"]);
+  });
+
+  it("host free-port-and-restart parses fine with neither --pid nor --port (Desktop's bare machine call)", async () => {
+    mocks.freePortKillCalls.length = 0;
+    mocks.serviceControllerCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(["host", "free-port-and-restart"], {
+      from: "user",
+    });
+
+    expect(mocks.freePortKillCalls).toEqual([]);
+    expect(mocks.serviceControllerCalls).toEqual(["restart"]);
   });
 
   it.each([

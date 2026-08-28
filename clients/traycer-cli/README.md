@@ -44,8 +44,8 @@ traycer host status
 | Command                        | Purpose                                                                |
 | ------------------------------ | ---------------------------------------------------------------------- |
 | `traycer login`                | Sign in to Traycer.                                                    |
-| `traycer logout`               | Remove locally stored credentials.                                     |
-| `traycer whoami`               | Show the signed-in user.                                               |
+| `traycer logout`               | Sign out and delete locally cached published-chat content.             |
+| `traycer whoami`               | Validate the stored credentials and show the signed-in user.           |
 | `traycer host ensure`          | Install, register, and start the local Traycer Host if needed.         |
 | `traycer host status`          | Show host process, endpoint, and activity status.                      |
 | `traycer host doctor`          | Diagnose host installation and runtime issues.                         |
@@ -74,7 +74,7 @@ Most commands support `--json`, which emits structured NDJSON events suitable fo
 
 ## Agent and Workspace Commands
 
-Traycer-launched agent sessions receive environment variables such as `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID`. In that context, the CLI can inspect the current epic, communicate with other agents, and create worktrees:
+Traycer-launched agent sessions receive environment variables such as `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID`. In that context, the CLI can inspect the current Task, communicate with other agents, and create worktrees:
 
 ```sh
 traycer agent list
