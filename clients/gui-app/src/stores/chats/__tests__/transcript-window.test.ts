@@ -437,6 +437,43 @@ describe("index deltas", () => {
     expect(appended.skeleton[101]?.rowId).toBe("row-101");
   });
 
+  it("applies an append whose rows a snapshot already counted, at the frame's own ordinals", () => {
+    // The host's append republish emits the bounded snapshot FIRST - stamped
+    // with the post-append `rowCount` and the subscriber's pre-delta
+    // `indexRevision` - and the delta for the same append right behind it. So
+    // the delta lands on a window whose `rowCount` already includes its rows.
+    // Read against `window.rowCount`, that has the `0 !== appendedRows`
+    // signature of a lost frame; voiding on it blanked the transcript and
+    // forced a resnapshot on EVERY append for the life of a turn, which is an
+    // empty chat under an active stream. The frame is self-consistent - its
+    // entries occupy `[rowCount - appended, rowCount)` - so it must apply, and
+    // seat at the frame-derived base rather than one past it.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: 0,
+      tail: {
+        fromOrdinal: 0,
+        messages: [userMessage("m-0", 0)],
+        events: [],
+      },
+    });
+    expect(seeded.rowCount).toBe(1);
+
+    const appended = applyIndexChange(seeded, {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "appended", entries: [skeletonEntry("m-0", 0)] }],
+    });
+
+    expect(appended.invalidated).toBe(false);
+    expect(appended.rowCount).toBe(1);
+    // At ordinal 0 - the ordinal the frame names - not at `window.rowCount`.
+    expect(appended.skeleton[0]?.rowId).toBe("m-0");
+    expect(appended.skeleton[1]).toBeUndefined();
+  });
+
   it("drops the whole span containing a row that was rewritten in place", () => {
     // The whole span, not the row: a span's records are a DEDUPLICATED union
     // across its rows, so the client cannot say which records belong to the
