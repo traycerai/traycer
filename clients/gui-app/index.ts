@@ -1,6 +1,10 @@
 export { TraycerApp, type TraycerAppProps } from "@/traycer-app";
 export { isMobileApp, setMobileApp } from "@/lib/mobile-app";
 export {
+  setAnalyticsAppSurface,
+  type AnalyticsAppSurface,
+} from "@/lib/analytics";
+export {
   hostRpcRegistry,
   type HostRpcRegistry,
   type MessengerFactory,

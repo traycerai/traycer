@@ -1079,15 +1079,49 @@ describe("analytics", () => {
 describe("app surface and platform globals", () => {
   afterEach(async () => {
     const { setMobileApp } = await import("@/lib/mobile-app");
+    const { setAnalyticsAppSurface } = await import("@/lib/analytics");
     setMobileApp(false);
+    setAnalyticsAppSurface("desktop");
   });
 
-  it("reports desktop off the mobile app and mobile on it", async () => {
-    const { analyticsAppSurface } = await import("@/lib/analytics");
+  it("reports the surface its shell declared", async () => {
+    const { analyticsAppSurface, setAnalyticsAppSurface } =
+      await import("@/lib/analytics");
+    const { shellSurfaces } = await import("../../../__tests__/shell-surfaces");
+    // Every shell that mounts the app, in the order its bootstrap runs:
+    // declare, then read back. The four values are distinct, so a surface
+    // reported for the wrong shell cannot pass as another's.
+    for (const surface of shellSurfaces()) {
+      setAnalyticsAppSurface(surface.analyticsSurface);
+      expect(analyticsAppSurface()).toBe(surface.analyticsSurface);
+    }
+    expect(
+      new Set(shellSurfaces().map((surface) => surface.analyticsSurface)).size,
+    ).toBe(shellSurfaces().length);
+  });
+
+  it("is unmoved by the mobile product flag", async () => {
+    // Identity is declared, not derived. The phone shell sets BOTH, and it is
+    // the declaration that names the surface - so flipping the product flag
+    // under a web shell must not relabel it, which is exactly the mis-tagging
+    // a derived surface produced.
+    const { analyticsAppSurface, setAnalyticsAppSurface } =
+      await import("@/lib/analytics");
     const { setMobileApp } = await import("@/lib/mobile-app");
-    expect(analyticsAppSurface()).toBe("desktop");
+    setAnalyticsAppSurface("web");
     setMobileApp(true);
-    expect(analyticsAppSurface()).toBe("mobile");
+    expect(analyticsAppSurface()).toBe("web");
+    setMobileApp(false);
+    expect(analyticsAppSurface()).toBe("web");
+  });
+
+  it("defaults to desktop before any shell has spoken", async () => {
+    // The default a bootstrap-less mount (tests, the dev preview harness)
+    // lands on, and the reason the desktop shell's own declaration is not
+    // load-bearing for its historical series.
+    vi.resetModules();
+    const { analyticsAppSurface } = await import("@/lib/analytics");
+    expect(analyticsAppSurface()).toBe("desktop");
   });
 
   it("names the mobile OS from the user agent on the mobile app", async () => {
@@ -1150,6 +1184,22 @@ describe("app-surface pass-through in the outbound sanitizer", () => {
       app_surface: "mobile",
       platform: "ios",
     });
+  });
+
+  it("passes every shell's declared surface through", async () => {
+    // Same regression, one shell per row: the allowlist drops the WHOLE event
+    // on an unknown `app_surface`, so a shell whose surface was never admitted
+    // ships reporting nothing at all - silently, and only in production.
+    const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
+    const { shellSurfaces } = await import("../../../__tests__/shell-surfaces");
+    for (const surface of shellSurfaces()) {
+      const sanitized = sanitizePostHogCaptureResult(
+        capture({ app_surface: surface.analyticsSurface }),
+      );
+      expect(sanitized?.properties).toMatchObject({
+        app_surface: surface.analyticsSurface,
+      });
+    }
   });
 
   it("drops an event whose surface global is missing or out of vocabulary", async () => {

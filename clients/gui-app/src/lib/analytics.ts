@@ -1188,6 +1188,25 @@ const ANALYTICS_RESOURCE_PRESSURE_TIERS = new Set<string>([
   "critical",
 ]);
 
+/**
+ * Built from a `satisfies Record<AnalyticsAppSurface, true>` for the same
+ * reason `ANALYTICS_SETTINGS_SECTIONS` is: this set is what the OUTBOUND
+ * sanitizer validates the registered `app_surface` global against, and a
+ * surface missing from it makes `safeAppGlobals` return null - which drops
+ * EVERY event from that shell, not just the one property. A new shell would
+ * ship reporting nothing at all, with no type error and no runtime error. The
+ * `satisfies` makes adding a surface to the union without listing it here a
+ * COMPILE error instead.
+ */
+const ANALYTICS_APP_SURFACES = new Set<string>(
+  Object.keys({
+    browser_dev: true,
+    desktop: true,
+    mobile: true,
+    web: true,
+  } satisfies Record<AnalyticsAppSurface, true>),
+);
+
 const ANALYTICS_EVENTS = new Set<string>(Object.values(AnalyticsEvent));
 
 function isAnalyticsEvent(event: string): event is AnalyticsEvent {
@@ -2044,7 +2063,7 @@ function safeAppGlobals(
       (typeof appVersion !== "string" ||
         !/^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,63}$/.test(appVersion))) ||
     typeof properties.app_surface !== "string" ||
-    !new Set(["desktop", "mobile"]).has(properties.app_surface) ||
+    !ANALYTICS_APP_SURFACES.has(properties.app_surface) ||
     typeof properties.platform !== "string" ||
     !new Set(["android", "ios", "linux", "macos", "other", "windows"]).has(
       properties.platform,
@@ -2397,11 +2416,45 @@ export function trackedSettingSetter<Value>(
 }
 
 /**
- * Which product shell is emitting events. A phone-narrow desktop window is
- * still `desktop`: this is the install target, not the viewport.
+ * Which product shell is emitting events.
+ *
+ * `browser_dev` is the dev loop that serves a shell's bundle in a plain
+ * browser tab; `web` is the shipped browser app. They are separate values
+ * because a dev tab's numbers are not product usage, and folding it into
+ * `web` would put every developer's session in the launch series.
  */
-export function analyticsAppSurface(): "desktop" | "mobile" {
-  return isMobileApp() ? "mobile" : "desktop";
+export type AnalyticsAppSurface = "browser_dev" | "desktop" | "mobile" | "web";
+
+/**
+ * IDENTITY, not capability, and therefore DECLARED - never derived. A shell's
+ * abilities are read off `IRunnerHost`, but no arrangement of abilities names
+ * the product a person thinks they are using: the browser app and the browser
+ * dev loop have the identical capability posture, and both would answer
+ * `mobile` to a `hasLocalHost` question. Nothing here sniffs a user agent for
+ * the same reason - the answer is a fact about the build, which the build
+ * already knows.
+ *
+ * Defaults to `desktop`, which is the shell that has never had to say so.
+ */
+let appSurface: AnalyticsAppSurface = "desktop";
+
+/**
+ * Called once by a shell's bootstrap, BEFORE the first render - and therefore
+ * before the first `Analytics.getInstance()`, which snapshots this into
+ * PostHog's registered globals. A later call still refreshes those globals, so
+ * a shell that trips that ordering mislabels nothing.
+ */
+export function setAnalyticsAppSurface(surface: AnalyticsAppSurface): void {
+  appSurface = surface;
+  Analytics.refreshGlobalsIfInitialized();
+}
+
+/**
+ * The shell's declared surface. A phone-narrow desktop window is still
+ * `desktop`: this is the install target, not the viewport.
+ */
+export function analyticsAppSurface(): AnalyticsAppSurface {
+  return appSurface;
 }
 
 export function analyticsPlatform():
@@ -2482,6 +2535,15 @@ export class Analytics {
   static getInstance(): Analytics {
     if (Analytics.instance === null) Analytics.instance = new Analytics();
     return Analytics.instance;
+  }
+
+  /**
+   * Re-sends the registered globals if - and only if - the singleton already
+   * exists. Deliberately does NOT construct one: a shell declaring its surface
+   * must not be what initializes PostHog.
+   */
+  static refreshGlobalsIfInitialized(): void {
+    Analytics.instance?.registerGlobals();
   }
 
   /**

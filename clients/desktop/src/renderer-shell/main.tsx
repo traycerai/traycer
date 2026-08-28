@@ -4,6 +4,7 @@ import {
   TraycerApp,
   hostRpcRegistry,
   installTitleBarOverlayThemeSync,
+  setAnalyticsAppSurface,
 } from "@traycer-clients/gui-app";
 import * as Sentry from "@sentry/electron/renderer";
 import { makeFetchTransport } from "@sentry/browser";
@@ -22,6 +23,10 @@ declare global {
 }
 
 function bootstrap(): void {
+  // Stated rather than left to the default, so telemetry's surface dimension
+  // has one rule - every shell names itself - and the desktop series is not
+  // the one that silently depends on nobody else having spoken first.
+  setAnalyticsAppSurface("desktop");
   const bridge = window.runnerHost;
   if (bridge === undefined || bridge === null) {
     throw new Error(

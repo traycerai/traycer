@@ -1,6 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { TraycerApp, hostRpcRegistry } from "@traycer-clients/gui-app";
+import {
+  TraycerApp,
+  hostRpcRegistry,
+  setAnalyticsAppSurface,
+} from "@traycer-clients/gui-app";
 import "./index.css";
 import { WebRunnerHost } from "./web-runner-host";
 import {
@@ -17,6 +21,11 @@ function bootstrap(): void {
   // and the "link a phone" QR surface, all of which that flag would take
   // away. The mobile CAPABILITY posture is expressed on the runner host
   // below instead - see `lib/mobile-app.ts` for why the two are separate.
+  //
+  // Telemetry still has to be able to name this shell, and no capability can:
+  // the browser app and the in-browser dev loop are indistinguishable by
+  // ability. So identity is DECLARED here, before the first render.
+  setAnalyticsAppSurface("web");
   const host = new WebRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,

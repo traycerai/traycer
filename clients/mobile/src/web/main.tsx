@@ -11,6 +11,7 @@ import {
 import {
   TraycerApp,
   hostRpcRegistry,
+  setAnalyticsAppSurface,
   setMobileApp,
 } from "@traycer-clients/gui-app";
 import type {
@@ -159,6 +160,14 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
+  // Telemetry identity, declared for the same reason and off the same fact -
+  // this one bundle is two products. `browser_dev` keeps the dev loop's
+  // sessions out of the installed app's series instead of inflating it; no
+  // capability could have told the two apart, since the browser entry runs the
+  // same remote-only runner host.
+  setAnalyticsAppSurface(
+    Capacitor.isNativePlatform() ? "mobile" : "browser_dev",
+  );
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite
   // `aps-environment` to "production" at export), so only `dev` - the one
