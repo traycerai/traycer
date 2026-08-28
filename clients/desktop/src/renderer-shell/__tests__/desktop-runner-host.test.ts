@@ -369,6 +369,10 @@ function buildFakeBridge(
         result: "moved",
         windowId: "window-2",
       }),
+      requestOpenDraftInNewWindow: async () => ({
+        result: "moved",
+        windowId: "window-2",
+      }),
       ownership: {
         snapshot: async () => [],
         claim: async (tabId, epicId) => {

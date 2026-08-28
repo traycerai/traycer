@@ -14,7 +14,6 @@
 import {
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
-  getPaneCorridorPositionFromPoint,
   readComposerAttachmentDropTargetData,
   readEpicCanvasDropTargetData,
   type ComposerAttachmentDropTargetData,
@@ -64,20 +63,13 @@ import {
   type HeaderTabDragData,
 } from "@/components/layout/tabs/header-tab-dnd";
 import {
-  EdgeSplitDwellMachine,
-  edgeSplitBrowserTimer,
-  type EdgeSplitDwellState,
-} from "@/components/layout/tabs/edge-split-dwell";
-import {
-  TOP_LEVEL_EDGE_SPLIT_TARGET,
-  TOP_LEVEL_STRIP_PAIR_TARGET,
+  TOP_LEVEL_FILLABLE_TARGET,
   readTopLevelTabDropTarget,
   resolveValidatedTopLevelTabDrop,
   stripPairTargetForIndex,
-  type TopLevelDwellTarget,
-  type TopLevelEdgeSplitTarget,
   type TopLevelFillableTarget,
   type TopLevelStripPairTarget,
+  type TopLevelTabDropTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
 import {
   activatePreparedPairTabIntent,
@@ -89,12 +81,6 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import {
-  getTabCommandLedger,
-  subscribeToTabCommandLedger,
-} from "@/stores/tabs/tab-command-coordinator";
-import { subscribeTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
-import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
 import { type SplitStripItem } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { tabResolveIntent } from "@/stores/tabs/registry";
@@ -117,8 +103,6 @@ import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  MERGE_DWELL_MS,
-  MERGE_STILLNESS_PX,
   insertionIndexForTarget,
   insertionIndexFromPointer,
   insertionOffsetsFor,
@@ -126,6 +110,7 @@ import {
   remapGeometryToSlots,
   resolveStripDragState,
   stripOffsetsFor,
+  type MergeSide,
   type StripDragGeometry,
   type StripDragState,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
@@ -149,10 +134,6 @@ import {
   armTileStripCommitHandoff,
   disarmTileStripCommitHandoff,
 } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
-import {
-  DwellLatch,
-  browserDwellTimer,
-} from "@/components/epic-canvas/dnd/dwell-latch";
 import {
   measureForeignTileStrip,
   measureTileStripGeometry,
@@ -214,18 +195,6 @@ let activeTileDrag: {
   readonly geometry: StripDragGeometry;
 } | null = null;
 
-/** Pointer must settle this long over a pane body before it arms. */
-const PANE_BODY_ARM_DWELL_MS = 220;
-
-/** Movement budget during that settle, in px. */
-const PANE_BODY_ARM_STILLNESS_PX = 6;
-
-/**
- * Re-runs the canvas preview with the last drag event, so a latch that wakes
- * itself can make the armed state visible without further pointer input.
- */
-let replayCanvasPreview: (() => void) | null = null;
-
 /**
  * A preview tile promoted by drag start, so a drag that commits nothing can
  * put it back.
@@ -258,124 +227,6 @@ function reportStripGeometryFailure(strip: "header" | "tile"): void {
     `[root-dnd] ${strip} strip geometry became unavailable; strip-model commits are disabled for this gesture`,
     { strip },
   );
-}
-
-/** Last header-drag inputs, so a self-waking latch can re-resolve at them. */
-let lastHeaderDrag: {
-  readonly headerTab: HeaderTabDragData;
-  readonly pointerX: number;
-} | null = null;
-
-/**
- * The header merge dwell, on the shared latch.
- *
- * Previously a bespoke `setTimeout` in the provider driving a pure model that
- * owned no timer - the exact shape that let the gesture die silently when the
- * pointer held still. Module-scoped for the same reason the geometry is: these
- * are gesture singletons, not React state.
- */
-let headerMergeLatch: DwellLatch | null = null;
-
-function headerMergeDwell(): DwellLatch {
-  headerMergeLatch ??= new DwellLatch({
-    dwellMs: MERGE_DWELL_MS,
-    stillnessPx: MERGE_STILLNESS_PX,
-    timer: browserDwellTimer,
-    onChange: (state) => {
-      if (state.kind !== "fired") return;
-      const pending = lastHeaderDrag;
-      if (pending === null) return;
-      // Re-resolve at the SAME pointer x: the model compares elapsed time
-      // against its own arming timestamp, so this is what turns a hold into a
-      // preview without any further pointer input.
-      publishHeaderStripDragState({
-        headerTab: pending.headerTab,
-        geometry: activeHeaderStripGeometry,
-        pointerX: pending.pointerX,
-      });
-    },
-  });
-  return headerMergeLatch;
-}
-
-/**
- * The pane-body dwell, on the shared latch.
- *
- * The pane body has no neutral region under the old geometry and ~84% of it
- * commits a split, so a tile crossing to another group must not arm anything
- * in passing. The latch owns its timer, which is what makes a *held* pointer
- * arm at all - a stationary pointer emits no events, and this exact gesture
- * died silently once for that reason.
- */
-let paneBodyLatch: DwellLatch | null = null;
-
-function paneBodyDwell(): DwellLatch {
-  paneBodyLatch ??= new DwellLatch({
-    dwellMs: PANE_BODY_ARM_DWELL_MS,
-    stillnessPx: PANE_BODY_ARM_STILLNESS_PX,
-    timer: browserDwellTimer,
-    onChange: (state) => {
-      // Re-run the preview when the latch wakes itself, so the armed state
-      // becomes visible without further pointer input.
-      if (state.kind === "fired") replayCanvasPreview?.();
-    },
-  });
-  return paneBodyLatch;
-}
-
-/**
- * Whether the pane-body target is armed for the point given. Only artifact-tab
- * (tile) drags are gated: they are the only source that must transit a body to
- * reach a legitimate alternative target. A sidebar or rail drag has no such
- * transit requirement and keeps its immediate positional preview.
- */
-function updatePaneBodyArm(
-  groupId: string,
-  point: PointLike | null,
-  nowMs: number,
-): boolean {
-  const state = paneBodyDwell().observe({
-    key: point === null ? null : groupId,
-    point,
-    nowMs,
-  });
-  return state.kind === "fired";
-}
-
-/**
- * A tile crossing a pane body that has not armed yet. Both the preview and the
- * commit consult this, so they can never disagree about whether the body
- * gesture is live.
- */
-function isUnarmedPaneBodyTransit(
-  source: EpicCanvasDragSourceData,
-  target: EpicCanvasDropTargetData,
-  point: PointLike | null,
-  targetRect: RectLike | null,
-): boolean {
-  if (source.kind !== ARTIFACT_TAB_DND_TYPE) return false;
-  if (target.kind !== "artifact-tab-group-body") return false;
-  if (
-    point === null ||
-    targetRect === null ||
-    getPaneCorridorPositionFromPoint(point, targetRect) === null
-  ) {
-    paneBodyDwell().reset();
-    return true;
-  }
-  return !updatePaneBodyArm(target.groupId, point, performance.now());
-}
-
-function resetPaneBodyDwellOutsideTarget(
-  source: EpicCanvasDragSourceData,
-  target: EpicCanvasDropTargetData | null,
-): void {
-  if (
-    source.kind === ARTIFACT_TAB_DND_TYPE &&
-    target?.kind !== "artifact-tab-group-body"
-  ) {
-    paneBodyDwell().reset();
-  }
 }
 
 function trackPointerX(event: PointerEvent): void {
@@ -541,7 +392,6 @@ function updateCanvasSourcePreview(
   if (updateArtifactTileStripPreview(source, point, refs)) return;
   clearDepartedArtifactStripState(source);
   if (updateHeaderStripTearOffPreview(source, event, point, refs)) {
-    paneBodyDwell().reset();
     return;
   }
   dndStore.headerStripDropIndexChanged(null);
@@ -550,25 +400,12 @@ function updateCanvasSourcePreview(
     over === null ? null : readEpicCanvasDropTargetData(overData),
     point,
   );
-  resetPaneBodyDwellOutsideTarget(source, targetAtPoint?.target ?? null);
   if (targetAtPoint === null) {
     refs.lastResolved.current = null;
     dndStore.dropPreviewChanged(null);
     return;
   }
   const { target, point: resolvedPoint } = targetAtPoint;
-  // B1 - preview and commit must arm together. A tile crossing a pane body en
-  // route to another strip is TRANSIT: it neither previews nor commits the
-  // body gesture. Suppressing the preview while still committing would be
-  // Sprint 01's F2 (a merge that fired having shown nothing) in a zone that is
-  // ~84% of every pane instead of a 16px band.
-  if (
-    isUnarmedPaneBodyTransit(source, target, resolvedPoint, readOverRect(event))
-  ) {
-    refs.lastResolved.current = null;
-    dndStore.dropPreviewChanged(null);
-    return;
-  }
   const preview = resolveCanvasDropPreview({
     source,
     target,
@@ -594,7 +431,7 @@ function clearDepartedArtifactStripState(
 ): void {
   if (source.kind !== ARTIFACT_TAB_DND_TYPE) return;
   useEpicDndStore.getState().headerStripDragStateChanged(null);
-  closeSourceTileStripGap();
+  preserveSourceTileStripGap();
 }
 
 function updateArtifactTileStripPreview(
@@ -620,8 +457,8 @@ function rejectTileStripFrame(refs: ReparentRefs): true {
   return true;
 }
 
-/** Close the source strip's gap while an artifact tile is outside every strip. */
-function closeSourceTileStripGap(): void {
+/** Keep the dimmed source tile in place while it is outside every strip. */
+function preserveSourceTileStripGap(): void {
   const dndStore = useEpicDndStore.getState();
   const drag = activeTileDrag;
   if (drag === null) {
@@ -698,11 +535,11 @@ function updateTileStripPreview(
   if (point === null) return false;
   const groupId = tileStripGroupAtPoint(point, source.viewTabId);
   if (groupId === null) return false;
-  // Over a strip: the body gesture is not a candidate this frame.
-  paneBodyDwell().reset();
-
   const offsets = new Map<string, ReadonlyMap<string, number>>();
-  let index: number;
+  // null = the drag sits at its own source position: a no-op the commit would
+  // refuse, so no insertion indicator is advertised - the same suppression the
+  // header path applies to its drop index.
+  let index: number | null;
   if (groupId === drag.groupId) {
     const contentOriginX = readTileStripContentOriginX(groupId);
     if (contentOriginX === null) return rejectTileStripFrame(refs);
@@ -715,10 +552,12 @@ function updateTileStripPreview(
       contentOriginX,
       pointerX: point.x,
       previous: dndStore.headerStripDragState,
-      nowMs: performance.now(),
     });
     dndStore.headerStripDragStateChanged(next);
-    index = insertionIndexForTarget(geometry.sourceIndex, next.targetIndex);
+    index =
+      next.targetIndex === geometry.sourceIndex
+        ? null
+        : insertionIndexForTarget(geometry.sourceIndex, next.targetIndex);
     offsets.set(groupId, stripOffsetsFor(geometry, next.targetIndex));
   } else {
     const sourceGeometry = remapGeometryToSlots(
@@ -738,13 +577,18 @@ function updateTileStripPreview(
       groupId,
       insertionOffsetsFor(foreign.slots, index, sourceGeometry.sourceWidth),
     );
-    // The tile has left its own strip, so that strip closes the gap rather
-    // than holding a slot open for something no longer in it.
+    // Keep the source strip's dimmed origin placeholder until the cross-group
+    // drop commits. The destination independently opens its insertion gap.
     offsets.set(drag.groupId, stripOffsetsFor(sourceGeometry, null));
     dndStore.headerStripDragStateChanged(null);
   }
   dndStore.tileStripOffsetsChanged(offsets);
 
+  if (index === null) {
+    refs.lastResolved.current = null;
+    dndStore.dropPreviewChanged(null);
+    return true;
+  }
   const preview: EpicCanvasDropPreview = {
     kind: "artifact-tab-strip",
     groupId,
@@ -762,68 +606,54 @@ function updateTileStripPreview(
 }
 
 /**
- * Header-tab preview. Edge-split and fillable-slot targets still come from
- * droppable hit-testing - they are content-pane targets with no source slot
- * under them - but the strip's own reorder/merge is resolved from the geometry
- * model instead. Hit-testing the strip cannot work once a provisional order
- * moves the dragged tab's own placeholder beneath the pointer.
+ * Header-tab preview. The fillable-slot target still comes from droppable
+ * hit-testing - it is a content-pane target with no source slot under it - but
+ * the strip's own reorder/merge is resolved from the geometry model instead.
+ * Hit-testing the strip cannot work once a provisional order moves the dragged
+ * tab's own placeholder beneath the pointer.
  */
 function updateHeaderTabSourcePreview(input: {
   readonly headerTab: HeaderTabDragData;
   readonly event: DragUpdateEvent;
   readonly point: PointLike | null;
-  readonly edgeDwell: EdgeSplitDwellMachine;
   readonly publishStripState: (pointerX: number) => void;
 }): void {
-  const { headerTab, event, point, edgeDwell } = input;
+  const { headerTab, event, point } = input;
   const dndStore = useEpicDndStore.getState();
   const over = event.over;
   const topLevelTarget =
     over === null ? null : readTopLevelTabDropTarget(over.data.current);
   const validDrop =
-    topLevelTarget === null ||
-    topLevelTarget.kind === TOP_LEVEL_STRIP_PAIR_TARGET
+    topLevelTarget === null
       ? null
       : resolveLiveTopLevelDrop(headerTab, topLevelTarget);
   if (validDrop !== null) {
     headerTearOffActive = false;
-    headerMergeDwell().reset();
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     dndStore.topLevelStripPairPreviewChanged(null);
-    if (validDrop.target.kind === "top-level-fillable-slot") {
-      edgeDwell.reset();
-      return;
-    }
-    edgeDwell.setTargetValidator(
-      (candidate) => resolveLiveTopLevelDrop(headerTab, candidate) !== null,
-    );
-    edgeDwell.observe(validDrop.target);
     return;
   }
   // Once the pointer visibly leaves the strip for tear-off, stop advertising a
   // reorder that the available detach handler may replace at release. Preview
-  // and commit use the same point source and threshold predicate.
+  // and commit use the same point source and threshold predicate. Only the
+  // fillable slot above outranks the tear-off: it is an explicit, visible
+  // empty pane inviting the drop. (The invisible edge-split bands that used to
+  // sit here lost that argument and were removed outright.)
   if (
     isHeaderTearOffPoint(
       currentReleasePointerPoint(),
       activeHeaderStripGeometry?.stripBottom ?? null,
     )
   ) {
-    headerMergeDwell().reset();
-    edgeDwell.reset();
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
-  // The dwell machine owns edge splits only; strip merge lives in the model, so
-  // the two can never disagree about where a boundary is.
-  edgeDwell.reset();
   if (point === null) {
-    headerMergeDwell().reset();
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
@@ -833,20 +663,12 @@ function updateHeaderTabSourcePreview(input: {
   input.publishStripState(point.x);
 }
 
-/**
- * Resolve the model at `pointerX` and publish it.
- *
- * Returns the milliseconds until the merge dwell would fire, or null when
- * nothing is pending. A stationary pointer emits NO pointer events, so without
- * a timer driving this the dwell only advances when something else happens to
- * resolve the model - which means the merge commits on release having never
- * once been previewed.
- */
+/** Resolve the model at `pointerX` and publish it. */
 function publishHeaderStripDragState(input: {
   readonly headerTab: HeaderTabDragData;
   readonly geometry: StripDragGeometry | null;
   readonly pointerX: number;
-}): string | null {
+}): void {
   const dndStore = useEpicDndStore.getState();
   const contentOriginX = readHeaderStripContentOriginX();
   const { headerTab } = input;
@@ -861,15 +683,13 @@ function publishHeaderStripDragState(input: {
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     dndStore.topLevelStripPairPreviewChanged(null);
-    return null;
+    return;
   }
-  const nowMs = performance.now();
   const next = resolveStripDragState({
     geometry,
     contentOriginX,
     pointerX: input.pointerX,
     previous: dndStore.headerStripDragState,
-    nowMs,
   });
   dndStore.headerStripDragStateChanged(next);
   // Explicit per-item displacement, the same mechanism the tile strip uses.
@@ -877,28 +697,36 @@ function publishHeaderStripDragState(input: {
   dndStore.headerStripOffsetsChanged(
     stripOffsetsFor(geometry, next.targetIndex),
   );
-  // The legacy insertion-line index is for canvas tear-off only; a header-tab
-  // drag shows its destination by moving the tabs, not by drawing a line.
-  dndStore.headerStripDropIndexChanged(null);
-  dndStore.topLevelStripPairPreviewChanged(
-    next.kind === "merge-preview"
-      ? (resolveStripPairTarget(headerTab, geometry, next)?.targetRef ?? null)
-      : null,
+  // A merge shows the pair highlight and nothing else - an insertion line
+  // beside a highlighted merge target advertises two different outcomes for
+  // one release. Plain reorder shows the line at the settled model boundary,
+  // where the displacement gap is opening.
+  dndStore.headerStripDropIndexChanged(
+    next.kind !== "reorder" || next.targetIndex === geometry.sourceIndex
+      ? null
+      : insertionIndexForTarget(geometry.sourceIndex, next.targetIndex),
   );
-  if (next.kind !== "merge-armed") return null;
-  return `${next.targetItemId}:${next.armedAtMs}`;
+  const pairTarget =
+    next.kind === "merge"
+      ? resolveStripPairTarget(headerTab, geometry, next)
+      : null;
+  dndStore.topLevelStripPairPreviewChanged(
+    next.kind !== "merge" || pairTarget === null
+      ? null
+      : { targetRef: pairTarget.targetRef, side: next.targetSide },
+  );
 }
 
 /**
- * The validated pair target a merge preview refers to, or null when the layout
- * no longer permits it (the same validation the dwell machine applied).
+ * The validated pair target a merge refers to, or null when the tabs-store
+ * layout no longer permits pairing with that item.
  */
 function resolveStripPairTarget(
   headerTab: HeaderTabDragData,
   geometry: StripDragGeometry,
   state: StripDragState,
 ): TopLevelStripPairTarget | null {
-  if (state.kind !== "merge-preview" && state.kind !== "merge-armed") {
+  if (state.kind !== "merge") {
     return null;
   }
   const index = geometry.slots.findIndex(
@@ -922,7 +750,7 @@ function layoutFromTabsStore() {
 
 function resolveLiveTopLevelDrop(
   headerTab: HeaderTabDragData,
-  target: TopLevelDwellTarget | TopLevelFillableTarget,
+  target: TopLevelTabDropTarget,
 ) {
   return resolveValidatedTopLevelTabDrop(
     headerTab,
@@ -954,7 +782,6 @@ function fillTopLevelSlot(
 function commitHeaderTabDrop(input: {
   readonly event: DragEndEvent;
   readonly navigate: UseNavigateResult<string>;
-  readonly edgeDwell: EdgeSplitDwellMachine;
   readonly geometry: StripDragGeometry | null;
   readonly dragState: StripDragState | null;
 }): void {
@@ -964,9 +791,7 @@ function commitHeaderTabDrop(input: {
       ? null
       : readTopLevelTabDropTarget(input.event.over.data.current);
   const validDrop =
-    headerTab === null ||
-    target === null ||
-    target.kind === TOP_LEVEL_STRIP_PAIR_TARGET
+    headerTab === null || target === null
       ? null
       : resolveLiveTopLevelDrop(headerTab, target);
   const activate = (ref: TabRef): void => {
@@ -981,15 +806,6 @@ function commitHeaderTabDrop(input: {
     fillTopLevelSlot(validDrop.source, validDrop.target, activate);
     return;
   }
-  if (validDrop?.target.kind === "top-level-edge-split") {
-    commitHeaderEdgeSplit(
-      validDrop.source,
-      validDrop.target,
-      input.edgeDwell,
-      input.navigate,
-    );
-    return;
-  }
   if (
     headerTab === null ||
     input.geometry === null ||
@@ -997,17 +813,22 @@ function commitHeaderTabDrop(input: {
   ) {
     return;
   }
-  // A merge preview beats the reorder it is sitting on: both describe the same
-  // pointer position, and the dwell is what distinguishes "combine with this
-  // tab" from "move next to it".
-  if (input.dragState.kind === "merge-preview") {
+  // A merge beats the reorder it is sitting on: both describe the same pointer
+  // position, and which half of the neighbour the dragged tab's centre is on
+  // is what distinguishes "combine with this tab" from "move next to it".
+  if (input.dragState.kind === "merge") {
     const pairTarget = resolveStripPairTarget(
       headerTab,
       input.geometry,
       input.dragState,
     );
     if (pairTarget !== null) {
-      commitHeaderStripPair(headerTab, pairTarget, input.navigate);
+      commitHeaderStripPair(
+        headerTab,
+        pairTarget,
+        input.dragState.targetSide,
+        input.navigate,
+      );
       return;
     }
   }
@@ -1026,12 +847,15 @@ function commitHeaderTabDrop(input: {
 }
 
 /**
- * Dropping A onto B yields `B | A`: the tab that stayed put keeps the left
- * side, the dragged one lands where it was released and takes focus.
+ * Dropping A onto B pairs them with A on its APPROACH side - the side of B the
+ * pointer was hovering, which is also the side the preview highlighted.
+ * Dragging rightward onto B yields `A | B`; leftward yields `B | A`. The
+ * dragged tab takes focus either way.
  */
 function commitHeaderStripPair(
   headerTab: HeaderTabDragData,
   target: TopLevelStripPairTarget,
+  side: MergeSide,
   navigate: UseNavigateResult<string>,
 ): void {
   const validDrop = resolveLiveTopLevelDrop(headerTab, target);
@@ -1044,37 +868,8 @@ function commitHeaderStripPair(
   activatePreparedPairTabIntent(
     navigate,
     {
-      left: target.targetRef,
-      right: sourceRef,
-      focusedRef: sourceRef,
-      splitId: `split:${uuidv4()}`,
-      leftRatio: 0.5,
-    },
-    tabResolveIntent(sourceTab),
-    undefined,
-  );
-}
-
-function commitHeaderEdgeSplit(
-  sourceRef: TabRef,
-  target: TopLevelEdgeSplitTarget,
-  edgeDwell: EdgeSplitDwellMachine,
-  navigate: UseNavigateResult<string>,
-): void {
-  // `commit` only succeeds for a target equal to this one (same kind, ref and
-  // side), so the already-narrowed `target` describes the committed geometry.
-  if (edgeDwell.commit(target) === null) {
-    return;
-  }
-  const sourceTab = getHeaderTabs().find(
-    (tab) => tab.kind === sourceRef.kind && tab.id === sourceRef.id,
-  );
-  if (sourceTab === undefined) return;
-  activatePreparedPairTabIntent(
-    navigate,
-    {
-      left: target.side === "left" ? sourceRef : target.targetRef,
-      right: target.side === "right" ? sourceRef : target.targetRef,
+      left: side === "left" ? sourceRef : target.targetRef,
+      right: side === "left" ? target.targetRef : sourceRef,
       focusedRef: sourceRef,
       splitId: `split:${uuidv4()}`,
       leftRatio: 0.5,
@@ -1154,6 +949,10 @@ function resolveDetachRequest(detach: HeaderTab | null): DetachRequest | null {
  * the strip's own rect. It must not tear off merely because the release landed
  * on no droppable: the geometry model gives every in-strip position a reorder
  * destination, so "no target" would turn an ordinary reorder into a new window.
+ *
+ * Of the top-level targets only a valid FILLABLE SLOT blocks a tear-off - the
+ * same precedence the live preview applies: it is an explicit, visible empty
+ * pane inviting the drop, and the preview has been advertising it.
  */
 function resolveTearOff(input: {
   readonly event: DragEndEvent;
@@ -1167,7 +966,7 @@ function resolveTearOff(input: {
   const point = currentReleasePointerPoint();
   const headerTab = readHeaderTabDragData(event.active.data.current);
   if (headerTab !== null) {
-    if (hasValidTopLevelDrop(event, headerTab)) return null;
+    if (hasValidFillableSlotDrop(event, headerTab)) return null;
     if (!isHeaderTearOffPoint(point, stripBottom)) return null;
     return (
       getHeaderTabs().find(
@@ -1220,7 +1019,7 @@ function isHeaderTearOffPoint(
   return headerTearOffActive;
 }
 
-function hasValidTopLevelDrop(
+function hasValidFillableSlotDrop(
   event: DragEndEvent,
   headerTab: HeaderTabDragData,
 ): boolean {
@@ -1228,7 +1027,10 @@ function hasValidTopLevelDrop(
     event.over === null
       ? null
       : readTopLevelTabDropTarget(event.over.data.current);
-  return target !== null && resolveLiveTopLevelDrop(headerTab, target) !== null;
+  return (
+    target?.kind === TOP_LEVEL_FILLABLE_TARGET &&
+    resolveLiveTopLevelDrop(headerTab, target) !== null
+  );
 }
 
 function armTileHandoffForDrop(
@@ -1263,7 +1065,6 @@ function commitOrdinaryDrop(input: {
   readonly source: EpicCanvasDragSourceData | null;
   readonly navigate: UseNavigateResult<string>;
   readonly navigateNested: NavigateNestedFocus;
-  readonly edgeDwell: EdgeSplitDwellMachine;
   readonly resolvedDrop: ResolvedEpicCanvasDrop | null;
 }): boolean {
   const dndStore = useEpicDndStore.getState();
@@ -1273,7 +1074,6 @@ function commitOrdinaryDrop(input: {
     commitHeaderTabDrop({
       event: input.event,
       navigate: input.navigate,
-      edgeDwell: input.edgeDwell,
       geometry: activeHeaderStripGeometry,
       dragState: headerDragState,
     });
@@ -1327,65 +1127,62 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const lastResolvedDropRef = useRef<ResolvedEpicCanvasDrop | null>(null);
   const lastReparentDropRef = useRef<LastReparentDrop | null>(null);
   const springLoadRef = useRef<SpringLoadEntry | null>(null);
-  // Strip geometry and content origin are re-read while dragging because the
-  // strip can scroll or change layout without a corresponding pointer move.
-  // A stationary pointer emits no events, so the merge dwell needs its own
-  // timer or it can only ever fire on release - committing a split that was
-  // never previewed.
-  const clearMergeDwellTimer = useCallback(() => {
-    headerMergeDwell().reset();
-  }, []);
-
   const publishStripState = useCallback(
     (headerTab: HeaderTabDragData, pointerX: number) => {
-      lastHeaderDrag = { headerTab, pointerX };
-      const dwellKey = publishHeaderStripDragState({
+      publishHeaderStripDragState({
         headerTab,
         geometry: activeHeaderStripGeometry,
         pointerX,
-      });
-      // A pending dwell means the model is armed; hand it to the latch, which
-      // owns the timer that will wake it.
-      headerMergeDwell().observe({
-        key:
-          dwellKey === null
-            ? null
-            : `merge:${headerTab.stripItemId}:${dwellKey}`,
-        point: { x: pointerX, y: 0 },
-        nowMs: performance.now(),
       });
     },
     [],
   );
 
-  const edgeDwell = useMemo(
-    () =>
-      new EdgeSplitDwellMachine((state: EdgeSplitDwellState) => {
-        const store = useEpicDndStore.getState();
-        const target = state.kind === "preview" ? state.target : null;
-        const pairTarget =
-          target?.kind === TOP_LEVEL_STRIP_PAIR_TARGET ? target : null;
-        store.topLevelEdgeSplitPreviewChanged(
-          target?.kind === TOP_LEVEL_EDGE_SPLIT_TARGET ? target : null,
-        );
-        store.topLevelStripPairPreviewChanged(pairTarget?.targetRef ?? null);
-        if (pairTarget !== null) store.headerStripDropIndexChanged(null);
-      }, edgeSplitBrowserTimer),
-    [],
-  );
   // Stable bundle (the inner refs never change identity) so the preview helpers
   // take one object instead of three positional ref params.
-  const reparentRefsRef = useRef<ReparentRefs>({
-    lastResolved: lastResolvedDropRef,
-    lastReparent: lastReparentDropRef,
-    springLoad: springLoadRef,
-  });
-  const reparentRefs = reparentRefsRef.current;
+  const reparentRefs = useMemo<ReparentRefs>(
+    () => ({
+      lastResolved: lastResolvedDropRef,
+      lastReparent: lastReparentDropRef,
+      springLoad: springLoadRef,
+    }),
+    [],
+  );
   // A spring-load timer armed mid-drag must not survive the provider: if it
   // unmounts (route change / epic close) before drag end/cancel clears it, the
   // pending `setTimeout` would fire and `expand()` a stale tab/panel.
   useEffect(() => {
-    window.addEventListener("pointermove", trackPointerX, {
+    const handlePointerMove = (event: PointerEvent): void => {
+      trackPointerX(event);
+      const store = useEpicDndStore.getState();
+      const headerTab = store.activeHeaderTab;
+      if (
+        headerTab !== null &&
+        activeHeaderStripGeometry !== null &&
+        event.clientY >= activeHeaderStripGeometry.stripTop &&
+        event.clientY <= activeHeaderStripGeometry.stripBottom
+      ) {
+        // dnd-kit can coalesce a fast native sweep into activation + release
+        // without an intermediate onDragMove. The capture stream is the raw
+        // pointer source already used for release; publish the same point live
+        // so neighbours move before pointer-up too.
+        publishStripState(headerTab, event.clientX);
+        return;
+      }
+      const source = store.activeSource;
+      if (
+        source !== null &&
+        source.kind === ARTIFACT_TAB_DND_TYPE &&
+        activeTileDrag !== null
+      ) {
+        updateTileStripPreview(
+          source,
+          { x: event.clientX, y: event.clientY },
+          reparentRefs,
+        );
+      }
+    };
+    window.addEventListener("pointermove", handlePointerMove, {
       capture: true,
       passive: true,
     });
@@ -1394,7 +1191,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       passive: true,
     });
     return () => {
-      window.removeEventListener("pointermove", trackPointerX, {
+      window.removeEventListener("pointermove", handlePointerMove, {
         capture: true,
       });
       window.removeEventListener("pointerdown", trackPointerDownX, {
@@ -1404,29 +1201,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       latestPointerY = null;
       lastPointerDownX = null;
     };
-  }, []);
-  useEffect(() => {
-    // A coordinator transaction fires a mid-transaction notify while
-    // suppressionDepth is still 1 (before the layout write lands), for which
-    // resolveValidatedTopLevelTabDrop always returns null. Revalidating
-    // against that transient state would reset a valid, stationary dwell on
-    // every unrelated transaction. Only settled notifies (suppressionDepth
-    // back at 0) reflect a state a dwell target should be judged against.
-    const revalidate = (): void => {
-      if (getTabCommandLedger().suppressionDepth > 0) return;
-      edgeDwell.revalidate();
-    };
-    const unsubscribeTabs = useTabsStore.subscribe(revalidate);
-    const unsubscribeLocks = subscribeTabStructuralLocks(revalidate);
-    const unsubscribeLedger = subscribeToTabCommandLedger(revalidate);
-    const unsubscribeCompatibility = subscribeTabSplitCompatibility(revalidate);
-    return () => {
-      unsubscribeTabs();
-      unsubscribeLocks();
-      unsubscribeLedger();
-      unsubscribeCompatibility();
-    };
-  }, [edgeDwell]);
+  }, [publishStripState, reparentRefs]);
   const sensors = useSensors(
     useSensor(EpicCanvasPointerSensor, {
       activationConstraint: {
@@ -1448,7 +1223,6 @@ export function RootDndProvider(props: RootDndProviderProps) {
       lastResolvedDropRef.current = null;
       lastReparentDropRef.current = null;
       clearSpringLoad(springLoadRef);
-      edgeDwell.reset();
       const dndStore = useEpicDndStore.getState();
       const source = readActiveDragSource(event.active);
       if (source !== null) {
@@ -1478,6 +1252,10 @@ export function RootDndProvider(props: RootDndProviderProps) {
                   geometry,
                 };
           dndStore.tileSourceWidthChanged(geometry?.sourceWidth ?? null);
+          const activationPoint = currentReleasePointerPoint();
+          if (geometry !== null && activationPoint !== null) {
+            updateTileStripPreview(source, activationPoint, reparentRefs);
+          }
         }
         return;
       }
@@ -1492,18 +1270,29 @@ export function RootDndProvider(props: RootDndProviderProps) {
           headerTab,
           geometry?.slots[geometry.sourceIndex]?.width ?? null,
         );
+        // The move that crosses the activation distance can itself span one or
+        // more tabs. dnd-kit starts the drag from that event but does not emit
+        // onDragMove for the same event, so seed the preview from the raw point
+        // captured before activation instead of waiting for another move that
+        // a quick gesture may never produce.
+        if (geometry !== null && latestPointerX !== null) {
+          publishStripState(headerTab, latestPointerX);
+        }
       }
     },
-    [edgeDwell],
+    [publishStripState, reparentRefs],
   );
 
   const updateDropPreview = useCallback(
     (event: DragUpdateEvent) => {
-      // SINGLE pointer source of truth: the point stashed by the collision
-      // pass that produced `event.over`. Never reconstruct it from
-      // `activatorEvent` + `event.delta` (scroll-adjusted; diverges under
-      // autoScroll).
-      const point = getLastCollisionPointerPoint();
+      // SINGLE pointer source of truth, shared with the capture-phase native
+      // pointermove handler: the raw tracked pointer, falling back to the
+      // collision-pass point when no native event has arrived yet. Two update
+      // paths publishing from two different pointer snapshots is what made a
+      // fast drag flip between a fresh and a stale resolution every frame.
+      // Never reconstruct the point from `activatorEvent` + `event.delta`
+      // (scroll-adjusted; diverges under autoScroll).
+      const point = currentReleasePointerPoint();
       const source = readActiveDragSource(event.active);
       if (source !== null) {
         updateCanvasSourcePreview(source, event, point, reparentRefs);
@@ -1515,65 +1304,27 @@ export function RootDndProvider(props: RootDndProviderProps) {
           headerTab,
           event,
           point,
-          edgeDwell,
           publishStripState: (pointerX) => {
             publishStripState(headerTab, pointerX);
           },
         });
       }
     },
-    [edgeDwell, publishStripState, reparentRefs],
-  );
-
-  // The dwell timer re-runs the preview with the last event, so a stationary
-  // pointer still arms.
-  useEffect(() => {
-    return () => {
-      replayCanvasPreview = null;
-      paneBodyDwell().reset();
-    };
-  }, []);
-
-  /**
-   * What a self-firing dwell replays when it wakes with no pointer input.
-   *
-   * EVERY update handler refreshes this, not just `onDragMove`. dnd-kit's
-   * `over` lags by one event: on the frame the pointer enters a new droppable,
-   * `onDragMove` still carries the PREVIOUS target and `onDragOver` fires
-   * immediately after with the correct one. Capturing only the move event meant
-   * that on a fast entry - one event landing inside a pane body, then a hold -
-   * the latch armed and fired correctly 220ms later, and replayed a stale
-   * `over` pointing at the strip the pointer had already left. The preview
-   * never appeared, and by B1 lockstep the drop committed nothing.
-   *
-   * The other two dwells never had this: the header merge republishes from
-   * `lastHeaderDrag` and the edge split from the target it holds. Both replay
-   * STATE. This one replays an EVENT, so the event it holds must be the latest
-   * one, whichever handler delivered it.
-   */
-  const rememberReplay = useCallback(
-    (event: DragUpdateEvent) => {
-      replayCanvasPreview = () => {
-        updateDropPreview(event);
-      };
-    },
-    [updateDropPreview],
+    [publishStripState, reparentRefs],
   );
 
   const handleDragMove = useCallback(
     (event: DragMoveEvent) => {
-      rememberReplay(event);
       updateDropPreview(event);
     },
-    [rememberReplay, updateDropPreview],
+    [updateDropPreview],
   );
 
   const handleDragOver = useCallback(
     (event: DragOverEvent) => {
-      rememberReplay(event);
       updateDropPreview(event);
     },
-    [rememberReplay, updateDropPreview],
+    [updateDropPreview],
   );
 
   // Handed to the imperative reparent commit so an RPC-routed move can
@@ -1605,28 +1356,19 @@ export function RootDndProvider(props: RootDndProviderProps) {
    */
   const endGesture = useCallback(() => {
     clearSpringLoad(springLoadRef);
-    edgeDwell.reset();
-    clearMergeDwellTimer();
-    paneBodyDwell().reset();
     lastResolvedDropRef.current = null;
     lastReparentDropRef.current = null;
     clearLastCollisionPointerPoint();
     activeHeaderStripGeometry = null;
     activeTileDrag = null;
-    lastHeaderDrag = null;
     promotedPreviewOnDrag = null;
     latestPointerX = null;
     latestPointerY = null;
     lastPointerDownX = null;
-    // Cleared here rather than only on unmount: the latch that consumes it is
-    // reset above, so a replay left armed can only ever re-run a dead gesture's
-    // event. "Unreachable today" is the reasoning that already failed once in
-    // this function.
-    replayCanvasPreview = null;
     stripGeometryFailureReported = false;
     headerTearOffActive = false;
     useEpicDndStore.getState().dragEnded();
-  }, [clearMergeDwellTimer, edgeDwell]);
+  }, []);
 
   useEffect(
     () => () => {
@@ -1716,20 +1458,12 @@ export function RootDndProvider(props: RootDndProviderProps) {
         source,
         navigate,
         navigateNested,
-        edgeDwell,
         resolvedDrop: lastResolvedDropRef.current,
       });
       if (!committed) restorePromotedPreview();
       endGesture();
     },
-    [
-      edgeDwell,
-      endGesture,
-      navigate,
-      navigateNested,
-      queryClient,
-      updateDropPreview,
-    ],
+    [endGesture, navigate, navigateNested, queryClient, updateDropPreview],
   );
 
   const handleDragCancel = useCallback(() => {

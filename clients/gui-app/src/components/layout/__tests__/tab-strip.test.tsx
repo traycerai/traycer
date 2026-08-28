@@ -6,6 +6,7 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
@@ -398,6 +399,7 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useEpicDndStore.getState().dragEnded();
   useTabsStore.setState({
     stripOrder: [],
     systemTabs: { history: null, settings: null },
@@ -576,6 +578,123 @@ describe("<TabStrip />", () => {
     expect(await screen.findByTestId("tab-epic-e-a")).toBeDefined();
     expect(screen.getByTestId("tab-epic-e-b")).toBeDefined();
     expect(screen.getByTestId("tab-new")).toBeDefined();
+  });
+
+  it("shows the pair highlight on the approach half during a merge", async () => {
+    openEpicFixture(EPIC_A);
+    openEpicFixture(EPIC_B);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+    await screen.findByTestId("tab-epic-e-a");
+
+    act(() => {
+      const dndStore = useEpicDndStore.getState();
+      dndStore.headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "tab:epic:e-a",
+          tabKind: "epic",
+          tabId: "e-a",
+          index: 0,
+        },
+        120,
+      );
+      // Dragging rightward onto B: the dragged tab's centre is on B's
+      // approach (left) half, so the merge is live immediately with the
+      // dragged tab taking the pair's left side.
+      dndStore.headerStripDragStateChanged({
+        kind: "merge",
+        targetIndex: 0,
+        targetItemId: "tab:epic:e-b",
+        targetSide: "left",
+      });
+      dndStore.headerStripDropIndexChanged(null);
+      dndStore.topLevelStripPairPreviewChanged({
+        targetRef: { kind: "epic", id: "e-b" },
+        side: "left",
+      });
+    });
+
+    // The merge is an approach-half highlight, not an insertion line: a line
+    // beside a highlighted merge target would advertise two outcomes for one
+    // release.
+    expect(screen.queryByTestId("tab-drop-indicator")).toBeNull();
+    const mergePreview = screen.getByTestId("tab-strip-pair-preview-epic-e-b");
+    expect(mergePreview.dataset.side).toBe("left");
+  });
+
+  it("shows insertion feedback across the full hovered top tab", async () => {
+    openEpicFixture(EPIC_A);
+    openEpicFixture(EPIC_B);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+    await screen.findByTestId("tab-epic-e-a");
+
+    act(() => {
+      const dndStore = useEpicDndStore.getState();
+      dndStore.headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "tab:epic:e-a",
+          tabKind: "epic",
+          tabId: "e-a",
+          index: 0,
+        },
+        120,
+      );
+      dndStore.headerStripDragStateChanged({
+        kind: "reorder",
+        targetIndex: 0,
+      });
+      dndStore.headerStripDropIndexChanged(1);
+    });
+
+    expect(
+      within(screen.getByTestId("tab-epic-e-b")).getByTestId(
+        "tab-drop-indicator",
+      ).dataset.side,
+    ).toBe("left");
+  });
+
+  it("mirrors the merge highlight when approached from the right", async () => {
+    openEpicFixture(EPIC_A);
+    openEpicFixture(EPIC_B);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+    await screen.findByTestId("tab-epic-e-a");
+
+    act(() => {
+      const dndStore = useEpicDndStore.getState();
+      dndStore.headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "tab:epic:e-a",
+          tabKind: "epic",
+          tabId: "e-a",
+          index: 0,
+        },
+        120,
+      );
+      // Dragging leftward back onto B: the dragged tab's centre is on B's
+      // approach (right) half, so the dragged tab would take the pair's
+      // right side.
+      dndStore.headerStripDragStateChanged({
+        kind: "merge",
+        targetIndex: 1,
+        targetItemId: "tab:epic:e-b",
+        targetSide: "right",
+      });
+      dndStore.headerStripDropIndexChanged(null);
+      dndStore.topLevelStripPairPreviewChanged({
+        targetRef: { kind: "epic", id: "e-b" },
+        side: "right",
+      });
+    });
+
+    expect(screen.queryByTestId("tab-drop-indicator")).toBeNull();
+    expect(
+      screen.getByTestId("tab-strip-pair-preview-epic-e-b").dataset.side,
+    ).toBe("right");
   });
 
   it("queries every open task tab without requiring a live Epic session", async () => {

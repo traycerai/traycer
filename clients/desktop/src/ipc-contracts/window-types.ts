@@ -118,6 +118,15 @@ export type OpenEpicInNewWindowResult =
   | { readonly result: "moved"; readonly windowId: string }
   | { readonly result: "queued-discard"; readonly windowId: string };
 
+/**
+ * `not-found`: the source window's per-window snapshot holds no draft with the
+ * requested id - the renderer's projection flush did not land before the call,
+ * or the draft was closed mid-flight. The renderer treats it as a refused move.
+ */
+export type OpenDraftInNewWindowResult =
+  | { readonly result: "moved"; readonly windowId: string }
+  | { readonly result: "not-found"; readonly windowId: string };
+
 export type MenuCommandId =
   | "app.openSettings"
   | "app.signIn"

@@ -124,6 +124,8 @@ export const RunnerHostInvoke = {
   windowsRequestClose: "runnerHost:windows:requestClose",
   windowsRequestOpenEpicInNewWindow:
     "runnerHost:windows:requestOpenEpicInNewWindow",
+  windowsRequestOpenDraftInNewWindow:
+    "runnerHost:windows:requestOpenDraftInNewWindow",
   ownershipSnapshot: "runnerHost:windows:ownership:snapshot",
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",

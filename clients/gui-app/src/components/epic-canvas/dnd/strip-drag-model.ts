@@ -13,45 +13,29 @@
  *
  * - **Monotonicity.** A monotone pointer sweep yields a monotone index.
  * - **Hysteresis.** After a swap the neighbour's centre has moved, so reversing
- *   requires re-crossing `sourceWidth + 2 * bandPx` - see `swapHysteresisPx`.
- *   Note this is the SOURCE's width, not the mean of the pair: the two coincide
- *   only for equal-width items, and a split group is one strip item of its own
- *   width.
+ *   requires re-crossing `sourceWidth` - see `swapHysteresisPx`. Note this is
+ *   the SOURCE's width, not the mean of the pair: the two coincide only for
+ *   equal-width items, and a split group is one strip item of its own width.
  *
- * Merge (pair-into-split) shares the model so the two gestures cannot disagree
- * about where a boundary is. The merge band sits around a neighbour's centre and
- * the swap boundary sits `bandPx` PAST that centre, so the band is reachable and
- * dwellable. Nothing is ever held in time: the boundary is shifted in x, so the
- * dragged tab moves continuously at every pointer position and a pass never
- * stalls.
- */
-
-/**
- * Half-width of the merge band around a neighbour's centre, in CSS px, for a
- * strip whose tabs can be PAIRED into a split - the header.
+ * Merge (pair-into-split) and reorder divide a hovered neighbour at its centre.
+ * The approaching half is the merge target; crossing the midpoint starts the
+ * reorder. This gives both actions a large, deterministic target without
+ * requiring pixel-perfect placement, and it makes the state a pure function of
+ * position: nothing is ever held in time, so there is no dwell to explain and
+ * no timer to keep alive.
  *
- * It is a per-gesture parameter (`StripDragGeometry.mergeBandPx`) rather than a
- * module constant because the two strips differ: header tabs pair, tile tabs do
- * not. A tile strip passes 0, which puts its swap boundary exactly at the
- * neighbour's centre - Chrome's own rule.
+ * Both zones are resolved against the DRAGGED TAB'S CENTRE
+ * (`pointer - grabOffset + width/2`), never against the raw pointer - the same
+ * reference Chrome uses for its swap rule. The user watches the tab in their
+ * hand, not the invisible pointer, and the two can disagree by up to a full
+ * tab width: grab a tab by its trailing edge and drag toward its leading side,
+ * and the tab visibly sits ON TOP of the neighbour while the pointer is still
+ * back over the source slot. Pointer-resolved zones make that gesture a dead
+ * zone - the tab overlaps the target, nothing highlights, nothing swaps -
+ * which reads as the drag simply not working. The centre moves 1:1 with the
+ * pointer, so monotonicity and hysteresis are unaffected by the choice; what
+ * changes is that every boundary sits where the visible tab says it is.
  */
-export const HEADER_MERGE_BAND_PX = 16;
-
-/**
- * Tile strips have no pair gesture, so no band and no merge state.
- *
- * Band 0 does NOT by itself make the merge branch unreachable: the test is
- * `distance <= bandPxFor(w, 0)`, i.e. `distance <= 0`, which is satisfiable at
- * exactly 0. What makes it unreachable on tile strips is `isMergeTarget: false`
- * from `readTileStripSlots`, and that is what the coverage relies on.
- */
-export const TILE_MERGE_BAND_PX = 0;
-
-/** Stationary time inside the band before a merge preview arms. */
-export const MERGE_DWELL_MS = 400;
-
-/** Pointer travel that re-anchors an arming dwell, in CSS px. */
-export const MERGE_STILLNESS_PX = 6;
 
 export interface StripSlot {
   readonly itemId: string;
@@ -85,25 +69,26 @@ export interface StripDragGeometry {
    */
   readonly sourceInitialLeft: number;
   readonly sourceWidth: number;
-  /** Per-strip: `HEADER_MERGE_BAND_PX` for the header, `TILE_MERGE_BAND_PX` for tiles. */
-  readonly mergeBandPx: number;
   readonly stripTop: number;
   readonly stripBottom: number;
 }
 
+/**
+ * The pair side the DRAGGED tab would take on a merge: the side it approaches
+ * from. Dragging rightward onto a neighbour hovers its left half, so the
+ * dragged tab becomes the LEFT member; leftward is the mirror. Preview and
+ * commit both read this one field, so the highlighted half and the committed
+ * pair order cannot disagree.
+ */
+export type MergeSide = "left" | "right";
+
 export type StripDragState =
   | { readonly kind: "reorder"; readonly targetIndex: number }
   | {
-      readonly kind: "merge-armed";
+      readonly kind: "merge";
       readonly targetIndex: number;
       readonly targetItemId: string;
-      readonly armedAtMs: number;
-      readonly armedAtPointerX: number;
-    }
-  | {
-      readonly kind: "merge-preview";
-      readonly targetIndex: number;
-      readonly targetItemId: string;
+      readonly targetSide: MergeSide;
     };
 
 export interface ResolveStripDragInput {
@@ -116,27 +101,18 @@ export interface ResolveStripDragInput {
    */
   readonly contentOriginX: number;
   readonly pointerX: number;
+  /** Carries only the settled `targetIndex` between frames - see the swap rule. */
   readonly previous: StripDragState | null;
-  readonly nowMs: number;
-}
-
-/** The merge band never eats more than a quarter of a narrow item. */
-export function bandPxFor(width: number, mergeBandPx: number): number {
-  return Math.min(mergeBandPx, width * 0.25);
 }
 
 /**
  * Distance the pointer must travel back before a just-made swap reverses.
- * Derived: swap-right fires at `L + w_s + w_n/2 + b`; after the swap the
- * neighbour occupies `[L, L + w_n]` so swap-left fires at `L + w_n/2 - b`.
- * The `w_n` terms cancel.
+ * Both crossings use the approached tab's midpoint. After the swap that tab
+ * occupies the source slot, so the midpoint shift—and therefore hysteresis—is
+ * exactly the dragged source width, independent of unequal neighbour widths.
  */
-export function swapHysteresisPx(
-  sourceWidth: number,
-  neighbourWidth: number,
-  mergeBandPx: number,
-): number {
-  return sourceWidth + 2 * bandPxFor(neighbourWidth, mergeBandPx);
+export function swapHysteresisPx(sourceWidth: number): number {
+  return sourceWidth;
 }
 
 /**
@@ -211,10 +187,10 @@ export function overlayLeftForPointer(input: {
 /**
  * Per-item x displacement, in px, for a strip rendering a provisional order.
  *
- * `targetIndex === null` means the dragged item has LEFT this strip (it is over
- * another group), so the strip closes the gap: everything after the source
- * shifts left by the source's advance and the source itself is not displaced,
- * since it is invisible and belongs to another strip's layout now.
+ * `targetIndex === null` means the dragged item is outside this strip. The
+ * source strip deliberately keeps its natural layout: the source slot stays in
+ * place as an origin placeholder until the drop commits elsewhere (tile strips
+ * dim it; the header hides its tab entirely under the overlay).
  *
  * Returned as explicit offsets rather than a CSS `order` because binding the
  * transform to state is what makes a stranded transform unrepresentable.
@@ -226,13 +202,8 @@ export function stripOffsetsFor(
   const offsets = new Map<string, number>();
   const { slots, sourceIndex } = geometry;
   if (sourceIndex < 0 || sourceIndex >= slots.length) return offsets;
-  const source = slots[sourceIndex];
 
   if (targetIndex === null) {
-    for (let i = sourceIndex + 1; i < slots.length; i += 1) {
-      const slot = slots[i];
-      offsets.set(slot.itemId, -source.advance);
-    }
     return offsets;
   }
 
@@ -320,14 +291,6 @@ function layOutProvisional(
   return laidOut;
 }
 
-function draggedCentreX(geometry: StripDragGeometry, pointerX: number): number {
-  const sourceWidth = geometry.slots[geometry.sourceIndex]?.width ?? 0;
-  // Deliberately unclamped. Clamping here would decouple the dragged centre
-  // from the pointer at both ends of the strip, sliding the merge band out from
-  // under the pointer. The overlay clamps for presentation; the model must not.
-  return pointerX - geometry.grabOffsetX + sourceWidth / 2;
-}
-
 function previousTargetIndex(
   geometry: StripDragGeometry,
   previous: StripDragState | null,
@@ -345,7 +308,7 @@ function settleTargetIndex(
   geometry: StripDragGeometry,
   contentOriginX: number,
   startIndex: number,
-  centre: number,
+  centreX: number,
 ): number {
   const lastIndex = geometry.slots.length - 1;
   let index = Math.min(Math.max(startIndex, 0), Math.max(lastIndex, 0));
@@ -355,20 +318,14 @@ function settleTargetIndex(
     const laidOut = layOutProvisional(geometry, contentOriginX, index);
     if (index + 1 < laidOut.length) {
       const right = laidOut[index + 1];
-      if (
-        centre >
-        right.centreX + bandPxFor(right.slot.width, geometry.mergeBandPx)
-      ) {
+      if (centreX > right.centreX) {
         index += 1;
         continue;
       }
     }
     if (index - 1 >= 0) {
       const left = laidOut[index - 1];
-      if (
-        centre <
-        left.centreX - bandPxFor(left.slot.width, geometry.mergeBandPx)
-      ) {
+      if (centreX < left.centreX) {
         index -= 1;
         continue;
       }
@@ -378,31 +335,46 @@ function settleTargetIndex(
   return index;
 }
 
+interface MergeCandidateResult {
+  readonly slot: StripSlot;
+  readonly side: MergeSide;
+}
+
 /**
- * The mergeable neighbour whose centre the dragged tab is currently sitting on,
- * or null. Both neighbours are candidates; the nearer one wins when the strip is
- * narrow enough for the bands to overlap.
+ * The mergeable neighbour whose slot the dragged tab's centre is currently
+ * inside, or null. Candidacy is purely positional - centre inside a
+ * neighbour's provisional slot - with NO travel-direction filter: after a
+ * swap, the passed tab sits a full `sourceWidth` behind the dragged centre,
+ * so it can only re-arm when the centre genuinely re-enters its half (a
+ * narrow tab still overlapping a wide neighbour it just passed, or the user
+ * reversing onto it). Filtering by net travel instead re-created the dead
+ * zone the module doc forbids: reverse after a swap and the tab visibly sat
+ * on the neighbour's half with nothing highlighted. Both neighbours are
+ * candidates; the nearer one wins on a strip narrow enough for both slots to
+ * contain the centre. A candidate AHEAD of the dragged tab is approached from
+ * its left (the dragged tab would take the pair's left side); one behind is
+ * the mirror.
  */
 function mergeCandidate(
   geometry: StripDragGeometry,
   contentOriginX: number,
   targetIndex: number,
-  centre: number,
-): StripSlot | null {
+  centreX: number,
+): MergeCandidateResult | null {
   const laidOut = layOutProvisional(geometry, contentOriginX, targetIndex);
-  const neighbours = [targetIndex - 1, targetIndex + 1]
-    .filter((index) => index >= 0 && index < laidOut.length)
-    .map((index) => laidOut[index]);
-  let best: StripSlot | null = null;
+  const candidateIndices = [targetIndex - 1, targetIndex + 1];
+  let best: MergeCandidateResult | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
-  for (const neighbour of neighbours) {
+  for (const index of candidateIndices) {
+    if (index < 0 || index >= laidOut.length) continue;
+    const neighbour = laidOut[index];
     if (!neighbour.slot.isMergeTarget) continue;
-    const distance = Math.abs(centre - neighbour.centreX);
-    if (
-      distance <= bandPxFor(neighbour.slot.width, geometry.mergeBandPx) &&
-      distance < bestDistance
-    ) {
-      best = neighbour.slot;
+    const distance = Math.abs(centreX - neighbour.centreX);
+    if (distance <= neighbour.slot.width / 2 && distance < bestDistance) {
+      best = {
+        slot: neighbour.slot,
+        side: index > targetIndex ? "left" : "right",
+      };
       bestDistance = distance;
     }
   }
@@ -417,66 +389,37 @@ function mergeCandidate(
 export function resolveStripDragState(
   input: ResolveStripDragInput,
 ): StripDragState {
-  const { geometry, contentOriginX, pointerX, previous, nowMs } = input;
+  const { geometry, contentOriginX, pointerX, previous } = input;
   if (geometry.slots.length === 0) {
     return { kind: "reorder", targetIndex: 0 };
   }
-  const centre = draggedCentreX(geometry, pointerX);
+  // The overlay's centre: where the user sees the tab, offset from the pointer
+  // by the constant grab offset. See the module doc for why zones must follow
+  // this and not the raw pointer.
+  const draggedCentreX =
+    pointerX - geometry.grabOffsetX + geometry.sourceWidth / 2;
   const targetIndex = settleTargetIndex(
     geometry,
     contentOriginX,
     previousTargetIndex(geometry, previous),
-    centre,
+    draggedCentreX,
   );
   const candidate = mergeCandidate(
     geometry,
     contentOriginX,
     targetIndex,
-    centre,
+    draggedCentreX,
   );
   if (candidate === null) {
-    // Left the band: a preview drops back to plain reorder at this very pointer
-    // position, so the transition is continuous rather than a jump.
+    // Off every mergeable half: plain reorder at this very pointer position,
+    // so the merge-to-reorder transition is continuous rather than a jump.
     return { kind: "reorder", targetIndex };
   }
-  if (previous !== null && previous.kind !== "reorder") {
-    if (previous.targetItemId === candidate.itemId) {
-      // A preview is sticky while the dragged tab stays on the target - only
-      // leaving the band ends it, never further movement inside it.
-      if (previous.kind === "merge-preview") {
-        return {
-          kind: "merge-preview",
-          targetIndex,
-          targetItemId: candidate.itemId,
-        };
-      }
-      const travelled = Math.abs(pointerX - previous.armedAtPointerX);
-      if (travelled <= MERGE_STILLNESS_PX) {
-        return nowMs - previous.armedAtMs >= MERGE_DWELL_MS
-          ? {
-              kind: "merge-preview",
-              targetIndex,
-              targetItemId: candidate.itemId,
-            }
-          : { ...previous, targetIndex };
-      }
-      // Moved too far to still be dwelling: re-anchor rather than latch, so
-      // drifting never accumulates its way to a merge but stopping still arms.
-      return {
-        kind: "merge-armed",
-        targetIndex,
-        targetItemId: candidate.itemId,
-        armedAtMs: nowMs,
-        armedAtPointerX: pointerX,
-      };
-    }
-  }
   return {
-    kind: "merge-armed",
+    kind: "merge",
     targetIndex,
-    targetItemId: candidate.itemId,
-    armedAtMs: nowMs,
-    armedAtPointerX: pointerX,
+    targetItemId: candidate.slot.itemId,
+    targetSide: candidate.side,
   };
 }
 
