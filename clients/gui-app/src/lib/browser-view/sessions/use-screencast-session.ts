@@ -34,6 +34,16 @@ import {
   type ScreencastSessionRefs,
 } from "@/lib/browser-view/sessions/screencast-controller";
 import type { ScreencastFrameSize } from "@/lib/browser-view/sessions/screencast-input-encoding";
+import {
+  createVideoPlaneSession,
+  JPEG_VIEW,
+  type VideoPlaneSession,
+  type VideoPlaneView,
+} from "@/lib/browser-view/sessions/video-plane-session";
+import {
+  acquireBrowserMediaEntry,
+  createBrowserMediaPeer,
+} from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 const DEFAULT_MAX_WIDTH = 1280;
 const DEFAULT_MAX_HEIGHT = 720;
@@ -71,6 +81,13 @@ export interface ScreencastImage {
 export interface ScreencastSession {
   readonly refs: ScreencastSessionRefs;
   readonly image: ScreencastImage | null;
+  /**
+   * The video plane's display state. `media` is non-null from the inbound
+   * track onwards so the `<video>` can mount and decode; `active` says it has
+   * decoded a frame and is the surface to show. Until then the JPEG image
+   * keeps painting - there is no black-tile window during ICE.
+   */
+  readonly video: VideoPlaneView & { readonly active: boolean };
   readonly lifecycle: ScreencastLifecycle;
   readonly details: string | null;
   readonly frameSize: ScreencastFrameSize | null;
@@ -108,6 +125,8 @@ interface ScreencastRenderState {
 export interface ScreencastSessionOptions {
   readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly epicId: string;
+  /** Identity half of the video plane's media key (with session + tab). */
+  readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
   readonly visible: boolean;
@@ -124,12 +143,14 @@ export interface ScreencastSessionOptions {
 export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
-  const { client, epicId, sessionId, tabId, visible } = options;
+  const { client, epicId, hostId, sessionId, tabId, visible } = options;
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
+  const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const overlayButtonRef = useRef<HTMLButtonElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const imeInputRef = useRef<HTMLInputElement | null>(null);
 
   const [armedState, setArmedState] = useState<{
@@ -141,6 +162,9 @@ export function useScreencastSession(
     readonly dialog: ScreencastDialog;
   } | null>(null);
   const [composing, setComposing] = useState(false);
+  const [videoViewState, setVideoView] = useState<VideoPlaneView>(JPEG_VIEW);
+  const [videoFrameSize, setVideoFrameSize] =
+    useState<ScreencastFrameSize | null>(null);
   const [streamState, setStreamState] = useState<ScreencastRenderState>(() => ({
     client,
     image: null,
@@ -156,6 +180,7 @@ export function useScreencastSession(
       viewportRef,
       overlayButtonRef,
       imageRef,
+      videoRef,
       imeInputRef,
     }),
     [],
@@ -182,15 +207,32 @@ export function useScreencastSession(
     }),
   );
 
+  // No subscription means no plane: the last round's view would otherwise
+  // keep a dead `srcObject` painting and keep reporting video geometry until
+  // the tile subscribes again. Derived rather than reset in the effect - the
+  // same shape as `stateMatchesClient` below.
+  const videoView = client !== null && visible ? videoViewState : JPEG_VIEW;
   const stateMatchesClient = streamState.client === client;
   const image = stateMatchesClient ? streamState.image : null;
-  const lifecycle = stateMatchesClient ? streamState.lifecycle : "connecting";
+  const videoActive = videoView.mode === "video";
+  const baseLifecycle = stateMatchesClient
+    ? streamState.lifecycle
+    : "connecting";
+  // A video tile paints no JPEG frame, so `notePresented` never runs and the
+  // liveness the chrome reads has to come from the decoded video frames
+  // instead. Degraded lifecycles still win - `stale` in particular is how a
+  // frozen video track surfaces (G3).
+  const lifecycle: ScreencastLifecycle =
+    videoActive && isFreshLifecycle(baseLifecycle) ? "live" : baseLifecycle;
   const details = screencastDetailsForRender(
     stateMatchesClient,
     streamState,
     client,
   );
-  const frameSize = stateMatchesClient ? streamState.frameSize : null;
+  const jpegFrameSize = stateMatchesClient ? streamState.frameSize : null;
+  // The video plane's own geometry wins only while it is painting, so a
+  // fallback to JPEG reverts the hit-test box with no restore step (G4).
+  const frameSize = videoActive ? videoFrameSize : jpegFrameSize;
   const navState = stateMatchesClient
     ? streamState.navState
     : EMPTY_SCREENCAST_NAV_STATE;
@@ -257,6 +299,47 @@ export function useScreencastSession(
     const isCurrent = (): boolean =>
       stream !== null && streamRef.current === stream;
 
+    // The peer connection lives in the module-scoped registry, keyed host +
+    // session + tab, so it outlives this subscription's remounts and is shared
+    // with the PiP viewer. What is per-subscription is the SIGNALING: the
+    // reply channel is this stream, and the host re-attaches (and re-offers)
+    // on the next subscribe.
+    const videoPlane = createVideoPlaneSession({
+      media: acquireBrowserMediaEntry({
+        key: { hostId, sessionId, tabId },
+        createPeer: createBrowserMediaPeer,
+      }),
+      port: {
+        sendSdpAnswer: ({ negotiationId, sdp }) => {
+          send({
+            kind: "sdpAnswer",
+            hasBinaryPayload: false,
+            negotiationId,
+            sdp,
+          });
+        },
+        sendIceCandidate: ({ negotiationId, ...candidate }) => {
+          send({
+            kind: "iceCandidate",
+            hasBinaryPayload: false,
+            negotiationId,
+            ...candidate,
+          });
+        },
+        sendVideoPlaneState: ({ negotiationId, state, reason }) => {
+          send({
+            kind: "videoPlaneState",
+            hasBinaryPayload: false,
+            negotiationId,
+            state,
+            reason,
+          });
+        },
+      },
+      onChange: setVideoView,
+    });
+    videoPlaneRef.current = videoPlane;
+
     const onConnectionStatus = (
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
@@ -304,6 +387,7 @@ export function useScreencastSession(
       } else if (frame.kind === "captureMode") {
         controller.setCaptureMode(frame.mode);
       }
+      videoPlane.handleServerFrame(frame);
       handleScreencastFrame({
         frame,
         binaryPayload,
@@ -374,6 +458,8 @@ export function useScreencastSession(
       controller.notePresentedSequence(null);
       controller.noteViewportEpoch(null);
       controller.setCaptureMode("jpeg");
+      videoPlane.close();
+      if (videoPlaneRef.current === videoPlane) videoPlaneRef.current = null;
       controller.clearLocalArm(false);
       opened.close();
     };
@@ -381,6 +467,7 @@ export function useScreencastSession(
     client,
     controller,
     epicId,
+    hostId,
     sessionId,
     setDetails,
     setFrameSize,
@@ -399,11 +486,71 @@ export function useScreencastSession(
   }, []);
   useScreencastViewportBridge(viewportRef, visible, sendViewport);
 
+  /**
+   * The `<video>` half of the video plane. The tile renders the element (with
+   * the same overlay above it as the `<img>`); everything about the media -
+   * attaching it, its geometry, and the decoded-frame liveness that reports
+   * `videoPlaneState: "live"` - is owned here, so both tile variants stay
+   * pure JSX.
+   */
+  useEffect(() => {
+    const element = videoRef.current;
+    const media = videoView.media;
+    if (element === null || media === null) return;
+    element.srcObject = media;
+    const noteSize = (): void => {
+      setVideoFrameSize(
+        element.videoWidth > 0 && element.videoHeight > 0
+          ? { width: element.videoWidth, height: element.videoHeight }
+          : null,
+      );
+    };
+    const noteFrame = (): void => {
+      videoPlaneRef.current?.noteVideoFrame();
+    };
+    let frameHandle: number | null = null;
+    const onDecodedFrame = (): void => {
+      noteFrame();
+      frameHandle = element.requestVideoFrameCallback(onDecodedFrame);
+    };
+    if (typeof element.requestVideoFrameCallback === "function") {
+      frameHandle = element.requestVideoFrameCallback(onDecodedFrame);
+    } else {
+      // No per-frame callback (an older WebView, jsdom): media progress is the
+      // only decode evidence available.
+      element.addEventListener("playing", noteFrame);
+      element.addEventListener("timeupdate", noteFrame);
+    }
+    element.addEventListener("loadedmetadata", noteSize);
+    element.addEventListener("resize", noteSize);
+    noteSize();
+    startPlayback(element);
+    return () => {
+      if (frameHandle !== null) element.cancelVideoFrameCallback(frameHandle);
+      element.removeEventListener("playing", noteFrame);
+      element.removeEventListener("timeupdate", noteFrame);
+      element.removeEventListener("loadedmetadata", noteSize);
+      element.removeEventListener("resize", noteSize);
+      element.srcObject = null;
+    };
+  }, [videoView.media]);
+
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const lastFrameAt = controller.lastFrameAt();
+      // While the video plane paints, its decoded frames ARE the liveness
+      // signal - the JPEG pump is off, so `lastFrameAt` would freeze at the
+      // last JPEG frame and flip a healthy tile to "stale" (G3).
+      const videoFrameAt = videoPlaneRef.current?.lastVideoFrameAt() ?? null;
+      const lastFrameAt = videoFrameAt ?? controller.lastFrameAt();
       if (lastFrameAt === null) return;
       if (Date.now() - lastFrameAt < STALE_WITHOUT_FRAME_MS) return;
+      // A track that connected, painted, then froze is the one failure no
+      // deadline covers (the first-frame one is disarmed by then) and the
+      // registry cannot see. Reporting it is what turns the host's JPEG pump
+      // back on instead of leaving a frozen tile with no plane at all.
+      if (videoFrameAt !== null) {
+        videoPlaneRef.current?.fail("video frames stopped");
+      }
       setLifecycle((current) =>
         current === "live" || current === "waiting" ? "stale" : current,
       );
@@ -472,6 +619,7 @@ export function useScreencastSession(
   return {
     refs,
     image,
+    video: { ...videoView, active: videoActive },
     lifecycle,
     details,
     frameSize,
@@ -488,6 +636,27 @@ export function useScreencastSession(
     overlayHandlers: controller.overlayHandlers,
     imeHandlers: controller.imeHandlers,
   };
+}
+
+/**
+ * `muted` + `playsInline` autoplay is allowed, but a source attached after
+ * mount still needs the kick. jsdom (and any runtime without a media stack)
+ * throws instead of returning a promise, which is not a plane failure.
+ */
+function startPlayback(element: HTMLVideoElement): void {
+  try {
+    const started = element.play();
+    if (started instanceof Promise) void started.catch(() => {});
+  } catch {
+    // No media stack; the plane simply never reports a decoded frame.
+  }
+}
+
+/** Lifecycles a decoded video frame is allowed to upgrade to "live". */
+function isFreshLifecycle(lifecycle: ScreencastLifecycle): boolean {
+  return (
+    lifecycle === "waiting" || lifecycle === "idle" || lifecycle === "live"
+  );
 }
 
 function handleDialogServerFrame(input: {

@@ -32,6 +32,8 @@ function mountController(): {
   readonly controller: ScreencastController;
   readonly sent: BrowserScreencastClientFrame[];
   readonly overlay: HTMLElement;
+  readonly image: HTMLImageElement;
+  readonly video: HTMLVideoElement;
 } {
   const sent: BrowserScreencastClientFrame[] = [];
   const captured: { current: ScreencastController | null } = { current: null };
@@ -41,10 +43,18 @@ function mountController(): {
     const viewportRef = useRef<HTMLDivElement | null>(null);
     const overlayButtonRef = useRef<HTMLButtonElement | null>(null);
     const imageRef = useRef<HTMLImageElement | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
     const imeInputRef = useRef<HTMLInputElement | null>(null);
     const controllerRef = useRef<ScreencastController | null>(null);
     controllerRef.current ??= createScreencastController({
-      refs: { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef },
+      refs: {
+        tileRef,
+        viewportRef,
+        overlayButtonRef,
+        imageRef,
+        videoRef,
+        imeInputRef,
+      },
       sendFrame: (frame) => sent.push(frame),
       listeners: {
         onLocalArmCleared: () => {},
@@ -57,6 +67,8 @@ function mountController(): {
       <div ref={tileRef}>
         <div ref={viewportRef}>
           <img ref={imageRef} alt="surface" />
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption -- the video plane's paint surface, not media content. */}
+          <video ref={videoRef} />
           <button
             ref={overlayButtonRef}
             type="button"
@@ -78,7 +90,11 @@ function mountController(): {
   if (captured.current === null) throw new Error("controller not created");
   const controller: ScreencastController = captured.current;
   controller.setFrameSize({ ...FRAME_SIZE });
-  return { controller, sent, overlay };
+  const video = view.container.querySelector("video");
+  if (video === null) throw new Error("no video surface");
+  video.getBoundingClientRect = () =>
+    new DOMRect(0, 0, FRAME_SIZE.width, FRAME_SIZE.height);
+  return { controller, sent, overlay, image, video };
 }
 
 function clickUnarmed(overlay: HTMLElement): void {
@@ -120,6 +136,56 @@ describe("screencast input correlation", () => {
     for (const frame of pointerFrames(sent)) {
       expect(frame.viewportEpoch).toBe(4);
       expect(frame.castSequence).toBeNull();
+      expect(frame.normalizedX).toBeCloseTo(0.25);
+      expect(frame.normalizedY).toBeCloseTo(0.5);
+    }
+  });
+
+  it("normalizes against the video element while the video plane paints", () => {
+    const { controller, sent, overlay, video } = mountController();
+    // Deliberately a different box from the image, so a frame normalized
+    // against the wrong surface is visible in the numbers.
+    video.getBoundingClientRect = () =>
+      new DOMRect(0, 0, FRAME_SIZE.width / 2, FRAME_SIZE.height / 2);
+    controller.setCaptureMode("video");
+    controller.noteViewportEpoch(4);
+    // The video box is half the image's, so the same click lands at twice the
+    // normalized offset - proof the video surface is the one measured.
+    controller.setFrameSize({
+      width: FRAME_SIZE.width / 2,
+      height: FRAME_SIZE.height / 2,
+    });
+
+    clickUnarmed(overlay);
+    controller.noteArmed(1);
+
+    for (const frame of pointerFrames(sent)) {
+      expect(frame.normalizedX).toBeCloseTo(0.5);
+      expect(frame.normalizedY).toBeCloseTo(1);
+    }
+    expect(pointerFrames(sent)).toHaveLength(2);
+  });
+
+  it("normalizes against the video element before the host echoes the mode", () => {
+    // The tile swaps surfaces on its first decoded frame; the host's
+    // `captureMode` frame lands an RTT later. In that window the `<img>` is
+    // `hidden` (a zeroed box) while correlation is still on the JPEG token -
+    // measuring the host-chosen element would drop every pointer event.
+    const { controller, sent, overlay, image, video } = mountController();
+    image.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+    video.getBoundingClientRect = () =>
+      new DOMRect(0, 0, FRAME_SIZE.width, FRAME_SIZE.height);
+    controller.notePresentedSequence(7);
+
+    clickUnarmed(overlay);
+    controller.noteArmed(1);
+
+    expect(pointerFrames(sent).map((frame) => frame.type)).toEqual([
+      "down",
+      "up",
+    ]);
+    for (const frame of pointerFrames(sent)) {
+      expect(frame.castSequence).toBe(7);
       expect(frame.normalizedX).toBeCloseTo(0.25);
       expect(frame.normalizedY).toBeCloseTo(0.5);
     }

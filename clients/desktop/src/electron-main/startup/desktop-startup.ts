@@ -118,6 +118,7 @@ import {
   configureAppUserModelId,
   configureV8CodeCache,
   configureV8HeapSize,
+  configureWebRtcIpPolicy,
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
@@ -349,6 +350,7 @@ async function timed(
 export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
+  configureWebRtcIpPolicy();
   applyHardwareAccelerationPreference();
   suppressWslKernelCoreDumps();
   // `initCrashReporter()` must run before `registerAppScheme()`. When a

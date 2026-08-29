@@ -95,7 +95,11 @@ interface ScreencastPointerFrameRequest {
   readonly deltaY: number;
   readonly clickCount: number;
   readonly correlation: ScreencastInputCorrelation;
-  readonly image: HTMLImageElement | null;
+  /**
+   * The element the plane paints into - `<img>` on the JPEG plane, `<video>`
+   * on the video plane. Only its box is read, so the union stays `HTMLElement`.
+   */
+  readonly surface: HTMLElement | null;
   readonly frameSize: ScreencastFrameSize | null;
 }
 
@@ -105,7 +109,7 @@ export function buildScreencastPointerFrame(
   const normalized = normalizedPointerPosition({
     clientX: request.event.clientX,
     clientY: request.event.clientY,
-    image: request.image,
+    surface: request.surface,
     frameSize: request.frameSize,
     clampToEdge: request.clampToEdge,
   });
@@ -197,12 +201,12 @@ export function isScreencastModChord(
 function normalizedPointerPosition(request: {
   readonly clientX: number;
   readonly clientY: number;
-  readonly image: HTMLImageElement | null;
+  readonly surface: HTMLElement | null;
   readonly frameSize: ScreencastFrameSize | null;
   readonly clampToEdge: boolean;
 }): { readonly normalizedX: number; readonly normalizedY: number } | null {
-  if (request.image === null || request.frameSize === null) return null;
-  const rect = request.image.getBoundingClientRect();
+  if (request.surface === null || request.frameSize === null) return null;
+  const rect = request.surface.getBoundingClientRect();
   const scale = Math.min(
     rect.width / request.frameSize.width,
     rect.height / request.frameSize.height,

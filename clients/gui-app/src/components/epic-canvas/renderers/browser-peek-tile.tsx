@@ -9,6 +9,7 @@ import {
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -136,13 +137,13 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const session = useScreencastSession({
     client,
     epicId,
+    hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,
     visible,
   });
   const { image, frameSize, navState, armedEpoch, dialog } = session;
-  const { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef } =
-    session.refs;
+  const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
   const frameCacheKey = browserPeekFrameKey(node);
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
@@ -244,27 +245,10 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           aria-label="Browser screencast controls"
           {...session.overlayHandlers}
         >
-          {image === null ? (
-            <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
-              <div>
-                <div className="text-ui-base font-medium">
-                  Waiting for frames
-                </div>
-                <div className="mt-1 max-w-[min(90vw,32rem)] text-ui-sm text-muted-foreground">
-                  Click the screencast to control this browser tab.
-                </div>
-              </div>
-            </div>
-          ) : (
-            <img
-              ref={imageRef}
-              src={image.src}
-              alt="Browser screencast"
-              className="h-full w-full object-contain"
-              draggable={false}
-              onLoad={() => session.notePresented(image.sequence)}
-            />
-          )}
+          <ScreencastSurface
+            session={session}
+            emptyHint="Click the screencast to control this browser tab."
+          />
           {status.overlay === null ? null : (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded border border-border bg-popover/95 px-3 py-2 text-ui-sm text-popover-foreground shadow-sm">
               {status.overlay}

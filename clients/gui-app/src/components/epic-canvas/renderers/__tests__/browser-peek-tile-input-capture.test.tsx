@@ -1707,4 +1707,87 @@ describe("BrowserPeekTile input capture", () => {
       }),
     ]);
   });
+  it("carries the viewport epoch once the host announces the video plane", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    act(() => {
+      stream.emit(
+        { kind: "captureMode", hasBinaryPayload: false, mode: "video" },
+        null,
+      );
+      stream.emit(
+        { kind: "viewportEpoch", hasBinaryPayload: false, epoch: 9 },
+        null,
+      );
+    });
+
+    sendPointerClick(overlayButton(), 400, 300);
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({
+        type: "down",
+        castSequence: null,
+        viewportEpoch: 9,
+      }),
+      expect.objectContaining({
+        type: "up",
+        castSequence: null,
+        viewportEpoch: 9,
+      }),
+    ]);
+  });
+
+  it("drops the video plane when the transport dies", () => {
+    // The epoch and the mode were both established by a transport that is
+    // gone; the next one starts on JPEG until the host says otherwise.
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    act(() => {
+      stream.emit(
+        { kind: "captureMode", hasBinaryPayload: false, mode: "video" },
+        null,
+      );
+      stream.emit(
+        { kind: "viewportEpoch", hasBinaryPayload: false, epoch: 9 },
+        null,
+      );
+      stream.emitStatus("closed");
+      stream.emitStatus("open");
+    });
+    presentLiveFrame(stream, 8, JPEG_SEQ_8);
+    emitArmed(stream, 2);
+
+    sendPointerClick(overlayButton(), 400, 300);
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({
+        type: "down",
+        castSequence: 8,
+        viewportEpoch: null,
+      }),
+      expect.objectContaining({
+        type: "up",
+        castSequence: 8,
+        viewportEpoch: null,
+      }),
+    ]);
+  });
 });

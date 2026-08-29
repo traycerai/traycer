@@ -15,6 +15,7 @@ import {
   useRetainLastBrowserPeekFrame,
   type BrowserPeekNode,
 } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -79,13 +80,13 @@ export function BrowserPeekTileMobile(props: BrowserPeekTileMobileProps) {
   const session = useScreencastSession({
     client,
     epicId,
+    hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,
     visible,
   });
   const { image, frameSize, navState, armedEpoch, dialog } = session;
-  const { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef } =
-    session.refs;
+  const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
   const frameCacheKey = browserPeekFrameKey(node);
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
@@ -166,27 +167,10 @@ export function BrowserPeekTileMobile(props: BrowserPeekTileMobileProps) {
           aria-label="Browser screencast controls"
           {...touchOverlayHandlers}
         >
-          {image === null ? (
-            <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
-              <div>
-                <div className="text-ui-base font-medium">
-                  Waiting for frames
-                </div>
-                <div className="mt-1 max-w-[min(90vw,32rem)] text-ui-sm text-muted-foreground">
-                  Tap the screencast to control this browser tab.
-                </div>
-              </div>
-            </div>
-          ) : (
-            <img
-              ref={imageRef}
-              src={image.src}
-              alt="Browser screencast"
-              className="h-full w-full object-contain"
-              draggable={false}
-              onLoad={() => session.notePresented(image.sequence)}
-            />
-          )}
+          <ScreencastSurface
+            session={session}
+            emptyHint="Tap the screencast to control this browser tab."
+          />
           {frameSize === null ? null : (
             <div className="pointer-events-none absolute left-3 top-3 rounded-sm bg-background/80 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
               {frameSize.width} x {frameSize.height}

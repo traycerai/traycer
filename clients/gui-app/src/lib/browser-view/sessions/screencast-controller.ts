@@ -42,6 +42,8 @@ export interface ScreencastSessionRefs {
   readonly viewportRef: RefObject<HTMLDivElement | null>;
   readonly overlayButtonRef: RefObject<HTMLButtonElement | null>;
   readonly imageRef: RefObject<HTMLImageElement | null>;
+  /** The video plane's paint surface; null on a tile that never negotiated. */
+  readonly videoRef: RefObject<HTMLVideoElement | null>;
   readonly imeInputRef: RefObject<HTMLInputElement | null>;
 }
 
@@ -185,6 +187,22 @@ export function createScreencastController(options: {
    * JPEG plane's `castSequence` path is untouched by the video plane's epoch
    * and vice versa - only this reads `captureMode`.
    */
+  /**
+   * The element a pointer's coordinates are normalized against.
+   *
+   * Deliberately NOT keyed off `captureMode`: that is the HOST's echo, while
+   * the tile swaps surfaces on its own first decoded frame, and in the RTT
+   * window between the two the host-chosen element is the `display:none` one -
+   * a zeroed `getBoundingClientRect`, a non-positive scale, and every pointer
+   * event silently dropped (permanently, if that `captureMode` frame is lost).
+   *
+   * The `<video>` is mounted only while the video plane holds a track, and
+   * both surfaces are `object-contain` inside the same overlay button, so the
+   * one that exists is always the right box - whichever plane is correlating.
+   */
+  const paintSurface = (): HTMLElement | null =>
+    refs.videoRef.current ?? refs.imageRef.current;
+
   const inputCorrelation = (): ScreencastInputCorrelation =>
     captureMode === "video"
       ? { castSequence: null, viewportEpoch }
@@ -445,7 +463,7 @@ export function createScreencastController(options: {
       deltaY: request.deltaY,
       clickCount,
       correlation: inputCorrelation(),
-      image: refs.imageRef.current,
+      surface: paintSurface(),
       frameSize,
     });
   };
