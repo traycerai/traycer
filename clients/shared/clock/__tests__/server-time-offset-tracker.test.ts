@@ -8,6 +8,7 @@ import {
   localClockDirection,
   ServerTimeOffsetTracker,
   type ServerClockState,
+  type ServerClockVerdict,
 } from "../server-time-offset-tracker";
 
 /**
@@ -284,6 +285,54 @@ describe("ServerTimeOffsetTracker wall-clock divergence", () => {
     clocks.setWallBy(5_000); // an NTP nudge, not a correction
     tracker.noteWallClockTick();
 
+    expect(tracker.currentState().verdict).toBe("skewed");
+  });
+
+  it("never leaves `skewed` for anything but `ok`, which is what makes the narrow recovery edge safe", () => {
+    // A parked session wakes ONLY on `skewed → ok`. That is safe precisely
+    // because `skewed → unknown` cannot occur - the single `unknown` publish is
+    // fenced behind `verdict !== "skewed"` (see the sibling test above, where a
+    // jump from `ok` DOES invalidate the sample), and `applyOffset` can only
+    // yield `skewed` or `ok`. Today that is an emergent property of two guards
+    // rather than anything enforced, and a sample-age decay added in good faith
+    // would publish `unknown` and silently strand every parked session -
+    // exactly the never-recovers failure this feature exists to remove. So pin
+    // it: from `skewed`, throw every input the tracker has at it and assert
+    // nothing but `skewed` is ever published.
+    const clocks = new FakeClocks();
+    const tracker = makeTracker(clocks);
+    const published: ServerClockVerdict[] = [];
+    tracker.subscribe((state) => published.push(state.verdict));
+
+    tracker.recordServerTimeMs(clocks.wallMs - SEVEN_HOURS_MS, clocks.wallMs);
+    expect(tracker.currentState().verdict).toBe("skewed");
+    tracker.noteWallClockTick();
+
+    // A backwards wall-clock jump, well over the divergence threshold: the very
+    // input that publishes `unknown` from any other verdict.
+    clocks.elapse(10_000);
+    clocks.setWallBy(-60_000);
+    tracker.noteWallClockTick();
+
+    // And a forwards one, the suspend/resume shape.
+    clocks.elapse(10_000);
+    clocks.setWallBy(45_000);
+    tracker.noteWallClockTick();
+
+    // Ordinary elapsed time, every junk input that is dropped silently, and a
+    // sample inside the hysteresis band that holds `skewed`.
+    clocks.elapse(600_000);
+    tracker.noteWallClockTick();
+    tracker.recordServerDateHeader(null);
+    tracker.recordServerDateHeader("not-a-date");
+    tracker.recordFreshlyIssuedToken("opaque-not-a-jwt");
+    tracker.recordServerTimeMs(Number.NaN, clocks.wallMs);
+    tracker.recordServerTimeMs(clocks.wallMs - 4 * 60_000, clocks.wallMs);
+
+    // Published set first: if a guard goes, this is the assertion that names
+    // the defect ("unknown" appeared) rather than reporting the knock-on
+    // verdict the tracker happened to land on afterwards.
+    expect([...new Set(published)]).toEqual(["skewed"]);
     expect(tracker.currentState().verdict).toBe("skewed");
   });
 

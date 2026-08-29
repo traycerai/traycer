@@ -5121,6 +5121,62 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
  * and fixing the clock recovered nothing because terminal sessions never
  * re-dial.
  */
+/**
+ * Bound and cadence for {@link pollUntil}. The budget is far longer than any
+ * backoff rung these suites configure, so it only ever expires on a genuine
+ * hang - it is a failure message, not a timing assumption.
+ */
+const CLOCK_POLL_BUDGET_MS = 2_000;
+const CLOCK_POLL_STEP_MS = 5;
+
+/**
+ * Waits for something to HAPPEN, instead of betting it happened inside a fixed
+ * sleep.
+ *
+ * `await wait(30)` followed by `expect(sockets).toHaveLength(1)` — or worse,
+ * `sockets[0].socket.fireOpen()` — is the shape behind this file's known
+ * intermittent failures: the sleep loses the race against a backoff redial and
+ * the test either indexes a socket that does not exist yet or reads a count
+ * that has not caught up. These suites run on REAL timers, so that race is
+ * decided by machine load, and every test added to the file makes it likelier.
+ *
+ * Every POSITIVE claim ("a dial happened", "the park installed its listener")
+ * goes through this. NEGATIVE claims ("nothing dialed", "never closed") keep
+ * their fixed `wait`, because there the elapsed time IS the assertion and
+ * polling would weaken it.
+ */
+async function pollUntil(
+  label: string,
+  predicate: () => boolean,
+): Promise<void> {
+  const deadline = Date.now() + CLOCK_POLL_BUDGET_MS;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, CLOCK_POLL_STEP_MS));
+  }
+  throw new Error(
+    `timed out after ${CLOCK_POLL_BUDGET_MS}ms waiting for ${label}`,
+  );
+}
+
+/**
+ * The socket for dial number `index`, once it exists.
+ *
+ * Indexed rather than "the most recent", which is the other half of the same
+ * hazard: a loop that grabs `sockets[sockets.length - 1]` before the next dial
+ * has landed silently re-drives the PREVIOUS socket, so the test appears to run
+ * its cycles while actually running one of them twice.
+ */
+async function nthSocket(
+  sockets: RecordedSocket[],
+  index: number,
+): Promise<StubStreamWebSocket> {
+  await pollUntil(`dial #${index}`, () => sockets.length > index);
+  return sockets[index].socket;
+}
+
 describe("WsStreamClient clock-skew park", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -5279,13 +5335,17 @@ describe("WsStreamClient clock-skew park", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    await wait(60);
+    await pollUntil(
+      "the pre-dial gate to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    // Then settle: a park that dialed or revalidated anyway shows up here.
     // No socket, no authn round trip, no terminal close - and a live
     // subscription is the only thing holding the session.
+    await wait(60);
     expect(sockets).toHaveLength(0);
     expect(revalidator.calls.count).toBe(0);
     expect(statuses).not.toContain("closed");
-    expect(clock.recoverySubscribers()).toBe(1);
 
     session.close();
   });
@@ -5303,18 +5363,25 @@ describe("WsStreamClient clock-skew park", () => {
       bearer: () => "plain-bearer",
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
-    await wait(30);
-    expect(sockets).toHaveLength(1);
+    const first = await nthSocket(sockets, 0);
 
-    sockets[0].socket.fireOpen();
-    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
-    await wait(80);
-    expect(sockets).toHaveLength(1);
-    expect(clock.recoverySubscribers()).toBe(1);
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
+    await pollUntil(
+      "the session to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    // The dial count AT THE PARK, not a literal: what this test claims is that
+    // correcting the clock adds exactly one more dial, whatever it took to get
+    // here.
+    const dialsAtPark = sockets.length;
 
     clock.recover();
-    await wait(60);
-    expect(sockets).toHaveLength(2);
+    await pollUntil(
+      "the redial on the clock-corrected edge",
+      () => sockets.length > dialsAtPark,
+    );
+    expect(sockets.length).toBe(dialsAtPark + 1);
     // The park released its handle on the way back out.
     expect(clock.recoverySubscribers()).toBe(0);
 
@@ -5333,8 +5400,10 @@ describe("WsStreamClient clock-skew park", () => {
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
-    await wait(60);
-    expect(revalidator.calls.count).toBeGreaterThan(0);
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
     expect(clock.recoverySubscribers()).toBe(0);
 
     session.close();
@@ -5354,15 +5423,20 @@ describe("WsStreamClient clock-skew park", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    await wait(30);
-    sockets[0].socket.fireOpen();
-    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
+    await pollUntil(
+      "the session to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    const dialsAtPark = sockets.length;
 
     // Far longer than the three backoff rungs the bound would have burned. A
     // session that counted this cycle would be closed by now; a parked one has
     // not dialed once more.
     await wait(250);
-    expect(sockets).toHaveLength(1);
+    expect(sockets.length).toBe(dialsAtPark);
     expect(statuses).not.toContain("closed");
 
     session.close();
@@ -5389,13 +5463,17 @@ describe("WsStreamClient clock-skew park", () => {
       closeReasons.push(reason);
     });
 
+    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
+    // behind a fixed wait re-drives the previous one when the redial has not
+    // landed yet, which silently turns three cycles into fewer.
     for (let cycle = 0; cycle < 3; cycle += 1) {
-      await wait(40);
-      const socket = sockets[sockets.length - 1].socket;
+      const socket = await nthSocket(sockets, cycle);
       socket.fireOpen();
       socket.fireText(UNAUTHORIZED_FATAL);
-      await wait(40);
     }
+    await pollUntil("the no-progress bound to close the session", () =>
+      statuses.includes("closed"),
+    );
 
     expect(statuses).toContain("closed");
     const fatalClose = closeReasons.find((r) => r?.kind === "fatalError");
@@ -5429,13 +5507,17 @@ describe("WsStreamClient clock-skew park", () => {
       closeReasons.push(reason);
     });
 
+    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
+    // behind a fixed wait re-drives the previous one when the redial has not
+    // landed yet, which silently turns three cycles into fewer.
     for (let cycle = 0; cycle < 3; cycle += 1) {
-      await wait(40);
-      const socket = sockets[sockets.length - 1].socket;
+      const socket = await nthSocket(sockets, cycle);
       socket.fireOpen();
       socket.fireText(UNAUTHORIZED_FATAL);
-      await wait(40);
     }
+    await pollUntil("the no-progress bound to close the session", () =>
+      statuses.includes("closed"),
+    );
 
     expect(statuses).toContain("closed");
     expect(closeReasons.find((r) => r?.kind === "fatalError")?.kind).toBe(
@@ -5463,8 +5545,10 @@ describe("WsStreamClient clock-skew park", () => {
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
-    await wait(60);
-    expect(revalidator.calls.count).toBeGreaterThan(0);
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
     expect(clock.recoverySubscribers()).toBe(0);
 
     session.close();
@@ -5486,13 +5570,12 @@ describe("WsStreamClient clock-skew park", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    await wait(30);
-    sockets[0].socket.fireOpen();
-    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
 
-    await wait(100);
     // Re-dialed on the ordinary backoff; never parked, never closed.
-    expect(sockets.length).toBeGreaterThan(1);
+    await pollUntil("the ordinary backoff redial", () => sockets.length > 1);
     expect(statuses).not.toContain("closed");
     expect(clock.recoverySubscribers()).toBe(0);
 
@@ -5511,8 +5594,10 @@ describe("WsStreamClient clock-skew park", () => {
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
-    await wait(60);
-    expect(clock.recoverySubscribers()).toBe(1);
+    await pollUntil(
+      "the pre-dial gate to park",
+      () => clock.recoverySubscribers() === 1,
+    );
     session.close();
     expect(clock.recoverySubscribers()).toBe(0);
 
@@ -5532,8 +5617,10 @@ describe("WsStreamClient clock-skew park", () => {
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
-    await wait(60);
-    expect(revalidator.calls.count).toBeGreaterThan(0);
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
 
     session.close();
   });
@@ -5563,6 +5650,10 @@ describe("WsStreamClient clock-skew park", () => {
     // Phase 1 - wrong clock. Parked at the pre-dial gate: nothing dialed,
     // nothing closed, and authn is not being hammered. On the old build this
     // window was three revalidate/redial cycles ending in `goTerminal`.
+    await pollUntil(
+      "the pre-dial gate to park",
+      () => clock.recoverySubscribers() === 1,
+    );
     await wait(200);
     expect(sockets).toHaveLength(0);
     expect(statuses).not.toContain("closed");
@@ -5573,8 +5664,7 @@ describe("WsStreamClient clock-skew park", () => {
     // unlatch off the reconnect that follows.
     bearer.current = "live-bearer";
     clock.recover();
-    await wait(60);
-    expect(sockets.length).toBeGreaterThanOrEqual(1);
+    await pollUntil("the resumed dial", () => sockets.length >= 1);
     expect(statuses).not.toContain("closed");
 
     session.close();
@@ -5670,15 +5760,15 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
       }
     });
 
-    await wait(30);
-    expect(sockets).toHaveLength(1);
-    sockets[0].socket.fireOpen();
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
     armed = true;
-    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
-    await wait(120);
-
+    first.fireText(UNAUTHORIZED_FATAL);
     // The park really did reach its emit (otherwise this asserts nothing).
-    expect(reconnectingAfterFatal).toBe(2);
+    await pollUntil(
+      "the park's own status emit",
+      () => reconnectingAfterFatal === 2,
+    );
     expect(recoveryListeners.size).toBe(0);
 
     // And the dead session cannot be revived by a later clock fix.

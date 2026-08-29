@@ -119,8 +119,20 @@ export interface ServerClockSkewSignal {
   /**
    * Fires ONLY on the `skewed → ok` edge — the clock-was-fixed signal a parked
    * stream session resumes on. Deliberately narrower than {@link subscribe}: a
-   * parked session must not re-dial on `skewed → unknown` (a sample went stale,
-   * nothing was proven) or on magnitude changes within `skewed`.
+   * parked session must not re-dial on magnitude changes within `skewed`.
+   *
+   * NARROW IS SAFE ONLY BECAUSE `skewed → unknown` CANNOT HAPPEN. It is not
+   * that waking on it would be wrong — it is that the transition does not
+   * exist, so `ok` is genuinely the only way out of `skewed` and this edge
+   * therefore catches every one of them. That rests on two guards: the sole
+   * `unknown` publish (in `noteWallClockTick`) is fenced behind
+   * `verdict !== "skewed"`, and `applyOffset` can only ever yield `skewed` or
+   * `ok`. A test pins it, because both guards are easy to break in good faith.
+   *
+   * SO: anything that adds a new way to reach `unknown` — a sample-age decay,
+   * a staleness timer, a reset API — MUST widen this edge in the same change.
+   * A parked session that never hears its wake-up is stranded until the user
+   * reloads, which is precisely the failure this feature was built to remove.
    */
   subscribeToRecovery(listener: () => void): () => void;
 }

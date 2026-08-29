@@ -17,6 +17,31 @@ function recordOffset(offsetMs: number): void {
   });
 }
 
+/**
+ * The banner as an ASSISTIVE-TECHNOLOGY sees it: a live region with the
+ * accessible name below.
+ *
+ * Queried by role rather than by test id on purpose. For an ambient banner the
+ * announcement IS the behaviour - a user who cannot see the amber strip still
+ * has to be told their clock is wrong, because every other symptom they will
+ * hit (a session that will not connect, timestamps that make no sense) is
+ * silent about the cause. A test id would pass just as well against a `<div>`
+ * that announces nothing, so it cannot defend the one property that matters
+ * here. `<output>` carries an implicit `status` role, which is the polite live
+ * region this wants; `alert` would interrupt, and the condition is ambient
+ * rather than an event.
+ */
+const BANNER_ROLE = "status";
+const BANNER_NAME = "System clock is incorrect";
+
+function queryBanner(): HTMLElement | null {
+  return screen.queryByRole(BANNER_ROLE, { name: BANNER_NAME });
+}
+
+function getBanner(): HTMLElement {
+  return screen.getByRole(BANNER_ROLE, { name: BANNER_NAME });
+}
+
 describe("ClockSkewBanner", () => {
   afterEach(() => {
     cleanup();
@@ -27,20 +52,33 @@ describe("ClockSkewBanner", () => {
 
   it("renders nothing before any server-time sample has landed", () => {
     render(<ClockSkewBanner />);
-    expect(screen.queryByTestId("clock-skew-banner")).toBeNull();
+    expect(queryBanner()).toBeNull();
   });
 
   it("renders nothing for an offset a 15-minute token tolerates", () => {
     render(<ClockSkewBanner />);
     recordOffset(60_000);
-    expect(screen.queryByTestId("clock-skew-banner")).toBeNull();
+    expect(queryBanner()).toBeNull();
+  });
+
+  it("announces itself as a live region rather than being visible-only", () => {
+    // The one property a test id could never defend. A user who cannot see the
+    // amber strip meets this condition as a set of unexplained symptoms, so the
+    // diagnosis has to reach them through the accessibility tree - and the
+    // magnitude has to sit INSIDE the live region, or the announcement says
+    // something is wrong without saying what.
+    render(<ClockSkewBanner />);
+    recordOffset(-SEVEN_HOURS_MS);
+    const banner = getBanner();
+    expect(banner.tagName).toBe("OUTPUT");
+    expect(banner.textContent).toContain("~7h ahead");
   });
 
   it("names magnitude and direction while the clock is wrong", () => {
     render(<ClockSkewBanner />);
     // Local clock 7h AHEAD, so the server reads earlier than we do.
     recordOffset(-SEVEN_HOURS_MS);
-    const banner = screen.getByTestId("clock-skew-banner");
+    const banner = getBanner();
     expect(banner.textContent).toContain("~7h ahead");
     expect(banner.textContent).toContain("Traycer can't connect");
   });
@@ -53,7 +91,7 @@ describe("ClockSkewBanner", () => {
     // saying otherwise sends the user after the wrong cause.
     render(<ClockSkewBanner />);
     recordOffset(SEVEN_HOURS_MS);
-    const banner = screen.getByTestId("clock-skew-banner");
+    const banner = getBanner();
     expect(banner.textContent).toContain("~7h behind");
     expect(banner.textContent).not.toContain("Traycer can't connect");
   });
@@ -61,10 +99,10 @@ describe("ClockSkewBanner", () => {
   it("self-clears once the clock is corrected, with nothing to dismiss", () => {
     render(<ClockSkewBanner />);
     recordOffset(-SEVEN_HOURS_MS);
-    expect(screen.getByTestId("clock-skew-banner")).not.toBeNull();
+    expect(getBanner()).not.toBeNull();
     // The same edge that resumes every parked stream session.
     recordOffset(0);
-    expect(screen.queryByTestId("clock-skew-banner")).toBeNull();
+    expect(queryBanner()).toBeNull();
   });
 
   it("stays up across the hysteresis band so it cannot flicker", () => {
@@ -73,6 +111,6 @@ describe("ClockSkewBanner", () => {
     // Three minutes: under the 5-minute enter bound, over the 2-minute exit
     // bound.
     recordOffset(-180_000);
-    expect(screen.queryByTestId("clock-skew-banner")).not.toBeNull();
+    expect(queryBanner()).not.toBeNull();
   });
 });
