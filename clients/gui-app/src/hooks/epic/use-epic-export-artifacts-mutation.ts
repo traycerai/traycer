@@ -1,8 +1,14 @@
 import { useMutation } from "@tanstack/react-query";
+import type * as Y from "yjs";
 import {
   createArtifactExport,
   type ArtifactExportFormat,
 } from "@/lib/artifacts/artifact-export";
+import {
+  ArtifactBodyUnavailableError,
+  holdArtifactBody,
+  type ArtifactBodyHold,
+} from "@/lib/epic-replica-reads";
 import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
@@ -35,21 +41,34 @@ export function useEpicExportArtifacts() {
       if (firstArtifact === undefined) {
         throw new Error("Select at least one artifact to export.");
       }
-      const state = epicHandle.store.getState();
       // Artifact-room docs are only materialized while leased, and export is
       // the one fragment reader with no editor mounted behind it. Take a lease
       // per artifact for the duration of the read - without one, exporting a
       // body nobody has opened in this session reads as "still loading".
-      const releases: Array<() => void> = [];
+      //
+      // Materializing is awaited one artifact at a time. Today the hold
+      // resolves immediately; once the cold tier lives in the runtime worker
+      // it resolves when that room's bytes have been transferred back, and
+      // holding N rooms concurrently would be the byte spike the accountant
+      // exists to prevent. Sequential keeps a settle boundary between rooms.
+      const holds: ArtifactBodyHold[] = [];
       try {
-        const artifacts = input.artifacts.map((artifact) => {
-          releases.push(state.acquireArtifactBodyLease(artifact.id));
-          const fragment = state.getArtifactFragment(artifact.id);
-          if (fragment === null) {
-            throw new Error(`“${artifact.title}” is still loading.`);
-          }
-          return { ...artifact, fragment };
-        });
+        const artifacts: Array<
+          ArtifactExportSelection & { readonly fragment: Y.XmlFragment }
+        > = [];
+        for (const artifact of input.artifacts) {
+          const hold = await holdArtifactBody(epicHandle, artifact.id).catch(
+            (cause: unknown) => {
+              // The seam names the artifact by id; the user knows it by title.
+              if (cause instanceof ArtifactBodyUnavailableError) {
+                throw new Error(`“${artifact.title}” is still loading.`);
+              }
+              throw cause;
+            },
+          );
+          holds.push(hold);
+          artifacts.push({ ...artifact, fragment: hold.fragment });
+        }
         const output = await createArtifactExport({
           artifacts,
           format: input.format,
@@ -62,10 +81,10 @@ export function useEpicExportArtifacts() {
         // be cooled - holding them across the dialog would pin every exported
         // body for that whole time. Releases are idempotent, so the `finally`
         // stays as the throw-path backstop.
-        releases.forEach((release) => release());
+        holds.forEach((hold) => hold.release());
         return await saveBlobToDisk(output.blob, output.suggestedName);
       } finally {
-        releases.forEach((release) => release());
+        holds.forEach((hold) => hold.release());
       }
     },
     onSuccess: (saved, input) => {

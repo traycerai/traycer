@@ -12,6 +12,7 @@ import type {
 } from "@/lib/attachments/image-blob-cache";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
+import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
@@ -152,9 +153,10 @@ async function readAttachmentFromEpicDoc(
   signal: AbortSignal,
 ): Promise<ImageBytesResult | null> {
   if (handle === null) return null;
-  const state = handle.store.getState();
-  if (!state.hasAttachmentBytes(hash)) return null;
-  const bytes = await state.readAttachmentBytes(hash, signal);
+  // Through the replica-read seam, in its non-waiting variant - the same
+  // guarded read this leg always did, now expressed as one contract that
+  // survives the replica moving into the runtime worker.
+  const bytes = await readHeldEpicAttachmentBytes(handle, hash, signal);
   return bytes === null
     ? null
     : { bytes: new Uint8Array(bytes), mediaType: null };

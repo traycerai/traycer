@@ -42,10 +42,9 @@ const prepareRemote = vi.hoisted(() =>
 const commit = vi.hoisted(() => vi.fn());
 const abort = vi.hoisted(() => vi.fn());
 
+const releaseArtifactBody = vi.hoisted(() => vi.fn());
 const acquireArtifactBodyLease = vi.hoisted(() =>
-  vi.fn(() => {
-    return () => {};
-  }),
+  vi.fn(() => releaseArtifactBody),
 );
 const getArtifactFragment = vi.hoisted(() =>
   vi.fn((): Y.XmlFragment | null => null),
@@ -125,6 +124,7 @@ afterEach(() => {
   commit.mockReset();
   abort.mockReset();
   acquireArtifactBodyLease.mockClear();
+  releaseArtifactBody.mockClear();
   getArtifactFragment.mockClear();
   getArtifactFragment.mockImplementation(() => fragment);
   prepareBytes.mockResolvedValue({
@@ -192,6 +192,7 @@ describe("AddImageToArtifactButton", () => {
     expect(prepareBytes).toHaveBeenCalledTimes(1);
     expect(imageNodeCount()).toBe(1);
     expect(acquireArtifactBodyLease).toHaveBeenCalledWith("artifact-a");
+    expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 
   it("rolls back the Y node when finish rejects mid-sequence", async () => {
@@ -214,6 +215,7 @@ describe("AddImageToArtifactButton", () => {
     expect(await screen.findByText(/could not be committed/i)).toBeTruthy();
     expect(imageNodeCount()).toBe(0);
     expect(commit).toHaveBeenCalledWith("artifact-a", "op-client");
+    expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 
   it("retries not-yet-converged and keeps the Y node after commit", async () => {
@@ -341,5 +343,6 @@ describe("AddImageToArtifactButton", () => {
     expect(prepareRemote).toHaveBeenCalled();
     expect(abort).toHaveBeenCalledWith("artifact-a", "op-remote");
     expect(imageNodeCount()).toBe(0);
+    expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 });

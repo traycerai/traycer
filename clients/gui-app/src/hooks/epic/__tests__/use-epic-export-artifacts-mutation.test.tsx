@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { createElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn() },
@@ -16,10 +17,23 @@ vi.mock("@/lib/runner-error-toast", () => ({
   toastFromRunnerError: vi.fn(),
 }));
 
+const acquireArtifactBodyLease = vi.hoisted(() => vi.fn());
+const getArtifactFragment = vi.hoisted(() => vi.fn());
+const createArtifactExport = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/artifacts/artifact-export", () => ({
+  createArtifactExport,
+}));
+
+vi.mock("@/lib/files/save-blob-to-disk", () => ({
+  saveBlobToDisk: vi.fn(),
+  openSavedFile: vi.fn(),
+}));
+
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({
     store: {
-      getState: () => ({ getArtifactFragment: vi.fn() }),
+      getState: () => ({ acquireArtifactBodyLease, getArtifactFragment }),
     },
   }),
 }));
@@ -35,6 +49,18 @@ function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
 }
 
 describe("useEpicExportArtifacts", () => {
+  beforeEach(() => {
+    acquireArtifactBodyLease.mockReset();
+    getArtifactFragment.mockReset();
+    createArtifactExport.mockReset();
+    acquireArtifactBodyLease.mockImplementation(() => vi.fn());
+    getArtifactFragment.mockReturnValue(new Y.Doc().getXmlFragment("body"));
+    createArtifactExport.mockResolvedValue({
+      blob: new Blob(["export"]),
+      suggestedName: "export.md",
+    });
+  });
+
   it("rejects an empty artifact selection with the export validation error", async () => {
     const { result } = renderHook(() => useEpicExportArtifacts(), {
       wrapper: makeWrapper(),
@@ -48,5 +74,63 @@ describe("useEpicExportArtifacts", () => {
         archiveTitle: null,
       }),
     ).rejects.toThrow("Select at least one artifact to export.");
+  });
+
+  it("surfaces the loading copy and releases an unavailable body", async () => {
+    const release = vi.fn();
+    acquireArtifactBodyLease.mockReturnValue(release);
+    getArtifactFragment.mockReturnValue(null);
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        artifacts: [{ id: "artifact-a", title: "Design" }],
+        format: "markdown",
+        archive: false,
+        archiveTitle: null,
+      }),
+    ).rejects.toThrow("“Design” is still loading.");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes artifact body leases sequentially and releases the first on a second failure", async () => {
+    const firstFragment = new Y.Doc().getXmlFragment("first");
+    const firstRelease = vi.fn();
+    const secondRelease = vi.fn();
+    const events: string[] = [];
+    acquireArtifactBodyLease.mockImplementation((artifactId: string) => {
+      events.push(`acquire:${artifactId}`);
+      return events.length === 1 ? firstRelease : secondRelease;
+    });
+    getArtifactFragment.mockImplementation((artifactId: string) => {
+      events.push(`fragment:${artifactId}`);
+      return artifactId === "artifact-a" ? firstFragment : null;
+    });
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        artifacts: [
+          { id: "artifact-a", title: "First" },
+          { id: "artifact-b", title: "Second" },
+        ],
+        format: "markdown",
+        archive: true,
+        archiveTitle: null,
+      }),
+    ).rejects.toThrow("“Second” is still loading.");
+    expect(events).toEqual([
+      "acquire:artifact-a",
+      "fragment:artifact-a",
+      "acquire:artifact-b",
+      "fragment:artifact-b",
+    ]);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).toHaveBeenCalledTimes(1);
+    expect(createArtifactExport).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,7 @@ import {
   useImageBlobUrlState,
 } from "@/lib/attachments/use-image-blob-url";
 import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
+import { readEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 
 export type AttachmentBlobSrcState =
   | { readonly status: "loading"; readonly src: null }
@@ -41,9 +42,13 @@ export function useEpicImageFetcher(): ImageBytesFetcher {
       if (handle === null) {
         throw new Error("No open-epic handle to fetch image attachment");
       }
-      const bytes = await handle.store
-        .getState()
-        .readAttachmentBytes(h, signal);
+      // Through the replica-read seam rather than the store directly: this is
+      // one of the byte reads that resolves against the worker-held root
+      // replica once the runtime moves, and the seam is where that swap
+      // happens. The WAITING variant deliberately - an artifact image whose
+      // bytes are still replicating must resolve when they land, not read as
+      // missing (see the seam for why the chat leg takes the other one).
+      const bytes = await readEpicAttachmentBytes(handle, h, signal);
       if (bytes === null) {
         throw new Error(`Image attachment ${h} unavailable`);
       }
