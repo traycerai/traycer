@@ -255,10 +255,9 @@ export interface TranscriptWindow {
    *
    * Superseded rather than merged: once the same record id arrives inside a
    * span, the authoritative copy wins and this one is pruned. A transient
-   * frozen assistant may cross a rebase provisionally, because it is not bound
-   * to an ordinal; the completed replacement skeleton either confirms its turn
-   * still exists or retires it. A same-epoch gap also retains accepted users,
-   * matching the equivalent index-void path. Other live records clear.
+   * frozen assistant and an accepted user may cross a rebase provisionally,
+   * because neither is bound to an ordinal and either interactive frame can
+   * overtake the bulk snapshot. Other live records clear.
    */
   readonly liveMessages: readonly Message[];
   readonly liveEvents: readonly ChatEvent[];
@@ -640,22 +639,20 @@ function recordsForRowIds(
   const projectedSetupRows = projectedRows.filter(
     (row) => row.source.kind === "setup-card",
   );
-  const exactSetupRowIds = new Set(
-    projectedSetupRows
-      .filter((row) => rowIds.has(row.rowId))
-      .map((row) => row.rowId),
-  );
-  const unmatchedSetupCount = setupRowIds.filter(
-    (rowId) => !exactSetupRowIds.has(rowId),
-  ).length;
   const fallbackSetupRows = new Set(
-    projectedSetupRows
-      .slice(setupRowOffset, setupRowOffset + setupRowIds.length)
-      .filter((row) => !exactSetupRowIds.has(row.rowId))
-      .slice(0, unmatchedSetupCount),
+    projectedSetupRows.slice(
+      setupRowOffset,
+      setupRowOffset + setupRowIds.length,
+    ),
   );
   for (const row of projectedRows) {
-    if (!rowIds.has(row.rowId) && !fallbackSetupRows.has(row)) continue;
+    if (
+      row.source.kind === "setup-card"
+        ? !fallbackSetupRows.has(row)
+        : !rowIds.has(row.rowId)
+    ) {
+      continue;
+    }
     const recordIds = rowRecordIds(row.source);
     for (const id of recordIds.messageIds) messageIds.add(id);
     for (const id of recordIds.eventIds) eventIds.add(id);
@@ -1160,8 +1157,7 @@ function provisionalLiveMessagesForSnapshot(input: {
     (message) =>
       (message.role === "assistant" &&
         isTransientLiveAssistantMessageId(message.messageId)) ||
-      ((input.missedDeltas || input.window.invalidated) &&
-        !input.rebased &&
+      ((input.rebased || input.missedDeltas || input.window.invalidated) &&
         message.role === "user"),
   );
 }
@@ -1318,9 +1314,9 @@ export function applyWindowedSnapshot(
           // to the old coordinate space, so carry it across a rebase. This is
           // load-bearing when the new tail row exceeds the inline snapshot
           // budget: without it the transcript is empty until loadRange returns.
-          // An epoch change drops user records because that authority may have
-          // deleted or rewritten them. A same-epoch gap retains accepted users,
-          // matching the equivalent index-void path while the resnapshot loads.
+          // Accepted users are equally ordinal-less and arrive on the same
+          // interactive lane, so a bulk snapshot cannot use an epoch change to
+          // distinguish deletion from an acceptance that overtook it.
           // The transient assistant retires when a freshly served span carries
           // the same turn (see pruneSupersededLiveRecords), despite its
           // intentionally different id.

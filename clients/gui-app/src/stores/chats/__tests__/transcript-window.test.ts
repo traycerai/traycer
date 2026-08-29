@@ -1950,6 +1950,24 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("keeps an accepted user that overtakes a rebasing snapshot", () => {
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("accepted-after-rebase-snapshot", 2)],
+      events: [],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebased.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-after-rebase-snapshot",
+    ]);
+  });
+
   it("keeps an assistant that overtakes a rebasing empty snapshot until its skeleton arrives", () => {
     const turnId = "turn-after-empty-rebase";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -2554,9 +2572,9 @@ describe("what an overlap keeps", () => {
         epoch: 1,
         fromOrdinal: 0,
         rowIds: [
-          "setup-card:chat-1:10:100",
+          "setup-card:chat-1:1:100",
           assistantRowId(turnId),
-          "setup-card:chat-1:11:100",
+          "setup-card:chat-1:2:100",
         ],
         incompleteRowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-partial", turnId, 1)],
