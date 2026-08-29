@@ -355,6 +355,13 @@ async function serve(
           transfer: reply.transfer,
         };
       }
+      case "body/update": {
+        const reply = await handlers["body/update"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
       default:
         return unservedCall(call);
     }

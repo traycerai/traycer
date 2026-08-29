@@ -28,10 +28,26 @@
  * aborts as its own transaction; a "flush" here would be this module claiming
  * a guarantee the store already owns and stating it in a second, weaker place.
  */
+import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type {
   ArtifactBodyMaterialization,
   EpicRuntimeWorkerCore,
 } from "./epic-runtime-worker-host";
+
+/**
+ * The latest settled demote for one doc.
+ *
+ * One entry per `docKey`, never a history: the main thread has at most one
+ * demote outstanding per doc, so anything older than the stored generation is
+ * from a lifetime it has already moved past.
+ */
+interface SettledDemote {
+  readonly generation: number;
+  readonly answer: {
+    readonly accepted: boolean;
+    readonly settledBytes: number;
+  };
+}
 
 export interface EpicRuntimeCorePorts {
   /**
@@ -55,6 +71,11 @@ export interface EpicRuntimeCorePorts {
       readonly generation: number;
       readonly update: Uint8Array;
     }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
+    /** Hand a local edit to the body lane. The lane's verdict is the answer. */
+    sendUpdate(input: {
+      readonly docKey: string;
+      readonly update: Uint8Array;
+    }): Promise<SendOutcome>;
   };
   /** The one durable transport this session owns (T12's ruling, worker-side). */
   readonly transport: { close(): void };
@@ -66,6 +87,7 @@ export function createEpicRuntimeWorkerCore(
   ports: EpicRuntimeCorePorts,
 ): EpicRuntimeWorkerCore {
   let serving = true;
+  const settledDemotes = new Map<string, SettledDemote>();
 
   return {
     async readAttachmentBytes(hash): Promise<Uint8Array | null> {
@@ -80,7 +102,11 @@ export function createEpicRuntimeWorkerCore(
       artifactId,
     ): Promise<ArtifactBodyMaterialization | null> {
       if (!serving) return null;
-      return ports.bodies.materialize(artifactId);
+      const materialized = await ports.bodies.materialize(artifactId);
+      // A new lifetime for this doc starts a new generation sequence, so the
+      // previous lifetime's settled answer must not shadow it.
+      if (materialized !== null) settledDemotes.delete(materialized.docKey);
+      return materialized;
     },
     async demoteBody(input) {
       // Refuse rather than accept-and-lose. The main thread keeps the live doc
@@ -88,11 +114,48 @@ export function createEpicRuntimeWorkerCore(
       // re-send after respawn; one accepted here and never written costs the
       // edit.
       if (!serving) return { accepted: false, settledBytes: 0 };
-      return ports.bodies.settle(input);
+
+      // Idempotence lives HERE and not on the main thread's generation guard,
+      // because `resendUnacknowledgedDemotes` deliberately re-posts the SAME
+      // generation - the resend exists precisely for the case where the main
+      // thread does not know whether the first post was seen. Releasing on both
+      // copies would decrement body demand twice and unsubscribe a body that is
+      // still open on the other side.
+      const settled = settledDemotes.get(input.docKey);
+      if (settled !== undefined) {
+        // The resend case: answer with what the first copy settled, and do not
+        // touch demand again.
+        if (settled.generation === input.generation) return settled.answer;
+        // Older than what has settled - it belongs to a lifetime the main
+        // thread has already moved past. Its own guard drops this answer, but
+        // this side must not RELEASE on it, which is why it never reaches the
+        // port.
+        if (input.generation < settled.generation) {
+          return { accepted: false, settledBytes: 0 };
+        }
+      }
+      const answer = await ports.bodies.settle(input);
+      settledDemotes.set(input.docKey, {
+        generation: input.generation,
+        answer,
+      });
+      return answer;
+    },
+    async updateBody(input) {
+      if (!serving) {
+        return {
+          outcome: {
+            kind: "dropped",
+            reason: "runtime worker is shutting down",
+          },
+        };
+      }
+      return { outcome: await ports.bodies.sendUpdate(input) };
     },
     dispose(): void {
       if (!serving) return;
       serving = false;
+      settledDemotes.clear();
       ports.transport.close();
       ports.durableStore.close();
     },

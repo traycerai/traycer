@@ -36,6 +36,7 @@ import {
   createWorkerBearerHolder,
   type WorkerBearerHolder,
 } from "@traycer-clients/shared/replica-runtime/worker/worker-bearer-holder";
+import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime/runtime-environment";
 import { createWorkerRuntimeEnvironment } from "../worker-runtime-environment";
 
@@ -78,6 +79,16 @@ export interface EpicRuntimeWorkerCore {
     readonly generation: number;
     readonly update: Uint8Array;
   }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
+  /**
+   * A local edit from the main-thread doc, on its way to the body lane.
+   *
+   * Answers the lane's own `SendOutcome` unchanged - `queued` is not a failure
+   * and must not be retried; only `dropped` is loss.
+   */
+  updateBody(input: {
+    readonly docKey: string;
+    readonly update: Uint8Array;
+  }): Promise<{ readonly outcome: SendOutcome }>;
   dispose(): void;
 }
 
@@ -153,6 +164,29 @@ export function startEpicRuntimeWorkerHost(
           hostStateVector: held.hostStateVector,
         },
         transfer: prepared.transfer,
+      };
+    },
+    "body/update": async (request) => {
+      if (core === null) {
+        // No core: the body lane this update was destined for does not exist
+        // here. `dropped` rather than `queued` because nothing in this worker
+        // is holding it - the main thread's live doc is, and the edit reaches
+        // the host on the next materialize/demote cycle. The reason names the
+        // state so a caller can tell a teardown drop from a lane refusing a
+        // doc it should have had.
+        return {
+          value: {
+            outcome: {
+              kind: "dropped",
+              reason: "runtime worker holds no replica",
+            },
+          },
+          transfer: NO_TRANSFER,
+        };
+      }
+      return {
+        value: await core.updateBody(request),
+        transfer: NO_TRANSFER,
       };
     },
     "body/demote": async (request) => {

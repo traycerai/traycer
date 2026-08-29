@@ -21,6 +21,7 @@
  * from `postMessage` surfaces at the boundary with no indication of which field
  * caused it.
  */
+import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 
 /**
@@ -216,6 +217,30 @@ export interface RuntimeWorkerCallMap {
       readonly settledBytes: number;
     };
   };
+  /**
+   * A local edit leaving the main-thread `Y.Doc` for the body lane.
+   *
+   * The outbound half of the split: the live doc is main-thread because Tiptap
+   * binds it by reference, so an edit made in the editor has to CROSS to reach
+   * the lane that sends it.
+   *
+   * `SendOutcome` is the lane's own verdict, mirrored exactly rather than
+   * re-invented - three arms, no fourth. `queued` is not a failure and must not
+   * be retried (a retry is a duplicate update, not an idempotent one); only
+   * `dropped` is loss, and it is the only arm a caller surfaces.
+   *
+   * A CALL rather than an event because the outcome belongs to the update that
+   * produced it. Nothing awaits it on the hot path - the editor does not block
+   * on the lane - but the correlation is what lets a `dropped` name which edit
+   * went nowhere.
+   */
+  readonly "body/update": {
+    readonly request: {
+      readonly docKey: string;
+      readonly update: Uint8Array;
+    };
+    readonly response: { readonly outcome: SendOutcome };
+  };
 }
 
 /**
@@ -289,6 +314,7 @@ const CALL_BUILDERS: {
   "attachment/read": (request) => ({ kind: "attachment/read", request }),
   "body/materialize": (request) => ({ kind: "body/materialize", request }),
   "body/demote": (request) => ({ kind: "body/demote", request }),
+  "body/update": (request) => ({ kind: "body/update", request }),
 };
 
 /** Builds the envelope for one call, with its kind and request correlated. */
@@ -419,6 +445,19 @@ export const CALL_RESPONSE_PARSERS: {
     const { accepted, settledBytes } = value;
     if (typeof accepted !== "boolean") return null;
     return typeof settledBytes === "number" ? { accepted, settledBytes } : null;
+  },
+  "body/update": (value) => {
+    if (!isRecord(value)) return null;
+    const outcome = value.outcome;
+    if (!isRecord(outcome)) return null;
+    if (outcome.kind === "sent") return { outcome: { kind: "sent" } };
+    if (outcome.kind !== "queued" && outcome.kind !== "dropped") return null;
+    // The reason is load-bearing on both non-sent arms - it is what makes a
+    // `queued` legible and a `dropped` actionable - so a reasonless outcome is
+    // a foreign payload, not a defaulted one.
+    return typeof outcome.reason === "string"
+      ? { outcome: { kind: outcome.kind, reason: outcome.reason } }
+      : null;
   },
 };
 

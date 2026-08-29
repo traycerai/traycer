@@ -60,6 +60,13 @@ function stubHandlers(
         value: { accepted: false, settledBytes: 0 },
         transfer: NO_TRANSFER,
       }),
+    "body/update": () =>
+      Promise.resolve({
+        value: {
+          outcome: { kind: "dropped", reason: "no runtime in this fixture" },
+        },
+        transfer: NO_TRANSFER,
+      }),
   };
   return { ...base, ...overrides };
 }
