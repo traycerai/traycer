@@ -746,7 +746,14 @@ export function createScreencastController(options: {
       deltaX: 0,
       deltaY: 0,
     });
-    if (pressed === null || released === null) return;
+    if (pressed === null || released === null) {
+      // `buildPointerFrame` advances the multi-click counter for a `down`
+      // before it can fail to normalize, so a tap that dies here has still
+      // been counted. Same invariant as the stale-frame branch above: no
+      // click reached the page, so there is no chain to continue.
+      pointerClickCount = null;
+      return;
+    }
     const down = { ...pressed, castSequence: downSequence };
     const up = { ...released, castSequence: downSequence };
     if (activeArmEpoch !== null) {

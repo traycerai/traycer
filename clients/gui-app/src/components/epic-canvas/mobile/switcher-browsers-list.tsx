@@ -320,6 +320,7 @@ function SwitcherBrowserStateBadge(props: {
   if (props.status === "crashed") {
     return (
       <span
+        role="img"
         className="flex size-4 shrink-0 items-center justify-center text-destructive"
         aria-label="Browser failed"
       >
@@ -330,6 +331,7 @@ function SwitcherBrowserStateBadge(props: {
   if (props.status === "dormant") {
     return (
       <span
+        role="img"
         className="flex size-4 shrink-0 items-center justify-center text-muted-foreground"
         aria-label="Browser asleep"
       >
