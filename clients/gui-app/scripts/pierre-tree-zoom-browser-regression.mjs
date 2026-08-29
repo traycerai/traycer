@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  findChrome,
+  launchChromeWithDevTools,
+  terminateProcessTree,
+} from "./chrome-launcher.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -15,7 +18,7 @@ const projectRoot = path.resolve(
 );
 const fixturePath = "/src/__tests__/browser/pierre-tree-zoom.html";
 const zoomLevels = [0.8, 0.9, 1, 1.1, 1.25];
-const chromePath = await findChrome();
+const chromePath = await findChrome("the Pierre tree zoom regression");
 const vitePort = await freePort();
 let chrome;
 let chromeProfilePath;
@@ -53,16 +56,13 @@ try {
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
-  const chromeEnv = { ...process.env };
-  delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
-  const launched = await launchChrome(chromePath, chromeEnv);
+  const launched = await launchChromeWithDevTools(
+    chromePath,
+    "traycer-tree-zoom-",
+  );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;
-  const devtoolsUrl = new URL(launched.webSocketUrl);
-  devtoolsUrl.protocol = "http:";
-  devtoolsUrl.pathname = "";
-  devtoolsUrl.search = "";
-  devtoolsUrl.hash = "";
+  const devtoolsUrl = launched.devtoolsHttpUrl;
 
   const targetResponse = await fetch(
     new URL(`/json/new?${encodeURIComponent(pageUrl)}`, devtoolsUrl),
@@ -147,7 +147,9 @@ try {
   );
 } finally {
   client?.close();
-  if (chrome !== undefined) chrome.kill("SIGTERM");
+  if (chrome !== undefined) {
+    await terminateProcessTree(chrome);
+  }
   viteProcess?.kill("SIGTERM");
   if (chromeProfilePath !== undefined) {
     await rm(chromeProfilePath, {
@@ -156,27 +158,6 @@ try {
       maxRetries: 3,
     });
   }
-}
-
-async function findChrome() {
-  const candidates = [
-    process.env.CHROME_BIN,
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ].filter((candidate) => candidate !== undefined);
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next platform-standard location.
-    }
-  }
-  throw new Error("Chrome is required for the Pierre tree zoom regression");
 }
 
 async function freePort() {
@@ -211,41 +192,6 @@ async function waitForHttp(url, process, readError, label) {
     await delay(50);
   }
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
-}
-
-async function launchChrome(chromeExecutable, env) {
-  const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-tree-zoom-"));
-  const chromeProcess = spawn(
-    chromeExecutable,
-    [
-      "--headless=new",
-      "--disable-background-networking",
-      "--disable-extensions",
-      "--no-first-run",
-      "--no-sandbox",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profilePath}`,
-      "about:blank",
-    ],
-    { env, stdio: ["ignore", "ignore", "pipe"] },
-  );
-  let stderr = "";
-  chromeProcess.stderr.setEncoding("utf8");
-  chromeProcess.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-    if (match?.[1] !== undefined) {
-      return { chrome: chromeProcess, profilePath, webSocketUrl: match[1] };
-    }
-    if (chromeProcess.exitCode !== null) {
-      throw new Error(`Chrome exited before CDP was ready:\n${stderr}`);
-    }
-    await delay(50);
-  }
-  throw new Error(`Timed out waiting for Chrome CDP:\n${stderr}`);
 }
 
 async function connectCdp(url) {
