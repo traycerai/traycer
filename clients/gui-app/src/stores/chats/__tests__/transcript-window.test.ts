@@ -2412,6 +2412,35 @@ describe("what an overlap keeps", () => {
     ).toEqual([transientId]);
   });
 
+  it("retires a legacy positional-tail stand-in after skeleton identity adoption", () => {
+    const turnId = "turn-legacy-tail-adopted";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+    const replacement = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        messages: [assistantMessage("assistant-durable", turnId, 1)],
+        events: [],
+      },
+    });
+    expect(replacement.liveMessages).toHaveLength(1);
+
+    const identified = applySkeletonChunk(replacement, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId(turnId), 0)],
+      isFinal: true,
+    });
+
+    expect(identified.liveMessages).toEqual([]);
+  });
+
   it("does not reconcile stand-ins against a completed void skeleton", () => {
     const turnId = "turn-void-skeleton";
     const transientId = transientLiveAssistantMessageId(turnId);

@@ -288,6 +288,10 @@ function encodedMemberKeyBytes(value: string): number {
   return utf8ByteLength(JSON.stringify(value)) + MEMBER_SEPARATOR_BYTES;
 }
 
+/** The always-serialized `incompleteRowIds: []` member, excluding elements. */
+const INCOMPLETE_ROW_IDS_FIXED_BYTES =
+  encodedMemberKeyBytes("incompleteRowIds") + 2;
+
 function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high);
 }
@@ -484,7 +488,11 @@ export function sliceTranscriptTail(
   lookup: TranscriptRecordLookup,
   maxBytes: number,
 ): TranscriptTailSlice {
-  const budget = Math.min(maxBytes, TRANSCRIPT_TAIL_MAX_BYTES);
+  const budget = Math.max(
+    0,
+    Math.min(maxBytes, TRANSCRIPT_TAIL_MAX_BYTES) -
+      INCOMPLETE_ROW_IDS_FIXED_BYTES,
+  );
   const rowIds: string[] = [];
   const incompleteRowIds: string[] = [];
   const messages: Message[] = [];

@@ -1621,6 +1621,7 @@ function reconcileSpansWithSkeleton(
 ): TranscriptWindow {
   let changed = false;
   const kept: HydratedSpan[] = [];
+  const adoptedAssistantTurnKeys = new Set<string>();
   for (const span of window.spans) {
     const disjoint =
       spanEnd(span) <= fromOrdinal || span.fromOrdinal >= toOrdinal;
@@ -1633,11 +1634,22 @@ function reconcileSpansWithSkeleton(
       continue;
     }
     const adopted = adoptSkeletonRowIds(window, span);
-    if (adopted !== span) changed = true;
+    if (adopted !== span) {
+      changed = true;
+      for (const turnKey of servedAssistantTurnKeys(
+        adopted.rowIds,
+        adopted.messages,
+      )) {
+        adoptedAssistantTurnKeys.add(turnKey);
+      }
+    }
     kept.push(adopted);
   }
   if (!changed) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  return pruneSupersededLiveRecords(
+    { ...window, spans: kept, hydratedBytes: totalBytes(kept) },
+    adoptedAssistantTurnKeys,
+  );
 }
 
 /**
