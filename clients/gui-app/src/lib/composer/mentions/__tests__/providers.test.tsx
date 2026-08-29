@@ -140,6 +140,10 @@ function browserTab(fields: {
     coLocated: fields.coLocated,
     lastActivityAt: fields.lastActivityAt,
     dormant: fields.dormant,
+    hostId: "chat-host",
+    hostLabel: "Chat host",
+    coordinatorKey: "coordinator-chat-host",
+    contextOnly: false,
   };
 }
 

@@ -22,6 +22,10 @@ import type {
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
 import {
+  browserTabPreviewRequest,
+  type BrowserTabPreviewRequest,
+} from "./browser-tab-preview";
+import {
   githubMentionAttachmentFromRow,
   githubMentionCategoryIcon,
   githubMentionPreview,
@@ -100,7 +104,15 @@ export type MentionFlowStep =
 export type MentionMenuAction =
   | { readonly kind: "navigate"; readonly step: MentionFlowStep }
   | { readonly kind: "back" }
-  | { readonly kind: "complete"; readonly mention: MentionAttachment };
+  | { readonly kind: "complete"; readonly mention: MentionAttachment }
+  /**
+   * A tab on another host: attach snapshot context (text line + screenshot)
+   * rather than a mention the agent could try to drive (spec decision #10).
+   */
+  | {
+      readonly kind: "attach-tab-preview";
+      readonly request: BrowserTabPreviewRequest;
+    };
 
 export interface MentionMenuEntry {
   readonly id: string;
@@ -1396,8 +1408,8 @@ function backEntry(description: string): MentionMenuEntry {
 }
 
 function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
-  const mention = mentionAttachmentFromSuggestion(entry);
-  if (mention === null) return [];
+  const action = suggestionAction(entry);
+  if (action === null) return [];
   // Agent rows are the only ones whose `updatedAt` approximates activity (it
   // bumps on streaming ticks); a terminal's is its start time, so terminals
   // keep a null clock and no badge semantics apply outside Agents. Archived
@@ -1416,13 +1428,30 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       searchText: null,
       disabledReason: null,
       icon: iconForSuggestion(entry),
-      action: { kind: "complete", mention },
+      action,
       updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,
       archived: isAgent ? entry.archived : false,
       dormant: entry.kind === "browser-tab" && entry.dormant,
       preview: previewForSuggestion(entry),
     },
   ];
+}
+
+/**
+ * A cross-host browser tab commits an attachment, not a mention; everything
+ * else commits the mention its attachment builder produces.
+ */
+function suggestionAction(
+  entry: MentionSuggestionEntry,
+): MentionMenuAction | null {
+  if (entry.kind === "browser-tab" && entry.contextOnly) {
+    return {
+      kind: "attach-tab-preview",
+      request: browserTabPreviewRequest(entry),
+    };
+  }
+  const mention = mentionAttachmentFromSuggestion(entry);
+  return mention === null ? null : { kind: "complete", mention };
 }
 
 function agentSuggestionEntries(

@@ -8,6 +8,12 @@ import {
   mentionPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import type { MentionAttachment } from "@/lib/composer/types";
+import { composerDraftGeneration } from "@/lib/composer/composer-draft-generation";
+import {
+  browserTabPreviewText,
+  fetchBrowserTabPreviewImage,
+  type BrowserTabPreviewRequest,
+} from "@/lib/composer/mentions/browser-tab-preview";
 
 import { MentionNodeView } from "../nodes/mention-node-view";
 import { createComposerSuggestionRender } from "../../picker/suggestion-render";
@@ -102,12 +108,49 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
           deps.pickerStore.getState().setStep(action.step);
           return;
         }
+        if (action.kind === "attach-tab-preview") {
+          commitBrowserTabPreviewInsertion(editor, range, action.request);
+          return;
+        }
         commitMentionInsertion(editor, range, action.mention);
       },
     },
   });
 
   return ChatMention;
+}
+
+/**
+ * A cross-host tab commits its text line synchronously - the pick must feel
+ * immediate, and the line is the part that always exists - then appends the
+ * screenshot when the owning host answers. A capture that fails or is refused
+ * (a dormant tab is never woken for a preview) simply appends nothing.
+ */
+export function commitBrowserTabPreviewInsertion(
+  editor: Editor,
+  range: { from: number; to: number },
+  request: BrowserTabPreviewRequest,
+): void {
+  const overrideSpace =
+    editor.state.doc.textBetween(range.to, range.to + 1) === " ";
+  editor
+    .chain()
+    .focus()
+    .insertContentAt(
+      { from: range.from, to: overrideSpace ? range.to + 1 : range.to },
+      [{ type: "text", text: `${browserTabPreviewText(request)} ` }],
+    )
+    .run();
+  const draftGeneration = composerDraftGeneration(editor);
+  void fetchBrowserTabPreviewImage(request).then((image) => {
+    if (image === null || editor.isDestroyed) return;
+    // The draft this pick belonged to is gone (the user sent it, or it was
+    // replaced): the editor is still alive, so without this the screenshot
+    // would land in the NEXT message. No `.focus()` either - a late insert
+    // must not steal the caret from whatever the user is doing now.
+    if (composerDraftGeneration(editor) !== draftGeneration) return;
+    editor.chain().insertImageAttachment(image).run();
+  });
 }
 
 function commitMentionInsertion(

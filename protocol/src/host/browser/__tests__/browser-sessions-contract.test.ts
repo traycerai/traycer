@@ -445,6 +445,64 @@ describe("browser.sessions@1.0 correlation", () => {
     ).toBe(false);
   });
 
+  // Cross-host mention previews (spec decision #10): a snapshot-only pair,
+  // deliberately nullable rather than optional on the wire, and with no
+  // `sessionId` - the owning host resolves the tab inside the stream's epic.
+  it("round-trips the captureTabPreview / tabPreviewResult pair", () => {
+    const request = {
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId: "preview-1",
+      tabId: "tab-1",
+    };
+    expect(browserSessionsClientFrameSchema.safeParse(request).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...request,
+        sessionId: "session-1",
+      }).success,
+      "captureTabPreview is strict: no sessionId to disagree with the host",
+    ).toBe(false);
+
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabPreviewResult",
+        hasBinaryPayload: false,
+        requestId: "preview-1",
+        ok: true,
+        screenshotBase64: "aGk=",
+        url: "http://localhost:3000",
+        title: "App",
+        reason: null,
+      }).success,
+    ).toBe(true);
+    // A refusal (a dormant tab) carries a reason and no payload at all.
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabPreviewResult",
+        hasBinaryPayload: false,
+        requestId: "preview-1",
+        ok: false,
+        screenshotBase64: null,
+        url: null,
+        title: null,
+        reason: "dormant",
+      }).success,
+    ).toBe(true);
+    // Nullable, not optional: an omitted field is a wire error, not a default.
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabPreviewResult",
+        hasBinaryPayload: false,
+        requestId: "preview-1",
+        ok: false,
+        reason: "dormant",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires request ids on request-response frames", () => {
     const capture = {
       kind: "capturePrimaryProfile",

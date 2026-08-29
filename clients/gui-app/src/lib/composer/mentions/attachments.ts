@@ -180,9 +180,18 @@ function worktreeMentionAttachmentFromSuggestion(
   };
 }
 
+/**
+ * `null` for a tab on ANOTHER host. The serializer renders a tab mention's
+ * `tabId` unconditionally (`json-content-serializer.ts:514-519`), so a
+ * cross-host pick routed through here would hand the agent a `browser-tab:`
+ * token naming a tab it can never attach to. Those picks go through
+ * `browserTabPreviewRequest` instead (spec decision #10); this null is the
+ * backstop for any other path that reaches a cross-host entry.
+ */
 function browserTabMentionAttachmentFromSuggestion(
   entry: BrowserTabMentionEntry,
-): BrowserTabMentionAttachment {
+): BrowserTabMentionAttachment | null {
+  if (entry.contextOnly) return null;
   return {
     kind: "mention",
     contextType: "browser-tab",

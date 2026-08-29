@@ -43,6 +43,18 @@ export interface BrowserSessionsState {
 }
 
 /**
+ * The host's verdict on one `captureTabPreview`. `ok: false` is an ordinary
+ * answer (a dormant tab, a tab that went away), not a transport failure.
+ */
+export interface BrowserTabPreview {
+  readonly ok: boolean;
+  readonly screenshotBase64: string | null;
+  readonly url: string | null;
+  readonly title: string | null;
+  readonly reason: string | null;
+}
+
+/**
  * One epic's browser inventory, keyed by {epic, host, authenticated owner}.
  * The registry is module-global because several React surfaces (the canvas
  * tiles, the sidebar, the PiP bridge) subscribe to the same stream and must
@@ -75,6 +87,11 @@ type PendingOpenRequest = {
   readonly reject: (error: Error) => void;
 };
 
+type PendingPreviewRequest = {
+  readonly resolve: (result: BrowserTabPreview) => void;
+  readonly reject: (error: Error) => void;
+};
+
 interface BrowserSessionsActionChannel {
   readonly owner: BrowserSessionsOwner;
   lifecycle: BrowserSessionsLifecycle;
@@ -83,7 +100,17 @@ interface BrowserSessionsActionChannel {
 
 interface BrowserSessionsCoordinator {
   readonly owner: BrowserSessionsOwner;
+  readonly epicId: string;
   state: BrowserSessionsState;
+  /**
+   * Snapshot-only capture of one tab on this coordinator's host, for a chat
+   * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
+   * rather than off `BrowserSessionsState` because only the mention picker
+   * calls it, keyed by coordinator - no rendering surface needs it, and
+   * every surface that builds a `BrowserSessionsState` would otherwise have
+   * to carry a method it never uses.
+   */
+  captureTabPreview: (tabId: string) => Promise<BrowserTabPreview>;
   upsertConsumer: (
     consumerId: symbol,
     runtime: BrowserSessionsCoordinatorRuntime,
@@ -97,6 +124,13 @@ const browserSessionsCoordinators = new Map<
   BrowserSessionsCoordinator
 >();
 const browserSessionsCoordinatorListeners = new Map<string, Set<() => void>>();
+/**
+ * Listeners on the REGISTRY rather than one coordinator: the mention picker
+ * aggregates every host whose browser surfaces are open in this epic, so it
+ * has to hear a coordinator appearing or disappearing too, not just a frame
+ * on a key it already knows.
+ */
+const browserSessionsRegistryListeners = new Set<() => void>();
 
 export function browserSessionsCoordinatorKey(
   epicId: string,
@@ -175,6 +209,49 @@ function notifyBrowserSessionsCoordinator(key: string): void {
   browserSessionsCoordinatorListeners
     .get(key)
     ?.forEach((listener) => listener());
+  browserSessionsRegistryListeners.forEach((listener) => listener());
+}
+
+/** Every live coordinator for `epicId`, in registry (insertion) order. */
+export function browserSessionsCoordinatorsForEpic(
+  epicId: string,
+): ReadonlyArray<{
+  readonly key: string;
+  readonly state: BrowserSessionsState;
+}> {
+  const out: Array<{
+    readonly key: string;
+    readonly state: BrowserSessionsState;
+  }> = [];
+  browserSessionsCoordinators.forEach((coordinator, key) => {
+    if (coordinator.epicId === epicId)
+      out.push({ key, state: coordinator.state });
+  });
+  return out;
+}
+
+/**
+ * Requests one snapshot preview over the named coordinator's stream. Rejects
+ * when that coordinator is gone or its stream is not live.
+ */
+export function captureBrowserTabPreview(
+  key: string,
+  tabId: string,
+): Promise<BrowserTabPreview> {
+  const coordinator = browserSessionsCoordinators.get(key);
+  if (coordinator === undefined) {
+    return Promise.reject(new Error("Browser sessions stream is not ready."));
+  }
+  return coordinator.captureTabPreview(tabId);
+}
+
+export function subscribeToBrowserSessionsCoordinators(
+  listener: () => void,
+): () => void {
+  browserSessionsRegistryListeners.add(listener);
+  return () => {
+    browserSessionsRegistryListeners.delete(listener);
+  };
 }
 
 function createBrowserSessionsCoordinator(args: {
@@ -186,6 +263,7 @@ function createBrowserSessionsCoordinator(args: {
 }): BrowserSessionsCoordinator {
   const pendingCloses = new Map<string, PendingCloseRequest>();
   const pendingOpens = new Map<string, PendingOpenRequest>();
+  const pendingPreviews = new Map<string, PendingPreviewRequest>();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
     [args.consumerId, args.runtime],
   ]);
@@ -267,6 +345,28 @@ function createBrowserSessionsCoordinator(args: {
         });
       } catch (error) {
         pendingOpens.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
+  const captureTabPreview = (tabId: string): Promise<BrowserTabPreview> => {
+    const channel = activeChannel();
+    if (channel === null) {
+      return Promise.reject(new Error("Browser sessions stream is not ready."));
+    }
+    const requestId = crypto.randomUUID();
+    return new Promise<BrowserTabPreview>((resolve, reject) => {
+      pendingPreviews.set(requestId, { resolve, reject });
+      try {
+        channel.sendClientFrame({
+          kind: "captureTabPreview",
+          hasBinaryPayload: false,
+          requestId,
+          tabId,
+        });
+      } catch (error) {
+        pendingPreviews.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -354,6 +454,10 @@ function createBrowserSessionsCoordinator(args: {
           pendingOpens,
           new Error("Browser sessions stream closed."),
         );
+        rejectPendingRequests(
+          pendingPreviews,
+          new Error("Browser sessions stream closed."),
+        );
       }
       patchState({
         lifecycle,
@@ -378,6 +482,7 @@ function createBrowserSessionsCoordinator(args: {
         },
         pendingCloses,
         pendingOpens,
+        pendingPreviews,
         browserView,
         electronTabs,
         sendClientFrame: (response) => {
@@ -432,6 +537,10 @@ function createBrowserSessionsCoordinator(args: {
         pendingOpens,
         new Error("Browser sessions stream closed."),
       );
+      rejectPendingRequests(
+        pendingPreviews,
+        new Error("Browser sessions stream closed."),
+      );
     };
   };
 
@@ -444,6 +553,8 @@ function createBrowserSessionsCoordinator(args: {
 
   const coordinator: BrowserSessionsCoordinator = {
     owner: args.owner,
+    epicId: args.epicId,
+    captureTabPreview,
     state: {
       hostId: args.owner.hostId,
       lifecycle: "connecting",
@@ -515,6 +626,7 @@ function handleBrowserSessionsFrame(args: {
   readonly setItems: (items: readonly BrowserSessionInfo[]) => void;
   readonly pendingCloses: Map<string, PendingCloseRequest>;
   readonly pendingOpens: Map<string, PendingOpenRequest>;
+  readonly pendingPreviews: Map<string, PendingPreviewRequest>;
   readonly browserView: BrowserViewBridge | null;
   readonly electronTabs: ElectronTabs;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
@@ -547,6 +659,7 @@ function handleBrowserSessionsFrame(args: {
         epicId: args.epicId,
         hostId: args.hostId,
         pendingOpens: args.pendingOpens,
+        pendingPreviews: args.pendingPreviews,
         browserView: args.browserView,
         sendClientFrame: args.sendClientFrame,
       });
@@ -580,6 +693,7 @@ function handleBrowserSessionsSubsystemFrame(args: {
   readonly epicId: string;
   readonly hostId: string;
   readonly pendingOpens: Map<string, PendingOpenRequest>;
+  readonly pendingPreviews: Map<string, PendingPreviewRequest>;
   readonly browserView: BrowserViewBridge | null;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
@@ -591,6 +705,19 @@ function handleBrowserSessionsSubsystemFrame(args: {
       args.pendingOpens.delete(frame.requestId);
       if (frame.result.ok) pending.resolve(frame.result);
       else pending.reject(new Error(frame.result.reason));
+      return;
+    }
+    case "tabPreviewResult": {
+      const pending = args.pendingPreviews.get(frame.requestId);
+      if (pending === undefined) return;
+      args.pendingPreviews.delete(frame.requestId);
+      pending.resolve({
+        ok: frame.ok,
+        screenshotBase64: frame.screenshotBase64,
+        url: frame.url,
+        title: frame.title,
+        reason: frame.reason,
+      });
       return;
     }
     case "caption":

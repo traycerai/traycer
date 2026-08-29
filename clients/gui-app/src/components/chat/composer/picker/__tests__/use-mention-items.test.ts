@@ -850,31 +850,114 @@ function browserSessionsState(
 }
 
 describe("browserTabMentionEntriesFromSessions", () => {
-  // The context is bound to the canvas host, which is not necessarily this
-  // chat's host - a chat stays bound to its own host for life. Without the
-  // `sessions.hostId !== hostId` gate this returned the other host's tabs.
-  it("returns no entries when the sessions context is bound to a different host than the chat's", () => {
-    const sessions = browserSessionsState({
-      hostId: "canvas-host",
-      items: [browserSession({ sessionId: "s1", hostId: "canvas-host" })],
-    });
-    expect(
-      browserTabMentionEntriesFromSessions(sessions, "chat-host", true),
-    ).toEqual([]);
-  });
+  const noHostLabels = (hostId: string): string | null => {
+    void hostId;
+    return null;
+  };
 
-  it("returns entries when the sessions context matches the chat's host", () => {
+  // The picker used to see exactly ONE coordinator (the canvas host's) and
+  // dropped its rows whenever that host was not the chat's - so a tab on
+  // another host vanished from the menu entirely. Cross-host mentions (spec
+  // decision #10) invert that: every host's tabs surface, and the chat's OWN
+  // host is the only one whose tabs come back drivable.
+  it("marks tabs on the chat's own host as drivable (contextOnly: false)", () => {
     const sessions = browserSessionsState({
       hostId: "chat-host",
       items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
     });
     const entries = browserTabMentionEntriesFromSessions(
-      sessions,
+      [{ key: "coord-1", state: sessions }],
       "chat-host",
+      noHostLabels,
       true,
     );
     expect(entries).toHaveLength(1);
     expect(entries[0]?.tabId).toBe("tab-1");
+    expect(entries[0]?.contextOnly).toBe(false);
+    expect(entries[0]?.coordinatorKey).toBe("coord-1");
+  });
+
+  // A tab on a host that is not the chat's own no longer disappears - it
+  // comes back marked `contextOnly: true`, carrying the owning host's label,
+  // because it can only ever be attached as snapshot context (url, title,
+  // screenshot), never a `browser-tab:` drive token the agent could attach to
+  // (spec decision #10).
+  it("marks tabs on a different host as contextOnly instead of dropping them, and carries the host's label", () => {
+    const sessions = browserSessionsState({
+      hostId: "canvas-host",
+      items: [browserSession({ sessionId: "s1", hostId: "canvas-host" })],
+    });
+    const entries = browserTabMentionEntriesFromSessions(
+      [{ key: "coord-1", state: sessions }],
+      "chat-host",
+      (hostId) => (hostId === "canvas-host" ? "Canvas Host" : null),
+      true,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.tabId).toBe("tab-1");
+    expect(entries[0]?.hostId).toBe("canvas-host");
+    expect(entries[0]?.contextOnly).toBe(true);
+    expect(entries[0]?.hostLabel).toBe("Canvas Host");
+  });
+
+  // A null chat host is "readiness has not resolved yet", not "this chat has
+  // no host": comparing against it would mark the chat's OWN tabs contextOnly
+  // for as long as that lasts, quietly downgrading them to snapshots.
+  it("returns no entries while the chat's host is unresolved", () => {
+    const sessions = browserSessionsState({
+      hostId: "chat-host",
+      items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+    });
+    expect(
+      browserTabMentionEntriesFromSessions(
+        [{ key: "coord-1", state: sessions }],
+        null,
+        noHostLabels,
+        true,
+      ),
+    ).toEqual([]);
+    const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
+    expect(
+      getSnapshot(
+        [{ key: "coord-1", state: sessions }],
+        null,
+        noHostLabels,
+        true,
+      ),
+    ).toEqual([]);
+  });
+
+  it("aggregates two hosts, host-qualifying ids so an identical session/tab id on each host never collides", () => {
+    const hostASessions = browserSessionsState({
+      hostId: "host-a",
+      items: [browserSession({ sessionId: "s1", hostId: "host-a" })],
+    });
+    const hostBSessions = browserSessionsState({
+      hostId: "host-b",
+      items: [browserSession({ sessionId: "s1", hostId: "host-b" })],
+    });
+    const entries = browserTabMentionEntriesFromSessions(
+      [
+        { key: "coord-a", state: hostASessions },
+        { key: "coord-b", state: hostBSessions },
+      ],
+      "host-a",
+      (hostId) => (hostId === "host-b" ? "Host B" : null),
+      true,
+    );
+
+    expect(entries).toHaveLength(2);
+    const [entryA, entryB] = entries;
+    expect(entryA.hostId).toBe("host-a");
+    expect(entryA.contextOnly).toBe(false);
+    expect(entryB.hostId).toBe("host-b");
+    expect(entryB.contextOnly).toBe(true);
+    expect(entryB.hostLabel).toBe("Host B");
+    // Same session/tab id minted on both hosts - only the host-qualified `id`
+    // keeps the menu's de-dupe from merging the two rows.
+    expect(entryA.tabId).toBe(entryB.tabId);
+    expect(entryA.sessionId).toBe(entryB.sessionId);
+    expect(entryA.id).not.toBe(entryB.id);
   });
 
   // `page.attachTab` auto-wakes a dormant session before leasing it (see
@@ -905,8 +988,9 @@ describe("browserTabMentionEntriesFromSessions", () => {
       ],
     });
     const entries = browserTabMentionEntriesFromSessions(
-      sessions,
+      [{ key: "coord-1", state: sessions }],
       "chat-host",
+      noHostLabels,
       true,
     );
     expect(entries).toHaveLength(1);
@@ -920,8 +1004,9 @@ describe("browserTabMentionEntriesFromSessions", () => {
       items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
     });
     const entries = browserTabMentionEntriesFromSessions(
-      sessions,
+      [{ key: "coord-1", state: sessions }],
       "chat-host",
+      noHostLabels,
       true,
     );
     expect(entries[0]?.dormant).toBe(false);
@@ -929,28 +1014,37 @@ describe("browserTabMentionEntriesFromSessions", () => {
 });
 
 describe("createBrowserTabMentionEntriesSnapshotCache", () => {
+  const noHostLabels = (hostId: string): string | null => {
+    void hostId;
+    return null;
+  };
+
   // The bug this cache exists to fix: the host bumps `lastActivityAt` (and
   // mints a fresh sessions object) on essentially every frame, which used to
   // re-run the whole mention pipeline at frame rate even when no tab's
   // mention-relevant fields actually changed.
   it("returns the SAME array reference across snapshots whose sessions are content-identical for mention purposes", () => {
     const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
-    const sessionAt = (lastActivityAt: number) =>
-      browserSessionsState({
-        hostId: "chat-host",
-        items: [
-          browserSession({
-            sessionId: "s1",
-            hostId: "chat-host",
-            lastActivityAt,
-          }),
-        ],
-      });
+    const sourcesAt = (lastActivityAt: number) => [
+      {
+        key: "coord-1",
+        state: browserSessionsState({
+          hostId: "chat-host",
+          items: [
+            browserSession({
+              sessionId: "s1",
+              hostId: "chat-host",
+              lastActivityAt,
+            }),
+          ],
+        }),
+      },
+    ];
 
-    const first = getSnapshot(sessionAt(1), "chat-host", true);
+    const first = getSnapshot(sourcesAt(1), "chat-host", noHostLabels, true);
     // A frame that only bumps `lastActivityAt` - every tab's
     // sessionId/tabId/title/url/viewed are unchanged - must not rebuild.
-    const second = getSnapshot(sessionAt(2), "chat-host", true);
+    const second = getSnapshot(sourcesAt(2), "chat-host", noHostLabels, true);
 
     expect(second).toBe(first);
     expect(first).toHaveLength(1);
@@ -959,35 +1053,47 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
   it("rebuilds when a tab's mention-relevant field actually changes", () => {
     const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
     const first = getSnapshot(
-      browserSessionsState({
-        hostId: "chat-host",
-        items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
-      }),
+      [
+        {
+          key: "coord-1",
+          state: browserSessionsState({
+            hostId: "chat-host",
+            items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+          }),
+        },
+      ],
       "chat-host",
+      noHostLabels,
       true,
     );
     const second = getSnapshot(
-      browserSessionsState({
-        hostId: "chat-host",
-        items: [
-          browserSession({
-            sessionId: "s1",
+      [
+        {
+          key: "coord-1",
+          state: browserSessionsState({
             hostId: "chat-host",
-            tabs: [
-              {
-                tabId: "tab-1",
-                url: "https://example.com/other",
-                originTier: "external",
-                status: "ready",
-                title: "Example",
-                viewed: false,
-                drivenBy: [],
-              },
+            items: [
+              browserSession({
+                sessionId: "s1",
+                hostId: "chat-host",
+                tabs: [
+                  {
+                    tabId: "tab-1",
+                    url: "https://example.com/other",
+                    originTier: "external",
+                    status: "ready",
+                    title: "Example",
+                    viewed: false,
+                    drivenBy: [],
+                  },
+                ],
+              }),
             ],
           }),
-        ],
-      }),
+        },
+      ],
       "chat-host",
+      noHostLabels,
       true,
     );
 
@@ -1012,35 +1118,47 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
       drivenBy: [],
     };
     const first = getSnapshot(
-      browserSessionsState({
-        hostId: "chat-host",
-        items: [
-          browserSession({
-            sessionId: "s1",
+      [
+        {
+          key: "coord-1",
+          state: browserSessionsState({
             hostId: "chat-host",
-            runtime: { kind: "dormant", revision: 0 },
-            tabs: [dormantTab],
+            items: [
+              browserSession({
+                sessionId: "s1",
+                hostId: "chat-host",
+                runtime: { kind: "dormant", revision: 0 },
+                tabs: [dormantTab],
+              }),
+            ],
           }),
-        ],
-      }),
+        },
+      ],
       "chat-host",
+      noHostLabels,
       true,
     );
     expect(first[0]?.dormant).toBe(true);
 
     const second = getSnapshot(
-      browserSessionsState({
-        hostId: "chat-host",
-        items: [
-          browserSession({
-            sessionId: "s1",
+      [
+        {
+          key: "coord-1",
+          state: browserSessionsState({
             hostId: "chat-host",
-            runtime: { kind: "headless", revision: 1 },
-            tabs: [{ ...dormantTab, status: "ready" }],
+            items: [
+              browserSession({
+                sessionId: "s1",
+                hostId: "chat-host",
+                runtime: { kind: "headless", revision: 1 },
+                tabs: [{ ...dormantTab, status: "ready" }],
+              }),
+            ],
           }),
-        ],
-      }),
+        },
+      ],
       "chat-host",
+      noHostLabels,
       true,
     );
 
@@ -1050,12 +1168,41 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
 
   it("returns the shared empty constant while the picker is closed, without touching the sessions snapshot", () => {
     const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
-    const sessions = browserSessionsState({
-      hostId: "chat-host",
-      items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
-    });
+    const sources = [
+      {
+        key: "coord-1",
+        state: browserSessionsState({
+          hostId: "chat-host",
+          items: [browserSession({ sessionId: "s1", hostId: "chat-host" })],
+        }),
+      },
+    ];
 
-    const closed = getSnapshot(sessions, "chat-host", false);
+    const closed = getSnapshot(sources, "chat-host", noHostLabels, false);
     expect(closed).toEqual([]);
+  });
+
+  // The host label rides the content key (not just the tab fields): it is
+  // carried into the attached text line for a contextOnly entry, so a
+  // renamed host must not keep serving the OLD label out of the cache even
+  // though every tab field is unchanged.
+  it("rebuilds when only the label a different host resolves to changes", () => {
+    const getSnapshot = createBrowserTabMentionEntriesSnapshotCache();
+    const sources = [
+      {
+        key: "coord-1",
+        state: browserSessionsState({
+          hostId: "canvas-host",
+          items: [browserSession({ sessionId: "s1", hostId: "canvas-host" })],
+        }),
+      },
+    ];
+
+    const first = getSnapshot(sources, "chat-host", () => "Old Name", true);
+    const second = getSnapshot(sources, "chat-host", () => "New Name", true);
+
+    expect(second).not.toBe(first);
+    expect(first[0]?.hostLabel).toBe("Old Name");
+    expect(second[0]?.hostLabel).toBe("New Name");
   });
 });

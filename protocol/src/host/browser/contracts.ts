@@ -218,8 +218,6 @@ export type ElectronTabCreateFailureCode = z.infer<
 // Reserved evolution room, not yet added:
 // - A `downloadEvent` server frame for file downloads/uploads (deferred,
 //   spec decision #12); the honest unsupported toast stays until then.
-// - A `captureTabPreview` server frame / `tabPreviewResult` client frame
-//   pair for cross-host mention-preview capture (ticket 06).
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -284,6 +282,22 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
           })
           .strict(),
       ]),
+    })
+    .strict(),
+  z
+    .object({
+      // Answers one `captureTabPreview`. Snapshot-only cross-host context
+      // (spec decision #10): a still, a url and a title, never a drive
+      // handle. `ok: false` carries `reason` and nothing else - notably a
+      // dormant tab, which is reported rather than woken.
+      kind: z.literal("tabPreviewResult"),
+      ...requestFrameFields,
+      ok: z.boolean(),
+      /** Base64 JPEG, capped host-side. */
+      screenshotBase64: z.string().nullable(),
+      url: z.string().nullable(),
+      title: z.string().nullable(),
+      reason: z.string().nullable(),
     })
     .strict(),
   z
@@ -402,6 +416,17 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("closeTab"),
       ...requestFrameFields,
       ...browserSessionReferenceFields,
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host
+      // that can never drive it (spec decision #10). No `sessionId`: the tab
+      // is resolved by the owning host inside this stream's epic scope, which
+      // is the only authorization there is.
+      kind: z.literal("captureTabPreview"),
+      ...requestFrameFields,
       tabId: z.string(),
     })
     .strict(),
