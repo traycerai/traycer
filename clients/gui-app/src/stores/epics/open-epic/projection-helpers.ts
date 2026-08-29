@@ -914,12 +914,17 @@ export function tuiAgentProjectionFromRecord(
 /**
  * A cross-host replica in the renderer's shape.
  *
- * `harnessId` is narrowed exactly as a local row's is, and a replica whose
+ * `harnessId` is narrowed exactly as a local row's is, and a replica NAMING a
  * harness this build cannot dispatch is dropped for the same reason: the
- * roster row would open a tile that could not attach. A replica whose cloud
- * row never recorded a harness at all is dropped by the same check - `null`
- * narrows to `null` - which is the honest outcome, since a row that cannot say
- * what it runs cannot be addressed either.
+ * roster row would open a tile that could not attach.
+ *
+ * A replica whose cloud row never recorded a harness at all is a different
+ * case and is LISTED, with `harnessId: null`. The protocol arm makes the field
+ * nullable on purpose - a row written before `runSettingsSummary` carried the
+ * harness has none - and says such a row renders without a harness mark. An
+ * earlier cut dropped it here, and this comment still described that; the
+ * agent then vanished from the roster on every other machine even though the
+ * host stored and served it correctly.
  *
  * `docResident: false` is a fact and not a placeholder: a replica is not the
  * doc map's frozen copy, and it IS addressable through the registry
