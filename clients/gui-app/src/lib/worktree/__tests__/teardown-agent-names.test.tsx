@@ -28,27 +28,40 @@ function seedOpenEpicWithChatTitle(title: string): {
   };
   const listeners = new Set<() => void>();
   const doc = new Y.Doc();
-  const handle = {
-    store: {
-      getState: () => ({
-        chats: { allIds: ["chat-1"] as const, byId: chatsById },
-        tuiAgents: { allIds: [] as const, byId: {} },
-        snapshotMeta: null,
-        isDirty: false,
-        unsyncedQueueSize: 0,
-      }),
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
+  const stateOf = () => ({
+    chats: { allIds: ["chat-1"] as const, byId: chatsById },
+    tuiAgents: { allIds: [] as const, byId: {} },
+    snapshotMeta: null,
+    isDirty: false,
+    unsyncedQueueSize: 0,
+  });
+  const storeCallable = (_selector: unknown): unknown => stateOf();
+  const storeBase: unknown = Object.assign(storeCallable, {
+    getState: () => stateOf() as never,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
+  });
+  const awareness = {
+    getStates: () => new Map<number, Record<string, unknown>>(),
+    on: () => undefined,
+    off: () => undefined,
+  };
+  const handle: OpenEpicStoreHandle = {
+    epicId: "epic-1",
+    userId: null,
     doc,
-    isClean: () => true,
+    awareness: awareness as never,
+    store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
     detachTransport: () => undefined,
-  } as unknown as OpenEpicStoreHandle;
+    requestFreshSnapshot: () => undefined,
+    isClean: () => true,
+    hotArtifactRoomIdsForTests: () => [],
+  };
   __getOpenEpicRegistryForTests().acquire("epic-1", () => handle);
   return {
     rename: (next: string) => {
