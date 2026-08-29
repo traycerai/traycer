@@ -484,6 +484,7 @@ function createDirtyEpicHandle(
     dirtyWatermarkStateVectorBase64: null,
     latestHostStateVectorBase64: null,
     unsyncedQueueSize,
+    writeCommands: [],
     lastFocusedArtifactId: null,
     lastFocusedThreadId: null,
     setLastFocusedArtifactId: (artifactId) => {
@@ -499,6 +500,10 @@ function createDirtyEpicHandle(
     },
     requestFreshSnapshot: () => undefined,
     retryMigration: () => undefined,
+    enqueueWriteCommand: () => null,
+    waitForWriteCommand: () => Promise.reject(new Error("unused in this test")),
+    retryWriteCommand: () => undefined,
+    discardWriteCommand: () => undefined,
     applyChatRecords: () => undefined,
     peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,

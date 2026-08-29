@@ -70,8 +70,9 @@ export function classifyEpicWriteCommandFailure(
     if (error.code === "E_IDEMPOTENCY_CACHE_SATURATED") {
       // The host emitted this only before resolver dispatch. Keep the command
       // queued with its stable key: a later reconnect drain is safe and may
-      // succeed once replay capacity returns.
-      return { kind: "queued", reason: error.message, boundedRetry: true };
+      // succeed once replay capacity returns. Because the host proved it did
+      // not run, this refusal must never arm the ambiguous-send deadline.
+      return { kind: "queued", reason: error.message, boundedRetry: false };
     }
     if (error.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN") {
       // The host retained the key but could not prove the original resolver's
