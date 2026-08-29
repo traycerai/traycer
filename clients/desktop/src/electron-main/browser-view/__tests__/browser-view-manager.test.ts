@@ -671,6 +671,27 @@ function createHarness(): Harness {
   return createHarnessWithOptions(undefined);
 }
 
+/**
+ * Every manager this file creates, so cleanup does not depend on any single
+ * test reaching its own last line.
+ *
+ * A live PiP capture re-arms a real 200ms timer forever
+ * (`BrowserPipCapture.captureFrame`); one left running outlives its test,
+ * and once a LATER test installs fake timers the chain migrates into the
+ * fake queue and spins `runAllTimersAsync` into vitest's 10000-timer abort.
+ * An assertion failure between `startPipCapture` and an in-test stop would
+ * resurrect exactly that leak - one failed test manufacturing a second,
+ * flaky one - so the stop lives in an `afterEach` that covers every
+ * PiP-starting path, current and future. `pip.stop()` is idempotent, so
+ * stopping managers that never captured is a no-op.
+ */
+const createdManagers: BrowserViewManager[] = [];
+
+afterEach(() => {
+  for (const manager of createdManagers) manager.pip.stop();
+  createdManagers.length = 0;
+});
+
 function createHarnessWithOptions(
   harnessOptions: HarnessOptions | undefined,
 ): Harness {
@@ -798,8 +819,10 @@ function createHarnessWithOptions(
       harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
     hostPlatform: harnessOptions?.hostPlatform ?? "darwin",
   };
+  const manager = new BrowserViewManager(options);
+  createdManagers.push(manager);
   return {
-    manager: new BrowserViewManager(options),
+    manager,
     windows,
     views,
     nativeTabStatuses,
@@ -1844,12 +1867,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
       { x: -300, y: -200, width: 300, height: 200 },
     ]);
     expect(view.visible).toBe(true);
-
-    // The capture loop re-arms a real 200ms timer forever; left running it
-    // outlives this test and, once a later test installs fake timers, hops
-    // into the fake queue and spins `runAllTimersAsync` into the 10000-timer
-    // abort. Stop it before handing the worker to the next test.
-    harness.manager.pip.stop();
   });
 
   it("holds and releases the compositor lease for an unbound PiP tab", async () => {
