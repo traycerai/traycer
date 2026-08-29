@@ -75,6 +75,7 @@ async function loadCryptoModule(
   await mod.initBrowserPersistence({
     decisionFilePath: decisionFilePath(),
     platform,
+    appName: "Traycer Staging",
   });
   return mod;
 }
@@ -452,6 +453,11 @@ describe("lazy browser persistence state machine", () => {
     expect(mod.getBrowserPersistenceState()).toEqual({
       decision: { kind: "enabled", decidedAt: 9 },
       cryptoState: mod.getBrowserCookieCryptoState(),
+      // macOS always prompts, and the card quotes the running app's name so a
+      // staging install's dialog reads exactly as the mock does.
+      promptsOnEnable: true,
+      appName: "Traycer Staging",
+      platform: "darwin",
     });
   });
 });

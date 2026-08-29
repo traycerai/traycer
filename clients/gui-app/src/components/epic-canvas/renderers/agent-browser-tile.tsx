@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { toast } from "sonner";
+import type { BrowserTabDriver } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -34,7 +42,12 @@ import type {
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/sessions/electron-tabs";
 import { openBrowserSessionTileFromPage } from "@/lib/browser-view/link-routing/browser-link-routing-core";
-import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
+import {
+  useBrowserPersistenceState,
+  type BrowserPersistenceController,
+} from "@/lib/browser-view/use-browser-persistence-state";
+import { BrowserPersistenceExplainerCard } from "@/components/epic-canvas/renderers/browser-persistence-explainer-card";
+import { useBrowserPersistenceExplainerClaim } from "@/components/epic-canvas/renderers/use-browser-persistence-explainer-claim";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -63,6 +76,29 @@ interface SurfaceAttachmentState {
   readonly registrationId: string;
   readonly status: "ready" | "error";
   readonly error: string | null;
+}
+
+/**
+ * Renders the explainer card in whichever tile holds the canvas-wide claim, so
+ * the copy - and the OS prompt behind its button - appears once rather than
+ * once per tile. Its own component so the claim hook and the "do I own it"
+ * branch stay out of `ElectronTabSurface`.
+ */
+function BrowserPersistenceExplainerSlot(props: {
+  readonly claimId: string;
+  readonly persistence: BrowserPersistenceController;
+  readonly drivenBy: readonly BrowserTabDriver[];
+}): ReactElement | null {
+  const ownsExplainerCard = useBrowserPersistenceExplainerClaim(props.claimId);
+  if (!ownsExplainerCard) return null;
+  // An agent placed this tile if anything is driving the tab (spec §7.2's
+  // agent-initiated placement); the copy changes, the affordances do not.
+  return (
+    <BrowserPersistenceExplainerCard
+      persistence={props.persistence}
+      agentDriven={props.drivenBy.length > 0}
+    />
+  );
 }
 
 /**
@@ -107,7 +143,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const annotationTab = annotationSession?.tabs.find(
     (item) => item.tabId === props.binding.tabId,
   );
-  const annotationDriverChatId = annotationTab?.drivenBy.at(-1)?.chatId ?? null;
+  const drivenBy = annotationTab?.drivenBy ?? [];
+  const annotationDriverChatId = drivenBy.at(-1)?.chatId ?? null;
   const annotationPreferredChatId = annotationDriverChatId;
 
   const tileKey = useMemo<BrowserViewTileKey>(
@@ -241,7 +278,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const snapshot = useBrowserViewSnapshot(tileKey);
-  const cookieCryptoState = useBrowserCookieCryptoState(browserView);
+  const persistence = useBrowserPersistenceState(browserView);
   const annotation = useBrowserAnnotationSession({
     browserView: showStartPage ? null : browserView,
     tileKey,
@@ -271,7 +308,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     initialUrl: props.node.url,
     capabilities: chromeCapabilities,
     annotation,
-    cookieCryptoState,
+    persistence,
     statusUrl,
     canGoBack,
     canGoForward,
@@ -330,6 +367,11 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       <BrowserTileFindAdapterBridge
         browserView={attachedBrowserView}
         tileKey={tileKey}
+      />
+      <BrowserPersistenceExplainerSlot
+        claimId={props.node.instanceId}
+        persistence={persistence}
+        drivenBy={drivenBy}
       />
       <BrowserTileToolbar
         controller={chrome.controller}

@@ -8,8 +8,8 @@ import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/br
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
+import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
 import type {
-  BrowserCookieCryptoState,
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
   BrowserViewElectronTabControlAction,
@@ -27,7 +27,7 @@ interface UseElectronTabChromeArgs {
   readonly initialUrl: string;
   readonly capabilities: TileChromeCapabilities;
   readonly annotation: BrowserAnnotationSessionController | null;
-  readonly cookieCryptoState: BrowserCookieCryptoState | null;
+  readonly persistence: BrowserPersistenceController | null;
   readonly statusUrl: string;
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
@@ -63,7 +63,7 @@ export function useElectronTabChrome(
     initialUrl,
     capabilities,
     annotation,
-    cookieCryptoState,
+    persistence,
     statusUrl,
     canGoBack,
     canGoForward,
@@ -185,7 +185,7 @@ export function useElectronTabChrome(
     zoomPercent,
     viewportPreset,
     disabled: false,
-    cookieCryptoState,
+    persistence,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
     onNavigate: navigateToAddress,

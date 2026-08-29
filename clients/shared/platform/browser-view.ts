@@ -211,14 +211,22 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
   readonly command: BrowserCdpCommand;
 }
 
+/**
+ * The handoff reasons the wire contract carries to the host, including
+ * `persistence-migration` (keychain refactor ticket 02): the tab is torn down
+ * so it can come back on the durable partition. The host treats it like any
+ * other release - what matters is its "revived; re-snapshot" notice.
+ */
+export type BrowserViewHandoffReason = Extract<
+  BrowserSessionsClientFrame,
+  { readonly kind: "electronTabHandoff" }
+>["reason"];
+
 export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
   readonly capturedUrl: string;
   readonly capturedStorageState: BrowserStorageState | null;
   readonly siblingTabs: readonly BrowserElectronTabHandoffSibling[];
-  readonly reason: Extract<
-    BrowserSessionsClientFrame,
-    { readonly kind: "electronTabHandoff" }
-  >["reason"];
+  readonly reason: BrowserViewHandoffReason;
 }
 
 type BrowserCookieCryptoMode = "real" | "degraded";
@@ -264,9 +272,31 @@ export type BrowserPersistenceDecision =
   /** The OS cached a denial; re-probe (and enable) on the next launch. */
   | { readonly kind: "relaunch-pending"; readonly decidedAt: number };
 
+/** The desktop platforms the persistence copy has to speak about by name. */
+export type BrowserPersistencePlatform = "darwin" | "win32" | "linux" | "other";
+
 export interface BrowserPersistenceState {
   readonly decision: BrowserPersistenceDecision;
   readonly cryptoState: BrowserCookieCryptoState;
+  /**
+   * Would enabling raise an OS keystore dialog on THIS machine? The desktop is
+   * the only side that can answer (macOS always, Linux until a real keyring
+   * backend was recorded, never Windows), and the explainer card exists only
+   * where the answer is yes (spec §6.1 rules, decision #21).
+   */
+  readonly promptsOnEnable: boolean;
+  /**
+   * Product name exactly as the OS keychain dialog spells it ("Traycer",
+   * "Traycer Staging"), so the mocked dialog in the card matches the real one
+   * on staging installs (spec §7.2).
+   */
+  readonly appName: string;
+  /**
+   * Desktop platform, so the renderer can name the keystore the way the user's
+   * OS names it (and mock the right dialog) without guessing from a backend
+   * that is null until something probes.
+   */
+  readonly platform: BrowserPersistencePlatform;
 }
 
 export type BrowserViewConsoleLevel =
@@ -363,6 +393,14 @@ export interface BrowserViewBridge {
   declinePersistence(): Promise<BrowserPersistenceState>;
   /** Relaunches the desktop so a cached OS denial can be re-asked. */
   relaunchForPersistence(): Promise<void>;
+  /**
+   * Push for every persistence state change (enable / decline / relaunch
+   * pending / boot). One shared truth per window, so every open tile's shield
+   * and card move together instead of polling per tile.
+   */
+  onPersistenceStateChanged(
+    handler: (state: BrowserPersistenceState) => void,
+  ): { dispose: () => void };
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;

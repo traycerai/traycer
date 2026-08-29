@@ -25,6 +25,9 @@ const persistedPersistenceState: BrowserPersistenceState = {
     storageBackend: null,
     encryptionAvailable: true,
   },
+  promptsOnEnable: false,
+  appName: "Traycer",
+  platform: "darwin",
 };
 
 // In vitest's jsdom env the `encrypt-storage` UMD wrapper fails to pick up
@@ -600,6 +603,7 @@ function buildFakeBridge(
       enablePersistence: async () => persistedPersistenceState,
       declinePersistence: async () => persistedPersistenceState,
       relaunchForPersistence: async () => undefined,
+      onPersistenceStateChanged: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),

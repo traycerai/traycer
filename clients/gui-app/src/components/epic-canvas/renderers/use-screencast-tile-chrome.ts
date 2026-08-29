@@ -96,7 +96,7 @@ export function useScreencastTileChrome(
     zoomPercent: 100,
     viewportPreset: UNUSED_VIEWPORT_PRESET,
     disabled,
-    cookieCryptoState: null,
+    persistence: null,
     zoomLocked: false,
     annotation: null,
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {

@@ -186,7 +186,19 @@ const sessionsByPartition = new Map<string, Session>();
 export function ensureBrowserViewSession(
   request: BrowserSessionProfileRequest,
 ): Session {
-  const partition = partitionForProfile(request.profile, request.sessionId);
+  return ensureBrowserViewSessionForPartition(
+    partitionForProfile(request.profile, request.sessionId),
+  );
+}
+
+/**
+ * The named jar, bypassing the persistence decision. Only the enable-time
+ * migration needs this: it has to hold BOTH jars open at once (spec §6.4),
+ * which the decision-driven lookup above can never express.
+ */
+export function ensureBrowserViewSessionForPartition(
+  partition: string,
+): Session {
   const existing = sessionsByPartition.get(partition);
   if (existing !== undefined) return existing;
   const browserSession = session.fromPartition(partition, { cache: true });

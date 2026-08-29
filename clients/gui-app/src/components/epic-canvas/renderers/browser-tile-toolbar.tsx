@@ -11,10 +11,14 @@ import {
   Plus,
   RotateCcw,
   RotateCw,
+  Shield,
+  ShieldAlert,
+  ShieldOff,
   SquareMousePointer,
   Smartphone,
   Tablet,
 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
@@ -41,7 +45,21 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { browserCookieDegradedMessage } from "@/lib/browser-view/browser-cookie-degraded-message";
+import {
+  browserCookieDegradedMessage,
+  browserPersistenceShieldCopy,
+  type BrowserPersistenceShieldAction,
+  type BrowserPersistenceShieldTone,
+} from "@/lib/browser-view/browser-cookie-degraded-message";
+import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
@@ -102,7 +120,10 @@ export function BrowserTileToolbar(props: {
     capabilities.devtools ||
     capabilities.siteInfo;
   const showTrailing =
-    capabilities.annotate || props.pictureInPicture !== null || showAdvanced;
+    capabilities.annotate ||
+    props.pictureInPicture !== null ||
+    controller.persistence !== null ||
+    showAdvanced;
   if (!showNav && !showAddress && !showTrailing) return null;
 
   return (
@@ -230,6 +251,9 @@ function BrowserTileToolbarTrailing(props: {
   const capabilities = controller.capabilities;
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
+      {controller.persistence === null ? null : (
+        <BrowserPersistenceShield persistence={controller.persistence} />
+      )}
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
@@ -243,6 +267,115 @@ function BrowserTileToolbarTrailing(props: {
         <BrowserMoreMenu controller={controller} />
       ) : null}
     </div>
+  );
+}
+
+const SHIELD_ICONS: Record<
+  BrowserPersistenceShieldTone,
+  ComponentType<{
+    readonly className?: string;
+    readonly "aria-hidden"?: boolean;
+  }>
+> = {
+  secure: Shield,
+  off: ShieldOff,
+  warning: ShieldAlert,
+};
+
+const SHIELD_TONE_CLASS: Record<BrowserPersistenceShieldTone, string> = {
+  secure: "text-muted-foreground hover:text-foreground",
+  off: "text-muted-foreground hover:text-foreground",
+  warning: "text-warning hover:text-warning",
+};
+
+/**
+ * Spec §7.1's shield. It is the ONLY always-visible surface that tells the
+ * user whether their logins survive, and the one place a denied keychain can
+ * be retried - which is why every state here carries its own affordance rather
+ * than a shared "see Settings".
+ */
+function BrowserPersistenceShield(props: {
+  readonly persistence: BrowserPersistenceController;
+}) {
+  const [open, setOpen] = useState(false);
+  const state = props.persistence.state;
+  // Nothing is claimed before the desktop has answered: an optimistic "saved
+  // securely" here would be a lie about where the user's cookies are.
+  if (state === null) return null;
+  const copy = browserPersistenceShieldCopy(state);
+  const Icon = SHIELD_ICONS[copy.tone];
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={copy.headline}
+        side="top"
+        sideOffset={6}
+        align="center"
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Saved logins: ${copy.headline}`}
+            className={cn(
+              "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
+              SHIELD_TONE_CLASS[copy.tone],
+            )}
+          >
+            <Icon aria-hidden />
+          </Button>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
+        <PopoverHeader>
+          <PopoverTitle>{copy.headline}</PopoverTitle>
+          <PopoverDescription className="text-ui-xs">
+            {copy.detail}
+          </PopoverDescription>
+        </PopoverHeader>
+        <BrowserPersistenceShieldAffordance
+          action={copy.action}
+          persistence={props.persistence}
+          onActed={() => setOpen(false)}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function BrowserPersistenceShieldAffordance(props: {
+  readonly action: BrowserPersistenceShieldAction;
+  readonly persistence: BrowserPersistenceController;
+  readonly onActed: () => void;
+}) {
+  const action = props.action;
+  if (action.kind === "none") return null;
+  if (action.kind === "settings") {
+    return (
+      <Link
+        to="/settings/general"
+        className="text-ui-xs font-medium text-primary underline-offset-4 hover:underline"
+        onClick={props.onActed}
+      >
+        {action.label}
+      </Link>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      size="sm"
+      className="self-start"
+      disabled={props.persistence.pending}
+      onClick={() => {
+        if (action.kind === "relaunch") props.persistence.relaunch();
+        else props.persistence.enable();
+        props.onActed();
+      }}
+    >
+      {action.label}
+    </Button>
   );
 }
 
@@ -286,7 +419,9 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
         {capabilities.siteInfo ? (
           <BrowserSiteInfoMenu
             url={controller.url}
-            cookieCryptoState={controller.cookieCryptoState}
+            cookieCryptoState={
+              controller.persistence?.state?.cryptoState ?? null
+            }
           />
         ) : null}
         {capabilities.devtools ? (

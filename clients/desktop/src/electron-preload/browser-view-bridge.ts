@@ -159,6 +159,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewRelaunchForPersistence,
         ) as Promise<void>,
+      onPersistenceStateChanged: (handler) =>
+        subscribe<BrowserPersistenceState>(
+          RunnerHostEvent.browserViewPersistenceStateChanged,
+          handler,
+        ),
       capturePrimaryProfile: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,

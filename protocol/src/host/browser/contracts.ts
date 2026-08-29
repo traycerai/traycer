@@ -499,7 +499,15 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       capturedUrl: z.string(),
       capturedStorageState: browserStorageStateSchema.nullable(),
       siblingTabs: z.array(browserElectronTabHandoffSiblingSchema),
-      reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
+      // `persistence-migration` is the desktop tearing the tab down so it can
+      // come back on the durable partition (keychain refactor ticket 02); the
+      // host treats it exactly like `tab-released`.
+      reason: z.enum([
+        "gui-quit",
+        "tab-released",
+        "crash-no-capture",
+        "persistence-migration",
+      ]),
     })
     .strict(),
 ]);

@@ -1,6 +1,6 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
 import type {
-  BrowserViewElectronTabHandoffChange,
+  BrowserViewHandoffReason,
   BrowserViewStatus,
 } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
@@ -49,7 +49,7 @@ interface BrowserViewEntryFactoryOptions {
   readonly emitStatus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (
     entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
+    handoffReason: BrowserViewHandoffReason | null,
   ) => void;
 }
 
@@ -83,7 +83,7 @@ export class BrowserViewEntryFactory {
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (
     entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
+    handoffReason: BrowserViewHandoffReason | null,
   ) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {

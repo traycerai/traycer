@@ -1,9 +1,7 @@
 import type { SyntheticEvent } from "react";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewViewportPresetId,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Runtime capabilities of one Electron tile. A toolbar control renders
@@ -31,7 +29,12 @@ export interface TileController {
   readonly zoomPercent: number;
   readonly viewportPreset: BrowserViewViewportPresetId;
   readonly disabled: boolean;
-  readonly cookieCryptoState: BrowserCookieCryptoState | null;
+  /**
+   * Desktop browser-login persistence for this tile's runtime, or null where
+   * there is no desktop to ask (a screencast tile). One shared store backs it,
+   * so every tile's shield reads the same answer.
+   */
+  readonly persistence: BrowserPersistenceController | null;
   readonly zoomLocked: boolean;
   readonly annotation: BrowserAnnotationSessionController | null;
   readonly onNavigate: (

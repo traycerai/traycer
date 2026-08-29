@@ -1,6 +1,9 @@
-import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserStorageOrigin,
+  BrowserStorageState,
+} from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
-import type { BrowserViewElectronTabHandoffChange } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewHandoffReason } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserViewEntry, BrowserViewSend } from "./browser-view-entry";
 import {
   nativeBrowserSessionKey,
@@ -9,7 +12,7 @@ import {
 import type { ManagedBrowserView } from "../browser-view-port";
 import type { BrowserStorageStateCaptureResult } from "../storage/browser-storage-state";
 
-type HandoffReason = BrowserViewElectronTabHandoffChange["reason"];
+type HandoffReason = BrowserViewHandoffReason;
 
 interface BrowserViewHandoffOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -18,6 +21,13 @@ interface BrowserViewHandoffOptions {
     input: { readonly origin: string },
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<BrowserStorageStateCaptureResult>;
+  /**
+   * Origins the primary-profile coordinator remembers. Carried ONLY on a
+   * `persistence-migration` handoff: a per-tab capture sees just the tab's own
+   * origin, and §6.4 step 3 wants every remembered origin replayed on the
+   * tiles that come back on the durable partition.
+   */
+  readonly readMigrationOrigins: () => readonly BrowserStorageOrigin[];
 }
 
 /**
@@ -32,11 +42,13 @@ export class BrowserViewHandoff {
     input: { readonly origin: string },
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<BrowserStorageStateCaptureResult>;
+  private readonly readMigrationOrigins: () => readonly BrowserStorageOrigin[];
 
   constructor(options: BrowserViewHandoffOptions) {
     this.entries = options.entries;
     this.send = options.send;
     this.captureStorageState = options.captureStorageState;
+    this.readMigrationOrigins = options.readMigrationOrigins;
   }
 
   async drainForWindow(windowId: string): Promise<void> {
@@ -142,7 +154,14 @@ export class BrowserViewHandoff {
         { origin: capturedUrl },
         entry.view.webContents,
       );
-      return result.storageState;
+      if (reason !== "persistence-migration") return result.storageState;
+      return {
+        cookies: result.storageState.cookies,
+        origins: mergeHandoffOrigins(
+          result.storageState.origins,
+          this.readMigrationOrigins(),
+        ),
+      };
     } catch {
       // `capturedUrl` is not http(s) (e.g. a fresh "about:blank" tile
       // never navigated), or the capture raced the teardown it precedes.
@@ -163,4 +182,19 @@ export class BrowserViewHandoff {
       return entry.currentUrl;
     }
   }
+}
+
+/**
+ * The tab's own capture wins its origin: it was read from the live page, while
+ * a remembered snapshot can be several navigations old.
+ */
+function mergeHandoffOrigins(
+  captured: readonly BrowserStorageOrigin[],
+  remembered: readonly BrowserStorageOrigin[],
+): BrowserStorageOrigin[] {
+  const capturedOrigins = new Set(captured.map((origin) => origin.origin));
+  return [
+    ...captured,
+    ...remembered.filter((origin) => !capturedOrigins.has(origin.origin)),
+  ];
 }

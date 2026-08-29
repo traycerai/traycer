@@ -4,6 +4,7 @@ import type {
   BrowserCookieCryptoState,
   BrowserCookieStorageBackend,
   BrowserPersistenceDecision,
+  BrowserPersistencePlatform,
   BrowserPersistenceState,
 } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
@@ -44,9 +45,12 @@ export interface BrowserCookieCryptoDetectionInput {
 export interface BrowserPersistenceInit {
   readonly decisionFilePath: string;
   readonly platform: NodeJS.Platform | string;
+  /** Product name the OS keychain dialog quotes; see `BrowserPersistenceState`. */
+  readonly appName: string;
 }
 
 let platform: NodeJS.Platform | string = process.platform;
+let appName = "Traycer";
 let store: BrowserPersistenceDecisionStore | null = null;
 let record: BrowserPersistenceRecord = UNDECIDED_BROWSER_PERSISTENCE_RECORD;
 let probe: BrowserPersistenceProbe | null = null;
@@ -62,6 +66,7 @@ export async function initBrowserPersistence(
   input: BrowserPersistenceInit,
 ): Promise<BrowserCookieCryptoState> {
   platform = input.platform;
+  appName = input.appName;
   store = createBrowserPersistenceDecisionStore(input.decisionFilePath);
   probe = null;
   denialCount = 0;
@@ -144,7 +149,19 @@ export function getBrowserPersistenceState(): BrowserPersistenceState {
   return {
     decision: record.decision,
     cryptoState: getBrowserCookieCryptoState(),
+    // "Would the OS ask?" is exactly the inverse of "may we probe unasked",
+    // so the card and the silent auto-enable can never disagree.
+    promptsOnEnable: !canAutoEnableSilently(),
+    appName,
+    platform: persistencePlatform(),
   };
+}
+
+function persistencePlatform(): BrowserPersistencePlatform {
+  if (platform === "darwin" || platform === "win32" || platform === "linux") {
+    return platform;
+  }
+  return "other";
 }
 
 export function getBrowserCookieCryptoState(): BrowserCookieCryptoState {

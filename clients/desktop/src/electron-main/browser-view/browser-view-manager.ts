@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { BrowserWindowConstructorOptions } from "electron";
 import type {
   BrowserCdpResult,
+  BrowserStorageOrigin,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
@@ -18,7 +19,7 @@ import type {
   BrowserViewStatus,
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
-  BrowserViewElectronTabHandoffChange,
+  BrowserViewHandoffReason,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
   PipCaptureStartInput,
@@ -122,6 +123,8 @@ interface BrowserViewManagerOptions {
     url: string,
     webContents: ManagedBrowserView["webContents"],
   ) => void;
+  /** Remembered localStorage origins, carried by a persistence migration. */
+  readonly readMigrationOrigins: () => readonly BrowserStorageOrigin[];
   /** Flush window for the aggregate `bounds_stream` perf log. */
   readonly boundsStreamLogIntervalMs: number;
   /** Platform used to resolve reserved chords (BT-301). */
@@ -217,6 +220,7 @@ export class BrowserViewManager {
       entries: this.entries,
       send: options.send,
       captureStorageState: options.captureStorageState,
+      readMigrationOrigins: options.readMigrationOrigins,
     });
     this.entryFactory = new BrowserViewEntryFactory({
       createView: options.createView,
@@ -506,6 +510,35 @@ export class BrowserViewManager {
     this.popups.dispose();
     this.overlay.dispose();
     this.annotations.dispose();
+  }
+
+  /**
+   * Tears every live guest down through the handoff path so the host revives
+   * it and re-places it - which now lands on the durable partition, since the
+   * decision flipped before this runs (spec §6.4 step 4). Guests that cannot
+   * hand off (still provisioning, or already handed off) are left alone: a
+   * teardown without a handoff would strand the host's route, and the next
+   * tile they open picks the persistent partition anyway.
+   */
+  async migrateNativeTabsForPersistence(): Promise<readonly string[]> {
+    const migrating = Array.from(this.entries.guestValues()).filter(
+      (entry) =>
+        entry.closePromise === null && entry.identity.lifecycle.canHandoff,
+    );
+    const migratedKeys = migrating.map((entry) => entry.guestKey);
+    await Promise.all(
+      migrating.map((entry) =>
+        this.closeEntry(entry, "persistence-migration").catch(
+          (error: unknown) => {
+            log.warn("[browser-view] persistence migration recreate failed", {
+              error: describeLogError(error),
+              guestKey: entry.guestKey,
+            });
+          },
+        ),
+      ),
+    );
+    return migratedKeys;
   }
 
   hasNativeTabsForWindow(windowId: string): boolean {
@@ -835,7 +868,7 @@ export class BrowserViewManager {
 
   private async closeEntry(
     entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
+    handoffReason: BrowserViewHandoffReason | null,
   ): Promise<void> {
     if (entry.closePromise !== null) return entry.closePromise;
     const closePromise = this.destroyEntry(entry, handoffReason);
@@ -845,7 +878,7 @@ export class BrowserViewManager {
 
   private async destroyEntry(
     entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
+    handoffReason: BrowserViewHandoffReason | null,
   ): Promise<void> {
     const surface = entry.surface;
     const keyId = surface === null ? null : entryKeyId(surface);

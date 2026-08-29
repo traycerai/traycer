@@ -10,6 +10,7 @@ import {
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
 import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 
 const openExternalLink = vi.hoisted(() => ({
@@ -31,6 +32,20 @@ const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
   reason: "os-backed",
   storageBackend: null,
   encryptionAvailable: true,
+};
+
+const ENABLED_PERSISTENCE: BrowserPersistenceController = {
+  state: {
+    decision: { kind: "enabled", decidedAt: 0 },
+    cryptoState: REAL_COOKIE_STATE,
+    promptsOnEnable: false,
+    appName: "Traycer",
+    platform: "darwin",
+  },
+  pending: false,
+  enable: () => undefined,
+  decline: () => undefined,
+  relaunch: () => undefined,
 };
 
 const ANNOTATION: BrowserAnnotationSessionController = {
@@ -72,7 +87,7 @@ function makeController(
     zoomPercent: 100,
     viewportPreset: "responsive",
     disabled: false,
-    cookieCryptoState: REAL_COOKIE_STATE,
+    persistence: ENABLED_PERSISTENCE,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
     onNavigate: preventNavigate,

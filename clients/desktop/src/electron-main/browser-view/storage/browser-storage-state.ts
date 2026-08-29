@@ -180,6 +180,17 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     this.observations.add(observation);
   }
 
+  /**
+   * The origins remembered so far, newest first, without awaiting in-flight
+   * observations. The enable-time migration carries these into the handoff so
+   * the recreated tiles replay them through the existing seed script (§6.4).
+   */
+  rememberedOrigins(): readonly BrowserPrimaryProfileOriginSnapshot[] {
+    return [...this.origins.values()]
+      .reverse()
+      .map(({ origin, localStorage }) => ({ origin, localStorage }));
+  }
+
   async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
     await Promise.all([...this.observations]);
     const origins = [...this.origins.values()]
@@ -204,6 +215,19 @@ export function browserLocalStorageSeedScript(
     "  for (const entry of match.localStorage) localStorage.setItem(entry.name, entry.value);",
     "})()",
   ].join("\n");
+}
+
+/**
+ * One jar's cookies as the protocol storage shape the seed path validates.
+ * `origins` is empty: cookies are session-wide, localStorage never is.
+ */
+export function browserStorageStateFromCookies(
+  cookies: readonly Cookie[],
+): ProtocolStorageState {
+  return {
+    cookies: cookies.map(toStorageCookie).map(toProtocolStorageCookie),
+    origins: [],
+  };
 }
 
 export async function seedBrowserViewCookies(

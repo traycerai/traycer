@@ -395,6 +395,9 @@ async function runOnReady(state: BootState): Promise<void> {
       await initBrowserPersistence({
         decisionFilePath: browserPersistenceFilePath(),
         platform: process.platform,
+        // `app.setName` already ran in main-process.ts, so this is the exact
+        // name the keychain item (and its ACL dialog) is spelled with.
+        appName: app.getName(),
       });
     }),
     timed("on-ready", "spell-check", () => enableSpellCheck()),

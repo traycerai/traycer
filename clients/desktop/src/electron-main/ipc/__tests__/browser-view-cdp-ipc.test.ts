@@ -132,6 +132,9 @@ vi.mock("../../browser-view/browser-session", () => ({
   cancelBrowserViewDownload: vi.fn(),
   clearBrowserViewPendingCertificateError: vi.fn(),
   ensureBrowserViewSession: vi.fn(),
+  ensureBrowserViewSessionForPartition: vi.fn(),
+  BROWSER_VIEW_PARTITION: "persist:traycer-browser",
+  BROWSER_VIEW_EPHEMERAL_PARTITION: "traycer-browser-ephemeral",
   onBrowserViewCertificateError: vi.fn(),
   onBrowserViewDownloadChange: vi.fn(),
   readBrowserViewPendingCertificateError: vi.fn(() => null),
@@ -149,6 +152,9 @@ vi.mock("../../browser-view/storage/browser-cookie-crypto", () => {
   const persistenceState = {
     decision: { kind: "enabled", decidedAt: 0 },
     cryptoState,
+    promptsOnEnable: false,
+    appName: "Traycer",
+    platform: "darwin",
   };
   return {
     getBrowserCookieCryptoState: vi.fn(() => cryptoState),
@@ -161,6 +167,10 @@ vi.mock("../../browser-view/storage/browser-cookie-crypto", () => {
 vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {
     observe(): void {}
+
+    rememberedOrigins() {
+      return [];
+    }
 
     capture() {
       return Promise.resolve({
@@ -189,6 +199,7 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
     }),
   ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
+  browserStorageStateFromCookies: vi.fn(() => ({ cookies: [], origins: [] })),
 }));
 
 function makeBridge() {
@@ -201,6 +212,7 @@ function makeBridge() {
       off: vi.fn(),
     },
     safeSendToWindow: vi.fn(),
+    fanOut: vi.fn(),
     resolveSenderWindowId: vi.fn(() => "window-1"),
   };
 }

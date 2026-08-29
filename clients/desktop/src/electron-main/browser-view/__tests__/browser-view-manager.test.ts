@@ -35,6 +35,7 @@ import type {
   BrowserSessionDownloadChange,
 } from "../browser-session";
 import type { BrowserStorageStateCaptureResult } from "../storage/browser-storage-state";
+import type { BrowserStorageOrigin } from "@traycer/protocol/host/browser/contracts";
 
 type BrowserViewManagerOptions = ConstructorParameters<
   typeof BrowserViewManager
@@ -642,7 +643,10 @@ type HarnessOptions = {
   readonly boundsStreamLogIntervalMs?: number;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
+  readonly migrationOrigins?: readonly BrowserStorageOrigin[];
 };
+
+const MIGRATION_ORIGINS_NONE: readonly BrowserStorageOrigin[] = [];
 
 const DEFAULT_CAPTURE_STORAGE_STATE: BrowserViewManagerOptions["captureStorageState"] =
   (_input, _webContents): Promise<BrowserStorageStateCaptureResult> =>
@@ -815,6 +819,8 @@ function createHarnessWithOptions(
     observePrimaryProfileOrigin: (url) => {
       primaryProfileObservedUrls.push(url);
     },
+    readMigrationOrigins: () =>
+      harnessOptions?.migrationOrigins ?? MIGRATION_ORIGINS_NONE,
     boundsStreamLogIntervalMs:
       harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
     hostPlatform: harnessOptions?.hostPlatform ?? "darwin",
@@ -1686,6 +1692,40 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.views[1]?.webContents.closeCalls).toBe(0);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
+    harness.manager.dispose();
+    await flushCloseEntry();
+  });
+
+  it("migrates live tabs for persistence with its own handoff reason and origins", async () => {
+    const harness = createHarnessWithOptions({
+      migrationOrigins: [
+        { origin: "https://remembered.example", localStorage: [] },
+      ],
+    });
+    const provisioned = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(provisioned);
+
+    const migrated = await harness.manager.migrateNativeTabsForPersistence();
+
+    expect(migrated).toHaveLength(1);
+    expect(harness.electronTabHandoffNotifications).toHaveLength(1);
+    // The reason is what makes the host emit its "revived; re-snapshot" notice
+    // for the RIGHT cause, and the remembered origins ride along so the
+    // recreated tile replays localStorage the tab itself never held.
+    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
+      sessionId: "session-1",
+      tabId: "tab-1",
+      reason: "persistence-migration",
+    });
+    expect(
+      harness.electronTabHandoffNotifications[0]?.capturedStorageState?.origins,
+    ).toEqual([{ origin: "https://remembered.example", localStorage: [] }]);
     harness.manager.dispose();
     await flushCloseEntry();
   });

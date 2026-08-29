@@ -494,3 +494,46 @@ describe("browser.sessions@1.0 persistence state", () => {
     ).toBe(false);
   });
 });
+
+describe("browser.sessions@1.0 electron tab handoff", () => {
+  const HANDOFF_FRAME = {
+    kind: "electronTabHandoff",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId: "registration-1",
+    capturedUrl: "https://example.com/",
+    capturedStorageState: null,
+    siblingTabs: [],
+  };
+
+  it("carries every handoff reason, including persistence-migration", () => {
+    for (const reason of [
+      "gui-quit",
+      "tab-released",
+      "crash-no-capture",
+      "persistence-migration",
+    ]) {
+      const frame = { ...HANDOFF_FRAME, reason };
+      expect(browserSessionsClientFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+      expect(browserSessionsV1.clientFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("rejects an unknown handoff reason and a missing one", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...HANDOFF_FRAME,
+        reason: "keychain-denied",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse(HANDOFF_FRAME).success,
+    ).toBe(false);
+  });
+});

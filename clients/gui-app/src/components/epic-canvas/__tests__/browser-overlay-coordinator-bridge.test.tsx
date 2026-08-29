@@ -55,6 +55,9 @@ const ENABLED_PERSISTENCE_STATE: BrowserPersistenceState = {
     storageBackend: null,
     encryptionAvailable: true,
   },
+  promptsOnEnable: false,
+  appName: "Traycer",
+  platform: "darwin",
 };
 
 class FakeBrowserViewBridge implements BrowserViewBridge {
@@ -219,6 +222,12 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   relaunchForPersistence(): Promise<void> {
     return Promise.resolve();
+  }
+
+  onPersistenceStateChanged(
+    _handler: (state: BrowserPersistenceState) => void,
+  ): { dispose: () => void } {
+    return { dispose: () => undefined };
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {

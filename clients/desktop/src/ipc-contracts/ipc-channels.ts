@@ -430,6 +430,10 @@ export const RunnerHostEvent = {
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
+  // Lazy persistence (keychain refactor ticket 02). Fanned out to every window
+  // on boot and after each decision change, so all tiles agree at once.
+  browserViewPersistenceStateChanged:
+    "runnerHost:event:browserView:persistenceStateChanged",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",

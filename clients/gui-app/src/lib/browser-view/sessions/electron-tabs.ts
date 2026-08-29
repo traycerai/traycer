@@ -3,12 +3,12 @@ import {
   type BrowserSessionsClientFrame,
   type BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
-import type {
-  BrowserViewAttachSurface,
-  BrowserViewNativeTabCapability,
-  BrowserViewNativeTabKey,
-  BrowserViewNativeTabStatusChange,
-  BrowserViewBridge,
+import {
+  type BrowserViewAttachSurface,
+  type BrowserViewNativeTabCapability,
+  type BrowserViewNativeTabKey,
+  type BrowserViewNativeTabStatusChange,
+  type BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
 import { appLogger } from "@/lib/logger";
 import { compositeKey } from "../tiles/browser-view-keys";

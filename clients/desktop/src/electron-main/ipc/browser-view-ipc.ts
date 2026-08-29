@@ -5,7 +5,10 @@ import {
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
 } from "electron";
-import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+} from "../../ipc-contracts/ipc-channels";
 import {
   browserViewIpcPayload,
   parseReservedChordTokens,
@@ -21,10 +24,13 @@ import type {
 } from "../browser-view/browser-view-port";
 import { hostPlatformFromProcessPlatform } from "../browser-view/manager/browser-view-chords";
 import {
+  BROWSER_VIEW_EPHEMERAL_PARTITION,
+  BROWSER_VIEW_PARTITION,
   createBrowserViewWebPreferences,
   cancelBrowserViewDownload,
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
+  ensureBrowserViewSessionForPartition,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
   readBrowserViewPendingCertificateError,
@@ -45,8 +51,10 @@ import {
   captureBrowserViewStorageState,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
+import { migrateBrowserPersistenceToPersistentPartition } from "../browser-view/storage/browser-persistence-migration";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import type { BrowserPersistenceState } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -104,6 +112,7 @@ export function registerBrowserViewIpc(
     observePrimaryProfileOrigin: (url, webContents) => {
       primaryProfileSnapshots.observe(url, webContents);
     },
+    readMigrationOrigins: () => primaryProfileSnapshots.rememberedOrigins(),
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
@@ -352,19 +361,30 @@ export function registerBrowserViewIpc(
     getBrowserPersistenceState(),
   );
 
-  // The only invoke allowed to reach the OS keystore. Ticket 02 puts the
-  // explainer card in front of it; migrating existing tiles is ticket 02 too,
-  // so live guests keep the partition they were created with.
+  // The only invoke allowed to reach the OS keystore. The explainer card
+  // (spec §7.2) is what stands in front of it; on success the live jar and
+  // every open tile move to the durable partition before the state is
+  // published, so nothing observes a half-migrated browser.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewPersistenceEnable,
     async () => {
       const cryptoState = await enableBrowserPersistence();
-      // Create the durable partition now so the next guest attaches to an
-      // already-hardened session.
       if (cryptoState.persistence === "persistent") {
+        // Create the durable partition first: the migration copies into it and
+        // the recreated guests attach to an already-hardened session.
         ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
+        await migrateBrowserPersistenceToPersistentPartition({
+          readEphemeralSession: () =>
+            ensureBrowserViewSessionForPartition(
+              BROWSER_VIEW_EPHEMERAL_PARTITION,
+            ),
+          readPersistentSession: () =>
+            ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
+          seedCookies: seedBrowserViewCookies,
+          recreateTabs: () => manager.migrateNativeTabsForPersistence(),
+        });
       }
-      return getBrowserPersistenceState();
+      return publishBrowserPersistenceState(bridge);
     },
   );
 
@@ -372,9 +392,13 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewPersistenceDecline,
     async () => {
       await declineBrowserPersistence();
-      return getBrowserPersistenceState();
+      return publishBrowserPersistenceState(bridge);
     },
   );
+
+  // Boot state, so a window that opened before any decision starts from the
+  // same truth the pushes carry rather than from its own first read.
+  publishBrowserPersistenceState(bridge);
 
   // Chromium caches the macOS keychain lookup per process, so a denial can
   // only be re-asked from a fresh one.
@@ -391,6 +415,18 @@ export function registerBrowserViewIpc(
     manager.dispose();
   });
   return manager;
+}
+
+/**
+ * One truth for every window. The shield and the explainer card read this
+ * push, so a decision taken in one window is never invisible in another.
+ */
+function publishBrowserPersistenceState(
+  bridge: RunnerIpcBridge,
+): BrowserPersistenceState {
+  const state = getBrowserPersistenceState();
+  bridge.fanOut(RunnerHostEvent.browserViewPersistenceStateChanged, state);
+  return state;
 }
 
 function createElectronBrowserView(
