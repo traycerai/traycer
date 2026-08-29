@@ -7,6 +7,7 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { toast } from "sonner";
+import { useStore } from "zustand";
 
 interface CommandMutationCallbacks<Response, Variables> {
   readonly onSuccess?: (response: Response, variables: Variables) => void;
@@ -87,7 +88,7 @@ export function useEpicCreateArtifact() {
  */
 export function useEpicDeleteArtifact() {
   const handle = useOpenEpicHandle();
-  const isPending = handle.store((state) =>
+  const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
         command.state === "pending" &&
@@ -143,7 +144,7 @@ export function useEpicDeleteArtifact() {
  */
 export function useEpicUpdateArtifactStatus() {
   const handle = useOpenEpicHandle();
-  const isPending = handle.store((state) =>
+  const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
         command.state === "pending" &&
@@ -199,7 +200,7 @@ function analyticsTicketStatus(status: number): 0 | 1 | 2 {
  */
 export function useEpicRenameArtifact(trackUserIntent: boolean) {
   const handle = useOpenEpicHandle();
-  const isPending = handle.store((state) =>
+  const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
         command.state === "pending" &&
