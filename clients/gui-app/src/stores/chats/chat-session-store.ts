@@ -37,6 +37,10 @@ import type {
   InterviewAnswerability,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
+  createImageWitnessStore,
+  type ImageWitnessStore,
+} from "@/stores/chats/image-witness-store";
+import {
   applyIndexChange,
   applyRangeResponse,
   applySkeletonChunk,
@@ -2110,7 +2114,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // when nothing changed (zustand then fires no listeners).
         let merged: ChatSessionState = state;
         for (const event of batch) {
-          const partial = applyBlockDelta(merged, event);
+          const partial = applyBlockDelta(merged, event, imageWitnesses);
           if (partial === merged || Object.keys(partial).length === 0) {
             continue;
           }
@@ -2611,6 +2615,16 @@ export function createChatSessionStoreWithNotificationDependencies(
      * duplicate rows.
      */
     let windowedLine = false;
+
+    /**
+     * The witnessed image-resolution write stream - the directional evidence
+     * the settled arm's image tiebreak compares (see
+     * {@link ImageWitnessStore}). Lives and dies with the WINDOW, never the
+     * connection: replaced on a windowed-to-legacy downgrade, where its
+     * ordinals' whole coordinate space becomes unaddressable, and otherwise
+     * carried across reconnects exactly as the window's spans are.
+     */
+    let imageWitnesses = createImageWitnessStore();
 
     /**
      * The ordinal range the transcript viewport is showing, as last reported
@@ -3625,6 +3639,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // below and it disagree at the one site whose own comment demands a
         // blank slate for a later re-upgrade.
         assemblingSummaries = null;
+        // The witness store's evidence orders copies within the windowed
+        // coordinate space this line is abandoning; a later re-upgrade starts
+        // a new lineage and must not inherit stamps from the old one.
+        imageWitnesses = createImageWitnessStore();
         applyAuthoritativeSnapshot(
           frame,
           {
@@ -3729,6 +3747,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // must still not displace a fresher held copy while the store is
             // mid-handoff.
             get().activeTurn?.turnId ?? null,
+            imageWitnesses,
           ),
           TRANSCRIPT_WINDOW_MAX_BYTES,
           visibleTranscriptRange,
@@ -4022,6 +4041,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             get().transcriptWindow,
             frame.range,
             get().activeTurn?.turnId ?? null,
+            imageWitnesses,
           ),
           TRANSCRIPT_WINDOW_MAX_BYTES,
           // What the reader is looking at is never evicted - see the
@@ -6955,16 +6975,23 @@ function withoutPendingInterview(
 function applyBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   return event.type === "image_resolution.updated"
-    ? applyImageResolutionDelta(state, event)
+    ? applyImageResolutionDelta(state, event, witnesses)
     : applyContentDelta(state, event);
 }
 
 function applyImageResolutionDelta(
   state: ChatSessionState,
   event: Extract<RuntimeEvent, { type: "image_resolution.updated" }>,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
+  // Recorded FIRST, and unconditionally: the witness is evidence about the
+  // source's write stream, not about the client's holdings, so an unheld or
+  // unreachable row records exactly as a held one does - that is what stamps
+  // a later first hydration correctly.
+  const witnessSeq = witnesses?.record(event.messageId, event.entry) ?? null;
   const messageIndex = state.messages.findIndex(
     (message) =>
       message.role === "assistant" && message.messageId === event.messageId,
@@ -7025,15 +7052,31 @@ function applyImageResolutionDelta(
   // A no-op rather than `{}` if the row is unreachable: the caller has already
   // decided this event belongs to a persisted row rather than the live one, so
   // falling back would re-run that decision with a worse answer.
-  return (
+  const patch =
     rewriteMessageInPlace(
       state,
       message.messageId,
       (target) =>
         target.role === "assistant" ? { ...target, imageResolutions } : target,
       "now",
-    ) ?? {}
-  );
+    ) ?? {};
+  // An APPLIED write stamps exactly - the applied witness names its own
+  // sequence, and `rewriteWindowMessage` rewrote every holder, so every copy
+  // of the record in the new window carries it.
+  if (
+    witnesses !== null &&
+    witnessSeq !== null &&
+    "transcriptWindow" in patch &&
+    patch.transcriptWindow !== undefined
+  ) {
+    witnesses.stampRewrittenCopies(
+      patch.transcriptWindow,
+      event.messageId,
+      event.entry.canonicalSource,
+      witnessSeq,
+    );
+  }
+  return patch;
 }
 
 function applyContentDelta(

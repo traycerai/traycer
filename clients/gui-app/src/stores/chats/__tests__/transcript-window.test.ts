@@ -12,6 +12,7 @@ import {
   queueSteerRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import { createImageWitnessStore } from "@/stores/chats/image-witness-store";
 import {
   appendLiveRecords,
   MAX_LIVE_EVENTS,
@@ -161,6 +162,7 @@ function windowWithSkeleton(rowCount: number): TranscriptWindow {
       tail: { fromOrdinal: rowCount, messages: [], events: [] },
     },
     null,
+    null,
   );
   return applySkeletonChunk(seeded, {
     epoch: 1,
@@ -185,6 +187,7 @@ describe("windowed snapshot seating", () => {
         },
       },
       null,
+      null,
     );
     expect(window.rowCount).toBe(5);
     expect(window.spans).toHaveLength(1);
@@ -207,6 +210,7 @@ describe("windowed snapshot seating", () => {
         }),
       },
       null,
+      null,
     );
     expect(seeded.spans).toHaveLength(1);
 
@@ -218,6 +222,7 @@ describe("windowed snapshot seating", () => {
         indexRevision: null,
         tail: { fromOrdinal: 9, messages: [userMessage("m-9", 9)], events: [] },
       },
+      null,
       null,
     );
     expect(refreshed.spans.map((span) => span.fromOrdinal)).toEqual([0, 9]);
@@ -233,6 +238,7 @@ describe("windowed snapshot seating", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -242,6 +248,7 @@ describe("windowed snapshot seating", () => {
         indexRevision: null,
         tail: { fromOrdinal: 4, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(rebased.spans).toEqual([]);
@@ -262,6 +269,7 @@ describe("windowed snapshot seating", () => {
         tail: { fromOrdinal: 40, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(window.spans).toEqual([]);
     expect(window.rowCount).toBe(40);
@@ -278,6 +286,7 @@ describe("skeleton chunks", () => {
         indexRevision: null,
         tail: { fromOrdinal: 6, messages: [], events: [] },
       },
+      null,
       null,
     );
     const first = applySkeletonChunk(seeded, {
@@ -312,6 +321,7 @@ describe("skeleton chunks", () => {
         tail: { fromOrdinal: 9, messages: [], events: [] },
       },
       null,
+      null,
     );
     const short = applySkeletonChunk(seeded, {
       epoch: 1,
@@ -335,6 +345,7 @@ describe("skeleton chunks", () => {
         indexRevision: null,
         tail: { fromOrdinal: 9, messages: [], events: [] },
       },
+      null,
       null,
     );
     const first = applySkeletonChunk(seeded, {
@@ -383,6 +394,7 @@ describe("skeleton chunks", () => {
         tail: { fromOrdinal: 1, messages: [userMessage("m-1", 1)], events: [] },
       },
       null,
+      null,
     );
     expect(seeded.spans).toHaveLength(1);
 
@@ -404,6 +416,7 @@ describe("skeleton chunks", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
     const contradicting = applySkeletonChunk(hydrated, {
@@ -428,6 +441,7 @@ describe("index deltas", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
     const appended = applyIndexChange(held, {
@@ -458,6 +472,7 @@ describe("index deltas", () => {
         indexRevision: null,
         tail: { fromOrdinal: 100, messages: [], events: [] },
       },
+      null,
       null,
     );
     const partial = applySkeletonChunk(seeded, {
@@ -548,6 +563,7 @@ describe("index deltas", () => {
         },
       },
       null,
+      null,
     );
     expect(seeded.rowCount).toBe(1);
 
@@ -593,6 +609,7 @@ describe("index deltas", () => {
         },
       },
       null,
+      null,
     );
 
     const appended = applyIndexChange(seeded, {
@@ -623,6 +640,7 @@ describe("index deltas", () => {
         rowIds: ["row-0", "row-1", "row-2"],
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
+      null,
       null,
     );
     expect(held.spans).toHaveLength(1);
@@ -657,6 +675,7 @@ describe("index deltas", () => {
         messages: [userMessage("m-2", 2)],
       }),
       null,
+      null,
     );
     const next = applyIndexChange(held, {
       activeTurnId: null,
@@ -688,6 +707,7 @@ describe("index deltas", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
     const reindexed = applyIndexChange(held, {
       activeTurnId: null,
@@ -713,6 +733,7 @@ describe("index deltas", () => {
         indexRevision: null,
         tail: { fromOrdinal: 4, messages: [], events: [] },
       },
+      null,
       null,
     );
     const stale = applyIndexChange(window, {
@@ -742,6 +763,7 @@ describe("index deltas", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
     expect(held.spans).toHaveLength(1);
@@ -794,6 +816,7 @@ describe("idempotent voiding", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
   }
@@ -1012,6 +1035,7 @@ describe("the active turn's streaming echo exemption in applyIndexChange", () =>
           tail: { fromOrdinal: 1, messages: [], events: [] },
         },
         null,
+        null,
       ),
       {
         epoch: 1,
@@ -1028,6 +1052,7 @@ describe("the active turn's streaming echo exemption in applyIndexChange", () =>
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-streaming", turnId, 1)],
       }),
+      null,
       null,
     );
   }
@@ -1121,6 +1146,7 @@ describe("range responses", () => {
         messages: [userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
     expect(seated.spans).toEqual([]);
   });
@@ -1140,6 +1166,7 @@ describe("range responses", () => {
         rowIds: ["row-1", "SOMETHING-ELSE"],
         messages: [userMessage("m-1", 1)],
       }),
+      null,
       null,
     );
 
@@ -1164,6 +1191,7 @@ describe("range responses", () => {
         messages: [userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
 
     expect(seated.invalidated).toBe(false);
@@ -1179,6 +1207,7 @@ describe("range responses", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
     expect(seated.spans).toEqual([]);
@@ -1202,6 +1231,7 @@ describe("range responses", () => {
         events: [sharedEvent],
       }),
       null,
+      null,
     );
     const second = applyRangeResponse(
       first,
@@ -1212,6 +1242,7 @@ describe("range responses", () => {
         messages: [shared, userMessage("m-4", 4)],
         events: [sharedEvent, event("e-4", 4)],
       }),
+      null,
       null,
     );
     expect(second.spans).toHaveLength(1);
@@ -1274,6 +1305,7 @@ describe("held-copy preference for the active turn", () => {
           tail: { fromOrdinal: 1, messages: [], events: [] },
         },
         null,
+        null,
       ),
       {
         epoch: 1,
@@ -1295,6 +1327,7 @@ describe("held-copy preference for the active turn", () => {
           indexRevision: null,
           tail: { fromOrdinal: 1, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -1331,6 +1364,7 @@ describe("held-copy preference for the active turn", () => {
         ],
       }),
       turnId,
+      null,
     );
 
     // The held (longer) body wins over the served (shorter, stale) one.
@@ -1370,6 +1404,7 @@ describe("held-copy preference for the active turn", () => {
         ],
       }),
       turnId,
+      null,
     );
 
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([
@@ -1405,6 +1440,7 @@ describe("held-copy preference for the active turn", () => {
         ],
       }),
       turnId,
+      null,
     );
 
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([
@@ -1447,6 +1483,7 @@ describe("held-copy preference for the active turn", () => {
           tail: { fromOrdinal: 3, messages: [], events: [] },
         },
         null,
+        null,
       ),
       {
         epoch: 1,
@@ -1470,6 +1507,7 @@ describe("held-copy preference for the active turn", () => {
         messages: [short],
       }),
       turnId,
+      null,
     );
     // ...and a LATER serve of a later ordinal carrying the same record grown.
     // Ordinal 1 stays a gap, so these never merge into one span.
@@ -1482,6 +1520,7 @@ describe("held-copy preference for the active turn", () => {
         messages: [grown],
       }),
       turnId,
+      null,
     );
 
     // A bulk answer for the earliest row, generated before the growth. The
@@ -1495,6 +1534,7 @@ describe("held-copy preference for the active turn", () => {
         messages: [short],
       }),
       turnId,
+      null,
     );
 
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([
@@ -1518,6 +1558,7 @@ describe("held-copy preference for the active turn", () => {
           { ...assistantMessage(messageId, turnId, 2), blocks: [firstBlock] },
         ],
       }),
+      null,
       null,
     );
 
@@ -1549,6 +1590,7 @@ describe("held-copy preference for the active turn", () => {
         },
       },
       turnId,
+      null,
     );
 
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([
@@ -1577,6 +1619,7 @@ describe("held-copy preference for the active turn", () => {
         ],
       }),
       turnId,
+      null,
     );
     // A non-echo rewrite (no active turn from the store's point of view)
     // demotes the turn's span to stale.
@@ -1608,6 +1651,7 @@ describe("held-copy preference for the active turn", () => {
         ],
       }),
       turnId,
+      null,
     );
 
     expect(seatedAssistantBlocks(reserved, messageId)).toEqual([
@@ -1628,6 +1672,7 @@ describe("gaps and what to request next", () => {
         messages: [userMessage("m-4", 4)],
       }),
       null,
+      null,
     );
     expect(
       transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 50 }),
@@ -1647,6 +1692,7 @@ describe("gaps and what to request next", () => {
         messages: [userMessage("m-4", 4)],
       }),
       null,
+      null,
     );
     // Two rows hydrated out of ten - the number find has to disclose.
     expect(unhydratedRowCount(window)).toBe(8);
@@ -1662,6 +1708,7 @@ describe("gaps and what to request next", () => {
         incompleteRowIds: ["row-before-skeleton"],
         messages: [userMessage("row-before-skeleton", 1)],
       }),
+      null,
       null,
     );
 
@@ -1690,6 +1737,7 @@ describe("gaps and what to request next", () => {
         tail: { fromOrdinal: 40, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(planTranscriptHydration(window, null, [])).toEqual({
       fromOrdinal: 20,
@@ -1708,6 +1756,7 @@ describe("gaps and what to request next", () => {
           tail: { fromOrdinal: 40, messages: [], events: [] },
         },
         null,
+        null,
       ),
       rangeResponse({
         epoch: 1,
@@ -1715,6 +1764,7 @@ describe("gaps and what to request next", () => {
         rowIds: Array.from({ length: 20 }, (_u, i) => `row-${20 + i}`),
         messages: [userMessage("m-20", 20)],
       }),
+      null,
       null,
     );
     expect(planTranscriptHydration(window, null, [])).toBeNull();
@@ -1758,6 +1808,7 @@ describe("gaps and what to request next", () => {
             tail: { fromOrdinal: 40, messages: [], events: [] },
           },
           null,
+          null,
         ),
         rangeResponse({
           epoch: 1,
@@ -1765,6 +1816,7 @@ describe("gaps and what to request next", () => {
           rowIds: Array.from({ length: 20 }, (_u, i) => `row-${20 + i}`),
           messages: [userMessage("m-20", 20)],
         }),
+        null,
         null,
       );
     }
@@ -1800,6 +1852,7 @@ describe("gaps and what to request next", () => {
           indexRevision: null,
           tail: { fromOrdinal: 40, messages: [], events: [] },
         },
+        null,
         null,
       );
       expect(planTranscriptHydration(noTail, null, [4])).toEqual({
@@ -1854,6 +1907,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
     expect(seeded.spans).toHaveLength(1);
 
@@ -1865,6 +1919,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
       },
+      null,
       null,
     );
 
@@ -1886,6 +1941,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
 
     const rebased = applyWindowedSnapshot(
@@ -1896,6 +1952,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -1911,6 +1968,7 @@ describe("stale spans", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
 
@@ -1937,6 +1995,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
 
     const reindexed = applyIndexChange(held, {
@@ -1960,6 +2019,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -1969,6 +2029,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
       },
+      null,
       null,
     );
     expect(rebased.staleSpans).toHaveLength(1);
@@ -1989,6 +2050,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0-new", 0), userMessage("m-1-new", 1)],
       }),
       null,
+      null,
     );
 
     expect(reserved.staleSpans).toEqual([]);
@@ -2004,6 +2066,7 @@ describe("stale spans", () => {
           indexRevision: null,
           tail: { fromOrdinal: 4, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -2027,6 +2090,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-keep", 0)],
       }),
       null,
+      null,
     );
     const seededB = applyRangeResponse(
       seededA,
@@ -2036,6 +2100,7 @@ describe("stale spans", () => {
         rowIds: ["drop-2"],
         messages: [userMessage("m-drop", 2)],
       }),
+      null,
       null,
     );
     expect(seededB.spans).toHaveLength(2);
@@ -2076,6 +2141,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -2085,6 +2151,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
       },
+      null,
       null,
     );
     expect(rebased.staleSpans).toHaveLength(1);
@@ -2117,6 +2184,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -2126,6 +2194,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
       },
+      null,
       null,
     );
     // The only FRESH span is the new inline tail; "m-0" survives in a stale
@@ -2165,6 +2234,7 @@ describe("stale spans", () => {
           tail: { fromOrdinal: 2, messages: [], events: [] },
         },
         null,
+        null,
       ),
       {
         epoch: 1,
@@ -2181,6 +2251,7 @@ describe("stale spans", () => {
         rowIds: ["keep-0", "gone-1"],
         messages: [userMessage("m-keep", 0), userMessage("m-gone", 1)],
       }),
+      null,
       null,
     );
     expect(hydrated.spans).toHaveLength(1);
@@ -2211,6 +2282,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-keep-new", 0)],
       }),
       null,
+      null,
     );
 
     expect(reserved.staleSpans).toEqual([]);
@@ -2238,6 +2310,7 @@ describe("stale spans", () => {
         },
       },
       null,
+      null,
     );
     expect(seeded.spans[0].rowIds).toEqual(["", ""]);
 
@@ -2249,6 +2322,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 2, messages: [userMessage("m-2", 2)], events: [] },
       },
+      null,
       null,
     );
 
@@ -2287,6 +2361,7 @@ describe("stale spans", () => {
         messages: [messageWithText(userMessage("m-0", 0), bulk)],
       }),
       null,
+      null,
     );
     const seeded = applyRangeResponse(
       withOnScreen,
@@ -2296,6 +2371,7 @@ describe("stale spans", () => {
         rowIds: ["row-10"],
         messages: [messageWithText(userMessage("m-10", 10), bulk)],
       }),
+      null,
       null,
     );
     const rebased = applyWindowedSnapshot(
@@ -2310,6 +2386,7 @@ describe("stale spans", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([
@@ -2347,6 +2424,7 @@ describe("stale spans", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(rebalanced.staleSpans.map((span) => span.rowIds)).toEqual([
@@ -2370,6 +2448,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -2383,6 +2462,7 @@ describe("stale spans", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([
@@ -2400,6 +2480,7 @@ describe("stale spans", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
     expect(served.staleSpans.map((span) => span.rowIds)).toEqual([
@@ -2431,6 +2512,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 5)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -2444,6 +2526,7 @@ describe("stale spans", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     // The replacement index renumbers the carried row from 5 to 20 and has not
@@ -2499,6 +2582,7 @@ describe("stale spans", () => {
         },
       },
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       legacyTail,
@@ -2508,6 +2592,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([["", ""]]);
@@ -2544,6 +2629,7 @@ describe("stale spans", () => {
         },
       },
       null,
+      null,
     );
     const second = applyWindowedSnapshot(
       first,
@@ -2557,6 +2643,7 @@ describe("stale spans", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     // Epoch 1's tail is the carry; epoch 2's is fresh, and both are markers at
@@ -2574,6 +2661,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -2606,6 +2694,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -2615,6 +2704,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
+      null,
       null,
     );
     // Epoch 2 re-serves `row-5` alone, at a new ordinal and with a body the
@@ -2628,6 +2718,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 555)],
       }),
       null,
+      null,
     );
     // A second rebase before the replacement lands, which is what leaves two
     // carries holding `row-5`: the fresher one is admitted for it, the older
@@ -2640,6 +2731,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(carried.staleSpans.map((span) => span.rowIds)).toEqual([
@@ -2671,6 +2763,7 @@ describe("stale spans", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
       null,
     );
 
@@ -2710,6 +2803,7 @@ describe("stale spans", () => {
         messages: [settled],
       }),
       null,
+      null,
     );
     // The local in-place rewrite, bumping the host's write counter the way
     // `accumulateTurnContent` does.
@@ -2730,6 +2824,7 @@ describe("stale spans", () => {
         messages: [settled],
       }),
       // No active turn, so only the settled rule can save this.
+      null,
       null,
     );
 
@@ -2758,6 +2853,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 5)],
       }),
       null,
+      null,
     );
     const watching = touchTranscriptRange(seeded, {
       fromOrdinal: 5,
@@ -2775,50 +2871,129 @@ describe("stale spans", () => {
     expect(touchTranscriptRange(atTail, null)).toBe(atTail);
   });
 
-  it("keeps a held copy whose image entry was REPLACED for a source both list", () => {
-    // `applyImageResolutionDelta` upserts on `canonicalSource`, so a later
-    // update to a source both copies already list replaces the entry in place.
-    // Asking only whether the source APPEARS answers "not ahead" for exactly
-    // the update that moved it, and the delayed serve then wins on `servedAt`.
-    const pending = {
-      source: "https://example.test/b.png",
-      canonicalSource: "https://example.test/b.png",
-      width: null,
-      height: null,
-      state: "consent-required" as const,
-      attachmentHash: null,
-      mediaType: null,
-    };
-    const settled = {
-      ...assistantMessage("a-upsert", "t-upsert", 5),
+  // ── The settled arm's image tiebreak decides on DIRECTIONAL evidence ──
+  //
+  // Two pins used to live here ("keeps a held copy whose image resolved after
+  // the serve was sliced", "keeps a held copy whose image entry was REPLACED
+  // for a source both list") pinning the any-difference-means-held-is-newer
+  // preference. That preference was the defect: "different" is not "newer",
+  // and a held copy seated from an OLDER slice differs from a fresher serve
+  // in exactly the same way, so the preference pinned the stale copy with the
+  // row hydrated and no gap left for the planner. Their scenarios return
+  // below with the write WITNESSED, where rule 2 decides them correctly - and
+  // the unwitnessed forms now pin the opposite outcome, so the preference
+  // cannot be resurrected.
+
+  function imageEntry(state: "pending" | "resolved", source: string) {
+    return state === "pending"
+      ? {
+          source,
+          canonicalSource: source,
+          width: null,
+          height: null,
+          state: "consent-required" as const,
+          attachmentHash: null,
+          mediaType: null,
+        }
+      : {
+          source,
+          canonicalSource: source,
+          width: 10,
+          height: 10,
+          state: "resolved" as const,
+          attachmentHash: "a".repeat(64),
+          mediaType: "image/png" as const,
+        };
+  }
+
+  function settledWithImages(
+    messageId: string,
+    entries: readonly ReturnType<typeof imageEntry>[],
+  ): Extract<Message, { role: "assistant" }> {
+    return {
+      ...assistantMessage(messageId, `t-${messageId}`, 5),
       blocksVersion: 3,
-      imageResolutions: [pending],
+      imageResolutions: [...entries],
     };
+  }
+
+  it("a witnessed write defeats the delayed serve that predates it", () => {
+    // The witness stream carried BOTH contents, so rule 2 has stamps on both
+    // sides: held (rewritten, exact apply stamp) vs served (unique content
+    // match on the pre-write content). The seeded serve is an ordinary range
+    // seat, and the evidence recorded BEFORE it still decides the comparison
+    // after it - range seats stamp, they never reset.
+    const witnesses = createImageWitnessStore();
+    const source = "https://example.test/b.png";
+    const pendingEntry = imageEntry("pending", source);
+    const resolvedEntry = imageEntry("resolved", source);
+    witnesses.record("a-w", pendingEntry);
     const seeded = applyRangeResponse(
       windowWithSkeleton(30),
       rangeResponse({
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5"],
-        messages: [settled],
+        messages: [settledWithImages("a-w", [pendingEntry])],
       }),
       null,
+      witnesses,
     );
-    // The consent is granted: SAME source, replaced entry, same blocksVersion.
-    const upserted = updateWindowMessage(seeded, "a-upsert", (message) =>
+    const applied = witnesses.record("a-w", resolvedEntry);
+    const upserted = updateWindowMessage(seeded, "a-w", (message) =>
       message.role !== "assistant"
         ? message
-        : {
-            ...message,
-            imageResolutions: [
-              {
-                ...pending,
-                state: "resolved" as const,
-                attachmentHash: "b".repeat(64),
-                mediaType: "image/png" as const,
-              },
-            ],
-          },
+        : { ...message, imageResolutions: [resolvedEntry] },
+    );
+    expect(upserted.held).toBe(true);
+    witnesses.stampRewrittenCopies(upserted.window, "a-w", source, applied);
+
+    const delayed = applyRangeResponse(
+      upserted.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-w", [pendingEntry])],
+      }),
+      null,
+      witnesses,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-w",
+    );
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions[0].state
+        : "missing",
+    ).toBe("resolved");
+  });
+
+  it("an unwitnessed write no longer holds the row - the serve stands", () => {
+    // The same scenario without the witness: the held rewrite brings no
+    // rule-2 evidence, the source sets match so rule 3 is silent, and rule 4
+    // seats the serve. The refuted held-preference must not decide this -
+    // repair rides the host's `updated` index entry (the write moved the
+    // row's digest), which re-plans the ordinal and fetches current state.
+    const witnesses = createImageWitnessStore();
+    const source = "https://example.test/b.png";
+    const pendingEntry = imageEntry("pending", source);
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-uw", [pendingEntry])],
+      }),
+      null,
+      witnesses,
+    );
+    const upserted = updateWindowMessage(seeded, "a-uw", (message) =>
+      message.role !== "assistant"
+        ? message
+        : { ...message, imageResolutions: [imageEntry("resolved", source)] },
     );
     expect(upserted.held).toBe(true);
 
@@ -2828,13 +3003,59 @@ describe("stale spans", () => {
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5"],
-        messages: [settled],
+        messages: [settledWithImages("a-uw", [pendingEntry])],
       }),
       null,
+      witnesses,
     );
 
     const rendered = hydratedRecords(delayed).messages.find(
-      (message) => message.messageId === "a-upsert",
+      (message) => message.messageId === "a-uw",
+    );
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions[0].state
+        : "missing",
+    ).toBe("consent-required");
+  });
+
+  it("witnesses recorded while the record was unheld stamp its first hydration", () => {
+    // The witness is evidence about the source's write stream, not the
+    // client's holdings: both writes were recorded before the client held any
+    // copy, so the first hydration stamps by unique content match and then
+    // defeats a delayed serve carrying the older write.
+    const witnesses = createImageWitnessStore();
+    const source = "https://example.test/u.png";
+    const older = imageEntry("pending", source);
+    const newer = imageEntry("resolved", source);
+    witnesses.record("a-fh", older);
+    witnesses.record("a-fh", newer);
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-fh", [newer])],
+      }),
+      null,
+      witnesses,
+    );
+
+    const delayed = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-fh", [older])],
+      }),
+      null,
+      witnesses,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-fh",
     );
     expect(
       rendered !== undefined && rendered.role === "assistant"
@@ -2843,67 +3064,277 @@ describe("stale spans", () => {
     ).toBe("resolved");
   });
 
-  it("keeps a held copy whose image resolved after the serve was sliced", () => {
-    // `image_resolution.updated` rewrites `imageResolutions` and the runtime
-    // accumulator advances `blocksVersion` only for BLOCK changes, so a range
-    // sliced before the image update TIES on version. A tie reads as "not
-    // ahead", which hands the row back to the older served copy - and the
-    // resolved image regresses permanently, because the row stays hydrated and
-    // leaves no gap for the planner.
-    const settled = {
-      ...assistantMessage("a-img", "t-img", 5),
-      blocksVersion: 3,
-    };
+  it("an ambiguous content match stamps nothing, so the superset rule decides", () => {
+    // W1(X), W2(Y), W3(X): the served copy's content X appears at TWO
+    // retained occurrences, so matching it to "the newest occurrence" would
+    // fabricate "served is later" (3 > 2), break dominance, and suppress the
+    // superset verdict below. Ambiguity yields NO stamp instead: every
+    // differing source goes silent, and rule 3 seats the held copy - it
+    // strictly supersets the served source set within the current lineage.
+    const witnesses = createImageWitnessStore();
+    const s1 = "https://example.test/s1.png";
+    const s2 = "https://example.test/s2.png";
+    const x = imageEntry("pending", s1);
+    const y = imageEntry("resolved", s1);
+    const z = imageEntry("resolved", s2);
+    witnesses.record("a-amb", x);
+    witnesses.record("a-amb", y);
+    witnesses.record("a-amb", x);
     const seeded = applyRangeResponse(
       windowWithSkeleton(30),
       rangeResponse({
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5"],
-        messages: [settled],
+        messages: [settledWithImages("a-amb", [y, z])],
       }),
       null,
+      witnesses,
     );
-    // The image resolves locally. Same `blocksVersion` - that is the point.
-    const resolved = updateWindowMessage(seeded, "a-img", (message) =>
-      message.role !== "assistant"
-        ? message
-        : {
-            ...message,
-            imageResolutions: [
-              {
-                source: "https://example.test/a.png",
-                canonicalSource: "https://example.test/a.png",
-                width: 10,
-                height: 10,
-                state: "resolved" as const,
-                attachmentHash: "a".repeat(64),
-                mediaType: "image/png" as const,
-              },
-            ],
-          },
-    );
-    expect(resolved.held).toBe(true);
 
     const delayed = applyRangeResponse(
-      resolved.window,
+      seeded,
       rangeResponse({
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5"],
-        messages: [settled],
+        messages: [settledWithImages("a-amb", [x])],
       }),
       null,
+      witnesses,
     );
 
     const rendered = hydratedRecords(delayed).messages.find(
-      (message) => message.messageId === "a-img",
+      (message) => message.messageId === "a-amb",
     );
     expect(
       rendered !== undefined && rendered.role === "assistant"
-        ? rendered.imageResolutions.length
+        ? rendered.imageResolutions.map((entry) => entry.canonicalSource)
+        : [],
+    ).toEqual([s1, s2]);
+  });
+
+  it("superset evidence predating the record's lineage reset is directionless", () => {
+    // Same comparison twice around a reset. Before: the held copy's strictly
+    // larger source set wins at witness silence (upsert-only, so larger is
+    // later). After `resetServedRecord` moves the record's lineage floor, the
+    // identical evidence predates the record's last authoritative replacement
+    // and rule 3 refuses it - a snapshot may legitimately re-establish the
+    // record with a smaller set.
+    const witnesses = createImageWitnessStore();
+    const s1 = "https://example.test/s1.png";
+    const s2 = "https://example.test/s2.png";
+    const wide = [imageEntry("resolved", s1), imageEntry("resolved", s2)];
+    const narrow = [imageEntry("resolved", s1)];
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-lin", wide)],
+      }),
+      null,
+      witnesses,
+    );
+
+    const before = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-lin", narrow)],
+      }),
+      null,
+      witnesses,
+    );
+    const beforeRendered = hydratedRecords(before).messages.find(
+      (message) => message.messageId === "a-lin",
+    );
+    expect(
+      beforeRendered !== undefined && beforeRendered.role === "assistant"
+        ? beforeRendered.imageResolutions.length
+        : -1,
+    ).toBe(2);
+
+    witnesses.resetServedRecord("a-lin");
+    const after = applyRangeResponse(
+      before,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-lin", narrow)],
+      }),
+      null,
+      witnesses,
+    );
+    const afterRendered = hydratedRecords(after).messages.find(
+      (message) => message.messageId === "a-lin",
+    );
+    expect(
+      afterRendered !== undefined && afterRendered.role === "assistant"
+        ? afterRendered.imageResolutions.length
         : -1,
     ).toBe(1);
+  });
+
+  it("a snapshot serving a record clears its evidence, and only its", () => {
+    // Per-record grain, pinned from both sides: M's rule-2 protection dies
+    // with the snapshot that served M, while N's - whose record the snapshot
+    // did not serve - survives and still rejects the delayed stale serve.
+    const witnesses = createImageWitnessStore();
+    const sm = "https://example.test/m.png";
+    const sn = "https://example.test/n.png";
+    const mOld = imageEntry("pending", sm);
+    const mNew = imageEntry("resolved", sm);
+    const nOld = imageEntry("pending", sn);
+    const nNew = imageEntry("resolved", sn);
+    witnesses.record("a-m", mOld);
+    witnesses.record("a-n", nOld);
+    let window = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5", "row-6"],
+        messages: [
+          settledWithImages("a-m", [mOld]),
+          settledWithImages("a-n", [nOld]),
+        ],
+      }),
+      null,
+      witnesses,
+    );
+    const mApplied = witnesses.record("a-m", mNew);
+    const mRewritten = updateWindowMessage(window, "a-m", (message) =>
+      message.role !== "assistant"
+        ? message
+        : { ...message, imageResolutions: [mNew] },
+    );
+    witnesses.stampRewrittenCopies(mRewritten.window, "a-m", sm, mApplied);
+    const nApplied = witnesses.record("a-n", nNew);
+    const nRewritten = updateWindowMessage(
+      mRewritten.window,
+      "a-n",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [nNew] },
+    );
+    witnesses.stampRewrittenCopies(nRewritten.window, "a-n", sn, nApplied);
+    window = nRewritten.window;
+
+    // The snapshot serves M (and only M) in its tail.
+    window = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 1,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 29,
+          messages: [settledWithImages("a-m", [mNew])],
+          events: [],
+        },
+      },
+      null,
+      witnesses,
+    );
+
+    const delayed = applyRangeResponse(
+      applyRangeResponse(
+        window,
+        rangeResponse({
+          epoch: 1,
+          fromOrdinal: 5,
+          rowIds: ["row-5"],
+          messages: [settledWithImages("a-m", [mOld])],
+        }),
+        null,
+        witnesses,
+      ),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 6,
+        rowIds: ["row-6"],
+        messages: [settledWithImages("a-n", [nOld])],
+      }),
+      null,
+      witnesses,
+    );
+
+    // Read the SEAT decisions off the spans the delayed serves produced -
+    // `hydratedRecords` dedupes to the freshest copy, and the snapshot's own
+    // tail copy of M would mask what the row-5 seat decided.
+    const seatedStateOf = (fromOrdinal: number, messageId: string): string => {
+      const span = delayed.spans.find(
+        (candidate) =>
+          candidate.fromOrdinal <= fromOrdinal &&
+          fromOrdinal < candidate.fromOrdinal + candidate.rowIds.length &&
+          candidate.messages.some((message) => message.messageId === messageId),
+      );
+      const seated = span?.messages.find(
+        (message) => message.messageId === messageId,
+      );
+      return seated !== undefined && seated.role === "assistant"
+        ? seated.imageResolutions[0].state
+        : "missing";
+    };
+    // M: evidence cleared by the snapshot serve, comparison silent, the
+    // delayed serve stands (repair rides the `updated` channel).
+    expect(seatedStateOf(5, "a-m")).toBe("consent-required");
+    // N: evidence intact, rule 2 rejects the delayed stale serve.
+    expect(seatedStateOf(6, "a-n")).toBe("resolved");
+  });
+
+  it("the active turn's held copy substitutes with no witness evidence at all", () => {
+    // Arm isolation: the active arm never consults the settled evidence
+    // rules. The same unwitnessed rewrite that loses on the settled arm
+    // survives here, because the stream is the active turn's authority and
+    // only `heldCopyIsBehindServed` displaces it.
+    const witnesses = createImageWitnessStore();
+    const source = "https://example.test/act.png";
+    const pendingEntry = imageEntry("pending", source);
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-act", [pendingEntry])],
+      }),
+      "t-a-act",
+      witnesses,
+    );
+    const upserted = updateWindowMessage(seeded, "a-act", (message) =>
+      message.role !== "assistant"
+        ? message
+        : { ...message, imageResolutions: [imageEntry("resolved", source)] },
+    );
+    expect(upserted.held).toBe(true);
+
+    const delayed = applyRangeResponse(
+      upserted.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-act", [pendingEntry])],
+      }),
+      "t-a-act",
+      witnesses,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-act",
+    );
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions[0].state
+        : "missing",
+    ).toBe("resolved");
   });
 
   it("protects every carry drawing the viewport, not just the first admitted", () => {
@@ -2928,6 +3359,7 @@ describe("stale spans", () => {
         messages: [messageWithText(userMessage("m-0", 0), bulk)],
       }),
       null,
+      null,
     );
     // Disjoint, so `insertSpan` cannot merge them into one carry.
     const seeded = applyRangeResponse(
@@ -2938,6 +3370,7 @@ describe("stale spans", () => {
         rowIds: ["row-10"],
         messages: [messageWithText(userMessage("m-10", 10), bulk)],
       }),
+      null,
       null,
     );
     // The reader is across both, reported before the rebase demotes them.
@@ -2954,6 +3387,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -2982,6 +3416,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -2991,6 +3426,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
+      null,
       null,
     );
     // The partial refetch: only `row-5` comes back, with a newer body. The
@@ -3003,6 +3439,7 @@ describe("stale spans", () => {
         rowIds: ["row-5"],
         messages: [userMessage("m-5", 555)],
       }),
+      null,
       null,
     );
     const named = applySkeletonChunk(refetched, {
@@ -3033,6 +3470,7 @@ describe("stale spans", () => {
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(carried.staleSpans.map((span) => span.rowIds)).toEqual([
@@ -3061,6 +3499,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
       }),
       null,
+      null,
     );
     const rebased = applyWindowedSnapshot(
       seeded,
@@ -3070,6 +3509,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
+      null,
       null,
     );
     const reserved = applyRangeResponse(
@@ -3081,6 +3521,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-5", 555)],
       }),
       null,
+      null,
     );
     const carried = applyWindowedSnapshot(
       reserved,
@@ -3090,6 +3531,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 30, messages: [], events: [] },
       },
+      null,
       null,
     );
     // `row-6` stays unnamed and off screen throughout, so the older carry has
@@ -3128,6 +3570,7 @@ describe("stale spans", () => {
         tail: { fromOrdinal: 3, messages: [], events: [] },
       },
       null,
+      null,
     );
     const partiallyNamed = applySkeletonChunk(announced, {
       epoch: 1,
@@ -3147,6 +3590,7 @@ describe("stale spans", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(seeded.spans[0].rowIds).toEqual(["row-1", ""]);
@@ -3178,6 +3622,7 @@ describe("stale spans", () => {
         messages: [userMessage("m-1-new", 0)],
       }),
       null,
+      null,
     );
 
     expect(reserved.staleSpans).toEqual([]);
@@ -3202,6 +3647,7 @@ describe("stale spans", () => {
         },
       },
       null,
+      null,
     );
     expect(first.spans[0].rowIds).toEqual(["", ""]);
 
@@ -3218,6 +3664,7 @@ describe("stale spans", () => {
         },
       },
       null,
+      null,
     );
     expect(second.spans[0].rowIds).toEqual(["", ""]);
     expect(second.staleSpans.map((span) => span.fromOrdinal)).toEqual([18]);
@@ -3232,6 +3679,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: { fromOrdinal: 6, messages: [userMessage("m-6", 6)], events: [] },
       },
+      null,
       null,
     );
 
@@ -3254,6 +3702,7 @@ describe("eviction", () => {
         messages: [userMessage("cold", 0)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3264,6 +3713,7 @@ describe("eviction", () => {
         messages: [userMessage("warm", 10)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3273,6 +3723,7 @@ describe("eviction", () => {
         rowIds: ["row-28", "row-29"],
         messages: [userMessage("tail", 28)],
       }),
+      null,
       null,
     );
 
@@ -3299,6 +3750,7 @@ describe("eviction", () => {
         messages: [userMessage("tail", 18)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3308,6 +3760,7 @@ describe("eviction", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("warmer", 0)],
       }),
+      null,
       null,
     );
     const evicted = evictTranscriptWindowToBudget(window, 1, null, []);
@@ -3325,6 +3778,7 @@ describe("eviction", () => {
         messages: [userMessage("old", 0)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3335,6 +3789,7 @@ describe("eviction", () => {
         messages: [userMessage("new", 10)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3344,6 +3799,7 @@ describe("eviction", () => {
         rowIds: ["row-28", "row-29"],
         messages: [userMessage("tail", 28)],
       }),
+      null,
       null,
     );
 
@@ -3381,6 +3837,7 @@ describe("eviction", () => {
         messages: [userMessage("mid", 10)],
       }),
       null,
+      null,
     );
 
     // The range is RECORDED even when it warms nothing, so the first report of
@@ -3414,6 +3871,7 @@ describe("eviction protects the visible span", () => {
         messages: [userMessage("cold", 0)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3424,6 +3882,7 @@ describe("eviction protects the visible span", () => {
         messages: [userMessage("visible", 10)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3433,6 +3892,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-28", "row-29"],
         messages: [userMessage("tail", 28)],
       }),
+      null,
       null,
     );
 
@@ -3467,6 +3927,7 @@ describe("eviction protects the visible span", () => {
         messages: [userMessage("question", 0)],
       }),
       null,
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -3476,6 +3937,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-10", "row-11"],
         messages: [userMessage("cold", 10)],
       }),
+      null,
       null,
     );
 
@@ -3530,6 +3992,7 @@ describe("reading a long chat upward from the tail", () => {
           rowIds: [`row-${fromOrdinal}`, `row-${fromOrdinal + 1}`],
           messages: [fatMessage(`m-${fromOrdinal}`, fromOrdinal)],
         }),
+        null,
         null,
       );
     }
@@ -3595,6 +4058,7 @@ describe("records the index has not placed yet", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
     const withLive = appendLiveRecords(window, {
       // `m-0` is already hydrated; the host re-sends it on a reconnect
@@ -3649,6 +4113,7 @@ describe("records the index has not placed yet", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
     const window = appendLiveRecords(seeded, {
       messages: [userMessage("m-live", 9)],
@@ -3696,6 +4161,7 @@ describe("records the index has not placed yet", () => {
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
       null,
+      null,
     );
     const spanBytes = (window: TranscriptWindow): number =>
       window.spans[0].messages.reduce(
@@ -3735,6 +4201,7 @@ describe("the streaming row's byte charge", () => {
         messages: [userMessage("cold", 0)],
       }),
       null,
+      null,
     );
     return applyRangeResponse(
       window,
@@ -3744,6 +4211,7 @@ describe("the streaming row's byte charge", () => {
         rowIds: ["row-29"],
         messages: [userMessage("live", 29)],
       }),
+      null,
       null,
     );
   }
@@ -3843,6 +4311,7 @@ describe("the streaming row's byte charge", () => {
         messages: [userMessage("m-stream", 10)],
       }),
       null,
+      null,
     );
     const seeded = applyRangeResponse(
       withStream,
@@ -3852,6 +4321,7 @@ describe("the streaming row's byte charge", () => {
         rowIds: ["row-0"],
         messages: [messageWithText(userMessage("m-idle", 0), bulk)],
       }),
+      null,
       null,
     );
     const rebased = applyWindowedSnapshot(
@@ -3866,6 +4336,7 @@ describe("the streaming row's byte charge", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     // Both carried: each fits the budget on its own, and together they still
@@ -3956,6 +4427,7 @@ describe("the streaming row's byte charge", () => {
         messages: [userMessage("m-carry", 10)],
       }),
       null,
+      null,
     );
     const rebased = applySkeletonChunk(
       applyWindowedSnapshot(
@@ -3970,6 +4442,7 @@ describe("the streaming row's byte charge", () => {
             events: [],
           },
         },
+        null,
         null,
       ),
       {
@@ -3998,6 +4471,7 @@ describe("the streaming row's byte charge", () => {
               ),
             ],
           }),
+          null,
           null,
         ),
       rebased,
@@ -4029,6 +4503,7 @@ describe("the streaming row's byte charge", () => {
         messages: [userMessage("m-stream", 10)],
       }),
       null,
+      null,
     );
     const streamed = streamWindowMessage(seeded, "m-stream", (message) =>
       messageWithText(message, bulk),
@@ -4053,6 +4528,7 @@ describe("the streaming row's byte charge", () => {
           events: [],
         },
       },
+      null,
       null,
     );
 
@@ -4081,6 +4557,7 @@ describe("the streaming row's byte charge", () => {
         messages: [userMessage("m-0", 0)],
       }),
       null,
+      null,
     );
     const rebase = (window: TranscriptWindow): TranscriptWindow =>
       applyWindowedSnapshot(
@@ -4095,6 +4572,7 @@ describe("the streaming row's byte charge", () => {
             events: [],
           },
         },
+        null,
         null,
       );
 
@@ -4132,6 +4610,7 @@ describe("holdsEveryRecordFrom", () => {
         },
       },
       null,
+      null,
     );
     return applyRangeResponse(
       seeded,
@@ -4143,6 +4622,7 @@ describe("holdsEveryRecordFrom", () => {
           userMessage(`m-${index}`, index),
         ),
       }),
+      null,
       null,
     );
   }
@@ -4196,6 +4676,7 @@ describe("holdsEveryRecordFrom", () => {
         },
       },
       null,
+      null,
     );
     expect(holdsEveryRecordFrom(window, "m-0")).toBe(true);
   });
@@ -4224,6 +4705,7 @@ describe("what an overlap keeps", () => {
         }),
       },
       null,
+      null,
     );
     // A later response under the same epoch, overlapping ordinal 0 with an
     // updated body - the shape a reconnect's authoritative tail produces.
@@ -4240,6 +4722,7 @@ describe("what an overlap keeps", () => {
           ],
         }),
       },
+      null,
       null,
     );
     const held = hydratedRecords(merged).messages.find(
@@ -4268,6 +4751,7 @@ describe("what an overlap keeps", () => {
         },
       },
       null,
+      null,
     );
     expect(seeded.spans).toHaveLength(1);
     // Same epoch, and the last row has since grown past the inline budget - so
@@ -4281,6 +4765,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 2, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(reconnected.spans).toHaveLength(0);
@@ -4312,6 +4797,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(hydratedRecords(rebased).messages.map((m) => m.messageId)).toEqual([
       transientId,
@@ -4337,6 +4823,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(
       hydratedRecords(resnapshot).messages.map((m) => m.messageId),
@@ -4356,6 +4843,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-durable", turnId, 1)],
       }),
+      null,
       null,
     );
 
@@ -4392,6 +4880,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(gapped.invalidated).toBe(true);
@@ -4421,6 +4910,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(gapped.invalidated).toBe(true);
@@ -4436,6 +4926,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -4462,6 +4953,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     const rebuilt = applySkeletonChunk(replacement, {
@@ -4495,6 +4987,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     const rebuilt = applySkeletonChunk(replacement, {
@@ -4549,6 +5042,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
@@ -4577,6 +5071,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
@@ -4598,6 +5093,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -4636,6 +5132,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(rebased.liveEvents.map((event) => event.eventId)).toEqual([
@@ -4672,6 +5169,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
@@ -4688,6 +5186,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -4729,6 +5228,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(rebuilding.snapshotProvisionalEventIds).toContain(setup.eventId);
     const rebuilt = applySkeletonChunk(rebuilding, {
@@ -4747,6 +5247,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(confirmed.liveEvents).toEqual([]);
   });
@@ -4760,6 +5261,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId("turn-1")],
         messages: [assistantMessage("assistant-durable", "turn-1", 1)],
       }),
+      null,
       null,
     );
     const completion = event("completion-live", 2);
@@ -4776,6 +5278,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -4795,6 +5298,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(confirmed.liveEvents.map((entry) => entry.eventId)).toContain(
       completion.eventId,
@@ -4811,6 +5315,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-notification", turnId, 1)],
       }),
+      null,
       null,
     );
     const failed: ChatEvent = {
@@ -4833,6 +5338,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(rebased.snapshotProvisionalEventIds).toContain(failed.eventId);
     const rebuilt = applySkeletonChunk(rebased, {
@@ -4851,6 +5357,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(confirmed.liveEvents).toEqual([]);
@@ -4892,6 +5399,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
@@ -4908,6 +5416,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -4934,6 +5443,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(snapshot.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
@@ -4959,6 +5469,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     const live = appendLiveRecords(rebuilding, {
@@ -4987,6 +5498,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     const transientId = transientLiveAssistantMessageId("turn-after-snapshot");
@@ -5032,6 +5544,7 @@ describe("what an overlap keeps", () => {
         messages: [assistantMessage("assistant-legacy-durable", null, 42)],
       }),
       null,
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -5059,6 +5572,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     const streamed = applySkeletonChunk(rebased, {
@@ -5076,6 +5590,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -5097,6 +5612,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
@@ -5113,6 +5629,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -5134,6 +5651,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     const intermediate = applyWindowedSnapshot(
       rebased,
@@ -5143,6 +5661,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(intermediate.snapshotProvisionalMessageIds).toContain(messageId);
@@ -5161,6 +5680,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -5182,6 +5702,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 2, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
     const superseded = applyRangeResponse(
@@ -5192,6 +5713,7 @@ describe("what an overlap keeps", () => {
         rowIds: [messageId],
         messages: [userMessage(messageId, 1)],
       }),
+      null,
       null,
     );
     expect(superseded.liveMessages).toEqual([]);
@@ -5204,6 +5726,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 2, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(intermediate.skeletonComplete).toBe(false);
@@ -5231,6 +5754,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
     const rebuilt = applySkeletonChunk(rebuilding, {
@@ -5248,6 +5772,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(confirmed.liveMessages).toEqual([]);
@@ -5268,6 +5793,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
@@ -5284,6 +5810,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -5303,6 +5830,7 @@ describe("what an overlap keeps", () => {
           indexRevision: null,
           tail: { fromOrdinal: 1, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -5328,6 +5856,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(rebuilt.skeleton).toEqual([]);
@@ -5347,6 +5876,7 @@ describe("what an overlap keeps", () => {
           indexRevision: null,
           tail: { fromOrdinal: 2, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -5373,6 +5903,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -5408,6 +5939,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 1, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(shrunk.skeleton).toHaveLength(1);
@@ -5425,6 +5957,7 @@ describe("what an overlap keeps", () => {
           indexRevision: null,
           tail: { fromOrdinal: 2, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -5446,6 +5979,7 @@ describe("what an overlap keeps", () => {
         messages: [assistantMessage("assistant-streaming-copy", turnId, 1)],
       }),
       null,
+      null,
     );
     const transientId = transientLiveAssistantMessageId(turnId);
     const completed = appendLiveRecords(beforeCompletion, {
@@ -5461,6 +5995,7 @@ describe("what an overlap keeps", () => {
         rowIds: ["user-later"],
         messages: [userMessage("user-later-record", 3)],
       }),
+      null,
       null,
     );
 
@@ -5481,6 +6016,7 @@ describe("what an overlap keeps", () => {
           indexRevision: null,
           tail: { fromOrdinal: 2, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -5507,6 +6043,7 @@ describe("what an overlap keeps", () => {
         rowIds: [steerRowId],
         messages: [assistantMessage("assistant-shared", turnId, 1)],
       }),
+      null,
       null,
     );
 
@@ -5549,6 +6086,7 @@ describe("what an overlap keeps", () => {
         messages: [durable],
       }),
       null,
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -5573,6 +6111,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-stale", turnId, 1)],
       }),
+      null,
       null,
     );
 
@@ -5629,6 +6168,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
@@ -5659,6 +6199,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [],
       }),
+      null,
       null,
     );
 
@@ -5721,6 +6262,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
@@ -5773,6 +6315,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
     const live = appendLiveRecords(oldTail, {
       messages: [assistantMessage(transientId, turnId, 2)],
@@ -5797,6 +6340,7 @@ describe("what an overlap keeps", () => {
           events: [],
         },
       },
+      null,
       null,
     );
 
@@ -5851,6 +6395,7 @@ describe("what an overlap keeps", () => {
         messages: [assistantMessage("assistant-partial", turnId, 1)],
         events: [setup],
       }),
+      null,
       null,
     );
 
@@ -5908,6 +6453,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(
@@ -5949,6 +6495,7 @@ describe("what an overlap keeps", () => {
           setupEvent("setup-second", "setup.running", 200),
         ],
       }),
+      null,
       null,
     );
 
@@ -5998,6 +6545,7 @@ describe("what an overlap keeps", () => {
           ],
         },
       },
+      null,
       null,
     );
 
@@ -6051,6 +6599,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(partial.spans).toEqual([]);
@@ -6070,6 +6619,7 @@ describe("what an overlap keeps", () => {
         messages: [userMessage("user-incomplete", 1)],
       }),
       null,
+      null,
     );
 
     expect(partial.spans).toEqual([]);
@@ -6085,6 +6635,7 @@ describe("what an overlap keeps", () => {
         incompleteRowIds: ["row-0"],
         messages: [userMessage("row-0", 1)],
       }),
+      null,
       null,
     );
 
@@ -6121,6 +6672,7 @@ describe("what an overlap keeps", () => {
         incompleteRowIds: ["stale-before-skeleton"],
         messages: [userMessage("stale-before-skeleton", 1)],
       }),
+      null,
       null,
     );
     const indexed = applySkeletonChunk(partial, {
@@ -6172,6 +6724,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -6211,6 +6764,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [durable],
       }),
+      null,
       null,
     );
 
@@ -6260,6 +6814,7 @@ describe("what an overlap keeps", () => {
         ],
       }),
       null,
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -6282,7 +6837,7 @@ describe("what an overlap keeps", () => {
       messages: [assistantMessage("assistant-durable", turnId, 2)],
     });
 
-    const hydrated = applyRangeResponse(live, legacyResponse, null);
+    const hydrated = applyRangeResponse(live, legacyResponse, null, null);
 
     expect(hydrated.liveMessages).toEqual([]);
   });
@@ -6299,6 +6854,7 @@ describe("what an overlap keeps", () => {
           indexRevision: null,
           tail: { fromOrdinal: 1, messages: [], events: [] },
         },
+        null,
         null,
       ),
       {
@@ -6326,6 +6882,7 @@ describe("what an overlap keeps", () => {
         },
       },
       null,
+      null,
     );
 
     expect(
@@ -6352,6 +6909,7 @@ describe("what an overlap keeps", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(replacement.liveMessages).toHaveLength(1);
@@ -6409,6 +6967,7 @@ describe("what an overlap keeps", () => {
         tail: { fromOrdinal: 0, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(rebased.liveMessages).toHaveLength(1);
 
@@ -6440,6 +6999,7 @@ describe("what an overlap keeps", () => {
         }),
       },
       null,
+      null,
     );
     expect(seeded.spans).toHaveLength(1);
     const rebroadcast = applyWindowedSnapshot(
@@ -6450,6 +7010,7 @@ describe("what an overlap keeps", () => {
         indexRevision: null,
         tail: { fromOrdinal: 3, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(rebroadcast.spans).toHaveLength(1);
@@ -6471,6 +7032,7 @@ describe("what an overlap keeps", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(seeded.spans[0].rowIds).toEqual([""]);
@@ -6507,6 +7069,7 @@ describe("what an overlap keeps", () => {
         },
       },
       null,
+      null,
     );
     expect(seeded.spans[0].rowIds).toEqual([""]);
 
@@ -6538,6 +7101,7 @@ describe("what an overlap keeps", () => {
         },
       },
       null,
+      null,
     );
     const contradicted = applyRangeResponse(
       seeded,
@@ -6549,6 +7113,7 @@ describe("what an overlap keeps", () => {
           messages: [userMessage("someone-else", 3)],
         }),
       },
+      null,
       null,
     );
     const described = applySkeletonChunk(contradicted, {
@@ -6584,6 +7149,7 @@ describe("one record across several spans", () => {
     return applyRangeResponse(
       window,
       rangeResponse({ epoch: 1, ...input }),
+      null,
       null,
     );
   }
@@ -6740,6 +7306,7 @@ describe("one record across several spans", () => {
           tail: { fromOrdinal: 10, messages: [], events: [] },
         },
         null,
+        null,
       ),
       { epoch: 1, fromOrdinal: 0, entries, isFinal: true },
     );
@@ -6854,6 +7421,7 @@ describe("the inline tail's row context", () => {
         },
       },
       null,
+      null,
     );
     expect(window.spans[0]?.rowIds).toEqual(["row-3", "row-4"]);
     expect(hydratedRecords(window).rowContext).toEqual({
@@ -6874,6 +7442,7 @@ describe("the inline tail's row context", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     // Unverified ids: the snapshot precedes the skeleton, so there is nothing
@@ -6896,6 +7465,7 @@ describe("the inline tail's row context", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(window.spans).toHaveLength(0);
@@ -6920,6 +7490,7 @@ describe("what a span charges the byte budget", () => {
         }),
         rowContext,
       },
+      null,
       null,
     );
   }
@@ -6994,6 +7565,7 @@ describe("what a span charges the byte budget", () => {
         rowContext: CONTEXT,
       },
       null,
+      null,
     );
 
     expect(reserved.spans).toHaveLength(1);
@@ -7022,6 +7594,7 @@ describe("what a span charges the byte budget", () => {
         },
       },
       null,
+      null,
     );
     const withContext = applyWindowedSnapshot(
       emptyTranscriptWindow(),
@@ -7037,6 +7610,7 @@ describe("what a span charges the byte budget", () => {
           rowContext: CONTEXT,
         },
       },
+      null,
       null,
     );
 

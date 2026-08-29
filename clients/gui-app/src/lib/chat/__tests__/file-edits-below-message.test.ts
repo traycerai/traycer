@@ -197,6 +197,7 @@ describe("resolveRevertScope", () => {
         tail: { fromOrdinal: 0, messages, events },
       },
       null,
+      null,
     );
     expect(
       resolveRevertScope({
@@ -228,6 +229,7 @@ describe("resolveRevertScope", () => {
           events: [],
         },
       },
+      null,
       null,
     );
     expect(

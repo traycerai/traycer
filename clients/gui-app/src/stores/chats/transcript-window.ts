@@ -2,6 +2,10 @@ import type {
   ChatEvent,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  imageResolutionEntriesEqual,
+  type ImageWitnessStore,
+} from "@/stores/chats/image-witness-store";
 import type {
   ChatIndexChange,
   ChatRangeResponse,
@@ -1695,6 +1699,13 @@ export function applyWindowedSnapshot(
    * {@link preferFresherHeldMessages}.
    */
   activeTurnId: string | null,
+  /**
+   * The session's witness store, or `null` where none exists. An accepted
+   * concrete snapshot RESETS lineage for the records it serves - it is the
+   * authoritative-replacement member of the boundary, where a range seat
+   * merely stamps.
+   */
+  witnesses: ImageWitnessStore | null,
 ): TranscriptWindow {
   // A snapshot from an epoch this window has already LEFT describes a
   // coordinate space whose ordinals were renumbered by the very change that
@@ -1988,7 +1999,22 @@ export function applyWindowedSnapshot(
     rowContext: tailRowContext,
     clock,
     activeTurnId,
+    witnesses,
   });
+}
+
+/**
+ * Stamp what a seat just landed: a served copy infers its per-source stamps
+ * by unique content match, a held substitute already carries its own (the
+ * stamping is idempotent per object). Shared by both seat leaves so neither
+ * can drift to stamping a different set than it seated.
+ */
+function stampSeatedMessages(
+  witnesses: ImageWitnessStore | null,
+  messages: readonly Message[],
+): void {
+  if (witnesses === null) return;
+  for (const message of messages) witnesses.stampSeatedCopy(message);
 }
 
 function seatSnapshotTailSpan(input: {
@@ -1998,8 +2024,9 @@ function seatSnapshotTailSpan(input: {
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly clock: number;
   readonly activeTurnId: string | null;
+  readonly witnesses: ImageWitnessStore | null;
 }): TranscriptWindow {
-  const { base, tail, rowIds, rowContext, clock } = input;
+  const { base, tail, rowIds, rowContext, clock, witnesses } = input;
   const conflictingRowIds = incompleteRowIdsToWithhold(tail.incompleteRowIds);
   if (conflictingRowIds.size > 0) {
     return seatNonConflictingTailRuns(
@@ -2016,6 +2043,20 @@ function seatSnapshotTailSpan(input: {
     tail.fromOrdinal,
   );
   const contextBytes = contextByteLength(rowContext);
+  // An accepted concrete snapshot is the authoritative-replacement member of
+  // the lineage boundary: it RESETS witnesses and lineage for exactly the
+  // records it seats here - conflicting/withheld records never reach this
+  // leaf, so a record the snapshot did not actually serve keeps its evidence.
+  // Reset BEFORE the comparison below, deliberately: a response already in
+  // flight for a just-served record forfeits rule-2 protection (the corner
+  // the design accepts knowingly - it sits inside the rule-4 residual).
+  if (witnesses !== null) {
+    for (const message of tail.messages) {
+      if (message.role === "assistant") {
+        witnesses.resetServedRecord(message.messageId);
+      }
+    }
+  }
   // The same held-copy preference the range seat applies: a bulk snapshot
   // can be serialized before block deltas that arrive ahead of it, and its
   // tail must not displace the delta-rewritten copy of the streaming body.
@@ -2023,7 +2064,12 @@ function seatSnapshotTailSpan(input: {
     completeBase,
     tail.messages,
     input.activeTurnId,
+    witnesses,
   );
+  // Captures land post-reset: a snapshot-seated copy stamps against the
+  // record's cleared occurrence list, which is the fresh-lineage floor rule 3
+  // reads.
+  stampSeatedMessages(witnesses, messages);
   const tailSpan: HydratedSpan = {
     fromOrdinal: tail.fromOrdinal,
     rowIds,
@@ -2056,6 +2102,7 @@ function seatNonConflictingTailRuns(
     readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
     readonly clock: number;
     readonly activeTurnId: string | null;
+    readonly witnesses: ImageWitnessStore | null;
   },
   conflictingRowIds: ReadonlySet<string>,
 ): TranscriptWindow {
@@ -2113,6 +2160,7 @@ function seatNonConflictingTailRuns(
         rowContext,
         clock: input.clock,
         activeTurnId: input.activeTurnId,
+        witnesses: input.witnesses,
       });
       setupRowsBeforeRun += rowIds.filter((rowId) =>
         rowId.startsWith("setup-card:"),
@@ -3581,6 +3629,7 @@ function preferFresherHeldMessages(
   window: TranscriptWindow,
   messages: readonly Message[],
   activeTurnId: string | null,
+  witnesses: ImageWitnessStore | null,
 ): readonly Message[] {
   // A Map rather than a copied-array-in-a-closure: an assignment inside a
   // callback is invisible to control-flow narrowing, which this module has
@@ -3590,15 +3639,19 @@ function preferFresherHeldMessages(
     if (message.role !== "assistant") return;
     const active =
       activeTurnId !== null && assistantTurnKey(message) === activeTurnId;
-    // A SETTLED record is only substituted on positive proof, so an
-    // unanswerable comparison is not worth the held-copy scan below.
+    // The ARM decides which rules run: the active arm never consults the
+    // settled evidence rules - the stream is its authority, and
+    // `heldCopyIsBehindServed` alone displaces it. A SETTLED record is only
+    // substituted on positive proof, so a serve with no version to compare is
+    // not worth the held-copy scan (unchanged from before the evidence rules:
+    // this guard bounds reachability, not the rules' semantics).
     if (!active && message.blocksVersion === undefined) return;
     const held = heldMessageCopy(window, message.messageId);
     if (held === null) return;
     if (
       active
         ? heldCopyIsBehindServed(held, message)
-        : !heldCopyIsAheadOfServed(held, message)
+        : !heldCopyIsAheadOfServed(held, message, witnesses)
     ) {
       return;
     }
@@ -3624,7 +3677,11 @@ function preferFresherHeldMessages(
  * held one strictly greater. An absent field keeps the host's copy, which is
  * the safe default for a record the client is not authoring.
  */
-function heldCopyIsAheadOfServed(held: Message, served: Message): boolean {
+function heldCopyIsAheadOfServed(
+  held: Message,
+  served: Message,
+  witnesses: ImageWitnessStore | null,
+): boolean {
   if (held.role !== "assistant" || served.role !== "assistant") return false;
   // Behind on BLOCKS disqualifies it whatever the images say: substituting
   // would trade block content the host has for image state the client has, and
@@ -3639,54 +3696,119 @@ function heldCopyIsAheadOfServed(held: Message, served: Message): boolean {
   ) {
     return true;
   }
-  // `blocksVersion` alone cannot answer this. `image_resolution.updated`
+  // `blocksVersion` alone cannot answer this: `image_resolution.updated`
   // rewrites `imageResolutions` and the runtime accumulator advances that
-  // counter only for BLOCK changes, so a range sliced before the image update
-  // ties on version - and a tie reads as "not ahead", which hands the row back
-  // to the older served copy and regresses the resolved image permanently,
-  // since the row stays hydrated and leaves no gap.
-  return heldKnowsUnservedImages(held, served);
+  // counter only for BLOCK changes, so copies differing in image state tie on
+  // version. At the tie, only DIRECTIONAL evidence substitutes - see
+  // {@link imageEvidenceSaysHeldAhead}.
+  return imageEvidenceSaysHeldAhead(held, served, witnesses);
 }
 
 /**
- * Does the held copy carry an image resolution the served one has not heard of?
- *
- * Keyed on `canonicalSource` because that is the entry's stable identity - and
- * compared by CONTENT rather than by presence, because
- * `applyImageResolutionDelta` UPSERTS on that key: a later update to a source
- * both copies already list replaces the entry in place. Asking only whether the
- * source appears would then answer "not ahead" for exactly the update that
- * moved it.
- *
- * A difference means the held copy is the newer one, and that direction is
- * sound rather than assumed. A served copy is a slice of the host's state at
- * slice time; the client applies every `image_resolution.updated` after that to
- * the record it holds. So the held copy carries a superset of what the serve
- * could contain, and the two can only diverge forwards. It does NOT rest on
- * resolution being one-way, which the schema does not promise - a watcher that
- * moves an entry from resolved back to blocked is still the client having seen
- * something the slice predates.
+ * The sources on which the two copies genuinely disagree - present on one
+ * side only, or present on both with different CONTENT. Keyed on
+ * `canonicalSource` because that is the entry's stable identity, and compared
+ * by content rather than presence because `applyImageResolutionDelta` UPSERTS
+ * on that key: a later update to a source both copies already list replaces
+ * the entry in place, and asking only whether the source appears would miss
+ * exactly the update that moved it.
  */
-function heldKnowsUnservedImages(
+function differingImageSources(
   held: Extract<Message, { role: "assistant" }>,
   served: Extract<Message, { role: "assistant" }>,
-): boolean {
-  if (held.imageResolutions.length === 0) return false;
+): readonly string[] {
+  const heldBySource = new Map(
+    held.imageResolutions.map((entry) => [entry.canonicalSource, entry]),
+  );
   const servedBySource = new Map(
     served.imageResolutions.map((entry) => [entry.canonicalSource, entry]),
   );
-  return held.imageResolutions.some((entry) => {
-    const counterpart = servedBySource.get(entry.canonicalSource);
-    if (counterpart === undefined) return true;
-    return (
-      counterpart.state !== entry.state ||
-      counterpart.attachmentHash !== entry.attachmentHash ||
-      counterpart.mediaType !== entry.mediaType ||
-      counterpart.width !== entry.width ||
-      counterpart.height !== entry.height ||
-      counterpart.source !== entry.source
-    );
-  });
+  const differing: string[] = [];
+  for (const source of new Set([
+    ...heldBySource.keys(),
+    ...servedBySource.keys(),
+  ])) {
+    const heldEntry = heldBySource.get(source);
+    const servedEntry = servedBySource.get(source);
+    if (
+      heldEntry === undefined ||
+      servedEntry === undefined ||
+      !imageResolutionEntriesEqual(heldEntry, servedEntry)
+    ) {
+      differing.push(source);
+    }
+  }
+  return differing;
+}
+
+/**
+ * The settled arm's image tiebreak: does DIRECTIONAL evidence say the held
+ * copy is ahead?
+ *
+ * The predecessor here treated ANY content difference as "held is newer",
+ * reasoning the held copy accumulates every write after the slice - but
+ * "different" is not "newer": a held copy seated from an older slice differs
+ * from a fresher serve in exactly the same way, and the preference then pins
+ * the STALE copy with the row hydrated and no gap left for the planner. So a
+ * difference substitutes only on evidence with a direction, in order:
+ *
+ * 1. Witnessed-write ordering, per differing source (rule 2): both sides'
+ *    stamps against the witness store ({@link ImageWitnessStore}), and the
+ *    rule fires only when BOTH carry one - a copy with no stamp brings no
+ *    evidence in either direction, and known-vs-unknown is not directional.
+ * 2. Cross-source dominance: held wins only when EVERY differing source has a
+ *    held-later verdict. A source that says served-later defeats it; a SILENT
+ *    differing source breaks dominance too (it cannot be shown
+ *    later-or-equal), and a dominance failure goes to rule 4 - NOT to the
+ *    superset rule, whose tie precondition is "witness silent everywhere".
+ * 3. With every source silent: source-set STRICT SUPERSET (entries are
+ *    upsert-only on both sides, so a strictly larger key set is later) -
+ *    but only within the record's current lineage: superset evidence
+ *    captured before the record's last authoritative replacement
+ *    ({@link ImageWitnessStore.lineageFloor}) is directionless, because a
+ *    snapshot may legitimately re-establish the record with a smaller set.
+ * 4. Otherwise directionless: no substitution, the served copy stands, and
+ *    repair of a wrong serve rides the host's `updated` index entry or the
+ *    next revision-gap void - never a guess.
+ */
+function imageEvidenceSaysHeldAhead(
+  held: Extract<Message, { role: "assistant" }>,
+  served: Extract<Message, { role: "assistant" }>,
+  witnesses: ImageWitnessStore | null,
+): boolean {
+  const differing = differingImageSources(held, served);
+  if (differing.length === 0 || witnesses === null) return false;
+  const servedBySource = new Map(
+    served.imageResolutions.map((entry) => [entry.canonicalSource, entry]),
+  );
+  let dominance = true;
+  let anyVerdict = false;
+  for (const source of differing) {
+    const heldSeq = witnesses.heldStamp(held, source);
+    const servedEntry = servedBySource.get(source);
+    const servedSeq =
+      servedEntry === undefined
+        ? null
+        : witnesses.servedStamp(held.messageId, servedEntry);
+    if (heldSeq === 0 || servedSeq === null || heldSeq === servedSeq) {
+      // Silent for this source - no stamp on one side, or stamps that agree
+      // while contents differ, which is no direction either.
+      dominance = false;
+      continue;
+    }
+    anyVerdict = true;
+    if (servedSeq > heldSeq) return false;
+  }
+  if (anyVerdict) return dominance;
+  const heldSources = new Set(
+    held.imageResolutions.map((entry) => entry.canonicalSource),
+  );
+  const strictSuperset =
+    served.imageResolutions.every((entry) =>
+      heldSources.has(entry.canonicalSource),
+    ) && heldSources.size > servedBySource.size;
+  if (!strictSuperset) return false;
+  return witnesses.capturedAt(held) > witnesses.lineageFloor(held.messageId);
 }
 
 /**
@@ -3738,6 +3860,13 @@ export function applyRangeResponse(
   response: ChatRangeResponse,
   /** The streaming turn, if any - see {@link preferFresherHeldMessages}. */
   activeTurnId: string | null,
+  /**
+   * The session's witness store, or `null` where none exists (the legacy
+   * line). A range seat STAMPS the copies it lands - it never resets lineage;
+   * destroying evidence at range seats is the delayed-bulk regression by
+   * another route.
+   */
+  witnesses: ImageWitnessStore | null,
 ): TranscriptWindow {
   if (response.epoch !== window.epoch) return window;
   if (response.rowIds.length === 0) return window;
@@ -3802,6 +3931,7 @@ export function applyRangeResponse(
             reachedEnd: response.reachedEnd && index === response.rowIds.length,
           },
           activeTurnId,
+          witnesses,
         );
         setupRowsBeforeRun += rowIds.filter((rowId) =>
           rowId.startsWith("setup-card:"),
@@ -3830,7 +3960,10 @@ export function applyRangeResponse(
     completeWindow,
     response.messages,
     activeTurnId,
+    witnesses,
   );
+  // Range seats stamp; they never reset.
+  stampSeatedMessages(witnesses, messages);
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
     rowIds: response.rowIds,

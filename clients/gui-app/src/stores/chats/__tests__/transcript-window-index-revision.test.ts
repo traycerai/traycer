@@ -104,6 +104,7 @@ function windowAtRevision(revision: number): TranscriptWindow {
       tail: { fromOrdinal: 10, messages: [], events: [] },
     },
     null,
+    null,
   );
   const skeletoned = applySkeletonChunk(seeded, {
     epoch: 4,
@@ -119,6 +120,7 @@ function windowAtRevision(revision: number): TranscriptWindow {
       rowIds: ["row-0"],
       messages: [userMessage("m-0", 0)],
     }),
+    null,
     null,
   );
   // `indexRevisionRebuilding: false` because this models a client that has
@@ -145,6 +147,7 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
         indexRevision: null,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -177,6 +180,7 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
         indexRevision: null,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -222,6 +226,7 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
         indexRevision: null,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
     // The claim is dropped at the boundary; the entries are not.
@@ -271,6 +276,7 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(
@@ -302,6 +308,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(result.invalidated).toBe(true);
@@ -325,6 +332,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: 5,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -352,6 +360,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: 3,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -381,6 +390,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: 3,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(straggler.indexRevision).toBe(5);
@@ -428,6 +438,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
       null,
+      null,
     );
     // The held revision survives the announcement itself - the restream carries
     // no revision to replace it with.
@@ -448,6 +459,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: 0,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -488,6 +500,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
       null,
+      null,
     );
     const resynced = applyWindowedSnapshot(
       announced,
@@ -497,6 +510,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: 2,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
     expect(resynced.indexRevision).toBe(2);
@@ -512,6 +526,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
       null,
+      null,
     );
     expect(ahead.invalidated).toBe(true);
 
@@ -525,6 +540,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
           indexRevision: 1,
           tail: { fromOrdinal: 10, messages: [], events: [] },
         },
+        null,
         null,
       ),
     ).toBe(resynced);
@@ -545,6 +561,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: 9,
         tail: { fromOrdinal: 2, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -570,6 +587,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: null,
         tail: { fromOrdinal: 2, messages: [], events: [] },
       },
+      null,
       null,
     );
 
@@ -610,6 +628,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
       null,
+      null,
     );
 
     expect(resynced.indexRevision).toBe(0);
@@ -626,6 +645,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
         indexRevision: null,
         tail: { fromOrdinal: 10, messages: [], events: [] },
       },
+      null,
       null,
     );
 
