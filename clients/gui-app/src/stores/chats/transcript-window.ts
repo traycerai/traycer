@@ -2350,6 +2350,44 @@ function freshDrawnRowIds(spans: readonly HydratedSpan[]): ReadonlySet<string> {
   return drawn;
 }
 
+/**
+ * Which carry the row merger would DRAW each row from, when two hold it.
+ *
+ * `seatStaleRows` walks the tier by descending `servedAt` and places a row at
+ * first encounter, so the freshest serve owns it and a staler duplicate draws
+ * nothing. This reproduces that winner exactly rather than approximating it: a
+ * forward scan of the STORED order taking `>` picks the greatest stamp and, on
+ * a tie, the earliest span - which is what a stable descending sort followed by
+ * first-match arrives at.
+ *
+ * Cached on the array for {@link staleSpanVisibleIn}, which runs on every
+ * viewport report. Both inputs are per-span immutable, so a new array is the
+ * only thing that can change an answer.
+ */
+const staleRowOwnerCache = new WeakMap<
+  readonly HydratedSpan[],
+  ReadonlyMap<string, HydratedSpan>
+>();
+
+function staleRowOwners(
+  spans: readonly HydratedSpan[],
+): ReadonlyMap<string, HydratedSpan> {
+  const cached = staleRowOwnerCache.get(spans);
+  if (cached !== undefined) return cached;
+  const owners = new Map<string, HydratedSpan>();
+  for (const span of spans) {
+    for (const rowId of span.rowIds) {
+      if (rowId === "") continue;
+      const seen = owners.get(rowId);
+      if (seen === undefined || span.servedAt > seen.servedAt) {
+        owners.set(rowId, span);
+      }
+    }
+  }
+  staleRowOwnerCache.set(spans, owners);
+  return owners;
+}
+
 function reconcileUnavailableRowsWithSkeleton(
   window: TranscriptWindow,
   fromOrdinal: number,
@@ -2677,8 +2715,9 @@ function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
 
 /**
  * The dedupe-and-bound shared by every path that demotes spans to stale:
- * warmest first, a span earns its place only by contributing an uncovered row
- * id, and the total stays within the window budget.
+ * warmest first and freshest-served within that, a span earns its place only by
+ * contributing an uncovered row id, and the total stays within the window
+ * budget.
  *
  * `liveBytes` is what the FRESH spans still hold, so stale and fresh share
  * ONE budget rather than each claiming `TRANSCRIPT_WINDOW_MAX_BYTES` -
@@ -2705,8 +2744,30 @@ function boundedStaleSpans(
   candidates: readonly HydratedSpan[],
   liveBytes: number,
 ): readonly HydratedSpan[] {
+  // Warmth first, then the FRESHEST SERVE - and the second key is not a
+  // tidiness preference, it is the only thing deciding which of two carries
+  // holding one row survives.
+  //
+  // Coverage below is first-come, so the span that sorts earlier keeps the row
+  // and the other is dropped for contributing nothing. `seatStaleRows` draws
+  // that row from the greatest `servedAt`, so ordering by anything else can
+  // discard the copy the renderer had selected and regress the row's body to an
+  // older serve - the loss this tier exists to prevent, reached with no budget
+  // pressure at all.
+  //
+  // Warmth alone does not decide it. A viewport report bumps every carry
+  // holding a visible row, and {@link rewriteWindowMessage} bumps every carry
+  // holding a streamed record, so duplicates arrive here TIED far more often
+  // than not; a stable sort then falls back to input order, which is ordinal
+  // for the two callers that pass the stored array
+  // ({@link boundStaleTierToBudget}, {@link retireCoveredStaleSpans}) and
+  // freshest-first for the two that prepend the spans they are demoting. The
+  // tier would otherwise disagree with itself: a carry admitted at a rebase as
+  // the freshest owner of a row is discarded by the next seat's re-bound,
+  // because the same function ran over the same spans in a different order.
   const sorted = [...candidates].sort(
-    (left, right) => right.touchedAt - left.touchedAt,
+    (left, right) =>
+      right.touchedAt - left.touchedAt || right.servedAt - left.servedAt,
   );
   // By row ID only, and a MARKER never counts as covered.
   //
@@ -3946,6 +4007,20 @@ export function touchTranscriptRange(
  *   BEFORE the hole rather than beside it. Read as either-or, a row the
  *   replacement index names off-screen still reads as visible whenever its old
  *   ordinal happens to land in an unarrived hole in view.
+ * - Of two carries holding one row, only the FRESHEST SERVE draws it
+ *   ({@link staleRowOwners}), so the staler duplicate earns no warmth from it.
+ *   Equalizing them instead would hand the tie to {@link boundedStaleSpans}'
+ *   secondary key and make a squeeze's outcome turn on that, when the answer
+ *   here is already known.
+ *
+ *   Only on the NAMED branch, and the restriction is the difference between
+ *   the two branches rather than caution: a named row resolves to ONE ordinal
+ *   whichever carry holds it, so every later refusal in the merger falls the
+ *   same way for both and the owner's win is unconditional. An unnamed row
+ *   falls back to each carry's OWN old ordinal, so an owner that cannot seat
+ *   (its hole already filled) leaves a duplicate at a different ordinal that
+ *   still can - and refusing that one warmth would be a missed bump, the
+ *   direction this function must not err in.
  *
  * What it cannot reproduce is the pair of refusals that depend on RENDERED
  * models - an ordinal another model already took, and a row whose model the
@@ -3967,11 +4042,15 @@ function staleSpanVisibleIn(
   if (from >= to) return () => false;
   const namedAt = skeletonOrdinalByRowId(window.skeleton);
   const drawnByFreshTier = freshDrawnRowIds(window.spans);
+  const ownerOf = staleRowOwners(window.staleSpans);
   return (span) =>
     span.rowIds.some((rowId, offset) => {
       if (rowId === "" || drawnByFreshTier.has(rowId)) return false;
       const named = namedAt.get(rowId);
-      if (named !== undefined) return named >= from && named < to;
+      if (named !== undefined) {
+        if (ownerOf.get(rowId) !== span) return false;
+        return named >= from && named < to;
+      }
       const oldOrdinal = span.fromOrdinal + offset;
       return (
         oldOrdinal >= from &&

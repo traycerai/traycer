@@ -2424,6 +2424,173 @@ describe("stale spans", () => {
     ).toEqual(["m-8", "m-9", "n-8", "n-9"]);
   });
 
+  it("keeps the carry the renderer draws from when two hold one row and warmth ties", () => {
+    // `seatStaleRows` draws a duplicated row from the greatest `servedAt`, but
+    // `boundedStaleSpans` decides which carry SURVIVES first-come in warmth
+    // order - so ordering the two by anything else discards the copy the
+    // renderer had selected and regresses that row to an older serve. No budget
+    // pressure is involved: the coverage dedupe alone drops it.
+    //
+    // The tie is the ordinary case rather than a contrivance. A viewport report
+    // bumps every carry holding a visible row, so two carries the reader can
+    // see are equally warm, and a stable sort then falls back to input order -
+    // which for the re-bound below is the STORED ordinal order, putting the
+    // older carry first.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5", "row-6"],
+        messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: { fromOrdinal: 30, messages: [], events: [] },
+      },
+      null,
+    );
+    // Epoch 2 re-serves `row-5` alone, at a new ordinal and with a body the
+    // first serve did not have. The timestamp is the visible difference.
+    const reserved = applyRangeResponse(
+      rebased,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 12,
+        rowIds: ["row-5"],
+        messages: [userMessage("m-5", 555)],
+      }),
+      null,
+    );
+    // A second rebase before the replacement lands, which is what leaves two
+    // carries holding `row-5`: the fresher one is admitted for it, the older
+    // one for `row-6` beside it.
+    const carried = applyWindowedSnapshot(
+      reserved,
+      {
+        epoch: 3,
+        rowCount: 30,
+        indexRevision: null,
+        tail: { fromOrdinal: 30, messages: [], events: [] },
+      },
+      null,
+    );
+    expect(carried.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-5", "row-6"],
+      ["row-5"],
+    ]);
+    const [older, fresher] = carried.staleSpans;
+    expect(fresher.servedAt).toBeGreaterThan(older.servedAt);
+
+    // Both rows on screen, so both carries are warmed to the same clock.
+    const named = applySkeletonChunk(carried, {
+      epoch: 3,
+      fromOrdinal: 20,
+      entries: [skeletonEntry("row-5", 20), skeletonEntry("row-6", 21)],
+      isFinal: false,
+    });
+    const warm = touchTranscriptRange(named, {
+      fromOrdinal: 20,
+      toOrdinal: 22,
+    });
+    expect(warm.staleSpans[0].touchedAt).toBe(warm.staleSpans[1].touchedAt);
+
+    // Any seat re-bounds the tier, and this one covers neither carry.
+    const seat = applyRangeResponse(
+      warm,
+      rangeResponse({
+        epoch: 3,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+
+    expect(seat.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-5", "row-6"],
+      ["row-5"],
+    ]);
+    // The consequence, stated on the body rather than on span identity: the
+    // row still renders from the newer serve.
+    expect(
+      hydratedRecords(seat).messages.find(
+        (message) => message.messageId === "m-5",
+      )?.timestamp,
+    ).toBe(555);
+  });
+
+  it("warms only the freshest carry of a row two carries hold", () => {
+    // The warmth bump answers "is this carry drawing anything on screen", and
+    // for a row the replacement index NAMES the answer is known: the freshest
+    // serve draws it and the staler duplicate draws nothing. Bumping both
+    // equalizes them, which hands a later squeeze's outcome to a tiebreak when
+    // the tier already knows which copy it would render.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5", "row-6"],
+        messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: { fromOrdinal: 30, messages: [], events: [] },
+      },
+      null,
+    );
+    const reserved = applyRangeResponse(
+      rebased,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 12,
+        rowIds: ["row-5"],
+        messages: [userMessage("m-5", 555)],
+      }),
+      null,
+    );
+    const carried = applyWindowedSnapshot(
+      reserved,
+      {
+        epoch: 3,
+        rowCount: 30,
+        indexRevision: null,
+        tail: { fromOrdinal: 30, messages: [], events: [] },
+      },
+      null,
+    );
+    // `row-6` stays unnamed and off screen throughout, so the older carry has
+    // nothing of its own to earn warmth from.
+    const named = applySkeletonChunk(carried, {
+      epoch: 3,
+      fromOrdinal: 20,
+      entries: [skeletonEntry("row-5", 20)],
+      isFinal: false,
+    });
+    const before = named.staleSpans.map((span) => span.touchedAt);
+
+    const warm = touchTranscriptRange(named, {
+      fromOrdinal: 20,
+      toOrdinal: 21,
+    });
+
+    expect(warm.staleSpans[0].touchedAt).toBe(before[0]);
+    expect(warm.staleSpans[1].touchedAt).toBeGreaterThan(before[1]);
+  });
+
   it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {
     // A tail the skeleton had only partly reached is seated on real ids AND
     // markers, so this span is subject to both retirement rules at once.
