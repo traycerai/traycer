@@ -3,8 +3,33 @@
  * stopped serving, and the order it tears down in.
  */
 import { describe, expect, it } from "vitest";
+import type { RuntimeWorkerCallRequest } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { createEpicRuntimeWorkerCore } from "../epic-runtime-core";
 import type { EpicRuntimeCorePorts } from "../epic-runtime-core";
+
+/**
+ * The ONE demote-params construction site in this file.
+ *
+ * It existed before, unannotated and scoped to a single `describe`, so the
+ * contract's `docGuid` failed at ELEVEN call sites instead of once here - and
+ * the two literals outside that block had to be swept by hand and were missed.
+ * The annotation is what makes it a single point of failure: naming
+ * `RuntimeWorkerCallRequest<"body/demote">` rather than restating its members
+ * means the next field added to the contract reds this line and nothing else.
+ *
+ * `docGuid` is per-docKey because two docKeys are two documents; the core keys
+ * idempotence on (docKey, generation) and never reads the guid, so no assertion
+ * here depends on the value.
+ */
+const demote = (
+  docKey: string,
+  generation: number,
+): RuntimeWorkerCallRequest<"body/demote"> => ({
+  docKey,
+  generation,
+  docGuid: `guid-${docKey}`,
+  update: Uint8Array.from([1]),
+});
 
 function createPorts(): EpicRuntimeCorePorts & {
   readonly closed: string[];
@@ -16,19 +41,21 @@ function createPorts(): EpicRuntimeCorePorts & {
   return {
     closed,
     settles,
-    attachments: { read: async () => Uint8Array.from([1]) },
+    attachments: { read: () => Promise.resolve(Uint8Array.from([1])) },
     bodies: {
-      materialize: async (artifactId) => ({
-        docKey: artifactId,
-        update: Uint8Array.from([2]),
-        seedMode: "full",
-        hostStateVector: null,
-      }),
-      settle: async (input) => {
+      materialize: (artifactId) =>
+        Promise.resolve({
+          docKey: artifactId,
+          docGuid: `guid-${artifactId}`,
+          update: Uint8Array.from([2]),
+          seedMode: "full",
+          hostStateVector: null,
+        }),
+      settle: (input) => {
         settles.push(`${input.docKey}:${String(input.generation)}`);
-        return { accepted: true, settledBytes: 7 };
+        return Promise.resolve({ accepted: true, settledBytes: 7 });
       },
-      sendUpdate: async () => ({ kind: "sent" }),
+      sendUpdate: () => Promise.resolve({ kind: "sent" }),
     },
     transport: {
       close: () => {
@@ -74,14 +101,10 @@ describe("after dispose", () => {
 
     // Accepting here costs the edit: the main thread drops its live doc on an
     // accepted demote. Refusing costs one re-send after respawn.
-    await expect(
-      core.demoteBody({
-        docKey: "artifact-1",
-        generation: 2,
-        docGuid: "guid-1",
-        update: Uint8Array.from([3]),
-      }),
-    ).resolves.toEqual({ accepted: false, settledBytes: 0 });
+    await expect(core.demoteBody(demote("artifact-1", 2))).resolves.toEqual({
+      accepted: false,
+      settledBytes: 0,
+    });
   });
 
   it("serves normally before dispose", async () => {
@@ -91,24 +114,14 @@ describe("after dispose", () => {
     await expect(core.readAttachmentBytes("hash")).resolves.toEqual(
       Uint8Array.from([1]),
     );
-    await expect(
-      core.demoteBody({
-        docKey: "artifact-1",
-        generation: 1,
-        docGuid: "guid-1",
-        update: Uint8Array.from([3]),
-      }),
-    ).resolves.toEqual({ accepted: true, settledBytes: 7 });
+    await expect(core.demoteBody(demote("artifact-1", 1))).resolves.toEqual({
+      accepted: true,
+      settledBytes: 7,
+    });
   });
 });
 
 describe("the settled-demote map — idempotence per (docKey, generation)", () => {
-  const demote = (docKey: string, generation: number) => ({
-    docKey,
-    generation,
-    update: Uint8Array.from([1]),
-  });
-
   it("answers a RESEND from the stored answer without touching the port again", async () => {
     const ports = createPorts();
     const core = createEpicRuntimeWorkerCore(ports);

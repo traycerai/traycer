@@ -45,6 +45,7 @@ import type {
   ReplicaReplacementReason,
   ReplicaResetCause,
   RuntimeEnvironment,
+  SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
 import {
   BUDGET_PLANE_IDS,

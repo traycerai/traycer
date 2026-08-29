@@ -117,11 +117,8 @@ function createBudget(): HotBodyBudget & { readonly calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
-    chargeHot: (docKey) => calls.push(`chargeHot:${docKey}`),
-    markDemoting: (docKey) => calls.push(`markDemoting:${docKey}`),
-    clearDemoting: (docKey) => calls.push(`clearDemoting:${docKey}`),
-    settleCold: (docKey, bytes) =>
-      calls.push(`settleCold:${docKey}:${String(bytes)}`),
+    chargeHot: (docKey, bytes) => calls.push(`chargeHot:${docKey}:${bytes}`),
+    settleCold: (docKey, bytes) => calls.push(`settleCold:${docKey}:${bytes}`),
   };
 }
 
@@ -154,7 +151,7 @@ describe("acquire / materialize", () => {
 
     expect(grantedKey(grant)).toBe("artifact-1");
     expect(docs.installed).toEqual(["artifact-1"]);
-    expect(budget.calls).toEqual(["chargeHot:artifact-1"]);
+    expect(budget.calls).toEqual(["chargeHot:artifact-1:3"]);
   });
 
   it("answers unavailable without installing when the worker holds no body", async () => {
@@ -208,10 +205,7 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
     // The accountant knows it is on its way out, and has NOT been told the
     // bytes are free. A doc reported cold here is one the accountant believes
     // it can spend while the store still holds it.
-    expect(budget.calls).toEqual([
-      "chargeHot:artifact-1",
-      "markDemoting:artifact-1",
-    ]);
+    expect(budget.calls).toEqual(["chargeHot:artifact-1:3"]);
     expect(leases.unacknowledgedDemoteKeys()).toEqual(["artifact-1"]);
   });
 
@@ -229,8 +223,7 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
     // 4096 is the worker's number, not anything this side could compute from
     // the three bytes `encode` produced.
     expect(budget.calls).toEqual([
-      "chargeHot:artifact-1",
-      "markDemoting:artifact-1",
+      "chargeHot:artifact-1:3",
       "settleCold:artifact-1:4096",
     ]);
     expect(leases.unacknowledgedDemoteKeys()).toEqual([]);
@@ -255,7 +248,7 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
     expect(worker.demotes).toHaveLength(1);
     expect(
       budget.calls.filter((call) => call.startsWith("markDemoting")),
-    ).toEqual(["markDemoting:artifact-1"]);
+    ).toEqual([]);
   });
 
   it("keeps the doc when the worker declines the generation", async () => {
@@ -309,7 +302,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
     // asserts the observable half: the doc survived with its bytes intact and
     // is re-sendable. The same-generation guarantee is asserted below.
     void nextLeases;
-    expect(posted?.generation).toBe(2);
+    expect(posted.generation).toBe(2);
 
     leases.resendUnacknowledgedDemotes();
     // The dead endpoint refuses new calls, so the re-post is rejected rather
@@ -361,7 +354,11 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
     expect(grantedKey(second)).toBe("artifact-1");
     expect(countCalls(pair, "body/materialize")).toBe(callsBefore);
     expect(docs.installed).toEqual(["artifact-1"]);
-    expect(budget.calls).toContain("clearDemoting:artifact-1");
+    // The re-acquire DISARMED the pending demote. This used to assert a
+    // `clearDemoting` budget call; that member is gone, and the fact it stood
+    // for lives on the entry's `demotingGeneration` - which this reads through
+    // the bridge's own seam rather than through the accountant.
+    expect(leases.unacknowledgedDemoteKeys()).not.toContain("artifact-1");
 
     // The old demote's ack lands late. It names a generation the lease has
     // outlived, so it must do nothing at all - dropping here takes the doc out
@@ -449,7 +446,8 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
     // is keyed by the room, not the artifact.
     const second = await leases.acquire("artifact-1");
     expect(grantedKey(second)).toBe("room-1");
-    expect(budget.calls).toContain("clearDemoting:room-1");
+    // Same disarm, keyed by the room on this arm.
+    expect(leases.unacknowledgedDemoteKeys()).not.toContain("room-1");
 
     // The old demote's ack lands. It must be a no-op: the editor bound to that
     // Y.Doc is holding it right now.
@@ -467,6 +465,6 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
     if (second.kind !== "granted") throw new Error("expected a grant");
     second.release();
     expect(worker.demotes).toHaveLength(2);
-    expect(worker.demotes[1]?.generation).toBeGreaterThan(staleGeneration ?? 0);
+    expect(worker.demotes[1]?.generation).toBeGreaterThan(staleGeneration);
   });
 });

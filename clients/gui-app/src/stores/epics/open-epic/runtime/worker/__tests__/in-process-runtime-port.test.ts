@@ -36,6 +36,7 @@ const COLD: InProcessColdState = {
   update: Uint8Array.from([1, 2, 3, 4]),
   seedMode: "full",
   hostStateVector: "sv",
+  docGuid: "guid-cold",
 };
 
 describe("body/materialize", () => {
@@ -96,6 +97,11 @@ describe("body/materialize", () => {
     // ambiguous one.
     expect(answer.seedMode).toBe("full");
     expect(answer.hostStateVector).toBe("sv");
+    // The identity these bytes were cut at, carried on the GRANTED arm. It is
+    // what the eventual demote is checked against, so a materialize that
+    // forwards bytes without their guid hands back a settlement that can only
+    // be refused.
+    expect(answer.docGuid).toBe("guid-cold");
   });
 });
 

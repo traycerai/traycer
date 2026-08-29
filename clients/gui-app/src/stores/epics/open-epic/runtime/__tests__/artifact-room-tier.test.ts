@@ -622,7 +622,11 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
     });
     expect(seedOutcome).toBe("seeded");
     const entryBefore = requireHotEntry(tier, "room-replace");
-    expect(entryBefore.doc.getText("body").toString()).toBe("alpha");
+    // `toJSON()`, not `toString()`: yjs declares `toJSON(): string` on `Y.Text`
+    // and does NOT declare `toString`, so the latter resolves to
+    // `Object.prototype.toString` in the type system - it happens to work at
+    // runtime, which is exactly what makes it worth not relying on.
+    expect(entryBefore.doc.getText("body").toJSON()).toBe("alpha");
 
     // A deleted-and-recreated artifact: same room id, new guid, unrelated
     // content.
@@ -646,7 +650,7 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
     // concatenated). Assert the new content is present AND the old content
     // is explicitly absent - not just that "beta" appears somewhere, which a
     // splice would also satisfy.
-    const finalText = entryAfter.doc.getText("body").toString();
+    const finalText = entryAfter.doc.getText("body").toJSON();
     expect(finalText).toBe("beta");
     expect(finalText).not.toContain("alpha");
 

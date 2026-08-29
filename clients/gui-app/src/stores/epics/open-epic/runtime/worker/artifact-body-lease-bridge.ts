@@ -65,24 +65,30 @@ export interface MainThreadBodyDocs {
  *
  * The ordering is the contract, not the call list. A doc awaiting its demote
  * ack is still HOT - it is still resident on this thread - so its charge stands
- * until the ack, and `markDemoting` is what stops the accountant choosing it
- * again for a demotion that is already under way.
+ * until the ack, and it is the entry's `demotingGeneration`, not the
+ * accountant, that stops a second demote being posted for it.
  */
 export interface HotBodyBudget {
-  chargeHot(docKey: string): void;
   /**
-   * This doc is on its way out; do not select it for demotion again. Cleared
-   * by {@link clearDemoting} if the lease is re-acquired before the ack.
-   */
-  markDemoting(docKey: string): void;
-  clearDemoting(docKey: string): void;
-  /**
-   * The demote landed: release the hot charge and record the cold bytes.
+   * A body doc just became resident. `bytes` is its ENCODED size.
    *
-   * One call rather than an uncharge plus a charge, because the two must not
-   * be separable - a hot release that happened without the matching cold
-   * record is a doc the accountant believes is free and the store still has.
-   * `settledBytes` is the WORKER's count for what it actually kept.
+   * `markDemoting` / `clearDemoting` used to sit here, to stop an eviction
+   * chooser picking a doc whose demote was already under way. They are gone
+   * because that chooser does not exist: the book never invents an LRU - it
+   * calls the TIER's walk - and post-flip the tier is cold-only while the
+   * main-side hot set is exactly this bridge's `entries`, each of them leased
+   * or already demoting. `demotingGeneration` on the entry already prevents
+   * the double post and the stale ack, so the pair was a second copy of that
+   * state with no reader.
+   */
+  chargeHot(docKey: string, bytes: number): void;
+  /**
+   * The worker settled this doc's bytes cold. ONE call, not separable: the hot
+   * charge is released and the cold figure is the worker's own.
+   *
+   * This does NOT record cold bytes - the TIER reports those, through its own
+   * `settleCold`, because it holds cold state for every room whether leased or
+   * not. One reporter per byte fact; recording here too would double-count.
    */
   settleCold(docKey: string, settledBytes: number): void;
 }
@@ -234,7 +240,7 @@ export function createArtifactBodyLeaseBridge(options: {
         docGuid: answer.docGuid,
         demotingGeneration: null,
       });
-      options.budget.chargeHot(docKey);
+      options.budget.chargeHot(docKey, answer.update.byteLength);
       return { kind: "granted", docKey, release: releaseFor(docKey) };
     },
     resendUnacknowledgedDemotes(): void {
@@ -268,7 +274,6 @@ export function createArtifactBodyLeaseBridge(options: {
     if (entry.demotingGeneration !== null) {
       entry.demotingGeneration = null;
       entry.generation += 1;
-      options.budget.clearDemoting(docKey);
     }
     entry.leases += 1;
     return { kind: "granted", docKey, release: releaseFor(docKey) };
@@ -291,7 +296,6 @@ export function createArtifactBodyLeaseBridge(options: {
       if (entry.demotingGeneration !== null) return;
       entry.generation += 1;
       entry.demotingGeneration = entry.generation;
-      options.budget.markDemoting(docKey);
       postDemote(docKey, entry.generation);
     };
   }

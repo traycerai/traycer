@@ -105,7 +105,9 @@ describe("startEpicRuntimeWorkerHost", () => {
     expect(fatal).toHaveLength(1);
     expect(events.filter((event) => event.kind === "ready")).toHaveLength(0);
     // Both numbers, so a reader of the log knows which side is stale.
-    const message = fatal[0]?.kind === "fatal" ? fatal[0].message : "";
+    // The filter already narrows to the fatal arm, so re-testing `kind` was a
+    // literal-vs-literal comparison that could not fail.
+    const message = fatal[0].message;
     expect(message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION - 1));
     expect(message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION));
     host.shutdown();
@@ -142,7 +144,7 @@ describe("startEpicRuntimeWorkerHost", () => {
     const partialView = new Uint8Array(buffer, 2, 3);
 
     host.installCore(
-      stubCore({ readAttachmentBytes: async () => partialView }),
+      stubCore({ readAttachmentBytes: () => Promise.resolve(partialView) }),
     );
 
     // Asserted on what the CALLER receives, not on the frame in transit. The

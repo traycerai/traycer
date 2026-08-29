@@ -1,0 +1,262 @@
+/// <reference types="node" />
+
+import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+/**
+ * No module owning PROCESS-SCOPED state may be value-reachable from the worker
+ * entry.
+ *
+ * This is the third member of one class. `appHostCredentialMintFlow` was the
+ * first: a module-scoped single-flight whose app-wideness is guaranteed by
+ * module identity, so a worker importing it gets a second COPY of its state
+ * rather than a second reference to one. `active-remote-sessions`' process-wide
+ * `RemoteSession` cache was the second - it is why the socket never moved.
+ * `process-memory-accountant`'s `let processRuntime` is the third, and it is
+ * the one still open.
+ *
+ * Every one of them is invisible to an in-process suite, because in-process the
+ * "worker" shares the module instance and there is exactly one copy. No
+ * behavioural test can find these; only the import graph can.
+ *
+ * A RATCHET, and today it holds the set at ZERO with an EMPTY allowlist -
+ * which is stronger than the allowlist this started with. The reason is worth
+ * knowing: the worker entry does not yet import the composition root, so its
+ * value graph is small and reaches nothing stateful. `process-memory-accountant`
+ * is reachable from `epic-replica-runtime.ts`, and that module joins this graph
+ * the moment the composition is wired into the worker.
+ *
+ * So this pin does not go red today - it goes red on the COMMIT that wires the
+ * composition without 4e having landed, naming the chain. That is exactly when
+ * it should fire, and it is why the allowlist is empty rather than pre-loaded
+ * with a module that is not there yet: a pre-loaded entry would have made the
+ * anti-rot check assert a chain that does not exist, which is a failing test
+ * describing nothing.
+ */
+const WORKER_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+// SEVEN, not six: worker → runtime → open-epic → epics → stores → src →
+// gui-app → clients. At six this landed on `gui-app`, so every `@/` specifier
+// resolved to a path that does not exist, the walk never left this directory,
+// and the pin passed while seeing nothing. Caught by ablating it - a value
+// import of the accountant from the entry stayed GREEN.
+const CLIENTS_DIR = path.join(
+  WORKER_DIR,
+  "..",
+  "..",
+  "..",
+  "..",
+  "..",
+  "..",
+  "..",
+);
+
+const ENTRY = path.join(WORKER_DIR, "epic-runtime-worker-entry.ts");
+
+/**
+ * Known process-scoped modules, each with the chain that reaches it.
+ *
+ * Emptied by 4e, which inverts the runtime's accounting dependency so
+ * `epic-replica-runtime.ts` stops reaching for the singleton by module
+ * identity.
+ */
+const ALLOWED: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The floor under {@link GraphWalk.resolvedAliasCount}. Today's count is 5.
+ *
+ * Deliberately BELOW the real count and well above zero. The failure this
+ * guards - a `CLIENTS_DIR` that points at the wrong directory - takes the
+ * count to zero outright rather than decrementing it, because both alias
+ * families (`@/` and `@traycer-clients/shared/`) resolve off that one anchor.
+ * A floor pinned to the exact count would instead red on any unrelated import
+ * being removed, and a pin that reds for uninteresting reasons gets its number
+ * bumped without being read.
+ */
+const MIN_RESOLVED_ALIAS_IMPORTS = 3;
+
+/** Modules that own module-level state and are CORRECT to duplicate per thread. */
+const PER_THREAD_OK: readonly string[] = [];
+
+/**
+ * Value imports only.
+ *
+ * `import type X`, and a braced clause whose specifiers are ALL `type`, emit
+ * nothing - so they create no module instance and cannot fork a singleton.
+ * A walker that counts them reports four false positives here on day one
+ * (`negotiated-manifest-registry`, `remote-session`, `ws-rpc-client`,
+ * `ws-stream-client` are all type-only reachable), which is how a pin teaches
+ * people to ignore it.
+ */
+function valueImportSpecs(source: string): string[] {
+  const specs: string[] = [];
+  const withClause =
+    /^\s*import\s+(?!type\s)([^;]*?)\s*from\s*["']([^"']+)["']/gm;
+  let match = withClause.exec(source);
+  while (match !== null) {
+    const clause = match[1];
+    const braced = /\{([^}]*)\}/s.exec(clause);
+    const names =
+      braced === null
+        ? []
+        : braced[1]
+            .split(",")
+            .map((n) => n.trim())
+            .filter((n) => n.length > 0);
+    const allTypes =
+      names.length > 0 && names.every((n) => n.startsWith("type "));
+    if (!allTypes) specs.push(match[2]);
+    match = withClause.exec(source);
+  }
+  const bare = /^\s*import\s+["']([^"']+)["']/gm;
+  let sideEffect = bare.exec(source);
+  while (sideEffect !== null) {
+    specs.push(sideEffect[1]);
+    sideEffect = bare.exec(source);
+  }
+  return specs;
+}
+
+function resolveSpec(spec: string, from: string): string | null {
+  let base: string;
+  if (spec.startsWith("@/"))
+    base = path.join(CLIENTS_DIR, "gui-app/src", spec.slice(2));
+  else if (spec.startsWith("@traycer-clients/shared/"))
+    base = path.join(
+      CLIENTS_DIR,
+      "shared",
+      spec.slice("@traycer-clients/shared/".length),
+    );
+  else if (spec.startsWith(".")) base = path.resolve(path.dirname(from), spec);
+  else return null;
+  for (const candidate of [
+    `${base}.ts`,
+    `${base}.tsx`,
+    path.join(base, "index.ts"),
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** By PREDICATE, never a name list - the 4th member must fail here too. */
+function ownsProcessState(source: string): boolean {
+  const body = source
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+  return (
+    /^let\s+\w+/m.test(body) ||
+    /^const\s+\w+\s*=\s*new (?:Map|Set|WeakMap|WeakSet)\b/m.test(body)
+  );
+}
+
+interface GraphWalk {
+  /** Process-scoped modules found, keyed by module, valued by the chain. */
+  readonly stateful: ReadonlyMap<string, string>;
+  /**
+   * How many WORKSPACE-ALIASED specifiers (`@/`, `@traycer-clients/shared/`)
+   * actually resolved to a file on disk.
+   *
+   * This is the pin's own liveness signal. `resolveSpec` returns `null` for
+   * anything it cannot place, and a null is indistinguishable from "this
+   * module imports nothing forbidden" - which is precisely how a wrong
+   * `CLIENTS_DIR` made the whole walk vacuous while it reported success.
+   */
+  readonly resolvedAliasCount: number;
+}
+
+function walk(): GraphWalk {
+  const parent = new Map<string, string>();
+  const seen = new Set<string>([ENTRY]);
+  const queue: string[] = [ENTRY];
+  let resolvedAliasCount = 0;
+  while (queue.length > 0) {
+    const file = queue.shift();
+    if (file === undefined || !existsSync(file)) continue;
+    for (const spec of valueImportSpecs(readFileSync(file, "utf8"))) {
+      const resolved = resolveSpec(spec, file);
+      // Counted per SPECIFIER, not per newly-seen module: a module reached
+      // twice still proves its alias resolved both times, and counting only
+      // first sights would make the floor drift with graph shape.
+      if (resolved !== null && !spec.startsWith(".")) resolvedAliasCount += 1;
+      if (resolved !== null && !seen.has(resolved)) {
+        seen.add(resolved);
+        parent.set(resolved, file);
+        queue.push(resolved);
+      }
+    }
+  }
+  const stateful = new Map<string, string>();
+  for (const file of seen) {
+    if (file.includes("__tests__") || file.includes("test-support")) continue;
+    if (!ownsProcessState(readFileSync(file, "utf8"))) continue;
+    const chain: string[] = [];
+    let cursor: string | undefined = file;
+    while (cursor !== undefined) {
+      chain.push(path.relative(CLIENTS_DIR, cursor));
+      cursor = parent.get(cursor);
+    }
+    stateful.set(
+      path.relative(CLIENTS_DIR, file),
+      chain.reverse().join("\n      -> "),
+    );
+  }
+  return { stateful, resolvedAliasCount };
+}
+
+describe("the worker entry's value-import graph", () => {
+  // The pin's own liveness, asserted BEFORE anything it concludes.
+  //
+  // This pin once passed while seeing nothing: `CLIENTS_DIR` was one `..`
+  // short, landing on `gui-app` instead of `clients`, so every `@/` specifier
+  // resolved to a path that does not exist, `resolveSpec` answered `null`, the
+  // walk never left this directory, and "no forbidden module found" was true
+  // and worthless. The ablation that should have reddened it stayed GREEN.
+  //
+  // A graph pin that resolves nothing is indistinguishable from a clean graph,
+  // so the resolver's own success is the thing to assert. Both halves matter:
+  // the anchor check fails loudly and exactly on a path change, and the
+  // positive count fails if resolution breaks for any other reason.
+  it("resolves its own anchor and a positive number of aliased imports", () => {
+    // Exact, and immune to how large the graph happens to be.
+    expect(existsSync(path.join(CLIENTS_DIR, "gui-app"))).toBe(true);
+    expect(existsSync(path.join(CLIENTS_DIR, "shared"))).toBe(true);
+
+    // A floor, not the current count: the graph legitimately grows, and a
+    // pin that must be edited on every unrelated import gets edited without
+    // being read.
+    expect(walk().resolvedAliasCount).toBeGreaterThanOrEqual(
+      MIN_RESOLVED_ALIAS_IMPORTS,
+    );
+  });
+
+  it("reaches no process-scoped module outside the ratchet's allowlist", () => {
+    const found = walk().stateful;
+    const unexpected = [...found.keys()].filter(
+      (file) => !ALLOWED.has(file) && !PER_THREAD_OK.includes(file),
+    );
+    // The chain, not just the module: "which import pulled it in" is the whole
+    // of the fix, and a bare module name sends the reader looking for it.
+    const detail = unexpected
+      .map((file) => `${file}\n      via ${found.get(file) ?? "?"}`)
+      .join("\n\n");
+    expect(detail).toBe("");
+  });
+
+  it("keeps the allowlist honest - every entry must still be reachable", () => {
+    // The other direction, and it is why the allowlist is empty today. An
+    // entry naming a module the graph does not reach is a permission granted
+    // to nothing, and the next singleton to appear under that name would be
+    // waved through. With an empty allowlist this holds vacuously and starts
+    // meaning something the moment an entry is added.
+    const found = walk().stateful;
+    for (const file of ALLOWED.keys()) {
+      expect(found.has(file)).toBe(true);
+    }
+  });
+});

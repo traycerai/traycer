@@ -405,10 +405,11 @@ describe("hot-doc byte budget with a real tier", () => {
 
     expect(harness.tier.peek("room-pinned")).not.toBeNull();
     expect(harness.demote).toHaveBeenCalled();
+    // Asserted rather than guarded: the index type is not nullable, so the old
+    // `=== undefined` branch was unreachable and proved nothing. This says the
+    // same thing where it can actually fail.
+    expect(harness.demoteOutcomes.length).toBeGreaterThan(0);
     const outcome = harness.demoteOutcomes[harness.demoteOutcomes.length - 1];
-    if (outcome === undefined) {
-      throw new Error("expected demote to have returned an outcome");
-    }
     expect(
       outcome.protectedBytesByKind.some((entry) => entry.kind === "leased"),
     ).toBe(true);
