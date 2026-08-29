@@ -2501,12 +2501,18 @@ function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
   for (const span of window.spans) {
     for (const rowId of span.rowIds) fresh.add(rowId);
   }
-  const kept = window.staleSpans.filter((span) =>
+  const uncovered = window.staleSpans.filter((span) =>
     span.rowIds.some((rowId) => !fresh.has(rowId)),
   );
-  return kept.length === window.staleSpans.length
-    ? window
-    : { ...window, staleSpans: kept };
+  // Rebalanced against the bytes the fresh spans NOW hold, not only bounded
+  // at the carry: every seat that grows the fresh tier shrinks the stale
+  // tier's headroom, so the shared budget keeps holding as hydration
+  // proceeds rather than only at the rebase that created the carry.
+  const bounded = boundedStaleSpans(uncovered, window.hydratedBytes);
+  const unchanged =
+    bounded.length === window.staleSpans.length &&
+    bounded.every((span) => window.staleSpans.includes(span));
+  return unchanged ? window : { ...window, staleSpans: bounded };
 }
 
 /**
