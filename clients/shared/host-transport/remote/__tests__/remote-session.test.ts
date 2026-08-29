@@ -56,9 +56,10 @@ import {
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
-import type {
-  ServerClockSkewSignal,
-  ServerClockState,
+import {
+  clockCanMakeValidBearersLookExpired,
+  type ServerClockSkewSignal,
+  type ServerClockState,
 } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import {
   HostRequestAbortedError,
@@ -7097,19 +7098,31 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
 describe("RemoteSession clock-skew park", () => {
   /**
    * A hand-driven `ServerClockSkewSignal`. The transport's contract is with the
-   * VERDICT and the recovery edge; keeping the double dumb makes these tests
-   * statements about the session, not about the tracker (which has its own
-   * suite).
+   * verdict, its DIRECTION, and the recovery edge; keeping the double dumb
+   * makes these tests statements about the session, not about the tracker
+   * (which has its own suite).
+   *
+   * `skewed-ahead` is the incident: a local clock running FAST, so
+   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
+   * clock - just as wrong, just as banner-worthy, and incapable of being why
+   * the relay rejected a bearer. The predicate is computed exactly as the real
+   * tracker computes it rather than hardcoded per case, so the double cannot
+   * drift from the sign convention.
    */
-  function makeClockSignal(initial: "ok" | "skewed"): {
+  function makeClockSignal(initial: "ok" | "skewed-ahead" | "skewed-behind"): {
     readonly signal: ServerClockSkewSignal;
     readonly recover: () => void;
     readonly recoverySubscribers: () => number;
   } {
-    let state: ServerClockState =
-      initial === "skewed"
-        ? { verdict: "skewed", offsetMs: -7 * 3_600_000 }
-        : { verdict: "ok", offsetMs: 0 };
+    const SEVEN_HOURS_MS = 7 * 3_600_000;
+    let state: ServerClockState;
+    if (initial === "skewed-ahead") {
+      state = { verdict: "skewed", offsetMs: -SEVEN_HOURS_MS };
+    } else if (initial === "skewed-behind") {
+      state = { verdict: "skewed", offsetMs: SEVEN_HOURS_MS };
+    } else {
+      state = { verdict: "ok", offsetMs: 0 };
+    }
     const recoveryListeners = new Set<() => void>();
     return {
       recoverySubscribers: () => recoveryListeners.size,
@@ -7121,7 +7134,8 @@ describe("RemoteSession clock-skew park", () => {
       },
       signal: {
         currentState: () => state,
-        isSkewed: () => state.verdict === "skewed",
+        canMakeValidBearersLookExpired: () =>
+          clockCanMakeValidBearersLookExpired(state),
         subscribe: () => () => undefined,
         subscribeToRecovery: (listener) => {
           recoveryListeners.add(listener);
@@ -7156,7 +7170,7 @@ describe("RemoteSession clock-skew park", () => {
     async () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      const clock = makeClockSignal("skewed");
+      const clock = makeClockSignal("skewed-ahead");
       const session = buildNoProgressSession(relay, lease, clock.signal);
       try {
         session.start();
@@ -7183,7 +7197,7 @@ describe("RemoteSession clock-skew park", () => {
     async () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      const clock = makeClockSignal("skewed");
+      const clock = makeClockSignal("skewed-ahead");
       relay.decideOpen = (_bearer, openIndex) =>
         openIndex === 0
           ? { kind: "fatal", details: unauthorizedDetails() }
@@ -7241,6 +7255,31 @@ describe("RemoteSession clock-skew park", () => {
   );
 
   it(
+    "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
+    async () => {
+      // The mirror of the incident, and the failure this feature would
+      // otherwise have reintroduced in the opposite direction. A SLOW clock
+      // makes a bearer look more valid, never expired, and the relay validates
+      // against its own clock - so it cannot be why this bearer was rejected.
+      // Whatever is (host config mismatch, revocation) is exactly what the
+      // bound exists to diagnose, and a remote user stranded behind "fix your
+      // clock" has no way at all to discover the real cause.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("skewed-behind");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "leaves the transient network-error arm untouched under skew",
     async () => {
       // A revalidation that cannot reach authn says nothing about the clock -
@@ -7249,7 +7288,7 @@ describe("RemoteSession clock-skew park", () => {
       // wake-time blip.
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("stale-token", "user-1");
-      const clock = makeClockSignal("skewed");
+      const clock = makeClockSignal("skewed-ahead");
       relay.decideOpen = (_bearer, openIndex) =>
         openIndex === 0
           ? { kind: "fatal", details: unauthorizedDetails() }
@@ -7278,7 +7317,7 @@ describe("RemoteSession clock-skew park", () => {
     async () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      const clock = makeClockSignal("skewed");
+      const clock = makeClockSignal("skewed-ahead");
       const session = buildNoProgressSession(relay, lease, clock.signal);
       session.start();
       await vi.waitFor(() => expect(clock.recoverySubscribers()).toBe(1), WAIT);
@@ -7341,7 +7380,7 @@ describe("RemoteSession clock-skew park re-entrancy", () => {
           verdict: "skewed",
           offsetMs: -7 * 3_600_000,
         }),
-        isSkewed: () => true,
+        canMakeValidBearersLookExpired: () => true,
         subscribe: () => () => undefined,
         subscribeToRecovery: (listener) => {
           recoveryListeners.add(listener);

@@ -50,9 +50,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "../../auth/bearer-revalidator";
-import type {
-  ServerClockSkewSignal,
-  ServerClockState,
+import {
+  clockCanMakeValidBearersLookExpired,
+  type ServerClockSkewSignal,
+  type ServerClockState,
 } from "../../clock/server-time-offset-tracker";
 import {
   NO_TRANSPORT_EVIDENCE,
@@ -5144,19 +5145,34 @@ describe("WsStreamClient clock-skew park", () => {
 
   /**
    * A hand-driven `ServerClockSkewSignal`. Nothing here samples anything - the
-   * transport's contract is with the VERDICT and the recovery edge, and keeping
-   * the double dumb is what makes these tests statements about the transport
-   * rather than about the tracker (which has its own suite).
+   * transport's contract is with the verdict, its DIRECTION, and the recovery
+   * edge, and keeping the double dumb is what makes these tests statements
+   * about the transport rather than about the tracker (which has its own
+   * suite).
+   *
+   * `skewed-ahead` is the incident: a local clock running FAST, so
+   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
+   * clock that is just as wrong and just as banner-worthy but CANNOT be why a
+   * bearer was rejected - the direction the park must not fire on. The
+   * predicate is computed exactly as the real tracker computes it rather than
+   * hardcoded per case, so the double cannot drift from the sign convention.
    */
-  function makeClockSignal(initial: "ok" | "skewed" | "unknown"): {
+  function makeClockSignal(
+    initial: "ok" | "skewed-ahead" | "skewed-behind" | "unknown",
+  ): {
     readonly signal: ServerClockSkewSignal;
     readonly recover: () => void;
     readonly recoverySubscribers: () => number;
   } {
-    let state: ServerClockState =
-      initial === "skewed"
-        ? { verdict: "skewed", offsetMs: -7 * 3_600_000 }
-        : { verdict: initial, offsetMs: initial === "ok" ? 0 : null };
+    const SEVEN_HOURS_MS = 7 * 3_600_000;
+    let state: ServerClockState;
+    if (initial === "skewed-ahead") {
+      state = { verdict: "skewed", offsetMs: -SEVEN_HOURS_MS };
+    } else if (initial === "skewed-behind") {
+      state = { verdict: "skewed", offsetMs: SEVEN_HOURS_MS };
+    } else {
+      state = { verdict: initial, offsetMs: initial === "ok" ? 0 : null };
+    }
     const recoveryListeners = new Set<() => void>();
     return {
       recoverySubscribers: () => recoveryListeners.size,
@@ -5168,7 +5184,8 @@ describe("WsStreamClient clock-skew park", () => {
       },
       signal: {
         currentState: () => state,
-        isSkewed: () => state.verdict === "skewed",
+        canMakeValidBearersLookExpired: () =>
+          clockCanMakeValidBearersLookExpired(state),
         subscribe: () => () => undefined,
         subscribeToRecovery: (listener) => {
           recoveryListeners.add(listener);
@@ -5251,7 +5268,7 @@ describe("WsStreamClient clock-skew park", () => {
   it("parks at the pre-dial expiry gate instead of revalidating a token the clock only makes LOOK expired", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
-    const clock = makeClockSignal("skewed");
+    const clock = makeClockSignal("skewed-ahead");
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
@@ -5276,7 +5293,7 @@ describe("WsStreamClient clock-skew park", () => {
   it("re-dials a session parked on the UNAUTHORIZED path once the clock is corrected", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
-    const clock = makeClockSignal("skewed");
+    const clock = makeClockSignal("skewed-ahead");
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
@@ -5326,7 +5343,7 @@ describe("WsStreamClient clock-skew park", () => {
   it("parks rather than counting toward the no-progress terminal bound, however long it sits", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
-    const clock = makeClockSignal("skewed");
+    const clock = makeClockSignal("skewed-ahead");
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
@@ -5387,12 +5404,78 @@ describe("WsStreamClient clock-skew park", () => {
     session.close();
   });
 
+  it("does NOT park on a clock running BEHIND, and still walks the no-progress bound to terminal", async () => {
+    // The mirror of the incident, and the failure this feature would otherwise
+    // have reintroduced in the opposite direction. A SLOW clock makes a bearer
+    // look more valid, never expired, and the host validates against its own
+    // clock - so it cannot be why this bearer was rejected. Whatever is (a host
+    // config mismatch, a revocation) is exactly the case the terminal bound
+    // exists to diagnose, and parking here would strand the session until the
+    // user "fixed" a clock that was never the cause.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-behind");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await wait(40);
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+      await wait(40);
+    }
+
+    expect(statuses).toContain("closed");
+    expect(closeReasons.find((r) => r?.kind === "fatalError")?.kind).toBe(
+      "fatalError",
+    );
+    // Never parked: nothing is holding a recovery subscription, so no clock
+    // correction was ever going to be what brought this session back.
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("does NOT park at the pre-dial gate on a clock running BEHIND, and does not blame the clock for it", async () => {
+    // A slow clock makes `exp <= Date.now()` LESS likely to fire, so if it
+    // fired anyway the bearer really is expired. Revalidate exactly as before,
+    // and do not hand the user a confident misdiagnosis on the way.
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-behind");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await wait(60);
+    expect(revalidator.calls.count).toBeGreaterThan(0);
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
   it("leaves the transient network-error outcome untouched under skew", async () => {
     // A wake-time blip is not evidence about the clock, and the streak-reset +
     // backoff behaviour it drives must be exactly what it was.
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("network-error");
-    const clock = makeClockSignal("skewed");
+    const clock = makeClockSignal("skewed-ahead");
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
@@ -5419,7 +5502,7 @@ describe("WsStreamClient clock-skew park", () => {
   it("releases the recovery subscription on close, so a later clock fix cannot revive a dead session", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
-    const clock = makeClockSignal("skewed");
+    const clock = makeClockSignal("skewed-ahead");
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
@@ -5460,7 +5543,7 @@ describe("WsStreamClient clock-skew park", () => {
     // authn is reachable and keeps saying the credential is current - exactly
     // what made the old loop make no progress.
     const revalidator = makeRevalidator("rotated");
-    const clock = makeClockSignal("skewed");
+    const clock = makeClockSignal("skewed-ahead");
     // The bearer and the verdict move TOGETHER because physically they are one
     // fact: the token only ever "expired" because it was being compared against
     // a clock that was 7h ahead, so correcting the clock is what makes the same
@@ -5540,7 +5623,7 @@ describe("WsStreamClient clock-skew park re-entrancy", () => {
         verdict: "skewed",
         offsetMs: -7 * 3_600_000,
       }),
-      isSkewed: () => true,
+      canMakeValidBearersLookExpired: () => true,
       subscribe: () => () => undefined,
       subscribeToRecovery: (listener) => {
         recoveryListeners.add(listener);

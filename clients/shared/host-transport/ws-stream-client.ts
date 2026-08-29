@@ -2259,12 +2259,14 @@ class StreamSession<
       // only one of them is this session's fault. The revalidation that just
       // resolved is itself the strongest evidence available: it is an authn
       // round trip, so its `Date` header has already reached the tracker. If
-      // the verdict is `skewed`, the clock is why - park before the counter
+      // our clock is running FAST, that is why - park before the counter
       // moves, so skew can never contribute to the terminal bound.
       //
-      // Keyed on the VERDICT and never on the rejection shape: host config
+      // Keyed on the CLOCK and never on the rejection shape: host config
       // mismatch produces an identical no-progress streak and must still reach
-      // `goTerminal`, because retrying it forever helps nobody.
+      // `goTerminal`, because retrying it forever helps nobody. And keyed on
+      // the direction that can cause this, not on `skewed`: a SLOW clock
+      // leaves this rejection just as unexplained as no skew at all.
       if (this.parkIfClockSkewed("no-progress-unauthorized")) {
         return;
       }
@@ -2322,9 +2324,17 @@ class StreamSession<
   }
 
   /**
-   * Parks this session if - and only if - the shared tracker currently reads
-   * the local clock as `skewed`. Returns whether it parked, so both call sites
-   * read as a guard.
+   * Parks this session if - and only if - the shared tracker reads the local
+   * clock as wrong IN THE DIRECTION THAT CAN CAUSE THIS FAILURE: running
+   * AHEAD, where a valid bearer reads as expired locally. Returns whether it
+   * parked, so both call sites read as a guard.
+   *
+   * Not merely `skewed`. A clock running BEHIND is equally wrong and equally
+   * banner-worthy, but it cannot make a bearer look expired and cannot make a
+   * host reject one, so an UNAUTHORIZED alongside it has some other cause -
+   * one the terminal bound diagnoses honestly today. Parking on that would
+   * strand a recoverable session behind a "fix your clock" that fixes nothing.
+   * See `clockCanMakeValidBearersLookExpired`.
    *
    * A parked session holds NO socket, NO retry timer and NO backoff ladder. It
    * is not terminal: `goTerminal`'s "recovery is a manual reload" contract is
@@ -2333,16 +2343,17 @@ class StreamSession<
    * subscription to the tracker's `skewed → ok` edge, on which it resumes the
    * ordinary dial path with whatever bearer is current by then.
    *
-   * Not parking when the tracker is absent or says `ok`/`unknown` is the whole
-   * safety story: without a trustworthy server-time reference this must degrade
-   * to exactly the behaviour that shipped before it existed.
+   * Not parking when the tracker is absent, says `ok`/`unknown`, or says the
+   * clock is wrong the other way is the whole safety story: without a
+   * trustworthy server-time reference that names THIS failure's cause, this
+   * must degrade to exactly the behaviour that shipped before it existed.
    */
   private parkIfClockSkewed(trigger: string): boolean {
     if (this.disposed) {
       return false;
     }
     const clock = this.config.clock;
-    if (clock === null || !clock.isSkewed()) {
+    if (clock === null || !clock.canMakeValidBearersLookExpired()) {
       return false;
     }
     if (this.clockParkUnsubscribe !== null) {
@@ -2427,10 +2438,15 @@ class StreamSession<
    * case the gate was written for, and it read as a confident misdiagnosis in
    * the clock-skew incident - the user's app said their bearer had expired
    * while suspended, on a machine that had just booted.
+   *
+   * Blames the clock only when the clock CAN be to blame, for the same reason:
+   * a clock running BEHIND makes this gate's `exp <= Date.now()` read LESS
+   * likely to fire, so if it fired anyway the bearer really is expired and
+   * naming the clock would just be the next confident misdiagnosis.
    */
   private preDialExpiryReason(): string {
     const clock = this.config.clock;
-    if (clock !== null && clock.isSkewed()) {
+    if (clock !== null && clock.canMakeValidBearersLookExpired()) {
       return clockSkewStreamReason(clock.currentState());
     }
     return "Bearer expired before dial (local token expiry read)";

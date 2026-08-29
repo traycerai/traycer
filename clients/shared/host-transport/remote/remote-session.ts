@@ -3054,14 +3054,16 @@ export class RemoteSession<
     if (rejectedBearer !== null && this.readBearerOrNull() === rejectedBearer) {
       // The clock, not the credential. The revalidation that just resolved is
       // itself an authn round trip, so its `Date` header has already reached
-      // the tracker - if the verdict is `skewed`, this streak is measuring a
+      // the tracker - if our clock is running FAST, this streak is measuring a
       // wrong wall clock and must not walk the session to `goTerminalFatal`.
       // Parked BEFORE the counter moves, so skew can never contribute to the
       // bound.
       //
-      // Keyed on the VERDICT and never on the rejection shape: a host config
+      // Keyed on the CLOCK and never on the rejection shape: a host config
       // mismatch produces an identical no-progress streak from an identical
-      // frame, and that one SHOULD still reach the bound.
+      // frame, and that one SHOULD still reach the bound. And keyed on the
+      // direction that can cause this, not on `skewed`: a SLOW clock leaves
+      // this rejection just as unexplained as no skew at all.
       if (this.parkIfClockSkewed()) {
         return;
       }
@@ -3089,9 +3091,17 @@ export class RemoteSession<
   }
 
   /**
-   * Parks this session if - and only if - the shared tracker currently reads
-   * the local clock as `skewed`. Returns whether it parked, so the call site
-   * reads as a guard.
+   * Parks this session if - and only if - the shared tracker reads the local
+   * clock as wrong IN THE DIRECTION THAT CAN CAUSE THIS FAILURE: running
+   * AHEAD, where a valid bearer reads as expired locally. Returns whether it
+   * parked, so the call site reads as a guard.
+   *
+   * Not merely `skewed`. A clock running BEHIND is equally wrong and equally
+   * banner-worthy, but it cannot make a bearer look expired and cannot make
+   * the relay reject one - it validates against its own clock - so an
+   * UNAUTHORIZED alongside it has some other cause, and parking would strand a
+   * session the bound would have diagnosed honestly. See
+   * `clockCanMakeValidBearersLookExpired`.
    *
    * The caller has already dropped the connection and left the phase at
    * `reconnecting`, so parking is mostly a matter of NOT arming the backoff
@@ -3121,7 +3131,7 @@ export class RemoteSession<
       return false;
     }
     const clock = this.options.clock ?? null;
-    if (clock === null || !clock.isSkewed()) {
+    if (clock === null || !clock.canMakeValidBearersLookExpired()) {
       return false;
     }
     if (this.clockParkUnsubscribe !== null) {

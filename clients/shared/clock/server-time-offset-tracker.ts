@@ -42,15 +42,78 @@ export interface ServerClockState {
   readonly offsetMs: number | null;
 }
 
+/** Which way round a wrong local clock is wrong. */
+export type LocalClockDirection = "ahead" | "behind";
+
+/**
+ * THE ONE PLACE the sign convention is decoded. `offsetMs` is
+ * `serverTime − Date.now()`, and that sign is easy to invert mentally, so
+ * nothing else in the codebase should be reading `offsetMs < 0` directly:
+ *
+ *   - local clock AHEAD (running fast) ⇒ `Date.now()` is the LARGER term
+ *     ⇒ `offsetMs` is NEGATIVE;
+ *   - local clock BEHIND (running slow) ⇒ `offsetMs` is POSITIVE.
+ */
+export function localClockDirection(offsetMs: number): LocalClockDirection {
+  return offsetMs < 0 ? "ahead" : "behind";
+}
+
+/**
+ * Whether the clock is wrong in the one direction that can make a bearer which
+ * is GENUINELY VALID read as expired here — i.e. running AHEAD.
+ *
+ * This is the predicate every auth park gate keys on, and it is strictly
+ * narrower than "the verdict is `skewed`". The two directions have opposite
+ * causal meaning at an auth failure, and only one of them is a cause at all:
+ *
+ *   - AHEAD (fast): the local `exp <= Date.now()` comparison reads a
+ *     just-minted bearer as hours expired, authn (correct clock) answers
+ *     "valid", the same token is re-dialed forever. This is the incident the
+ *     whole clock feature exists for, and parking is the fix.
+ *   - BEHIND (slow): a bearer can only look MORE valid than it is, never
+ *     expired — and the host validates against ITS OWN clock, so ours cannot
+ *     make it reject anything. An UNAUTHORIZED seen while the clock is slow
+ *     therefore has an UNRELATED cause (revocation, host config mismatch), and
+ *     parking on it would strand a session that the terminal bound would have
+ *     diagnosed honestly, until the user "fixed" a clock that was never the
+ *     problem. That is this feature's own failure mode, mirrored.
+ *
+ * Detection is deliberately NOT narrowed to match: a clock that is hours slow
+ * is worth telling the user about (it has its own consequences elsewhere), so
+ * the `skewed` verdict and the banner still speak for both directions. Only
+ * PARKING keys on this.
+ */
+export function clockCanMakeValidBearersLookExpired(
+  state: ServerClockState,
+): boolean {
+  return (
+    state.verdict === "skewed" &&
+    state.offsetMs !== null &&
+    localClockDirection(state.offsetMs) === "ahead"
+  );
+}
+
 /**
  * The read side, which is all the stream transport and the GUI need. Kept
  * separate from the tracker class so consumers cannot feed samples into it and
  * test doubles stay trivial.
+ *
+ * There is deliberately exactly ONE boolean here, and it is the narrow causal
+ * one. A plain "is the clock wrong" convenience used to sit beside it, and
+ * every park gate reached for it — which is precisely the bug
+ * {@link clockCanMakeValidBearersLookExpired} exists to prevent. Surfacing
+ * consumers (banners) read {@link currentState} and key on
+ * `verdict === "skewed"` themselves, which keeps the wrong predicate out of
+ * reach at a park site rather than merely documented against.
  */
 export interface ServerClockSkewSignal {
   currentState(): ServerClockState;
-  /** Convenience for the transport's park gates: `verdict === "skewed"`. */
-  isSkewed(): boolean;
+  /**
+   * The auth park gate: see {@link clockCanMakeValidBearersLookExpired}. NOT
+   * "is the clock wrong" — a clock wrong in the other direction is still
+   * `skewed`, still worth a banner, and still must NOT park anything.
+   */
+  canMakeValidBearersLookExpired(): boolean;
   /** Fires on every state change; returns an unsubscribe. */
   subscribe(listener: (state: ServerClockState) => void): () => void;
   /**
@@ -136,8 +199,8 @@ export class ServerTimeOffsetTracker implements ServerClockSkewSignal {
     return this.state;
   }
 
-  isSkewed(): boolean {
-    return this.state.verdict === "skewed";
+  canMakeValidBearersLookExpired(): boolean {
+    return clockCanMakeValidBearersLookExpired(this.state);
   }
 
   subscribe(listener: (state: ServerClockState) => void): () => void {
@@ -325,13 +388,13 @@ function decodeJwtSegment(segment: string): unknown {
 /**
  * Human-facing description of a skew verdict — "~7h ahead" — shared by the GUI
  * banner and the transport's fatal-reason copy so the two can never disagree
- * about direction. `offsetMs` is `server − local`, so a NEGATIVE offset means
- * the local clock is ahead.
+ * about direction. Reads the sign through {@link localClockDirection} rather
+ * than inlining it, so the copy and the park gate can never drift apart on
+ * which way round `offsetMs` runs.
  */
 export function describeClockOffset(offsetMs: number): string {
   const magnitude = Math.abs(offsetMs);
-  const direction = offsetMs < 0 ? "ahead" : "behind";
-  return `~${formatApproximateDuration(magnitude)} ${direction}`;
+  return `~${formatApproximateDuration(magnitude)} ${localClockDirection(offsetMs)}`;
 }
 
 function formatApproximateDuration(ms: number): string {

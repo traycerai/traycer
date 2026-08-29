@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  clockCanMakeValidBearersLookExpired,
   clockSkewStreamReason,
   describeClockOffset,
   DEFAULT_SKEW_ENTER_MS,
   DEFAULT_SKEW_EXIT_MS,
+  localClockDirection,
   ServerTimeOffsetTracker,
   type ServerClockState,
 } from "../server-time-offset-tracker";
@@ -57,7 +59,7 @@ describe("ServerTimeOffsetTracker classification", () => {
       verdict: "unknown",
       offsetMs: null,
     });
-    expect(tracker.isSkewed()).toBe(false);
+    expect(tracker.canMakeValidBearersLookExpired()).toBe(false);
   });
 
   it("stays `ok` for offsets inside the enter threshold", () => {
@@ -77,7 +79,7 @@ describe("ServerTimeOffsetTracker classification", () => {
       verdict: "skewed",
       offsetMs: -SEVEN_HOURS_MS,
     });
-    expect(tracker.isSkewed()).toBe(true);
+    expect(tracker.canMakeValidBearersLookExpired()).toBe(true);
   });
 
   it("reads the HTTP `Date` header, and ignores an absent or unparseable one", () => {
@@ -108,6 +110,72 @@ describe("ServerTimeOffsetTracker classification", () => {
       tokenWithIat(Math.floor((clocks.wallMs - SEVEN_HOURS_MS) / 1000)),
     );
     expect(tracker.currentState().verdict).toBe("skewed");
+  });
+});
+
+/**
+ * The two directions of a wrong clock have OPPOSITE causal meaning at an auth
+ * failure, and only one of them is a cause at all. Detection must not care;
+ * parking must.
+ */
+describe("ServerTimeOffsetTracker skew direction", () => {
+  it("pins the sign convention: negative is a clock running AHEAD", () => {
+    // `offsetMs` is `serverTime − Date.now()`, so a FAST local clock is the
+    // larger term and the difference goes negative. Every direction-sensitive
+    // decision in the app routes through this one function; if it inverts,
+    // this is the test that says so.
+    expect(localClockDirection(-1)).toBe("ahead");
+    expect(localClockDirection(1)).toBe("behind");
+    expect(localClockDirection(0)).toBe("behind");
+  });
+
+  it("declares `skewed` for a clock running BEHIND, because the user still wants to know", () => {
+    const clocks = new FakeClocks();
+    const tracker = makeTracker(clocks);
+    // Local clock 7h SLOW, so server − local is positive.
+    tracker.recordServerTimeMs(clocks.wallMs + SEVEN_HOURS_MS, clocks.wallMs);
+    expect(tracker.currentState()).toEqual({
+      verdict: "skewed",
+      offsetMs: SEVEN_HOURS_MS,
+    });
+    expect(describeClockOffset(SEVEN_HOURS_MS)).toContain("behind");
+  });
+
+  it("refuses the park predicate for a clock running BEHIND, at the same magnitude that arms it when AHEAD", () => {
+    // A slow clock makes a bearer look MORE valid, never expired, and the host
+    // validates against its own clock - so it cannot be why anything was
+    // rejected. Parking on it would strand a session behind a "fix your clock"
+    // that fixes nothing. Same tracker, same magnitude, opposite sign.
+    const clocks = new FakeClocks();
+    const behind = makeTracker(clocks);
+    behind.recordServerTimeMs(clocks.wallMs + SEVEN_HOURS_MS, clocks.wallMs);
+    expect(behind.currentState().verdict).toBe("skewed");
+    expect(behind.canMakeValidBearersLookExpired()).toBe(false);
+
+    const ahead = makeTracker(clocks);
+    ahead.recordServerTimeMs(clocks.wallMs - SEVEN_HOURS_MS, clocks.wallMs);
+    expect(ahead.canMakeValidBearersLookExpired()).toBe(true);
+  });
+
+  it("is false for every non-`skewed` verdict, whatever the offset says", () => {
+    // `ok` and `unknown` must never arm a park, and `unknown` in particular
+    // carries no offset at all - the predicate has to tolerate that rather
+    // than read `null < 0`.
+    expect(
+      clockCanMakeValidBearersLookExpired({
+        verdict: "unknown",
+        offsetMs: null,
+      }),
+    ).toBe(false);
+    expect(
+      clockCanMakeValidBearersLookExpired({ verdict: "ok", offsetMs: -1_000 }),
+    ).toBe(false);
+    expect(
+      clockCanMakeValidBearersLookExpired({
+        verdict: "skewed",
+        offsetMs: null,
+      }),
+    ).toBe(false);
   });
 });
 

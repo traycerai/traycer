@@ -5,7 +5,10 @@ import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
 import { getClientAppVersion } from "@/lib/app-version";
 import { describeVersionSkew } from "@/lib/host/version-skew-copy";
 import { useServerClockSkew } from "@/lib/clock/use-server-clock-skew";
-import { describeClockOffset } from "@traycer-clients/shared/clock/server-time-offset-tracker";
+import {
+  clockCanMakeValidBearersLookExpired,
+  describeClockOffset,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
@@ -28,16 +31,22 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
           guidance: props.error.upgradeGuidance,
         })
       : null;
-  // A wrong system clock OUTRANKS whatever fatal code got recorded, because
-  // under skew the recorded code is a symptom: an UNAUTHORIZED whose cause was
-  // the clock, or a session that went terminal on an older build before
+  // A clock running FAST outranks whatever fatal code got recorded, because
+  // under that skew the recorded code is a symptom: an UNAUTHORIZED whose cause
+  // was the clock, or a session that went terminal on an older build before
   // parking existed. Retrying is futile until the clock is fixed, so the copy
   // has to say so rather than offering "Failed to load epic" as the diagnosis.
   //
-  // Gated on `verdict === "skewed"` alone — never on the error code — so a
-  // genuinely broken host on a machine with a correct clock keeps its own
-  // message.
-  const clockOffsetMs = clock.verdict === "skewed" ? clock.offsetMs : null;
+  // Never on the error code — so a genuinely broken host on a machine with a
+  // correct clock keeps its own message. And never on `skewed` alone: this
+  // block REPLACES the recorded error with a causal claim, and a clock running
+  // BEHIND cannot make any bearer look expired or make a host reject one, so
+  // the claim would be false AND would bury the real message. The ambient
+  // clock banner still tells that user their clock is wrong; this pane keeps
+  // telling them what actually failed here.
+  const clockOffsetMs = clockCanMakeValidBearersLookExpired(clock)
+    ? clock.offsetMs
+    : null;
   const title = errorTitle(clockOffsetMs, skew?.title ?? null);
   return (
     <div

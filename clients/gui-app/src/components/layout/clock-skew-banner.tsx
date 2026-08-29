@@ -2,23 +2,34 @@ import { useEffect, type ReactNode } from "react";
 import { AlarmClock } from "lucide-react";
 import { startAppServerClockMonitor } from "@/lib/clock/app-server-clock";
 import { useServerClockSkew } from "@/lib/clock/use-server-clock-skew";
-import { describeClockOffset } from "@traycer-clients/shared/clock/server-time-offset-tracker";
+import {
+  clockCanMakeValidBearersLookExpired,
+  describeClockOffset,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
 
 /**
  * States that this machine's WALL CLOCK is wrong, mounted beside the session
  * strip directly under the app header.
  *
  * A banner rather than a toast or a notification because the condition is
- * AMBIENT, not an event: while the clock is off, every bearer this client holds
- * reads as long expired and no authenticated traffic can succeed anywhere in
- * the app. There is nothing to acknowledge and nothing to retry, so there is
- * also no dismiss affordance - it self-clears the moment the tracker sees the
- * clock come right, which is the same edge that resumes every parked stream.
+ * AMBIENT, not an event: a wrong clock is a property of the machine that stays
+ * true until someone fixes it. There is nothing to acknowledge and nothing to
+ * retry, so there is also no dismiss affordance - it self-clears the moment the
+ * tracker sees the clock come right, which is the same edge that resumes every
+ * parked stream.
  *
  * It speaks only for a `skewed` verdict. `unknown` (no server-time sample yet,
  * or a sample invalidated by a wall-clock jump) renders nothing: the tracker
  * has not proven anything, and an "is your clock wrong?" banner shown on
  * suspicion would be worse than the silence it replaces.
+ *
+ * Shown for BOTH directions, but the CONSEQUENCE sentence is direction-aware
+ * and only the fast-clock one claims connections are blocked. That claim is
+ * true exactly when the local `exp <= Date.now()` read can condemn a valid
+ * bearer, which is a clock running ahead; a clock running behind makes bearers
+ * look MORE valid and blocks nothing, so telling that user Traycer "can't
+ * connect until it's corrected" would send them after the wrong cause - the
+ * misdiagnosis this whole feature exists to stop.
  */
 export function ClockSkewBanner(): ReactNode {
   const state = useServerClockSkew();
@@ -32,6 +43,9 @@ export function ClockSkewBanner(): ReactNode {
   if (state.verdict !== "skewed" || offsetMs === null) {
     return null;
   }
+  const consequence = clockCanMakeValidBearersLookExpired(state)
+    ? "Traycer can't connect until it's corrected."
+    : "Times shown in the app will be wrong until it's corrected.";
   return (
     <output
       aria-label="System clock is incorrect"
@@ -41,7 +55,7 @@ export function ClockSkewBanner(): ReactNode {
     >
       <AlarmClock className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">
-        {`Your system clock appears to be ${describeClockOffset(offsetMs)}. Traycer can't connect until it's corrected.`}
+        {`Your system clock appears to be ${describeClockOffset(offsetMs)}. ${consequence}`}
       </span>
     </output>
   );

@@ -45,6 +45,19 @@ describe("ClockSkewBanner", () => {
     expect(banner.textContent).toContain("Traycer can't connect");
   });
 
+  it("still speaks for a clock running BEHIND, but does not claim connections are blocked", () => {
+    // Detection is deliberately NOT narrowed to the direction that parks
+    // sessions - a clock hours slow is worth telling the user about. What the
+    // banner must not do is repeat the fast-clock CLAIM, because a slow clock
+    // makes bearers look more valid rather than expired and blocks nothing;
+    // saying otherwise sends the user after the wrong cause.
+    render(<ClockSkewBanner />);
+    recordOffset(SEVEN_HOURS_MS);
+    const banner = screen.getByTestId("clock-skew-banner");
+    expect(banner.textContent).toContain("~7h behind");
+    expect(banner.textContent).not.toContain("Traycer can't connect");
+  });
+
   it("self-clears once the clock is corrected, with nothing to dismiss", () => {
     render(<ClockSkewBanner />);
     recordOffset(-SEVEN_HOURS_MS);
