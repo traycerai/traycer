@@ -957,6 +957,32 @@ export function mapWindowMessages(
 }
 
 /**
+ * Re-measure the spans holding a row whose byte charge was deferred.
+ *
+ * Shared by {@link settleWindowBytes} and {@link staleCarrySpans} so the two
+ * cannot drift: both have to turn a deferred figure into a true one, and
+ * `boundedStaleSpans` trusts whatever they produce.
+ *
+ * Only records went unsettled, so `contextBytes` is carried rather than
+ * re-derived - that would buy nothing and put a whole-map encode on the path
+ * the deferral exists to keep cheap.
+ */
+function resettledSpanBytes(
+  spans: readonly HydratedSpan[],
+  unsettled: ReadonlySet<string>,
+): readonly HydratedSpan[] {
+  return spans.map((span) =>
+    span.messages.some((message) => unsettled.has(message.messageId))
+      ? {
+          ...span,
+          bytes:
+            recordsByteLength(span.messages, span.events) + span.contextBytes,
+        }
+      : span,
+  );
+}
+
+/**
  * Bring {@link TranscriptWindow.hydratedBytes} back in line with what the spans
  * actually hold.
  *
@@ -967,31 +993,12 @@ export function mapWindowMessages(
 export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   if (window.unsettledByteMessageIds.length === 0) return window;
   const unsettled = new Set(window.unsettledByteMessageIds);
-  const spans = window.spans.map((span) =>
-    span.messages.some((message) => unsettled.has(message.messageId))
-      ? {
-          ...span,
-          // Same carry as the remap above: only records went unsettled, so
-          // re-deriving the context charge here would buy nothing and put a
-          // whole-map encode on the path this function exists to keep cheap.
-          bytes:
-            recordsByteLength(span.messages, span.events) + span.contextBytes,
-        }
-      : span,
-  );
+  const spans = resettledSpanBytes(window.spans, unsettled);
   // Stale copies of a streaming record grow through the same deferred path
   // (see {@link rewriteWindowMessage}), and `boundedStaleSpans` trusts
   // `span.bytes` - so an unsettled stale figure would let a long streaming
   // turn hold more than the shared budget admits.
-  const staleSpans = window.staleSpans.map((span) =>
-    span.messages.some((message) => unsettled.has(message.messageId))
-      ? {
-          ...span,
-          bytes:
-            recordsByteLength(span.messages, span.events) + span.contextBytes,
-        }
-      : span,
-  );
+  const staleSpans = resettledSpanBytes(window.staleSpans, unsettled);
   // Bounded here rather than only where the tier is BUILT: settling is the
   // moment a deferred stale figure becomes true, so it is the first moment the
   // shared budget can be judged at all.
@@ -2595,9 +2602,24 @@ export function recordSharingOrdinals(
  * the rows the reader was just looking at are the ones that survive.
  */
 function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
+  const candidates = [...window.spans, ...window.staleSpans];
   // Zero live bytes: a rebase or void discards the fresh spans, so the whole
   // window budget is headroom for the carry.
-  return boundedStaleSpans([...window.spans, ...window.staleSpans], 0);
+  //
+  // Settled FIRST, because this transition is where a deferred figure stops
+  // being repairable. An active turn's span carries an UNDERSTATED `bytes`
+  // until {@link settleWindowBytes} runs, and both windows this feeds are
+  // built from `emptyTranscriptWindow()` - so `unsettledByteMessageIds`, the
+  // record of what still owes a measurement, does not survive the carry.
+  // `boundedStaleSpans` would then bound against a figure nothing can ever
+  // correct, and a completed long turn would hold past the budget for the
+  // life of the tier.
+  return boundedStaleSpans(
+    window.unsettledByteMessageIds.length === 0
+      ? candidates
+      : resettledSpanBytes(candidates, new Set(window.unsettledByteMessageIds)),
+    0,
+  );
 }
 
 /**
@@ -2609,6 +2631,22 @@ function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
  * ONE budget rather than each claiming `TRANSCRIPT_WINDOW_MAX_BYTES` -
  * without it a fully hydrated window that rebases retains roughly twice the
  * budget until authority retires the carry.
+ *
+ * That budget is SOFT against the warmest contributing span, for the same
+ * reason {@link evictTranscriptWindowToBudget}'s is soft against the spans a
+ * reader is looking at. `liveBytes` can arrive already over the limit - the
+ * fresh tier is over budget between a seat and the eviction that answers it,
+ * and eviction leaves it over budget for as long as protected spans alone
+ * exceed the limit - and a hard test then fails for EVERY candidate and
+ * discards the whole tier. What that costs is precise: the carry is the only
+ * copy of rows whose replacement is still in flight, and warmth is arranged so
+ * the warmest is the one being read or streamed (the viewport bump in
+ * {@link touchTranscriptRange}, the write bump in
+ * {@link rewriteWindowMessage}), so the span dropped first to make room for
+ * cold fresh spans is the one on screen. Admitting one span cannot unbound the
+ * window either, by the same argument the tail exemption rests on: a span is
+ * itself bounded, and authority retires this one as soon as a replacement is
+ * served.
  */
 function boundedStaleSpans(
   candidates: readonly HydratedSpan[],
@@ -2631,12 +2669,19 @@ function boundedStaleSpans(
   const carried: HydratedSpan[] = [];
   let bytes = liveBytes;
   for (const span of sorted) {
-    if (bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES) continue;
     const uncovered = (rowId: string, offset: number): boolean =>
       rowId === ""
         ? !coveredOrdinals.has(span.fromOrdinal + offset)
         : !coveredRowIds.has(rowId);
+    // Coverage BEFORE the budget, so "the warmest contributing span" is the
+    // one admitted below rather than whichever duplicate sorted first.
     if (!span.rowIds.some(uncovered)) continue;
+    if (
+      carried.length > 0 &&
+      bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES
+    ) {
+      continue;
+    }
     span.rowIds.forEach((rowId, offset) => {
       if (rowId === "") coveredOrdinals.add(span.fromOrdinal + offset);
       else coveredRowIds.add(rowId);

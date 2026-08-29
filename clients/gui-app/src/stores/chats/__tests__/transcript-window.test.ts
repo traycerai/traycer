@@ -2960,6 +2960,131 @@ describe("the streaming row's byte charge", () => {
     ).toEqual(["m-stream", "m-29"]);
   });
 
+  it("keeps the warmest carry when the fresh tier alone is over budget", () => {
+    // The fresh tier sits over budget between a seat and the eviction that
+    // answers it - and STAYS over for as long as protected spans alone exceed
+    // the limit, since eviction is deliberately soft against those. A hard
+    // headroom test fails for every candidate in that state, so the entire
+    // carry is discarded to make room for fresh spans that are themselves
+    // about to be evicted. What goes first is what warmth ranks highest,
+    // which is arranged to be the span being read or streamed - so the rows
+    // on screen are the ones that flash back to placeholders.
+    const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.6));
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10"],
+        messages: [userMessage("m-carry", 10)],
+      }),
+      null,
+    );
+    const rebased = applySkeletonChunk(
+      applyWindowedSnapshot(
+        seeded,
+        {
+          epoch: 2,
+          rowCount: 30,
+          indexRevision: null,
+          tail: {
+            fromOrdinal: 29,
+            messages: [userMessage("m-29", 29)],
+            events: [],
+          },
+        },
+        null,
+      ),
+      {
+        epoch: 2,
+        fromOrdinal: 0,
+        entries: skeletonEntries(0, 30),
+        isFinal: true,
+      },
+    );
+    expect(rebased.staleSpans.map((span) => span.fromOrdinal)).toEqual([10]);
+
+    // Two large off-screen ranges land before eviction runs. Neither covers
+    // row 10, so the carry is still the only copy of that row.
+    const overBudget = [0, 20].reduce(
+      (window, fromOrdinal) =>
+        applyRangeResponse(
+          window,
+          rangeResponse({
+            epoch: 2,
+            fromOrdinal,
+            rowIds: [`row-${fromOrdinal}`],
+            messages: [
+              messageWithText(
+                userMessage(`m-${fromOrdinal}`, fromOrdinal),
+                bulk,
+              ),
+            ],
+          }),
+          null,
+        ),
+      rebased,
+    );
+    expect(overBudget.hydratedBytes).toBeGreaterThan(
+      TRANSCRIPT_WINDOW_MAX_BYTES,
+    );
+
+    expect(overBudget.staleSpans.map((span) => span.fromOrdinal)).toEqual([10]);
+    expect(
+      hydratedRecords(overBudget).messages.map((message) => message.messageId),
+    ).toContain("m-carry");
+  });
+
+  it("settles a deferred figure before carrying the span stale", () => {
+    // `unsettledByteMessageIds` records what still owes a measurement, and
+    // the windows a carry feeds are rebuilt from `emptyTranscriptWindow()` -
+    // so the marker does not survive the transition. A span carried with an
+    // understated figure is therefore never corrected: `settleWindowBytes`
+    // early-returns on the empty marker list, and `boundedStaleSpans` trusts
+    // the number for the life of the tier.
+    const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.6));
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10"],
+        messages: [userMessage("m-stream", 10)],
+      }),
+      null,
+    );
+    const streamed = streamWindowMessage(seeded, "m-stream", (message) =>
+      messageWithText(message, bulk),
+    );
+    expect(streamed.window.unsettledByteMessageIds).toEqual(["m-stream"]);
+
+    // The figure this span WOULD have carried had it been settled in place.
+    // Pinned as an equality against that, not as "larger than before": the
+    // understated value is also larger than zero.
+    const settledInPlace = settleWindowBytes(streamed.window).spans.find(
+      (span) => span.fromOrdinal === 10,
+    );
+    const rebased = applyWindowedSnapshot(
+      streamed.window,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 29,
+          messages: [userMessage("m-29", 29)],
+          events: [],
+        },
+      },
+      null,
+    );
+
+    expect(rebased.unsettledByteMessageIds).toEqual([]);
+    expect(
+      rebased.staleSpans.find((span) => span.fromOrdinal === 10)?.bytes,
+    ).toBe(settledInPlace?.bytes);
+  });
+
   it("re-measures a stale copy a remap rewrote", () => {
     // `boundedStaleSpans` trusts `span.bytes`, so a remap that rewrites the
     // stale records and leaves the figure behind puts the carry's share of the
