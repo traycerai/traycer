@@ -1372,7 +1372,13 @@ function seatSnapshotTailSpan(input: {
     base.liveMessages,
   );
   if (conflictingRowIds.size > 0) {
-    return seatNonConflictingTailRuns(input, conflictingRowIds);
+    return seatNonConflictingTailRuns(
+      {
+        ...input,
+        base: dropSpansOverlappingFrom(base, tail.fromOrdinal),
+      },
+      conflictingRowIds,
+    );
   }
   const contextBytes = contextByteLength(rowContext);
   const tailSpan: HydratedSpan = {

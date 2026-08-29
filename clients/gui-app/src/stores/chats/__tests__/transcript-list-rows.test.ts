@@ -529,6 +529,44 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
   });
 
+  it("keeps an orphaned steer projected from the live assistant during invalidation", () => {
+    const turnId = "turn-live-steer";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId("steer:queue-live")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "H:steer:queue-live"]);
+  });
+
   it("does not append a synthetic row from an unresolved tail span", () => {
     const syntheticId = "forked-chat-link:event-unresolved";
     const rows = transcriptListRows({

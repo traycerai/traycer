@@ -5,7 +5,9 @@ import {
   assistantRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  queueSteerRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 
 /**
  * # The list the transcript draws: hydrated rows and placeholders together
@@ -354,12 +356,21 @@ export function transcriptListRows(input: {
     const liveRowIds = liveRecordRowIds(window);
     const retainedSpanRowIds = spanRowIds(window.spans);
     const skeletonRowIds = skeletonOrdinalByRowId(window.skeleton);
+    const hasTransientLiveAssistant = window.liveMessages.some(
+      (message) =>
+        message.role === "assistant" &&
+        isTransientLiveAssistantMessageId(message.messageId),
+    );
+    const steerRowIdPrefix = queueSteerRowId("");
     const unplacedRendered = rendered.filter(
       (model) =>
         !retainedSpanRowIds.has(model.id) &&
         !skeletonRowIds.has(model.id) &&
         (isExplicitlyPendingOrStreaming(model) ||
           liveRowIds.has(model.id) ||
+          (hasTransientLiveAssistant &&
+            model.persistentMessageId === null &&
+            model.id.startsWith(steerRowIdPrefix)) ||
           (model.persistentMessageId !== null &&
             liveRowIds.has(model.persistentMessageId))),
     );

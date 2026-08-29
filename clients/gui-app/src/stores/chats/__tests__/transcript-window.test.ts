@@ -2350,7 +2350,33 @@ describe("what an overlap keeps", () => {
   it("seats complete tail siblings around an incomplete live assistant", () => {
     const turnId = "turn-partial-tail";
     const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(emptyTranscriptWindow(), {
+    const indexed = applySkeletonChunk(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("user-before", 0),
+          skeletonEntry(assistantRowId(turnId), 1),
+          skeletonEntry("user-after", 2),
+        ],
+        isFinal: true,
+      },
+    );
+    const oldTail = applyRangeResponse(
+      indexed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
+        messages: [
+          userMessage("user-before", 0),
+          assistantMessage("assistant-stale", turnId, 1),
+          userMessage("user-after", 3),
+        ],
+      }),
+    );
+    const live = appendLiveRecords(oldTail, {
       messages: [assistantMessage(transientId, turnId, 2)],
       events: [],
     });
