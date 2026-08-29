@@ -1560,6 +1560,14 @@ function pendingTurnMeta(
       turn.reasoningEffort,
     ),
     serviceTier: turn.serviceTier,
+    // Every field above is settings-derived - what the user PICKED - which is
+    // all that exists pre-turn. The credential a spawn actually used is not
+    // knowable yet (this indicator renders during setup, before the provider
+    // has been spawned), and unlike the others it is a claim about what
+    // happened rather than what was requested. So it stays null here and
+    // arrives with the turn's own record, which is the only thing that ever
+    // knows it. Nothing is lost: the annotation belongs to the turn-end footer.
+    envCredentialVar: null,
     // Cost is unknown until the turn completes; the pending/live footer omits it.
     costUsd: null,
   };
@@ -1608,6 +1616,12 @@ interface AssistantTurnAccumulator {
    */
   reasoningEffort: string | null;
   serviceTier: string | null;
+  /**
+   * Env variable whose credential authenticated the turn, recorded by the host
+   * at spawn time; `null` when the profile sign-in was used. See
+   * `AssistantTurnMeta.envCredentialVar`.
+   */
+  envCredentialVar: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
   imageResolutionsByBlockId: Map<
@@ -2115,6 +2129,12 @@ function renderPersistedAssistantMessageTurn(
     String(timing.rowAnchorAt),
     String(timing.elapsedStartedAt),
     acc.profileLabel ?? "profile:none",
+    // Listed for the same reason `profileLabel` is: a tooltip-only field that
+    // no other part of this key covers. It is also stamped mid-turn (the row
+    // exists before `turn.started` lands), so the cached model can predate it -
+    // and the annotation it drives is a security disclosure, which must not be
+    // the thing a stale render drops.
+    acc.envCredentialVar ?? "envcred:none",
     turnPauseSignature(pause),
     stoppedSignature(stopped),
   ].join(":");
@@ -2179,6 +2199,13 @@ function addAssistantMessageToAccumulator(
     existing.reasoningEffort =
       existing.reasoningEffort ?? message.reasoningEffort;
     existing.serviceTier = existing.serviceTier ?? message.serviceTier;
+    // Same first-non-null rule, and it matters more here: every record of one
+    // turn came from one spawn, so they cannot honestly disagree - but the row
+    // is created before `turn.started` lands, so the FIRST record can carry a
+    // not-yet-stamped null while a sibling has the real value. Overwriting with
+    // a later null would turn a recorded bypass back into "signed in normally".
+    existing.envCredentialVar =
+      existing.envCredentialVar ?? message.envCredentialVar;
     existing.profileLabel = existing.profileLabel ?? profileLabel;
     // `costUsd` is cumulative-to-turn-end and lands on the completing record,
     // which may be processed after an earlier sibling. Take the LATEST non-null
@@ -2199,6 +2226,7 @@ function addAssistantMessageToAccumulator(
     profileLabel,
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
+    envCredentialVar: message.envCredentialVar,
     costUsd: message.usage?.costUsd ?? null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -2638,6 +2666,7 @@ function renderAssistantTurnSlice(
       input.acc.reasoningEffort,
     ),
     serviceTier: input.acc.serviceTier,
+    envCredentialVar: input.acc.envCredentialVar,
     costUsd: input.acc.costUsd,
   };
   const firstBlock = input.blocks.at(0) ?? null;
@@ -2995,6 +3024,12 @@ function renderLiveAssistant(
       input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
+    // Same reasoning as `costUsd` below, and the same for the same structural
+    // reason: the live row is built from `LiveAssistantMessage`, which mirrors
+    // the turn's SETTINGS. The credential a spawn used is a host-recorded fact
+    // that only reaches the persisted record, so it surfaces when this turn
+    // re-renders through that path rather than being guessed here.
+    envCredentialVar: null,
     // A live turn has no final cost yet; it surfaces once the turn completes
     // and re-renders via the persisted path. The live footer is suppressed.
     costUsd: null,

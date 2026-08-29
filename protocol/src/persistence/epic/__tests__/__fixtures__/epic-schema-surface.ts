@@ -6230,6 +6230,17 @@ export const epicSchemaSurfaceBaseline = {
                           }
                         ]
                       },
+                      "envCredentialVar": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "imageResolutions": {
                         "default": [],
                         "type": "array",
@@ -14802,6 +14813,17 @@ export const epicSchemaSurfaceBaseline = {
                           }
                         ]
                       },
+                      "envCredentialVar": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "imageResolutions": {
                         "default": [],
                         "type": "array",
@@ -14951,6 +14973,7 @@ export const epicSchemaSurfaceBaseline = {
                       "usage",
                       "reasoningEffort",
                       "serviceTier",
+                      "envCredentialVar",
                       "imageResolutions"
                     ],
                     "additionalProperties": false

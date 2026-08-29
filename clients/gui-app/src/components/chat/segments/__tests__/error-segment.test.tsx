@@ -7,6 +7,7 @@ import {
   __resetSupportContextRegistryForTests,
 } from "@/lib/support-context-registry";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { ErrorSegment } from "../error-segment";
 
 describe("<ErrorSegment />", () => {
@@ -27,6 +28,7 @@ describe("<ErrorSegment />", () => {
         code="RUNTIME_THROWN"
         recoverable={false}
         findUnitId={null}
+        harnessId={null}
       />,
     );
 
@@ -42,6 +44,7 @@ describe("<ErrorSegment />", () => {
         code={null}
         recoverable={false}
         findUnitId={null}
+        harnessId={null}
       />,
     );
 
@@ -60,6 +63,7 @@ describe("<ErrorSegment />", () => {
           code={hostileCode}
           recoverable={false}
           findUnitId={null}
+          harnessId={null}
         />
       </TooltipProvider>,
     );
@@ -88,6 +92,7 @@ describe("<ErrorSegment />", () => {
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
+          harnessId={null}
         />
       </TooltipProvider>,
     );
@@ -130,6 +135,7 @@ describe("<ErrorSegment />", () => {
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
+          harnessId={null}
         />
       </TooltipProvider>,
     );
@@ -140,6 +146,7 @@ describe("<ErrorSegment />", () => {
           code="auth"
           recoverable
           findUnitId={null}
+          harnessId={null}
         />
       </TooltipProvider>,
     );
@@ -179,6 +186,7 @@ describe("<ErrorSegment />", () => {
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
+          harnessId={null}
         />
       </TooltipProvider>,
     );
@@ -212,6 +220,7 @@ describe("<ErrorSegment />", () => {
             code="RUNTIME_THROWN"
             recoverable={false}
             findUnitId={null}
+            harnessId={null}
           />
         </TooltipProvider>,
       );
@@ -232,6 +241,7 @@ describe("<ErrorSegment />", () => {
           code="auth"
           recoverable
           findUnitId={null}
+          harnessId={null}
         />
       </TooltipProvider>,
     );
@@ -253,6 +263,98 @@ describe("<ErrorSegment />", () => {
       message: null,
       code: null,
       source: "Chat",
+    });
+  });
+  // The env-credential disclosure row's remedy. The message names the variable;
+  // this is the affordance that gets the user to the place it can be unset.
+  describe("env-credential auth failures", () => {
+    const ENV_CREDENTIAL_MESSAGE =
+      "This agent authenticated with `ANTHROPIC_API_KEY` from your shell " +
+      'environment — your "Terminal account" sign-in was bypassed.';
+
+    afterEach(() => {
+      useProvidersFocusStore.getState().clearFocusHarnessId();
+      useProvidersFocusStore.getState().clearFocusTab();
+    });
+
+    it("deep-links to the turn's own provider Env tab", () => {
+      render(
+        <ErrorSegment
+          message={ENV_CREDENTIAL_MESSAGE}
+          code="auth_env_credential"
+          recoverable={false}
+          findUnitId={null}
+          harnessId="claude"
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Manage environment variables" }),
+      );
+
+      // Both halves matter: the provider that actually failed, and the tab that
+      // holds the unset control. Landing on Providers alone would leave the user
+      // hunting through ~16 providers for a tab they have never opened.
+      const focus = useProvidersFocusStore.getState();
+      expect(focus.focusHarnessId).toBe("claude");
+      expect(focus.focusTab).toBe("env");
+    });
+
+    it("still offers the affordance when the turn's harness is unknown", () => {
+      // A legacy row carries no turn metadata. The button must not vanish - the
+      // Providers section root is still far closer than nothing - but it must
+      // not name an arbitrary provider either.
+      render(
+        <ErrorSegment
+          message={ENV_CREDENTIAL_MESSAGE}
+          code="auth_env_credential"
+          recoverable={false}
+          findUnitId={null}
+          harnessId={null}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Manage environment variables" }),
+      );
+
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+      expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+    });
+
+    it("does not offer it on an ordinary error", () => {
+      render(
+        <ErrorSegment
+          message="Boom went the host"
+          code="RUNTIME_THROWN"
+          recoverable={false}
+          findUnitId={null}
+          harnessId="claude"
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "Manage environment variables" }),
+      ).toBeNull();
+    });
+
+    it("does not offer it on the recoverable auth row, whose remedy is signing in", () => {
+      // `auth` and `auth_env_credential` are deliberately different codes: this
+      // one IS fixed by reconnecting, and pointing at env settings would send
+      // the user to a page with nothing to change.
+      render(
+        <ErrorSegment
+          message="Please re-authenticate"
+          code="auth"
+          recoverable
+          findUnitId={null}
+          harnessId="claude"
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "Manage environment variables" }),
+      ).toBeNull();
     });
   });
 });

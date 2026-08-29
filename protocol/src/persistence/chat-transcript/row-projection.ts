@@ -560,6 +560,10 @@ const TURN_DECORATING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
   "checkpoint.captured",
 ]);
 
+export function isTurnDecoratingEvent(event: ChatEvent): boolean {
+  return TURN_DECORATING_EVENT_TYPES.has(event.type);
+}
+
 /**
  * The pause lifecycle, which decorates a turn but cannot be keyed on `turnId`.
  *

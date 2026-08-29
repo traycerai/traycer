@@ -25,6 +25,7 @@ import {
 import "./index.css";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { MobileDeviceDescriber } from "../device-describer";
+import { MobileFileSave } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import {
@@ -226,6 +227,11 @@ function bootstrap(): void {
       ? new MobileDeviceDescriber()
       : null,
     linkLoginDeepLinks,
+    // Native-only, like the two above: the share sheet is the OS surface a
+    // phone user saves through, and neither plugin has a web implementation
+    // worth preferring over the browser save APIs gui-app already falls back
+    // to in a tab.
+    fileSave: Capacitor.isNativePlatform() ? new MobileFileSave() : null,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

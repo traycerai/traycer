@@ -248,7 +248,12 @@ function readWarningOptions(): ExternalToast {
 describe("worktreeCleanupSummary", () => {
   it("says nothing when the cleanup covered nothing", () => {
     expect(
-      worktreeCleanupSummary({ removed: [], failed: [], uncertain: [] }),
+      worktreeCleanupSummary({
+        removed: [],
+        failed: [],
+        uncertain: [],
+        holdersChanged: [],
+      }),
     ).toBeNull();
   });
 
@@ -258,6 +263,7 @@ describe("worktreeCleanupSummary", () => {
         removed: ["/wt/a", "/wt/b"],
         failed: ["/wt/c"],
         uncertain: [],
+        holdersChanged: [],
       }),
     ).toBe("2 worktrees removed, 1 worktree couldn't be removed");
   });
@@ -271,6 +277,7 @@ describe("worktreeCleanupSummary", () => {
         removed: ["/wt/a"],
         failed: ["/wt/b"],
         uncertain: ["/wt/c", "/wt/d"],
+        holdersChanged: [],
       }),
     ).toBe(
       "1 worktree removed, 1 worktree couldn't be removed, 2 worktrees unconfirmed",
