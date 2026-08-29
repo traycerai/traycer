@@ -19,6 +19,7 @@ import {
   AnalyticsEvent,
   analyticsBlockerFromError,
 } from "@/lib/analytics";
+import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
 export interface LogSegment {
   /** Monotonic per-run id (append-only), so React keys are stable. */
@@ -41,6 +42,12 @@ export interface WorktreeDeleteRunState {
    * `null` is the old-host path (prose reason only).
    */
   readonly pendingBusyHolders: readonly WorktreeBusyHolder[] | null;
+  /**
+   * Digest from the refusal that populated `pendingBusyHolders`. Echoed as
+   * `expectedHoldersRevision` on the confirmed retry so the host stops the
+   * consented inventory, not whatever exists now.
+   */
+  readonly pendingHoldersRevision: string | undefined;
 }
 
 const INITIAL_RUN: WorktreeDeleteRunState = {
@@ -51,6 +58,7 @@ const INITIAL_RUN: WorktreeDeleteRunState = {
   deleted: false,
   error: null,
   pendingBusyHolders: null,
+  pendingHoldersRevision: undefined,
 };
 
 const QUEUED_RUN: WorktreeDeleteRunState = {
@@ -119,6 +127,7 @@ interface WorktreeDeleteRunStore {
   readonly setPendingBusyHolders: (
     key: string,
     holders: readonly WorktreeBusyHolder[],
+    holdersRevision: string | undefined,
   ) => void;
 }
 
@@ -163,6 +172,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
           deleted,
           activePhase: null,
           pendingBusyHolders: null,
+          pendingHoldersRevision: undefined,
         },
       };
       return {
@@ -208,6 +218,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
                   status: "failed",
                   error,
                   pendingBusyHolders: null,
+                  pendingHoldersRevision: undefined,
                 },
               }
             : candidate,
@@ -342,7 +353,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
       foregroundKey: state.foregroundKey === key ? null : state.foregroundKey,
     })),
   clearAll: () => set({ runs: [], foregroundKey: null }),
-  setPendingBusyHolders: (key, holders) =>
+  setPendingBusyHolders: (key, holders, holdersRevision) =>
     set((state) => {
       const record = state.runs.find((candidate) => candidate.key === key);
       if (record === undefined) return state;
@@ -355,6 +366,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
                   ...candidate.run,
                   status: "failed",
                   pendingBusyHolders: holders,
+                  pendingHoldersRevision: holdersRevision,
                   error: null,
                   activePhase: null,
                 },
@@ -399,6 +411,7 @@ interface QueuedWorktreeDelete {
   readonly target: WorktreeHostEntry;
   readonly scripts: WorktreeEntryScripts | null;
   readonly stopOwners: boolean;
+  readonly expectedHoldersRevision: string | undefined;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly onSettled: () => void;
 }
@@ -431,6 +444,7 @@ export function useWorktreeDeleteRun(
     target: WorktreeHostEntry,
     scripts: WorktreeEntryScripts | null,
     stopOwners: boolean,
+    expectedHoldersRevision: string | undefined,
   ) => void;
   readonly startBatchBackgrounded: (
     targets: ReadonlyArray<WorktreeHostEntry>,
@@ -516,8 +530,13 @@ export function useWorktreeDeleteRun(
       target: WorktreeHostEntry,
       scripts: WorktreeEntryScripts | null,
       stopOwners: boolean,
+      expectedHoldersRevision: string | undefined,
     ) => {
-      startDelete([{ target, scripts, stopOwners }], false, null);
+      startDelete(
+        [{ target, scripts, stopOwners, expectedHoldersRevision }],
+        false,
+        null,
+      );
     },
     [startDelete],
   );
@@ -531,6 +550,7 @@ export function useWorktreeDeleteRun(
           target,
           scripts: scriptsByPath.get(target.worktreePath) ?? null,
           stopOwners: false,
+          expectedHoldersRevision: undefined,
         })),
         true,
         nextWorktreeDeleteBatchKey(hostId),
@@ -580,6 +600,7 @@ interface WorktreeDeleteRequestTarget {
   readonly target: WorktreeHostEntry;
   readonly scripts: WorktreeEntryScripts | null;
   readonly stopOwners: boolean;
+  readonly expectedHoldersRevision: string | undefined;
 }
 
 interface StartWorktreeDeleteCommandInput {
@@ -780,7 +801,7 @@ function startWorktreeDeleteCommand(
             },
             onTargetFailed: (worktreePath, reason, holders) => {
               const key = keyFor(worktreePath);
-              if (takePendingBusyHolders(key, holders)) {
+              if (takePendingBusyHolders(key, holders, undefined)) {
                 unsettled.delete(key);
                 releaseTargetKey(key);
                 return;
@@ -836,6 +857,7 @@ function enqueueFallbackDeletes(
       target: item.target,
       scripts: item.scripts,
       stopOwners: item.stopOwners,
+      expectedHoldersRevision: item.expectedHoldersRevision,
       openStreamTransport: input.openStreamTransport,
       onSettled: input.onSettled,
     });
@@ -983,6 +1005,9 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
           worktreePath: item.target.worktreePath,
           scripts: item.scripts,
           stopOwners: item.stopOwners,
+          expectedHoldersRevision: item.stopOwners
+            ? sanitizeHoldersRevision(item.expectedHoldersRevision)
+            : undefined,
           callbacks: {
             onStarted: (hasTeardown) =>
               useWorktreeDeleteRunStore
@@ -1009,8 +1034,8 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
               closeDeleteClient(item.key);
               settle();
             },
-            onFailed: (reason, holders) => {
-              if (takePendingBusyHolders(item.key, holders)) {
+            onFailed: (reason, holders, _code, holdersRevision) => {
+              if (takePendingBusyHolders(item.key, holders, holdersRevision)) {
                 closeDeleteClient(item.key);
                 settle();
                 return;
@@ -1172,9 +1197,16 @@ function shouldShowProgress(record: WorktreeDeleteRunRecord): boolean {
 function takePendingBusyHolders(
   key: string,
   holders: readonly WorktreeBusyHolder[] | undefined,
+  holdersRevision: string | undefined,
 ): boolean {
   if (holders === undefined || holders.length === 0) return false;
-  useWorktreeDeleteRunStore.getState().setPendingBusyHolders(key, holders);
+  useWorktreeDeleteRunStore
+    .getState()
+    .setPendingBusyHolders(
+      key,
+      holders,
+      sanitizeHoldersRevision(holdersRevision),
+    );
   return true;
 }
 

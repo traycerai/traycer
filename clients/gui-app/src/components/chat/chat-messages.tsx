@@ -125,6 +125,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useInsertionEffect,
   useMemo,
   useRef,
   useState,
@@ -1092,9 +1093,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const listRowsRef = useRef(listRows);
   // Seeded EMPTY, not with `buildRowKeyToIndex(listRows)`: a `useRef`
   // argument is evaluated on every render and discarded after the first, and
-  // this one is an O(rows) map build per streaming token. The layout effect
-  // below populates it before paint - and before any of its consumers, which
-  // are all event- or effect-driven - so no read ever sees the empty seed.
+  // this one is an O(rows) map build per streaming token. Its layout effect
+  // populates it before paint. Unlike `listRowsRef`, no descendant layout
+  // callback consumes this map, so it does not need insertion-phase freshness.
   const rowIndexByKeyRef = useRef(EMPTY_ROW_INDEX_BY_KEY);
   const scrollRequestRef = useRef(scrollRequest);
   const handledScrollRequestIdRef = useRef<number | null>(null);
@@ -1580,8 +1581,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     transcriptWindowRef.current = transcriptWindow;
   }, [messages, transcriptWindow]);
 
-  useLayoutEffect(() => {
+  useInsertionEffect(() => {
     listRowsRef.current = listRows;
+  }, [listRows]);
+
+  useLayoutEffect(() => {
     rowIndexByKeyRef.current = buildRowKeyToIndex(listRows);
   }, [listRows]);
 
@@ -2531,10 +2535,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Viewport-driven hydration (slice C of the windowed line): translate the
   // list's visible ROW indexes into the ordinal range they cover and report
   // upward, where the session store folds it into `planTranscriptHydration`.
-  // Reads the rows through the ref so the callback identity stays stable
-  // across streaming renders - the store dedups repeats, and a rows change
-  // that alters what the same indexes mean is followed by a fresh viewability
-  // callback from the list itself.
+  // Keep one callback identity for LegendList's passive callback slot. The
+  // library can run a new-data layout pass before installing a changed callback
+  // prop; closing over `listRows` would therefore pair new indexes with old
+  // rows. `useInsertionEffect` refreshes this ref before any child layout
+  // callback in the commit, while the stable callback avoids the slot race.
   const onChatTimelineVisibleRowsChange = useCallback(
     (fromIndex: number, toIndex: number): void => {
       onVisibleOrdinalRangeChange(

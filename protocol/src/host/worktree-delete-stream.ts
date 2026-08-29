@@ -206,7 +206,9 @@ export const worktreeDeleteByPathStreamV11 = defineStreamRpcContract({
  * @1.2 failed frames may carry the unary refusal `code` so a current
  * GUI can distinguish `WORKTREE_HOLDERS_CHANGED` from `WORKTREE_BUSY`
  * without parsing `reason`. Absent on a 1.1 host; a 1.1 client schema
- * strips it.
+ * strips it. An unknown `code` (a newer host's future value) sanitizes
+ * to absent so the terminal `failed` frame still parses — dropping the
+ * frame would leave a pending delete unsettled.
  */
 export const worktreeDeleteByPathServerFrameSchemaV12 = z.discriminatedUnion(
   "kind",
@@ -237,7 +239,10 @@ export const worktreeDeleteByPathServerFrameSchemaV12 = z.discriminatedUnion(
       reason: z.string(),
       holders: worktreeBusyHoldersWireFieldSchema,
       holdersRevision: holdersRevisionWireFieldSchema,
-      code: z.enum(["WORKTREE_BUSY", "WORKTREE_HOLDERS_CHANGED"]).optional(),
+      code: z
+        .enum(["WORKTREE_BUSY", "WORKTREE_HOLDERS_CHANGED"])
+        .optional()
+        .catch(undefined),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({

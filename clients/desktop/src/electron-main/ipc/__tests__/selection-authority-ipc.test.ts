@@ -628,6 +628,45 @@ async function lastMessageOn(
   return found;
 }
 
+/**
+ * Waits until `window` has seen the fleet-membership fan-out naming `hostId`.
+ *
+ * Fleet membership is published by an async seed pipeline (`void
+ * fleet.refresh()` at install: a real fs identity read, then the registry
+ * fetch, then the engine publish). Every write the engine directory-validates
+ * misbehaves when it runs before that pipeline lands - `activate` refuses
+ * with `unknown-host`, and dial evidence is silently DROPPED for hosts
+ * outside the fleet - and gating on the fixed `flushIo()` sleep lost exactly
+ * that race in CI (`unknown-host` from a fleet that did not hold the host
+ * yet). Wait for the observable fact instead: a `selectionLeasesChanged`
+ * fan-out carrying the host.
+ */
+async function awaitFleetMembership(
+  window: CapturingWindow,
+  hostId: string,
+): Promise<void> {
+  await vi.waitFor(() => {
+    const arrived = window.sentMessages.some((message) => {
+      if (message.channel !== RunnerHostEvent.selectionLeasesChanged) {
+        return false;
+      }
+      const payload = message.payload;
+      if (typeof payload !== "object" || payload === null) return false;
+      const change = (payload as { change: unknown }).change;
+      return (
+        Array.isArray(change) &&
+        change.some(
+          (entry) =>
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as { hostId: unknown }).hostId === hostId,
+        )
+      );
+    });
+    expect(arrived).toBe(true);
+  });
+}
+
 function attachHandler(): InvokeHandler {
   const handler = ipcMainState.handlers.get(
     SelectionAuthorityChannels.invoke.attach,
@@ -949,7 +988,8 @@ describe("selection authority IPC binding", () => {
       registry.add("window-a", 101, windowA);
       registry.add("window-b", 202, windowB);
       bridge.install();
-      await flushIo();
+      await awaitFleetMembership(windowA, "shared-host");
+      await awaitFleetMembership(windowB, "shared-host");
 
       const attach = attachHandler();
       const seqA = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 101);
@@ -1140,7 +1180,11 @@ describe("selection authority IPC binding", () => {
     registry.add("window-a", 101, windowA);
     registry.add("window-b", 202, windowB);
     bridge.install();
-    await flushIo();
+    // Dial evidence for a host outside the fleet is DROPPED by the engine,
+    // so the refusal counting below silently no-ops when it outruns the
+    // async membership seed - wait for the fan-out fact, not a clock.
+    await awaitFleetMembership(windowA, "close-host");
+    await awaitFleetMembership(windowB, "close-host");
 
     const attach = attachHandler();
     const seqA = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 101);
@@ -1271,7 +1315,11 @@ describe("selection authority IPC binding", () => {
       registry.add("window-a", 101, windowA);
       registry.add("window-b", 202, windowB);
       bridge.install();
-      await flushIo();
+      // Dial evidence for a host outside the fleet is DROPPED by the engine,
+      // so the refusal counting below silently no-ops when it outruns the
+      // async membership seed - wait for the fan-out fact, not a clock.
+      await awaitFleetMembership(windowA, "crash-host");
+      await awaitFleetMembership(windowB, "crash-host");
 
       const attach = attachHandler();
       const seqA = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 101);
@@ -1396,7 +1444,11 @@ describe("selection authority IPC binding", () => {
       registry.add("window-a", 101, windowA);
       registry.add("window-b", 202, windowB);
       bridge.install();
-      await flushIo();
+      // Dial evidence for a host outside the fleet is DROPPED by the engine,
+      // so the refusal counting below silently no-ops when it outruns the
+      // async membership seed - wait for the fan-out fact, not a clock.
+      await awaitFleetMembership(windowA, "detach-host");
+      await awaitFleetMembership(windowB, "detach-host");
 
       const attach = attachHandler();
       const seqA = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 101);
@@ -1561,7 +1613,11 @@ describe("selection authority IPC binding", () => {
       const windowA = buildWindow();
       registry.add("window-a", 101, windowA);
       bridge.install();
-      await flushIo();
+      // The one-shot rejection below is meant for the EXPLICIT refresh; a
+      // clock gate here let a slow seed refresh land late and swallow it,
+      // handing the explicit refresh the resolved value instead. Wait for
+      // the seed's fetch to have actually happened before arming it.
+      await settledSeedFetchCount();
 
       fetchRegisteredHostsMock.mockRejectedValueOnce(
         new Error("registry blip"),
