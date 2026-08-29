@@ -136,6 +136,12 @@ export interface ArtifactRoomReplicaEntry {
    * dirty state once the host catches up.
    */
   latestHostStateVectorBase64: string | null;
+  /**
+   * Inbound/local update bytes since the last `notifyHot` encode. The
+   * collapse-latching pattern: a total-size trigger would re-encode on every
+   * keystroke once the body itself exceeded the threshold.
+   */
+  hotBytesSinceSettle: number;
 }
 
 /**
@@ -179,6 +185,8 @@ interface ColdArtifactRoomEntry {
 const BIN_STREAM_ORIGIN = Symbol("open-epic/artifact-room-stream");
 const BIN_AWARENESS_REMOTE_ORIGIN = "artifact-room-stream-remote";
 const ROOM_PENDING_COLLAPSE_BYTES = 2 * 1024 * 1024;
+/** Re-encode a hot room for the byte budget after this much unmeasured growth. */
+const HOT_DOC_RESETTLE_BYTES = 256 * 1024;
 const ROOM_PENDING_COLLAPSE_ENTRIES = 32;
 /** Frames retained per cold room; see `ColdArtifactRoomEntry.awarenessFrames`.
  * One renewal cycle across a realistic number of collaborators. */
@@ -361,8 +369,22 @@ export function createArtifactRoomTier(
 
   function notifyHot(artifactRoomId: string, bytes: number): void {
     lastHotBytes.set(artifactRoomId, bytes);
+    const entry = replicas.get(artifactRoomId);
+    if (entry !== undefined) entry.hotBytesSinceSettle = 0;
     if (budget === null) return;
     budget.settle(artifactRoomId, bytes);
+  }
+
+  function noteHotGrowth(artifactRoomId: string, deltaBytes: number): void {
+    const entry = replicas.get(artifactRoomId);
+    if (entry === undefined) return;
+    entry.hotBytesSinceSettle += deltaBytes;
+    if (entry.hotBytesSinceSettle > HOT_DOC_RESETTLE_BYTES) {
+      notifyHot(artifactRoomId, Y.encodeStateAsUpdate(entry.doc).byteLength);
+      return;
+    }
+    if (budget === null) return;
+    budget.chargeProvisional(artifactRoomId, deltaBytes);
   }
 
   function notifyCold(artifactRoomId: string, bytes: number): void {
@@ -370,10 +392,11 @@ export function createArtifactRoomTier(
     budget.settleCold(artifactRoomId, bytes);
   }
 
-  function unchargeHot(artifactRoomId: string): void {
+  function unchargeHot(artifactRoomId: string): number {
+    const charged = lastHotBytes.get(artifactRoomId) ?? 0;
     lastHotBytes.delete(artifactRoomId);
-    if (budget === null) return;
-    budget.release(artifactRoomId);
+    if (budget !== null) budget.release(artifactRoomId);
+    return charged;
   }
 
   function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
@@ -505,6 +528,7 @@ export function createArtifactRoomTier(
       onDivergenceChanged();
       if (session.canSendBodyWrites()) {
         send({ kind: "room-update", artifactRoomId, update });
+        noteHotGrowth(artifactRoomId, update.byteLength);
         return;
       }
       // Queue while reconnecting/closed, or while a raw-open stream is still
@@ -514,6 +538,7 @@ export function createArtifactRoomTier(
       // preserving an outbound propagation path.
       if (replica !== undefined) {
         pushPendingRoomUpdate(replica, update);
+        noteHotGrowth(artifactRoomId, update.byteLength);
       }
     };
     const awarenessUpdateHandler = (
@@ -547,6 +572,7 @@ export function createArtifactRoomTier(
       pendingReconcileUpdate: null,
       dirtyWatermarkStateVectorBase64: null,
       latestHostStateVectorBase64: null,
+      hotBytesSinceSettle: 0,
     };
     replicas.set(artifactRoomId, entry);
     return entry;
@@ -951,12 +977,11 @@ export function createArtifactRoomTier(
           }
         }
         if (victim === null) break;
+        const charged = lastHotBytes.get(victim) ?? 0;
         cancelCooldown(victim);
         if (!coolReplica(victim)) break;
-        const cooled = cold.get(victim);
-        const bytes = cooled === undefined ? 0 : cooled.bytes;
-        reclaimed += bytes;
-        remaining -= bytes;
+        reclaimed += charged;
+        remaining -= charged;
       }
       let leasedBytes = 0;
       for (const id of replicas.keys()) {
@@ -1072,6 +1097,7 @@ export function createArtifactRoomTier(
       }
       Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
       entry.latestHostStateVectorBase64 = hostStateVectorBase64;
+      noteHotGrowth(artifactRoomId, updateBytes.byteLength);
       if (
         latestHostCoversDirtyWatermark(
           hostStateVectorBase64,

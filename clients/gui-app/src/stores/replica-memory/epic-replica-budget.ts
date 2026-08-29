@@ -26,159 +26,142 @@ export interface EpicReplicaProjectionCounts {
  *
  * While `@1` is the wire the root Y.Doc must stay resident (it is the only
  * record source). The eviction hook therefore reports the root as
- * `"required"` and reclaims nothing from it. Cold-room bytes and projection
- * slices ride the same holder so the floor is attributed honestly rather
- * than vanishing from the snapshot.
+ * `"required"` and reclaims nothing from it.
  */
 export interface EpicReplicaBudgetSession {
-  readonly epicId: string;
+  readonly key: string;
   measure(): number;
   projectionCounts(): EpicReplicaProjectionCounts;
 }
 
 export interface EpicReplicaBudgetBook {
   attach(session: EpicReplicaBudgetSession): void;
-  detach(epicId: string): void;
-  settleRoot(accountant: MemoryAccountant, epicId: string, bytes: number): void;
-  settleColdRooms(
+  detach(key: string): void;
+  settleRoot(
     accountant: MemoryAccountant,
-    epicId: string,
+    holderId: BudgetHolderId,
     bytes: number,
   ): void;
   settleColdRoom(
     accountant: MemoryAccountant,
-    epicId: string,
-    artifactRoomId: string,
+    bookKey: string,
+    holderId: BudgetHolderId,
     bytes: number,
   ): void;
   settleCommandOverlay(
     accountant: MemoryAccountant,
-    epicId: string,
+    holderId: BudgetHolderId,
     bytes: number,
   ): void;
-  release(accountant: MemoryAccountant, epicId: string): void;
+  release(
+    accountant: MemoryAccountant,
+    bookKey: string,
+    holderIds: readonly BudgetHolderId[],
+  ): void;
   evict(overBytes: number): EvictionOutcome;
   projectionRowCounts(): EpicReplicaProjectionCounts;
 }
 
-export function epicRootHolderId(epicId: string): BudgetHolderId {
-  return `${epicId}:root`;
+export function epicReplicaBookKey(
+  hostId: string,
+  epicId: string,
+  runtimeToken: string,
+): string {
+  return `${hostId}:${epicId}:${runtimeToken}`;
 }
 
-export function epicCommandOverlayHolderId(epicId: string): BudgetHolderId {
-  return `${epicId}:command-overlay`;
+export function epicRootHolderId(
+  hostId: string,
+  epicId: string,
+  runtimeToken: string,
+): BudgetHolderId {
+  return `${hostId}:${epicId}:${runtimeToken}:root`;
 }
 
-export function epicColdRoomsHolderId(epicId: string): BudgetHolderId {
-  return `${epicId}:cold-rooms`;
+export function epicCommandOverlayHolderId(
+  hostId: string,
+  epicId: string,
+  runtimeToken: string,
+): BudgetHolderId {
+  return `${hostId}:${epicId}:${runtimeToken}:command-overlay`;
 }
 
 export function epicColdRoomHolderId(
+  hostId: string,
   epicId: string,
+  runtimeToken: string,
   artifactRoomId: string,
 ): BudgetHolderId {
-  return `${epicId}:cold:${artifactRoomId}`;
+  return `${hostId}:${epicId}:${runtimeToken}:cold:${artifactRoomId}`;
 }
 
 export function createEpicReplicaBudgetBook(): EpicReplicaBudgetBook {
   const sessions = new Map<string, EpicReplicaBudgetSession>();
-  const coldRoomsByEpic = new Map<string, Set<string>>();
+  const coldRoomsByKey = new Map<string, Set<BudgetHolderId>>();
 
   return {
     attach(session: EpicReplicaBudgetSession): void {
-      sessions.set(session.epicId, session);
+      sessions.set(session.key, session);
     },
 
-    detach(epicId: string): void {
-      sessions.delete(epicId);
+    detach(key: string): void {
+      sessions.delete(key);
     },
 
     settleRoot(
       accountant: MemoryAccountant,
-      epicId: string,
+      holderId: BudgetHolderId,
       bytes: number,
     ): void {
-      accountant.settle(
-        BUDGET_PLANE_IDS.epicReplicas,
-        epicRootHolderId(epicId),
-        bytes,
-      );
-    },
-
-    settleColdRooms(
-      accountant: MemoryAccountant,
-      epicId: string,
-      bytes: number,
-    ): void {
-      accountant.settle(
-        BUDGET_PLANE_IDS.epicReplicas,
-        epicColdRoomsHolderId(epicId),
-        bytes,
-      );
+      accountant.settle(BUDGET_PLANE_IDS.epicReplicas, holderId, bytes);
     },
 
     settleColdRoom(
       accountant: MemoryAccountant,
-      epicId: string,
-      artifactRoomId: string,
+      bookKey: string,
+      holderId: BudgetHolderId,
       bytes: number,
     ): void {
-      const holderId = epicColdRoomHolderId(epicId, artifactRoomId);
       if (bytes === 0) {
         accountant.release(BUDGET_PLANE_IDS.epicReplicas, holderId);
-        coldRoomsByEpic.get(epicId)?.delete(artifactRoomId);
+        coldRoomsByKey.get(bookKey)?.delete(holderId);
         return;
       }
-      let rooms = coldRoomsByEpic.get(epicId);
+      let rooms = coldRoomsByKey.get(bookKey);
       if (rooms === undefined) {
         rooms = new Set();
-        coldRoomsByEpic.set(epicId, rooms);
+        coldRoomsByKey.set(bookKey, rooms);
       }
-      rooms.add(artifactRoomId);
+      rooms.add(holderId);
       accountant.settle(BUDGET_PLANE_IDS.epicReplicas, holderId, bytes);
     },
 
     settleCommandOverlay(
       accountant: MemoryAccountant,
-      epicId: string,
+      holderId: BudgetHolderId,
       bytes: number,
     ): void {
-      accountant.settle(
-        BUDGET_PLANE_IDS.epicReplicas,
-        epicCommandOverlayHolderId(epicId),
-        bytes,
-      );
+      accountant.settle(BUDGET_PLANE_IDS.epicReplicas, holderId, bytes);
     },
 
-    release(accountant: MemoryAccountant, epicId: string): void {
-      accountant.release(
-        BUDGET_PLANE_IDS.epicReplicas,
-        epicRootHolderId(epicId),
-      );
-      accountant.release(
-        BUDGET_PLANE_IDS.epicReplicas,
-        epicColdRoomsHolderId(epicId),
-      );
-      accountant.release(
-        BUDGET_PLANE_IDS.epicReplicas,
-        epicCommandOverlayHolderId(epicId),
-      );
-      const coldRooms = coldRoomsByEpic.get(epicId);
+    release(
+      accountant: MemoryAccountant,
+      bookKey: string,
+      holderIds: readonly BudgetHolderId[],
+    ): void {
+      for (const holderId of holderIds) {
+        accountant.release(BUDGET_PLANE_IDS.epicReplicas, holderId);
+      }
+      const coldRooms = coldRoomsByKey.get(bookKey);
       if (coldRooms !== undefined) {
-        for (const artifactRoomId of coldRooms) {
-          accountant.release(
-            BUDGET_PLANE_IDS.epicReplicas,
-            epicColdRoomHolderId(epicId, artifactRoomId),
-          );
+        for (const holderId of coldRooms) {
+          accountant.release(BUDGET_PLANE_IDS.epicReplicas, holderId);
         }
-        coldRoomsByEpic.delete(epicId);
+        coldRoomsByKey.delete(bookKey);
       }
     },
 
     evict(overBytes: number): EvictionOutcome {
-      // Honesty constraint: the root replica is not evictable while @1 is
-      // the wire. Reclaiming zero is the legal answer; the accountant
-      // latches `"over-protected"` and stops.
       void overBytes;
       let protectedBytes = 0;
       for (const session of sessions.values()) {

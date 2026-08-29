@@ -155,6 +155,9 @@ export type {
   CommandSendFailure,
   CommandState,
 } from "./command-overlay";
-export { createCommandQueue } from "./command-overlay";
+export {
+  COMMAND_AUTO_RETRY_WINDOW_MS,
+  createCommandQueue,
+} from "./command-overlay";
 
 export type { PlaneRegistration, ReplicaRuntime } from "./replica-runtime";

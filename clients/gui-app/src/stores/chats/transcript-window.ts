@@ -16,6 +16,7 @@ import {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
+import type { ProtectedBytes } from "@traycer-clients/shared/replica-runtime";
 
 /**
  * # The client half of the windowed transcript
@@ -456,7 +457,11 @@ export function appendLiveRecords(
     ...window,
     liveMessages,
     liveEvents,
-    hydratedBytes: chargedWindowBytes(window.spans, liveMessages, liveEvents),
+    // Delta of the NEW records only. Re-measuring the whole live set here
+    // would stringify every retained event on each append — quadratic in the
+    // 512-cap, and the settle path already remeasures live when the figure
+    // is read.
+    hydratedBytes: window.hydratedBytes + recordsByteLength(messages, events),
     clock: window.clock + 1,
   };
 }
@@ -702,7 +707,10 @@ function rewriteWindowMessage(
       ...window,
       spans,
       liveMessages,
-      hydratedBytes: chargedWindowBytes(spans, liveMessages, window.liveEvents),
+      hydratedBytes:
+        charge === "deferred"
+          ? window.hydratedBytes
+          : chargedWindowBytes(spans, liveMessages, window.liveEvents),
       unsettledByteMessageIds:
         charge === "now" || window.unsettledByteMessageIds.includes(messageId)
           ? window.unsettledByteMessageIds
@@ -2471,4 +2479,45 @@ export function evictTranscriptWindowToBudget(
       window.liveEvents,
     ),
   };
+}
+
+/**
+ * What a post-eviction window still holds that cannot be dropped, by kind.
+ * Live records are `"tail"` (no ordinal, not recoverable by range). Surviving
+ * spans are classified the same way {@link evictTranscriptWindowToBudget}
+ * protected them.
+ */
+export function transcriptWindowProtectedBytes(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+): readonly ProtectedBytes[] {
+  const byKind = new Map<ProtectedBytes["kind"], number>();
+  const add = (kind: ProtectedBytes["kind"], bytes: number): void => {
+    if (bytes <= 0) return;
+    byKind.set(kind, (byKind.get(kind) ?? 0) + bytes);
+  };
+  for (const span of window.spans) {
+    if (spanEnd(span) >= window.rowCount && window.rowCount > 0) {
+      add("tail", span.bytes);
+      continue;
+    }
+    if (
+      required.some(
+        (ordinal) => span.fromOrdinal <= ordinal && spanEnd(span) > ordinal,
+      )
+    ) {
+      add("required", span.bytes);
+      continue;
+    }
+    if (
+      visible !== null &&
+      span.fromOrdinal < visible.toOrdinal &&
+      spanEnd(span) > visible.fromOrdinal
+    ) {
+      add("visible", span.bytes);
+    }
+  }
+  add("tail", recordsByteLength(window.liveMessages, window.liveEvents));
+  return [...byKind.entries()].map(([kind, bytes]) => ({ kind, bytes }));
 }

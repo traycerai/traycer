@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime";
-import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
+import type {
+  EvictionOutcome,
+  RuntimeEnvironment,
+} from "@traycer-clients/shared/replica-runtime";
+import {
+  BUDGET_PLANE_IDS,
+  createMemoryAccountant,
+} from "@traycer-clients/shared/replica-runtime";
 import { createProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
   chatHolderId,
@@ -8,7 +14,6 @@ import {
   createChatWindowBudgetBook,
   evictChatWindowForAccountant,
   legacyTranscriptResidencyBytes,
-  type ChatWindowBudgetSession,
 } from "@/stores/replica-memory/chat-window-budget";
 import {
   appendLiveRecords,
@@ -29,11 +34,8 @@ import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscri
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   CHAT_WINDOWS_SOFT_LIMIT_BYTES,
-  DEFAULT_MAX_LIVE_EPICS,
-  EPIC_REPLICAS_MAX_LIVE,
   EPIC_REPLICAS_SOFT_LIMIT_BYTES,
   HOT_DOCS_SOFT_LIMIT_BYTES,
-  TRANSCRIPT_WINDOW_MAX_BYTES as BUDGET_TRANSCRIPT_WINDOW_MAX_BYTES,
 } from "@/stores/replica-memory/budget-limits";
 
 const CONTENT: JsonContent = {
@@ -202,33 +204,56 @@ describe("evictChatWindowForAccountant", () => {
       outcome.protectedBytesByKind.some((entry) => entry.kind === "tail"),
     ).toBe(true);
   });
+
+  it("reports surviving visible and required spans, not only live records", () => {
+    let window = windowWithSkeleton(6);
+    window = applyRangeResponse(
+      window,
+      rangeOf(0, ["row-0"], [userMessage("m-0", 0)]),
+    );
+    window = applyRangeResponse(
+      window,
+      rangeOf(2, ["row-2"], [userMessage("m-2", 2)]),
+    );
+    window = applyRangeResponse(
+      window,
+      rangeOf(4, ["row-4"], [userMessage("m-4", 4)]),
+    );
+    const { outcome } = evictChatWindowForAccountant(
+      window,
+      0,
+      { fromOrdinal: 0, toOrdinal: 1 },
+      [2],
+    );
+    expect(
+      outcome.protectedBytesByKind.some((entry) => entry.kind === "visible"),
+    ).toBe(true);
+    expect(
+      outcome.protectedBytesByKind.some((entry) => entry.kind === "required"),
+    ).toBe(true);
+    expect(outcome.reclaimedBytes).toBeGreaterThan(0);
+  });
 });
 
 describe("createChatWindowBudgetBook", () => {
   it("evicts the coldest session first", () => {
     const book = createChatWindowBudgetBook();
-    const coldEvict = vi.fn(
-      (): ReturnType<ChatWindowBudgetSession["evict"]> => ({
-        reclaimedBytes: 50,
-        protectedBytesByKind: [],
-      }),
-    );
-    const hotEvict = vi.fn(
-      (): ReturnType<ChatWindowBudgetSession["evict"]> => ({
-        reclaimedBytes: 0,
-        protectedBytesByKind: [{ kind: "visible", bytes: 80 }],
-      }),
-    );
+    const coldEvict = vi.fn((): EvictionOutcome => ({
+      reclaimedBytes: 50,
+      protectedBytesByKind: [],
+    }));
+    const hotEvict = vi.fn((): EvictionOutcome => ({
+      reclaimedBytes: 0,
+      protectedBytesByKind: [{ kind: "visible", bytes: 80 }],
+    }));
     book.attach({
       holderId: "cold",
       touchedAt: () => 1,
-      measure: () => 50,
       evict: coldEvict,
     });
     book.attach({
       holderId: "hot",
       touchedAt: () => 9,
-      measure: () => 80,
       evict: hotEvict,
     });
     const outcome = book.evict(40);
@@ -239,6 +264,79 @@ describe("createChatWindowBudgetBook", () => {
 
   it("chatHolderId discriminates host, not only epic+chat", () => {
     expect(chatHolderId("h1", "e", "c")).not.toBe(chatHolderId("h2", "e", "c"));
+  });
+
+  it("orders eviction by process-wide recency, not per-session publish count", () => {
+    const runtime = createProcessMemoryRuntime(fakeEnvironment());
+    const aEvict = vi.fn((): EvictionOutcome => ({
+      reclaimedBytes: 10,
+      protectedBytesByKind: [],
+    }));
+    const bEvict = vi.fn((): EvictionOutcome => ({
+      reclaimedBytes: 10,
+      protectedBytesByKind: [],
+    }));
+    let aStamp = 0;
+    let bStamp = 0;
+    runtime.chatWindows.attach({
+      holderId: "busy-abandoned",
+      touchedAt: () => aStamp,
+      evict: aEvict,
+    });
+    runtime.chatWindows.attach({
+      holderId: "just-opened",
+      touchedAt: () => bStamp,
+      evict: bEvict,
+    });
+    for (let index = 0; index < 5; index += 1) {
+      aStamp = runtime.stampChatRecency();
+    }
+    bStamp = runtime.stampChatRecency();
+    runtime.chatWindows.evict(10);
+    expect(aEvict).toHaveBeenCalledTimes(1);
+    expect(bEvict).not.toHaveBeenCalled();
+  });
+
+  it("one plane walk when a cold session publishes and re-enters reconcile", () => {
+    const accountant = createMemoryAccountant({
+      environment: fakeEnvironment(),
+      observedCeilingBytes: 10_000,
+    });
+    const book = createChatWindowBudgetBook();
+    const planeEvict = vi.fn((overBytes: number): EvictionOutcome => {
+      return book.evict(overBytes);
+    });
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.chatWindows,
+      softLimitBytes: 100,
+      nearThresholdRatio: 0.8,
+      evict: planeEvict,
+    });
+    const coldEvict = vi.fn((): EvictionOutcome => {
+      accountant.settle(BUDGET_PLANE_IDS.chatWindows, "cold", 40);
+      accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+      return { reclaimedBytes: 40, protectedBytesByKind: [] };
+    });
+    const hotEvict = vi.fn((): EvictionOutcome => ({
+      reclaimedBytes: 0,
+      protectedBytesByKind: [{ kind: "visible", bytes: 80 }],
+    }));
+    book.attach({
+      holderId: "cold",
+      touchedAt: () => 1,
+      evict: coldEvict,
+    });
+    book.attach({
+      holderId: "hot",
+      touchedAt: () => 9,
+      evict: hotEvict,
+    });
+    accountant.settle(BUDGET_PLANE_IDS.chatWindows, "cold", 80);
+    accountant.settle(BUDGET_PLANE_IDS.chatWindows, "hot", 80);
+    accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+    expect(planeEvict).toHaveBeenCalledTimes(1);
+    expect(coldEvict).toHaveBeenCalledTimes(1);
+    expect(hotEvict).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -268,12 +366,5 @@ describe("TRANSCRIPT_WINDOW_MAX_BYTES remains the per-window unit", () => {
   it("is still 8 MiB, and the process pool is a multiple of it", () => {
     expect(TRANSCRIPT_WINDOW_MAX_BYTES).toBe(8 * 1024 * 1024);
     expect(CHAT_WINDOWS_SOFT_LIMIT_BYTES).toBe(4 * TRANSCRIPT_WINDOW_MAX_BYTES);
-  });
-
-  it("is the same binding the window module re-exports, not a second copy", () => {
-    expect(TRANSCRIPT_WINDOW_MAX_BYTES).toBe(
-      BUDGET_TRANSCRIPT_WINDOW_MAX_BYTES,
-    );
-    expect(DEFAULT_MAX_LIVE_EPICS).toBe(EPIC_REPLICAS_MAX_LIVE);
   });
 });

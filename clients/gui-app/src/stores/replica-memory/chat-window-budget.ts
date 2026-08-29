@@ -14,6 +14,7 @@ import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
 import {
   evictTranscriptWindowToBudget,
   transcriptWindowChargedBytes,
+  transcriptWindowProtectedBytes,
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
@@ -78,9 +79,8 @@ export function legacyTranscriptResidencyBytes(
  */
 export interface ChatWindowBudgetSession {
   readonly holderId: BudgetHolderId;
-  /** Recency for eviction order. Higher = hotter. A counter, not a clock. */
+  /** Recency for eviction order. Higher = hotter. A process-wide counter. */
   touchedAt(): number;
-  measure(): number;
   /**
    * Drop unprotected spans aiming to reclaim `overBytes`. Must settle the
    * holder afterwards (the accountant does not guess which holder changed).
@@ -92,6 +92,11 @@ export interface ChatWindowBudgetBook {
   attach(session: ChatWindowBudgetSession): void;
   detach(holderId: BudgetHolderId): void;
   settle(
+    accountant: MemoryAccountant,
+    holderId: BudgetHolderId,
+    bytes: number,
+  ): void;
+  chargeProvisional(
     accountant: MemoryAccountant,
     holderId: BudgetHolderId,
     bytes: number,
@@ -118,6 +123,18 @@ export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
       bytes: number,
     ): void {
       accountant.settle(BUDGET_PLANE_IDS.chatWindows, holderId, bytes);
+    },
+
+    chargeProvisional(
+      accountant: MemoryAccountant,
+      holderId: BudgetHolderId,
+      bytes: number,
+    ): void {
+      accountant.chargeProvisional(
+        BUDGET_PLANE_IDS.chatWindows,
+        holderId,
+        bytes,
+      );
     },
 
     evict(overBytes: number): EvictionOutcome {
@@ -172,17 +189,15 @@ export function evictChatWindowForAccountant(
     required,
   );
   const after = transcriptWindowChargedBytes(next);
-  const spanBytes = next.spans.reduce((sum, span) => sum + span.bytes, 0);
-  const liveBytes = after - spanBytes;
-  const protectedBytesByKind: ProtectedBytes[] = [];
-  if (liveBytes > 0) {
-    protectedBytesByKind.push({ kind: "tail", bytes: liveBytes });
-  }
   return {
     window: next,
     outcome: {
       reclaimedBytes: Math.max(0, before - after),
-      protectedBytesByKind,
+      protectedBytesByKind: transcriptWindowProtectedBytes(
+        next,
+        visible,
+        required,
+      ),
     },
   };
 }

@@ -7,15 +7,17 @@ import type {
 import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 
 /**
- * What the artifact-room tier calls at encode boundaries. One object, three
- * methods — `settleCold` is a second method on this sink, not a second sink.
+ * What the artifact-room tier calls at encode boundaries. One object —
+ * `settleCold` is a second method on this sink, not a second sink.
  *
  * `release` uncharges the HOT holder only. `settleCold(id, 0)` uncharges the
- * cold holder (`0` means gone).
+ * cold holder (`0` means gone). `chargeProvisional` is the hot-path estimate
+ * between encode settles.
  */
 export interface HotDocBudgetSink {
   settle(artifactRoomId: string, bytes: number): void;
   settleCold(artifactRoomId: string, bytes: number): void;
+  chargeProvisional(artifactRoomId: string, bytes: number): void;
   release(artifactRoomId: string): void;
 }
 
@@ -23,59 +25,53 @@ export interface HotDocBudgetSink {
  * One epic's artifact-room tier, as the hot-docs plane sees it.
  *
  * The book never invents an LRU: `demoteColdestUnpinned` is the tier's own
- * eviction (the same walk `enforceHotCap` already uses). Bytes for `measure`
- * come from the book's last-settled figures, not a tier getter.
+ * eviction (the same walk `enforceHotCap` already uses). `key` is the
+ * host-scoped runtime token, so a cross-host re-point cannot detach the
+ * winner.
  */
 export interface HotDocBudgetTier {
-  readonly epicId: string;
+  readonly key: string;
   materializedIds(): readonly string[];
-  leaseCount(artifactRoomId: string): number;
-  /**
-   * Demote the coldest unpinned rooms until `overBytes` is reclaimed or
-   * nothing demotable remains. Pinned rooms are reported as protected
-   * `"leased"`.
-   */
   demoteColdestUnpinned(overBytes: number): EvictionOutcome;
-}
-
-export interface HotDocHolderMeasure {
-  readonly holderId: BudgetHolderId;
-  readonly bytes: number;
-  readonly pinned: boolean;
 }
 
 export interface HotDocBudgetBook {
   attach(tier: HotDocBudgetTier): void;
-  detach(epicId: string): void;
+  detach(key: string): void;
   settle(
     accountant: MemoryAccountant,
     holderId: BudgetHolderId,
     bytes: number,
   ): void;
+  chargeProvisional(
+    accountant: MemoryAccountant,
+    holderId: BudgetHolderId,
+    bytes: number,
+  ): void;
   release(accountant: MemoryAccountant, holderId: BudgetHolderId): void;
-  lastSettledBytes(holderId: BudgetHolderId): number;
   evict(overBytes: number): EvictionOutcome;
   docsResident(): number;
 }
 
 export function hotDocHolderId(
+  hostId: string,
   epicId: string,
+  runtimeToken: string,
   artifactRoomId: string,
 ): BudgetHolderId {
-  return `${epicId}:${artifactRoomId}`;
+  return `${hostId}:${epicId}:${runtimeToken}:${artifactRoomId}`;
 }
 
 export function createHotDocBudgetBook(): HotDocBudgetBook {
   const tiers = new Map<string, HotDocBudgetTier>();
-  const lastSettled = new Map<BudgetHolderId, number>();
 
   return {
     attach(tier: HotDocBudgetTier): void {
-      tiers.set(tier.epicId, tier);
+      tiers.set(tier.key, tier);
     },
 
-    detach(epicId: string): void {
-      tiers.delete(epicId);
+    detach(key: string): void {
+      tiers.delete(key);
     },
 
     settle(
@@ -83,17 +79,19 @@ export function createHotDocBudgetBook(): HotDocBudgetBook {
       holderId: BudgetHolderId,
       bytes: number,
     ): void {
-      lastSettled.set(holderId, bytes);
       accountant.settle(BUDGET_PLANE_IDS.hotDocs, holderId, bytes);
     },
 
-    release(accountant: MemoryAccountant, holderId: BudgetHolderId): void {
-      lastSettled.delete(holderId);
-      accountant.release(BUDGET_PLANE_IDS.hotDocs, holderId);
+    chargeProvisional(
+      accountant: MemoryAccountant,
+      holderId: BudgetHolderId,
+      bytes: number,
+    ): void {
+      accountant.chargeProvisional(BUDGET_PLANE_IDS.hotDocs, holderId, bytes);
     },
 
-    lastSettledBytes(holderId: BudgetHolderId): number {
-      return lastSettled.get(holderId) ?? 0;
+    release(accountant: MemoryAccountant, holderId: BudgetHolderId): void {
+      accountant.release(BUDGET_PLANE_IDS.hotDocs, holderId);
     },
 
     evict(overBytes: number): EvictionOutcome {

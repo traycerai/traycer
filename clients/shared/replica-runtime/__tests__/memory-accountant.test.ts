@@ -186,6 +186,9 @@ describe("createMemoryAccountant", () => {
     expect(usage.evictionsRequested).toBe(1);
     expect(usage.bytesReclaimed).toBe(30);
     expect(usage.evictionsRefused).toBe(0);
+    expect(usage.protectedBytesByKind).toEqual([
+      { kind: "visible", bytes: 80 },
+    ]);
   });
 
   it("latches over-protected when the hook reclaims nothing, and does not retry", () => {
@@ -428,5 +431,35 @@ describe("createMemoryAccountant", () => {
     accountant.settle("p", "legacy", 500);
     expect(accountant.reconcile("p")).toBe("over-protected");
     expect(accountant.snapshot().planes[0].evictionsRefused).toBe(1);
+  });
+
+  it("a nested reconcile from inside the eviction hook does not walk the plane again", () => {
+    const environment = createFakeEnvironment();
+    const accountant = createMemoryAccountant({
+      environment,
+      observedCeilingBytes: 1000,
+    });
+    const evict = vi.fn((): EvictionOutcome => {
+      // Still over after this settle, so a nested reconcile would walk
+      // again if the plane latch were missing.
+      accountant.settle("p", "cold", 50);
+      accountant.reconcile("p");
+      return {
+        reclaimedBytes: 30,
+        protectedBytesByKind: [{ kind: "visible", bytes: 80 }],
+      };
+    });
+    accountant.register(
+      spec({
+        planeId: "p",
+        softLimitBytes: 100,
+        nearThresholdRatio: 0.8,
+        evict,
+      }),
+    );
+    accountant.settle("p", "cold", 80);
+    accountant.settle("p", "hot", 80);
+    expect(accountant.reconcile("p")).toBe("over-protected");
+    expect(evict).toHaveBeenCalledTimes(1);
   });
 });

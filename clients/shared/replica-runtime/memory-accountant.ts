@@ -153,6 +153,12 @@ export interface PlaneUsage {
   readonly bytesReclaimed: number;
   /** Times an eviction returned zero because everything left was protected. */
   readonly evictionsRefused: number;
+  /**
+   * Why the last reconcile could not reclaim more, empty when the plane is
+   * under its limit or simply had nothing more to give. Survives on the
+   * snapshot so `"over-protected"` is attributable.
+   */
+  readonly protectedBytesByKind: readonly ProtectedBytes[];
 }
 
 /**
@@ -250,6 +256,13 @@ interface PlaneState {
    * extra step.
    */
   protectedLatch: boolean;
+  /**
+   * True while this plane's eviction hook is on the stack. Process-wide: one
+   * session's publish must not re-enter `evict` through another session's
+   * settle. Nested reconcile returns the current pressure without walking.
+   */
+  reconciling: boolean;
+  lastProtectedBytesByKind: readonly ProtectedBytes[];
 }
 
 function holderChargedBytes(holder: HolderCharge): number {
@@ -311,6 +324,7 @@ function usageOf(plane: PlaneState): PlaneUsage {
     evictionsRequested: plane.evictionsRequested,
     bytesReclaimed: plane.bytesReclaimed,
     evictionsRefused: plane.evictionsRefused,
+    protectedBytesByKind: plane.lastProtectedBytesByKind,
   };
 }
 
@@ -366,6 +380,8 @@ export function createMemoryAccountant(
         bytesReclaimed: 0,
         evictionsRefused: 0,
         protectedLatch: false,
+        reconciling: false,
+        lastProtectedBytesByKind: [],
       });
       return {
         planeId: spec.planeId,
@@ -411,21 +427,31 @@ export function createMemoryAccountant(
 
     reconcile(planeId: BudgetPlaneId): BudgetPressure {
       const plane = requireRegistered(planes, planeId);
+      if (plane.reconciling) return pressureOf(plane);
       if (plane.protectedLatch) return "over-protected";
       const charged = planeChargedBytes(plane);
-      if (charged <= plane.spec.softLimitBytes) return pressureOf(plane);
-
-      plane.evictionsRequested += 1;
-      const outcome = plane.spec.evict(charged - plane.spec.softLimitBytes);
-      plane.bytesReclaimed += outcome.reclaimedBytes;
-      const stillOver = planeChargedBytes(plane) > plane.spec.softLimitBytes;
-      if (stillOver) {
-        plane.protectedLatch = true;
-        if (outcome.reclaimedBytes === 0) {
-          plane.evictionsRefused += 1;
-        }
+      if (charged <= plane.spec.softLimitBytes) {
+        plane.lastProtectedBytesByKind = [];
+        return pressureOf(plane);
       }
-      return pressureOf(plane);
+
+      plane.reconciling = true;
+      try {
+        plane.evictionsRequested += 1;
+        const outcome = plane.spec.evict(charged - plane.spec.softLimitBytes);
+        plane.bytesReclaimed += outcome.reclaimedBytes;
+        plane.lastProtectedBytesByKind = outcome.protectedBytesByKind;
+        const stillOver = planeChargedBytes(plane) > plane.spec.softLimitBytes;
+        if (stillOver) {
+          plane.protectedLatch = true;
+          if (outcome.reclaimedBytes === 0) {
+            plane.evictionsRefused += 1;
+          }
+        }
+        return pressureOf(plane);
+      } finally {
+        plane.reconciling = false;
+      }
     },
 
     pressure(planeId: BudgetPlaneId): BudgetPressure {

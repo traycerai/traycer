@@ -65,7 +65,7 @@ import {
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
-import { getProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
   chatHolderId,
   chatSessionChargeBytes,
@@ -1827,10 +1827,9 @@ export function createChatSessionStoreWithNotificationDependencies(
   notificationDependencies: ChatSessionNotificationDependencies,
 ): ChatSessionStoreHandle {
   const notificationUserId = options.userId;
-  const memory = getProcessMemoryRuntime();
+  const memory = ensureProcessMemoryRuntime(createRendererRuntimeEnvironment());
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
-  let budgetClock = 0;
-  let reconciling = false;
+  let recencyStamp = 0;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
   // Assigned synchronously inside the `create()` initializer below, where the
@@ -2182,6 +2181,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           ? merged
           : { ...merged, pendingActions, acceptedActions };
       });
+      recencyStamp = memory.stampChatRecency();
+      memory.chatWindows.chargeProvisional(memory.accountant, holderId, 0);
     };
 
     const lease = options.streamFlushCoordinator.register({
@@ -3305,19 +3306,13 @@ export function createChatSessionStoreWithNotificationDependencies(
      * without being authoritative about anything else.
      */
     const commitChatWindowBudget = (window: TranscriptWindow): void => {
-      budgetClock += 1;
+      recencyStamp = memory.stampChatRecency();
       memory.chatWindows.settle(
         memory.accountant,
         holderId,
         chatSessionChargeBytes(window, chatSlicesOf(get())),
       );
-      if (reconciling) return;
-      reconciling = true;
-      try {
-        memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
-      } finally {
-        reconciling = false;
-      }
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
 
     const legacyTranscriptChargeBytes = (state: ChatSessionState): number =>
@@ -3325,19 +3320,13 @@ export function createChatSessionStoreWithNotificationDependencies(
       chatWholeSetSliceBytes(chatSlicesOf(state));
 
     const commitLegacyTranscriptBudget = (): void => {
-      budgetClock += 1;
+      recencyStamp = memory.stampChatRecency();
       memory.chatWindows.settle(
         memory.accountant,
         holderId,
         legacyTranscriptChargeBytes(get()),
       );
-      if (reconciling) return;
-      reconciling = true;
-      try {
-        memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
-      } finally {
-        reconciling = false;
-      }
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
 
     const publishWindowedTranscript = (
@@ -3361,9 +3350,7 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     memory.chatWindows.attach({
       holderId,
-      touchedAt: () => budgetClock,
-      measure: () =>
-        chatSessionChargeBytes(get().transcriptWindow, chatSlicesOf(get())),
+      touchedAt: () => recencyStamp,
       evict: (overBytes) => {
         const state = get();
         if (!windowedLine) {
