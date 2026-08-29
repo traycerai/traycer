@@ -1407,6 +1407,89 @@ describe("index deltas", () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * The resnapshot entry's dedup is keyed on the THREE boundary cases (a
+   * rebuild announcement, a rebase, a voided index), never on "a snapshot
+   * arrived" - an aux-only re-broadcast (a queue change, an approval) rides
+   * the same `onWindowedSnapshot` handler at a HELD revision and must leave
+   * the entry standing, or a steady drip of aux traffic would close it once
+   * per frame while the real answer is still in flight and re-send a
+   * resnapshot for every approval.
+   */
+  it("survives an aux-only re-broadcast while void, but a later void reopens it", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 5,
+        rowCount: 2,
+        indexRevision: 1,
+        changes: [{ type: "reindexed" }],
+      });
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // An aux-only re-broadcast at the SAME epoch, with a concrete revision
+      // and no rebuild announcement - none of the three boundary cases. The
+      // pending resnapshot entry is what asked for the repair; closing it
+      // here is the shape that looks conservative and destroys the answer -
+      // the entry's dedup would release, and a re-plan could mint a second
+      // request for a repair already travelling on the wire.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+          indexRevision: 1,
+        }),
+      );
+      // No second resnapshot: the entry survived the aux frame.
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // The rebuild-announcing snapshot IS a boundary case - `indexRevision:
+      // null` - and closes the entry.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // A LATER void can now reopen the entry and ask again - proof the close
+      // above actually happened rather than merely reading as inert.
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 6,
+        rowCount: 2,
+        indexRevision: 1,
+        changes: [{ type: "reindexed" }],
+      });
+      expect(harness.resnapshotCount()).toBe(2);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
 });
 
 /**
@@ -2027,6 +2110,93 @@ describe("accumulated-change chunks", () => {
       expect(
         harness.handle.store.getState().accumulatedSummaryGenerationSeated,
       ).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * The un-seat this store used to skip. A chunk of a LATER generation whose
+   * `fromIndex` is not 0 cannot itself seat - its predecessors, including that
+   * generation's own first chunk, were dropped - but the generation WAS
+   * observed on the ledger, so the trust flags must publish that a
+   * replacement is running. The previous shape returned before publishing,
+   * leaving `accumulatedSummaryGenerationSeated` vouching for the SUPERSEDED
+   * generation while its replacement was already known to be in flight.
+   */
+  it("un-seats when a later generation's chunk cannot itself seat", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
+      // Generation 1 completes and seats.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      const before = harness.resnapshotCount();
+
+      // Generation 2's first OBSERVED chunk is not index 0: everything before
+      // it in that generation - including its real first chunk - was dropped.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 1,
+          generation: 2,
+          summaries: [summary("y.ts")],
+          isFinal: false,
+        },
+      });
+
+      // The published set is unchanged - the chunk cannot seat at the wrong
+      // offset - but the trust flags must stop vouching for it as settled.
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryAssemblyStarted,
+      ).toBe(true);
+      // And the restream is what recovers the dropped predecessor.
+      expect(harness.resnapshotCount()).toBe(before + 1);
     } finally {
       harness.handle.dispose();
     }

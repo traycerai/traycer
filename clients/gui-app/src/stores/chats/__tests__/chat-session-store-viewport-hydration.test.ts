@@ -1490,6 +1490,193 @@ describe("chat session viewport hydration: aux rebroadcasts while a range is in 
   });
 });
 
+/**
+ * The recovery ledger's rebuild boundary: an accepted rebuild announcement
+ * subsumes every open range entry at once, and the answer to a
+ * pre-boundary request must never seat - it is indistinguishable from a
+ * post-boundary slice of current state, because the host slices at answer
+ * time. Rejecting it by REQUEST ID (never by content) is the only thing that
+ * can tell the two apart, and the planner that re-derives the same gap under
+ * a fresh id is what proves the obligation was carried rather than dropped.
+ */
+describe("chat session viewport hydration: the rebuild boundary subsumes in-flight ranges", () => {
+  it("discards the pre-boundary answer for the old request id, but seats the replanned one", () => {
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      expect(harness.rangeRequests).toHaveLength(1);
+      const oldRequestId = harness.lastRangeRequestId();
+
+      // An accepted rebuild announcement at the SAME epoch - `snapshot()`
+      // always frames `indexRevision: null`, the boundary's discriminator,
+      // not a new epoch. It subsumes every open range entry, and the planner
+      // (never gated on the boundary) immediately re-derives the same gap
+      // under a fresh id.
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+        }),
+      );
+      expect(harness.rangeRequests).toHaveLength(2);
+      const newRequestId = harness.lastRangeRequestId();
+      expect(newRequestId).not.toBe(oldRequestId);
+
+      // The OLD request's answer lands. A pre-boundary-framed answer is
+      // indistinguishable from a post-boundary slice of current state by
+      // CONTENT alone, so only the id absent from the ledger says so - it
+      // must not seat, whatever rows it claims to carry.
+      harness.callbacks().onRange(rangeAnswering(oldRequestId, 10, 20));
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((span) => span.fromOrdinal === 10),
+      ).toBe(false);
+      // Discarding it does not mint a THIRD request: the replanned one is
+      // still tracked as in flight, so the re-plan the discard triggers
+      // dedupes against it.
+      expect(harness.rangeRequests).toHaveLength(2);
+
+      // The NEW (post-boundary) request's own answer seats normally.
+      harness.callbacks().onRange(range(harness, 10, 20));
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((span) => span.fromOrdinal === 10),
+      ).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("keeps planning gaps in the delivered prefix while the rebuild's skeleton is still incomplete", () => {
+    // The boundary opens a `skeleton-completion` entry to carry the subsumed
+    // obligations to a guaranteed close, but the planner must NOT be gated on
+    // that entry - gating it would strand the delivered prefix behind a close
+    // that never comes if the stream stalls into abandonment.
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      // The rebuild announcement. Nothing is visible yet and the tail is
+      // already hydrated, so it plans nothing on its own.
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+        }),
+      );
+      expect(harness.rangeRequests).toEqual([]);
+
+      // A partial, non-final skeleton chunk: the rebuild has not finished.
+      harness.callbacks().onSkeletonChunk(skeletonChunk(0, 10, false));
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeletonComplete,
+      ).toBe(false);
+
+      // A gap INSIDE the delivered prefix [0, 10) is still asked for.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 2, toOrdinal: 5 });
+      expect(harness.rangeRequests).toHaveLength(1);
+      expect(harness.rangeRequests[0]).toMatchObject({
+        fromOrdinal: 2,
+        toOrdinal: 4,
+      });
+
+      // ...and its answer SEATS while `skeletonComplete` is still false - the
+      // stalled rebuild's own close condition never gated this plan.
+      harness.callbacks().onRange(range(harness, 2, 5));
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((span) => span.fromOrdinal === 2),
+      ).toBe(true);
+      expect(
+        harness.handle.store.getState().transcriptWindow.skeletonComplete,
+      ).toBe(false);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * The ledger's outstanding-request cap: binding it is a SUPERSEDE-AND-REPLAN,
+ * never silent trust. The evicted oldest entries are replaced by one NEW
+ * wider request covering their rows; a response to an evicted id is discarded
+ * exactly as any unrecorded response is, and only the wider request's own
+ * accepted answer closes its entry.
+ */
+describe("chat session viewport hydration: the outstanding-request cap supersedes and replans", () => {
+  it("replaces evicted entries with one wider request, discards their late answers, and seats the wider one", () => {
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+
+      // Mint MAX_OUTSTANDING_HYDRATION_REQUESTS + 1 distinct one-row range
+      // requests, one per report - each targets an ordinal nothing has
+      // fetched yet, so every call plans a fresh id. The ledger keeps every
+      // entry even though only the latest holds the in-flight dedup slot (see
+      // `requestPlannedHydration`'s own doc: "a differently-planned request
+      // does not make the earlier answer wrong, only unawaited"), so the
+      // LAST report is what binds the cap.
+      for (
+        let ordinal = 0;
+        ordinal <= MAX_OUTSTANDING_HYDRATION_REQUESTS;
+        ordinal += 1
+      ) {
+        harness.handle.store.getState().reportVisibleTranscriptRange({
+          fromOrdinal: ordinal,
+          toOrdinal: ordinal + 1,
+        });
+      }
+
+      // One ordinary request per report, plus the ONE wider replacement
+      // request the cap-binding report also sent.
+      const ordinaryCount = MAX_OUTSTANDING_HYDRATION_REQUESTS + 1;
+      expect(harness.rangeRequests).toHaveLength(ordinaryCount + 1);
+
+      // The two OLDEST entries (ordinals 0 and 1) are what the cap evicted.
+      const evictedRequestId = harness.rangeRequests[0].requestId;
+      const secondEvictedRequestId = harness.rangeRequests[1].requestId;
+      const replacement = harness.rangeRequests[ordinaryCount];
+      // Covers exactly the evicted entries' rows: ordinals [0, 2).
+      expect(replacement).toMatchObject({ fromOrdinal: 0, toOrdinal: 1 });
+      expect(replacement.requestId).not.toBe(evictedRequestId);
+      expect(replacement.requestId).not.toBe(secondEvictedRequestId);
+
+      // A response to an evicted id is discarded outright - its ledger entry
+      // is gone, so nothing recorded what happened to those ordinals while it
+      // was in the air.
+      harness.callbacks().onRange(rangeAnswering(evictedRequestId, 0, 1));
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((span) => span.fromOrdinal === 0),
+      ).toBe(false);
+      // No new request was minted for it: the wider replacement already
+      // carries the obligation, and the re-plan the discard triggers dedupes
+      // against whatever currently holds the in-flight slot.
+      expect(harness.rangeRequests).toHaveLength(ordinaryCount + 1);
+
+      // The wider replacement's own answer seats normally.
+      harness.callbacks().onRange(rangeAnswering(replacement.requestId, 0, 2));
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((span) => span.fromOrdinal === 0),
+      ).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
 describe("chat session viewport hydration: resnapshot after invalidation", () => {
   it("asks once per abandoned epoch however many frames follow", () => {
     const harness = createViewportHarness();
