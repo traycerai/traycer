@@ -140,6 +140,7 @@ describe("composer mention flow", () => {
         action: { kind: "complete", mention: fileMention("src/foo.ts") },
         updatedAt: null,
         archived: false,
+        dormant: false,
         preview: null,
       },
     });
@@ -184,6 +185,7 @@ describe("composer mention flow", () => {
         action: { kind: "complete", mention: fileMention("src/foo.ts") },
         updatedAt: null,
         archived: false,
+        dormant: false,
         preview: null,
       },
     });
@@ -221,6 +223,7 @@ describe("composer mention flow", () => {
         action: { kind: "complete", mention: fileMention("platform.ts") },
         updatedAt: null,
         archived: false,
+        dormant: false,
         preview: null,
       },
     });

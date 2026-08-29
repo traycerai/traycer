@@ -165,6 +165,7 @@ export function WorkspaceSummaryTrigger(
             onUpdate={null}
             updateEnabled={false}
             updatePending={false}
+            discardDisabled={false}
             onEditEnvironment={NOOP}
             readOnly
             nestedInPopover={false}

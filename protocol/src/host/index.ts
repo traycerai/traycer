@@ -1,5 +1,6 @@
 export * from "./agent";
 export * from "./asset-stream-schemas";
+export * from "./browser";
 export * from "./chat-fork";
 export * from "./comments";
 export * from "./config";
@@ -44,7 +45,9 @@ export {
   worktreeCreatePathsV10,
   worktreeDeleteV10,
   worktreeDeleteV11,
+  worktreeDeleteV12,
   worktreeDeleteUpgradeV10ToV11,
+  worktreeDeleteUpgradeV11ToV12,
   worktreeListHoldersV10,
   worktreeListAllForHostV10,
   worktreeListAllForHostV12,
@@ -95,6 +98,7 @@ export {
   osScriptSchema,
   workspaceScriptsSchema,
   worktreeBusyErrorDetailsSchema,
+  worktreeHoldersChangedErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
   worktreeBusyHolderSchema,
@@ -115,6 +119,9 @@ export {
   worktreeCreateResponseSchema,
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
+  worktreeDeleteRequestSchemaV12,
+  expectedHoldersRevisionFieldSchema,
+  HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
@@ -195,6 +202,7 @@ export {
   type OsScript,
   type WorkspaceScripts,
   type WorktreeBusyErrorDetails,
+  type WorktreeHoldersChangedErrorDetails,
   type WorktreeBusyHoldKind,
   type WorktreeBusyHolder,
   type WorktreeBusyHolderActivity,
@@ -214,6 +222,7 @@ export {
   type WorktreeCreateResponse,
   type WorktreeDeleteRequest,
   type WorktreeDeleteRequestV11,
+  type WorktreeDeleteRequestV12,
   type WorktreeDeleteResponse,
   type WorktreeListHoldersRequest,
   type WorktreeListHoldersResponse,

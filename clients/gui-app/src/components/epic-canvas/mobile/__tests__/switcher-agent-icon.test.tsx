@@ -255,12 +255,9 @@ describe("<SwitcherAgentIcon /> matches the desktop mapping", () => {
 
 describe("<SwitcherAgentIcon /> owner-host scoping", () => {
   // A chat row must name its OWN owner host, off the projection. The list's
-  // `useEpicArtifactRecords()` row carries the app-wide ACTIVE host instead
-  // (`recordForChat` stamps `fallbackHostId`; only TUI records carry a real
-  // owner), so a retained epic tab bound to host A while the user switches the
-  // active host to B would hand this icon B - which reads
-  // `byOriginHostId[B]`, i.e. nothing, and drops the whole host-derived ladder
-  // while epic awareness can still look live.
+  // `useEpicArtifactRecords()` row resolves legacy null ownership to a session
+  // fallback, so the icon deliberately reads the projection rather than the
+  // openable record.
   it("reads status under the chat's own host, not the active one", () => {
     state.ownerHostId = "host-A";
     state.gui = "claude";

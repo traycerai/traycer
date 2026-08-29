@@ -50,18 +50,26 @@ function snapshotDiffTileIdTarget(payload: SnapshotDiffTilePayload): string {
  * file_change blocks that contributed to the row; the renderer re-reads
  * before->after from the chat session. `hostId` binds the tile to the chat's
  * host for life.
+ *
+ * `beforeHash`/`afterHash` are those blocks' endpoints as of the click, kept so
+ * a tile outliving its row's hydration still resolves. They do not enter the
+ * tile id.
  */
 export function makeSnapshotSegmentDiffTile(args: {
   readonly hostId: string;
   readonly chatId: string;
   readonly sourceBlockIds: SnapshotSourceBlockIds;
   readonly filePath: string;
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
 }): SnapshotDiffTileRef {
   const diff: SnapshotDiffTilePayload = {
     kind: "snapshot-segment",
     chatId: args.chatId,
     sourceBlockIds: args.sourceBlockIds,
     filePath: args.filePath,
+    beforeHash: args.beforeHash,
+    afterHash: args.afterHash,
   };
   return {
     id: snapshotDiffTileId(args.hostId, diff),

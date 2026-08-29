@@ -326,7 +326,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
       {
         tab: draftTabModule.build(DRAFT_SOURCE),
         surface: draftTabModule.descriptor.surface,
-        expectedNewWindow: "none",
+        expectedNewWindow: "move",
       },
       {
         tab: historyTabModule.build(HISTORY_SOURCE),

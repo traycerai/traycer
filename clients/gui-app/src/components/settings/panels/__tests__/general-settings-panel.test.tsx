@@ -129,20 +129,12 @@ const windowsBridgeMock = vi.hoisted(
   (): { current: TestWindowsBridge | null } => ({ current: null }),
 );
 
-interface TestRunnerHost {
-  hostManagement: { uninstallTraycer: Mock } | null;
-}
-
 interface TestFeatureSettingsBridge {
   readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
   readonly setAgentRolesEnabled: Mock<
     (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
   >;
 }
-
-const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
-  current: { hostManagement: null },
-}));
 
 const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   queryResult: {
@@ -239,10 +231,6 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeMock.current,
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => runnerHostMock.current,
-}));
-
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@tanstack/react-router")>();
@@ -301,7 +289,6 @@ describe("GeneralSettingsPanel", () => {
     ];
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
-    runnerHostMock.current = { hostManagement: null };
     clearAllPersistedStoresMock.mockClear();
     clearAllPersistedStoresMock.mockResolvedValue(undefined);
     useAuthStore.setState({
@@ -323,6 +310,10 @@ describe("GeneralSettingsPanel", () => {
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
+      browserLinkDefaultMode: "in-app",
+      terminalBrowserLinkOpenMode: "in-app",
+      markdownBrowserLinkOpenMode: "in-app",
+      browserDevOrigins: [],
     });
   });
 
@@ -468,6 +459,29 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(toggle);
 
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("renders the web link default row unconditionally", () => {
+    renderPanel();
+
+    expect(screen.getByText("Web link default")).toBeTruthy();
+  });
+
+  it("renders per-kind browser link settings and removable dev origins", () => {
+    useSettingsStore.setState({
+      browserLinkDefaultMode: "per-kind",
+      browserDevOrigins: ["http://localhost:5173"],
+    });
+
+    renderPanel();
+
+    expect(screen.getByText("Terminal links")).toBeTruthy();
+    expect(screen.getByText("Markdown links")).toBeTruthy();
+    expect(screen.getByText("http://localhost:5173")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(useSettingsStore.getState().browserDevOrigins).toEqual([]);
   });
 
   it("labels the steering chord with the platform modifier", () => {

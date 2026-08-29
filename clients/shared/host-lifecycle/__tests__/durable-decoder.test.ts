@@ -158,7 +158,7 @@ describe("decodeTransitionJournal", () => {
     probeNonce: "nonce-1",
     from: "raw-fallback",
     to: "smappservice",
-    phase: "started",
+    phase: "fallback-journaled",
     startedAt: "2026-01-01T00:00:00.000Z",
     expectedIdentities: ["ai.traycer.host.agent"],
   };

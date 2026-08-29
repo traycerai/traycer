@@ -36,6 +36,17 @@ function toolInputFields(toolName: string, input: unknown) {
 }
 
 describe("chat activity grouping", () => {
+  it("summarizes the Traycer browser REPL as browser activity", () => {
+    const timeline = buildCompleteTimeline([
+      toolSegment("browser-1", "traycer-browser/repl", {
+        title: "Inspect checkout",
+        code: "await page.snapshot()",
+      }),
+    ]);
+
+    expect(soleGroup(timeline, 0).summary).toBe("Browsed 1 page");
+  });
+
   it("groups operational runs between narrative text blocks", () => {
     const timeline = buildCompleteTimeline([
       textSegment("text-1", "First"),

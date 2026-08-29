@@ -45,9 +45,7 @@ const PROVIDER = join(
 const TEARDOWN_ASSIGNMENTS = [
   "activeTileDrag = null",
   "activeHeaderStripGeometry = null",
-  "lastHeaderDrag = null",
   "promotedPreviewOnDrag = null",
-  "replayCanvasPreview = null",
 ] as const;
 
 function providerSource(): string {
@@ -85,11 +83,8 @@ describe("gesture teardown is centralised", () => {
     for (const assignment of TEARDOWN_ASSIGNMENTS) {
       expect(body).toContain(assignment);
     }
-    // The dwell latches and the store all reset here too - a gesture that ends
-    // without these leaves a latch armed for the next one.
-    expect(body).toContain("paneBodyDwell().reset()");
-    expect(body).toContain("edgeDwell.reset()");
-    expect(body).toContain("clearMergeDwellTimer()");
+    // The store reset too - a gesture that ends without it leaves the dnd
+    // store publishing a dead drag into the next gesture.
     expect(body).toContain("dragEnded()");
   });
 
@@ -99,23 +94,8 @@ describe("gesture teardown is centralised", () => {
     // indent levels - and two early returns performed a shortened subset.
     const source = providerSource();
     const body = endGestureBody(source);
-    // `replayCanvasPreview` has one legitimate second site: the provider's
-    // UNMOUNT effect, which is not a gesture end. Excluding the unmount effect
-    // by slice keeps the guard exact rather than relaxing it to "at most two".
-    const unmountEffectStart = source.indexOf(
-      "  // The dwell timer re-runs the preview with the last event",
-    );
-    expect(unmountEffectStart).toBeGreaterThan(-1);
-    const unmountEffectEnd = source.indexOf("}, []);", unmountEffectStart);
-    expect(
-      unmountEffectEnd,
-      "unmount effect has no closing `}, []);`",
-    ).toBeGreaterThan(unmountEffectStart);
-    const withoutUnmount =
-      source.slice(0, unmountEffectStart) + source.slice(unmountEffectEnd);
-
     for (const assignment of TEARDOWN_ASSIGNMENTS) {
-      const total = withoutUnmount.split(assignment).length - 1;
+      const total = source.split(assignment).length - 1;
       const inside = body.split(assignment).length - 1;
       expect(
         total,

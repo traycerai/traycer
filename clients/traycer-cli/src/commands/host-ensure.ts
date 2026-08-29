@@ -1,3 +1,5 @@
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
 import { ensureHost, type HostEnsureResult } from "../host/ensure";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { formatServiceLifecycleWarning } from "../service";
@@ -27,6 +29,8 @@ export interface HostEnsureArgs {
   // Skip the busy check and restart a running host unconditionally
   // (desktop "Force restart" path). Surfaced as `--force`.
   readonly force: boolean;
+  /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
+  readonly attemptAdoption: string | null;
 }
 
 export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
@@ -53,7 +57,13 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       state: "not-checked",
       reason: "nothing-to-start",
     };
+    const adoption = await resolveAttemptAdoptionFromNonce(
+      hostHomeDir(ctx.runtime.environment),
+      args.attemptAdoption,
+      Date.now(),
+    );
     const result = await ensureHost({
+      adoption,
       runtime: ctx.runtime,
       versionRequest: args.versionRequest,
       fromPath: args.fromPath,

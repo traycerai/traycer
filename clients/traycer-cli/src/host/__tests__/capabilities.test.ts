@@ -6,6 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   HOST_CAPABILITIES,
   HOST_CAPABILITIES_VERSION,
+  HOST_CAPABILITY_MAINTENANCE_LEASE_V1,
+  HOST_CAPABILITY_MAINTENANCE_LEASE_V2,
+  HOST_CAPABILITY_HOST_START_ADOPTION_V2,
   HOST_CAPABILITY_SERVICE_LABEL,
   runHostCapabilities,
 } from "../capabilities";
@@ -28,10 +31,20 @@ const CLI_ENTRY = join(
 describe("host capability tokens", () => {
   it("pins the exact token string emitters embed", () => {
     expect(HOST_CAPABILITY_SERVICE_LABEL).toBe("service-label");
+    expect(HOST_CAPABILITY_HOST_START_ADOPTION_V2).toBe(
+      "host-start-adoption-v2",
+    );
+    expect(HOST_CAPABILITY_MAINTENANCE_LEASE_V1).toBe("maintenance-lease-v1");
+    expect(HOST_CAPABILITY_MAINTENANCE_LEASE_V2).toBe("maintenance-lease-v2");
   });
 
   it("pins the full advertised set, so adding or dropping a token is a deliberate edit", () => {
-    expect(HOST_CAPABILITIES).toEqual(["service-label"]);
+    expect(HOST_CAPABILITIES).toEqual([
+      "service-label",
+      "host-start-adoption-v2",
+      "maintenance-lease-v1",
+      "maintenance-lease-v2",
+    ]);
   });
 });
 
@@ -39,6 +52,18 @@ describe("runHostCapabilities", () => {
   it("answers --has with the exit code and no output at all", () => {
     expect(
       runHostCapabilities({ kind: "has", capability: "service-label" }),
+    ).toEqual({ stdout: "", exitCode: 0 });
+    expect(
+      runHostCapabilities({ kind: "has", capability: "maintenance-lease-v1" }),
+    ).toEqual({ stdout: "", exitCode: 0 });
+    expect(
+      runHostCapabilities({ kind: "has", capability: "maintenance-lease-v2" }),
+    ).toEqual({ stdout: "", exitCode: 0 });
+    expect(
+      runHostCapabilities({
+        kind: "has",
+        capability: "host-start-adoption-v2",
+      }),
     ).toEqual({ stdout: "", exitCode: 0 });
   });
 
@@ -53,13 +78,19 @@ describe("runHostCapabilities", () => {
     expect(response.exitCode).toBe(0);
     expect(JSON.parse(response.stdout)).toEqual({
       v: HOST_CAPABILITIES_VERSION,
-      capabilities: ["service-label"],
+      capabilities: [
+        "service-label",
+        "host-start-adoption-v2",
+        "maintenance-lease-v1",
+        "maintenance-lease-v2",
+      ],
     });
   });
 
   it("emits one token per line without --json", () => {
     expect(runHostCapabilities({ kind: "list", json: false })).toEqual({
-      stdout: "service-label\n",
+      stdout:
+        "service-label\nhost-start-adoption-v2\nmaintenance-lease-v1\nmaintenance-lease-v2\n",
       exitCode: 0,
     });
   });
@@ -80,6 +111,28 @@ describe("`traycer host capabilities` as a subprocess", () => {
       "capabilities",
       "--has",
       "service-label",
+    ]);
+    expect(result.stdout).toBe("");
+  });
+
+  it("exits 0 for the target-bound maintenance lease v2 capability", async () => {
+    const result = await execFileAsync("bun", [
+      CLI_ENTRY,
+      "host",
+      "capabilities",
+      "--has",
+      "maintenance-lease-v2",
+    ]);
+    expect(result.stdout).toBe("");
+  });
+
+  it("exits 0 for the spawn-scoped host-start adoption capability", async () => {
+    const result = await execFileAsync("bun", [
+      CLI_ENTRY,
+      "host",
+      "capabilities",
+      "--has",
+      HOST_CAPABILITY_HOST_START_ADOPTION_V2,
     ]);
     expect(result.stdout).toBe("");
   });
@@ -105,7 +158,12 @@ describe("`traycer host capabilities` as a subprocess", () => {
     ]);
     expect(JSON.parse(result.stdout)).toEqual({
       v: 1,
-      capabilities: ["service-label"],
+      capabilities: [
+        "service-label",
+        "host-start-adoption-v2",
+        "maintenance-lease-v1",
+        "maintenance-lease-v2",
+      ],
     });
   });
 

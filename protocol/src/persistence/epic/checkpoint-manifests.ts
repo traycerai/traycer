@@ -83,6 +83,61 @@ export function isNoOpCheckpointEntry(
 }
 
 /**
+ * Which checkpoints have a file they touch touched AGAIN by a later checkpoint.
+ *
+ * Drives the restore dialog's "files modified in later turns will also be
+ * rewound" warning, which is the note this module's `isNoOpCheckpointEntry`
+ * doc lists among the consumers that must apply one rule uniformly.
+ *
+ * ## Why it is here and not beside its consumer
+ *
+ * It has two callers on two sides of the wire and they must not disagree. The
+ * renderer derived it from the events it holds, which on the windowed line is
+ * whatever subset happens to be hydrated - a span without the LATER
+ * checkpoints concludes `false` and the warning silently disappears from a
+ * destructive dialog. So the projection now computes it over whole history and
+ * carries the answer per row (`TranscriptRowContext.hasLaterOverlappingChanges`),
+ * and the renderer keeps its own derivation only for the legacy line where
+ * `events` really is the whole log. Two derivations of one rule is exactly the
+ * drift this file already exists to prevent; one function, two callers.
+ *
+ * @param manifests Every checkpoint manifest in the range being judged, in
+ * capture order. Order is the whole input - "later" means "later in this
+ * array" - so a caller passing a partial or unsorted set gets a partial or
+ * wrong answer, which is the bug above.
+ */
+export function overlappingCheckpointIds(
+  manifests: ReadonlyArray<TurnCheckpointManifest>,
+): ReadonlySet<string> {
+  // Only real changes drive the note: a no-op entry isn't part of this turn's
+  // change set and isn't restored, so an overlap with one would make the
+  // cumulative warning misleading.
+  //
+  // Record, per file path, the index of the last checkpoint that touches it. A
+  // checkpoint then overlaps iff any path it touches is touched again by a
+  // later one - one forward pass plus one scan, rather than the quadratic
+  // pairwise comparison this started as.
+  const lastTouchIndexByPath = new Map<string, number>();
+  manifests.forEach((manifest, index) => {
+    manifest.entries
+      .filter((entry) => !isNoOpCheckpointEntry(entry))
+      .forEach((entry) => {
+        lastTouchIndexByPath.set(entry.filePath, index);
+      });
+  });
+  return new Set(
+    manifests.flatMap((manifest, index) => {
+      const touchedLater = manifest.entries.some(
+        (entry) =>
+          !isNoOpCheckpointEntry(entry) &&
+          (lastTouchIndexByPath.get(entry.filePath) ?? index) > index,
+      );
+      return touchedLater ? [manifest.checkpointId] : [];
+    }),
+  );
+}
+
+/**
  * Current `TurnCheckpointManifest` shape version. Bumped whenever the
  * manifest payload changes in a non-backwards-compatible way. Writers
  * always emit this value; readers reject manifests whose `schemaVersion`

@@ -424,8 +424,15 @@ describe("content recovery classification", () => {
   });
 
   it("classifies every node kind the text projection names", () => {
+    // Follows the projection, which now lives in protocol so the host can run
+    // the same one. `tiptap-json-content.ts` re-exports it and still names a
+    // few node kinds of its own, so reading THAT file would keep passing while
+    // silently no longer guarding the enumeration this test is about.
     const source = readFileSync(
-      resolve(HERE, "../tiptap-json-content.ts"),
+      resolve(
+        HERE,
+        "../../../../../../protocol/src/common/composer-plain-text.ts",
+      ),
       "utf8",
     );
     const named = [...source.matchAll(/node\.type === "([^"]+)"/g)].map(

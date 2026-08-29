@@ -27,6 +27,7 @@ import {
   createNativeClipboardReadGate,
 } from "./file-drops-bridge";
 import { buildZoomBridge } from "./zoom-bridge";
+import { buildBrowserViewBridge } from "./browser-view-bridge";
 import {
   buildSelectionAuthorityBridge,
   buildSelectionFleetRefresh,
@@ -82,6 +83,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   platform: buildPlatformBridge(),
   power: buildPowerBridge(),
   ...buildZoomBridge(),
+  ...buildBrowserViewBridge(),
   selectionAuthority: buildSelectionAuthorityBridge(),
   refreshSelectionFleet: buildSelectionFleetRefresh(),
   hostManagement: buildHostManagementBridge(),

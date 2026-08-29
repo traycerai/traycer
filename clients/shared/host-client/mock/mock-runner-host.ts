@@ -152,6 +152,7 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
  * fire, matching the production invariant.
  */
 export class MockRunnerHost implements IRunnerHost {
+  readonly browserView = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   // Fixed test-only value: no test constructs a real remote transport against

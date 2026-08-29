@@ -36,6 +36,21 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("browser-tab LLM token splits into a mention plus the [tabId=...] suffix as text", () => {
+    // `@browser-tab:<title> [tabId=...]` is `formatMentionForLLMQuery`'s
+    // `ContextType.BrowserTab` output. `MENTION_TOKEN_REGEX` stops at the
+    // first whitespace, so only a single-word title is captured as the
+    // mention path here - the bracketed suffix falls into the following text
+    // segment, exactly like `@agent:`/`@terminal:` tokens already do.
+    expect(
+      splitPromptIntoComposerSegments("check @browser-tab:GitHub [tabId=t1]"),
+    ).toEqual([
+      { type: "text", text: "check " },
+      { type: "mention", path: "browser-tab:GitHub" },
+      { type: "text", text: " [tabId=t1]" },
+    ]);
+  });
+
   it("multiple mentions", () => {
     expect(splitPromptIntoComposerSegments("@a.ts @b.ts end")).toEqual([
       { type: "mention", path: "a.ts" },

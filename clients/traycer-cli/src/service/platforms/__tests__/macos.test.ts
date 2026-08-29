@@ -38,6 +38,7 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { ServiceMutationAuthorityError } from "../../mutation-authority";
 
 const execFileAsync = promisify(execFile);
 
@@ -172,6 +173,67 @@ describe("macOS service lifecycle", () => {
     expect(plist).not.toContain("HardResourceLimits");
   });
 
+  it("binds adoption to the loaded SMAppService agent label", async () => {
+    const agentLabelId = smAppServiceAgentLabelId(label);
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] !== "print") {
+        return buildSuccessResult();
+      }
+      const target = args[1] ?? "";
+      if (target.endsWith(`/${agentLabelId}`)) {
+        return {
+          stdout: [
+            "\tpath = (submitted by smd.321)",
+            "\ttype = Submitted",
+            "\tmanaged_by = com.apple.xpc.ServiceManagement",
+          ].join("\n"),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "not loaded", exitCode: 1 };
+    };
+
+    const controller = createMacosController(runner);
+    await expect(controller.hostStartAdoptionLabel(label)).resolves.toBe(
+      agentLabelId,
+    );
+    expect(
+      calls.some((call) => call.args[1]?.endsWith(`/${agentLabelId}`)),
+    ).toBe(true);
+  });
+
+  // Change 9 (PR #1480 review round 4): the desktop-agent probe's `.catch`
+  // used to fold EVERY launchctl failure into `not-loaded`, including a
+  // revoked mutation capability - which would route adoption to the CLI's
+  // own logical label and publish a grant the Desktop supervisor rejects.
+  // The probe is advisory only for genuine launchctl faults (a hung/
+  // unspawnable process, "not found"); an authority loss must propagate so
+  // the caller parks/aborts instead of silently mis-adopting.
+  it("propagates a service-mutation-authority loss from the desktop-agent probe instead of reading it as not-loaded", async () => {
+    const agentLabelId = smAppServiceAgentLabelId(label);
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (args[0] !== "print") {
+        return buildSuccessResult();
+      }
+      const target = args[1] ?? "";
+      if (target.endsWith(`/${agentLabelId}`)) {
+        throw authorityError;
+      }
+      return { stdout: "", stderr: "not loaded", exitCode: 1 };
+    };
+
+    const controller = createMacosController(runner);
+    await expect(controller.hostStartAdoptionLabel(label)).rejects.toBe(
+      authorityError,
+    );
+  });
+
   // Without this key, background-task management names the login item
   // after ProgramArguments[0] - literally "sh" from an "Unknown
   // Developer" - on every CLI-registered install (dev machines and the
@@ -214,7 +276,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
       await writeFile(
         newCli,
         `#!/bin/sh
-if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && [ "$5" = "service-label" ]; then exit 0; fi
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "adoption-nonce" ]; then printf '%s\\n' '11111111-1111-4111-8111-111111111111'; exit 0; fi
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && { [ "$5" = "service-label" ] || [ "$5" = "host-start-adoption-v2" ]; }; then exit 0; fi
 printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 `,
         "utf8",
@@ -232,7 +295,32 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
       expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
       expect(await readFile(newArgs, "utf8")).toBe(
-        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n",
+        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n--adoption-nonce\n11111111-1111-4111-8111-111111111111\n",
+      );
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the labelled compatibility arm when a current CLI has no adoption nonce", async () => {
+    const work = mkdtempSync(join(tmpdir(), "traycer-host-start-no-nonce-"));
+    const cli = join(work, "cli.sh");
+    const args = join(work, "args.txt");
+    const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
+    try {
+      await writeFile(
+        cli,
+        `#!/bin/sh
+if [ "$2" = "capabilities" ]; then exit 0; fi
+if [ "$2" = "adoption-nonce" ]; then exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(args)}
+`,
+        "utf8",
+      );
+      await chmod(cli, 0o700);
+      await execFileAsync("/bin/sh", ["-c", script, cli]);
+      await expect(readFile(args, "utf8")).resolves.toBe(
+        "host\nstart\n--service-label\nai.traycer.host.compat\n",
       );
     } finally {
       await rm(work, { recursive: true, force: true });
@@ -272,7 +360,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
       await writeFile(
         newCli,
         `#!/bin/sh
-if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && [ "$5" = "service-label" ]; then exit 0; fi
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "adoption-nonce" ]; then printf '%s\\n' '11111111-1111-4111-8111-111111111111'; exit 0; fi
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && { [ "$5" = "service-label" ] || [ "$5" = "host-start-adoption-v2" ]; }; then exit 0; fi
 printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 `,
         "utf8",
@@ -285,7 +374,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
       expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
       expect(await readFile(newArgs, "utf8")).toBe(
-        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n",
+        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n--adoption-nonce\n11111111-1111-4111-8111-111111111111\n",
       );
     } finally {
       await rm(work, { recursive: true, force: true });

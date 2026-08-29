@@ -62,6 +62,11 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => "owner",
 }));
 
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
+  BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+
 // Import AFTER the mocks so the bridge picks them up.
 import { HostedChatSurfaceContextBridge } from "@/components/epic-canvas/surface-host/hosted-chat-surface-context-bridge";
 

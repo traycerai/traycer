@@ -169,7 +169,7 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
     // A registered blocker makes `tryNavigation` await before it notifies, so
     // an unguarded replace would deliver REPLACE after the window closed and
     // the restored entry would reach the controller as an external commit -
-    // losing the `preserveStartupFocus` handling T3 gives startup work.
+    // losing the `preserveStartupFocus` handling used for startup work.
     testState.blockerRegistered = true;
     seedRestoredRoute("/restored?tab=1");
     const observed = vi.spyOn(tabNavigationController, "observeLocation");

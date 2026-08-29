@@ -9,7 +9,13 @@ import {
   readMetadataString,
   readMetadataValue,
 } from "@/lib/chat/event-metadata";
-import { SETUP_EVENT_TYPES } from "@/lib/chat/setup-tone";
+// The lifecycle windowing is shared with the host, which reserves an ordinal
+// per window - see `row-projection.ts`.
+import {
+  partitionSetupCardWindows,
+  type SetupCardWindow,
+} from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
+import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import type {
   SetupCardViewModel,
@@ -38,6 +44,12 @@ export interface SetupCardBinding {
  */
 export interface SetupCardRow {
   readonly createdAt: number;
+  /**
+   * The window's position in the host's WHOLE-LOG partition - the value the
+   * card's row id is built from, so it must be the host's and never this
+   * client's local index. See {@link alignToWholeLog}.
+   */
+  readonly windowIndex: number;
   readonly model: SetupCardViewModel;
   /**
    * True only for the lifecycle window still OPEN at the end of the walk - the
@@ -82,145 +94,424 @@ export interface SetupCardRow {
 }
 
 /**
- * Project the persisted `setup.*` chat events into the setup-card view-model
- * (T1's contract). Pure - no store, no React, no rendering. Returns one row per
- * setup *lifecycle*, in chronological (createdAt-ascending) order, for T3 to
- * merge into the createdAt-sorted transcript.
+ * Project the persisted `setup.*` chat events into the setup-card view-model.
+ * Pure - no store, no React, no rendering. One row per setup *lifecycle*, in
+ * chronological order, for the transcript merge.
  *
- * A chat log can hold MORE than one lifecycle. A retry updates a workspace in
- * place (same lifecycle, same row), but a same-host re-bind appends a fresh
- * `setup.running` to the SAME log after the prior worktree went missing - the
- * old card must stay `ready` and a NEW card must appear at the re-bind moment,
- * not flip the old one back to `setting-up`. (A cross-host re-bind clones the
- * chat artifact, so that case never reaches one log.)
- *
- * So the walk partitions `events` (in append/chronological order) into lifecycle
- * windows, splitting on:
- *  - `worktree.missing` - the primary boundary: the worktree was reset, so the
- *    next setup belongs to a new lifecycle (covers re-bind to a different path).
- *  - a `setup.running` for a workspace the current window already saw `succeeded`
- *    - a defensive ready->running boundary for any re-bind that didn't emit
- *    `worktree.missing`. A `failed`/`cancelled`->`running` retry has no such
- *    boundary, so it stays in-place within the same window and supersedes.
- *
- * Each non-empty window becomes one consolidated row with one `SetupCardWorkspace`
- * per `workspacePath`, anchored at that window's earliest setup-event timestamp.
- * The final window is flagged `isActive` only when no boundary closed it (it is
- * the live lifecycle); every earlier window, and a final one closed by a trailing
- * boundary, is historical.
+ * **The lifecycle WINDOWING is not here.** It moved to
+ * `@traycer/protocol`'s `partitionSetupCardWindows`, because a setup card is a
+ * transcript ROW: the host reserves an ordinal for it and must fold the same
+ * events into the same number of windows. What stays here is the view model -
+ * per-workspace state rollup, retry routing, terminal liveness - which the host
+ * has no use for. That split is what let the windowing become shared code
+ * without dragging component types into the protocol package.
  */
 export function buildSetupCardRows(
   events: ReadonlyArray<ChatEvent>,
   binding: SetupCardBinding,
+  /**
+   * The host's whole-log partition, when this client is on the windowed line.
+   * Empty on the legacy line, where `events` IS the whole log and the local
+   * partition is already authoritative. See {@link alignToWholeLog}.
+   */
+  wholeLogWindows: ReadonlyArray<SetupCardWindowIdentity>,
 ): ReadonlyArray<SetupCardRow> {
-  const windows: ChatEvent[][] = [];
-  let current: ChatEvent[] | null = null;
+  const local = partitionSetupCardWindows(events);
+  return alignToWholeLog(
+    local,
+    wholeLogWindows,
+    observedBoundaries(events),
+  ).map((aligned) => ({
+    createdAt: aligned.identity.createdAt,
+    windowIndex: aligned.identity.windowIndex,
+    isActive: aligned.identity.isActive,
+    hasCreatingEvent: aligned.identity.hasCreatingEvent,
+    triggeringMessageId: aligned.triggeringMessageId,
+    model: deriveViewModel(
+      aligned.events,
+      binding,
+      aligned.identity.createdAt,
+      aligned.identity.isActive,
+    ),
+  }));
+}
 
-  for (const event of events) {
-    // `worktree.missing` is the lifecycle boundary: it isn't a setup event
-    // itself, but it marks the binding reset that separates two lifecycles.
-    if (event.type === "worktree.missing") {
-      current = null;
-      continue;
-    }
-    if (!SETUP_EVENT_TYPES.has(event.type)) continue;
+/**
+ * The `worktree.missing` stamps this slice holds, ascending.
+ *
+ * Sorted rather than taken in array order: `events` is chronological by
+ * construction everywhere this is called, but {@link observedBoundaryClosing}
+ * takes the FIRST match as the earliest, so it depends on the order rather than
+ * merely benefiting from it.
+ */
+function observedBoundaries(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<number> {
+  return events
+    .filter((event) => event.type === "worktree.missing")
+    .map((event) => event.timestamp)
+    .sort((left, right) => left - right);
+}
 
-    // A path-less setup event (e.g. the generic `SETUP_AWAIT_FAILED` catch) can
-    // neither name a workspace nor drive its retry, so it never forms or affects
-    // a window. The per-workspace typed failure carries its own `workspacePath`.
-    const workspacePath = readMetadataString(event, "workspacePath");
-    if (workspacePath === null || workspacePath.length === 0) continue;
+/** One card to draw: whose lifecycle it is, and the events the slice holds. */
+interface AlignedSetupCardWindow {
+  readonly identity: SetupCardWindowIdentity;
+  readonly events: ReadonlyArray<ChatEvent>;
+  readonly triggeringMessageId: string | null;
+}
 
-    // Lifecycle boundary: a NEW worktree creation must open its own window so its
-    // card renders near the message that triggered it, never folding into an
-    // earlier card. Close the current window when:
-    //  - `setup.running` arrives for a path the window already marked `succeeded`
-    //    (a defensive re-bind that skipped `worktree.missing`).
-    //  - `setup.creating` arrives once the window has moved past its initial
-    //    creating phase, i.e. it already holds a non-creating setup event
-    //    (`windowHasProgressedPastCreating`). That marks a SEPARATE create send -
-    //    including one targeting a different workspace than the window's. The
-    //    consecutive `setup.creating` events of ONE multi-worktree send are all
-    //    emitted BEFORE any `setup.running` (see `materializeStagedWorktreeIntent`),
-    //    so they still consolidate into a single window.
-    //  - `setup.creating` repeats for a path already `creating` in the window
-    //    (the first create attempt was abandoned before it ran).
-    if (
-      current !== null &&
-      ((event.type === "setup.running" &&
-        windowHasSucceeded(current, workspacePath)) ||
-        (event.type === "setup.creating" &&
-          (windowHasProgressedPastCreating(current) ||
-            windowHasCreating(current, workspacePath))))
+/**
+ * Does this unmatched local window belong to the host window just behind it?
+ *
+ * The question the equality match cannot answer, and the two cases look
+ * identical in every other input: a lifecycle whose OPENING events are still
+ * cold is stamped at its later events (so it matches no host `createdAt`), and
+ * so is a genuinely NEW lifecycle the host has not published yet.
+ *
+ * ## `closedAt` answers it outright
+ *
+ * A window closed at T contains no event stamped at or after T - that is what
+ * closing means - so a local window anchored there opens a new lifecycle, while
+ * one anchored before T is that window's cold-opening tail.
+ *
+ * ## `closedAt: null` answers NOTHING, and reading it as "joins" merged two
+ *
+ * An open window has no bound, and the tempting next step - "no bound, so a
+ * later window is its tail" - is false. `null` is a fact about the SNAPSHOT: it
+ * says the host had not closed that lifecycle at the moment it published the
+ * list. Every local window this question is ever asked about is built partly or
+ * wholly from events that arrived AFTER that, and the boundary closing it can
+ * be one of them (`worktree.missing` is live-delivered and forms no window of
+ * its own). So the published `null` is the STALER of the two accounts, and
+ * letting it answer overrode the client's own partition with it: a re-bind
+ * observed live was reattached to the historical identity, reusing its row id
+ * and lifecycle flags, and the two lifecycles drew one card between them.
+ *
+ * ## The slice can SUPPLY the missing bound, and that is better than inferring
+ *
+ * `closedAt` is unpublishable from a slice only because the closing event forms
+ * no window - not because the slice cannot HOLD it. When it does hold one, that
+ * `worktree.missing` is the same fact the host would have published, learned
+ * earlier: the boundary is stamped by the host on its own persisted record, so
+ * both sides of the comparison stay host-stamped.
+ *
+ * So an unbounded preceding identity takes the earliest boundary the slice
+ * holds at or after its `createdAt` as its effective `closedAt`, and the
+ * ordinary comparison below decides from there - tie rule included. This is
+ * what answers the case the empty-bucket inference cannot: a prior lifecycle
+ * whose rows are entirely COLD leaves an empty bucket whether the live events
+ * after it opened a new lifecycle or not, and the observed boundary is the only
+ * thing that tells those apart.
+ *
+ * With no boundary in the slice there is nothing to supply, and it falls
+ * through to the same inference `undefined` uses - not because `null` and
+ * `undefined` mean the same thing, but because neither one BOUNDS anything and
+ * the empty-bucket reading is what is left.
+ *
+ * The TIE is `>=`, i.e. an event stamped exactly at `closedAt` is treated as
+ * past the boundary. `closedAt` is the closing event's own timestamp and a
+ * window's events all strictly precede it, so equality means the local event is
+ * the boundary's contemporary rather than the closed window's - and on this
+ * seam the costly direction is the other one, which re-attaches a new lifecycle
+ * to a historical row.
+ *
+ * The comparison is host-stamped on BOTH sides, which is load-bearing because
+ * this seam's previous defect was exactly a local stamp passing for a host one.
+ * Verified rather than assumed: live events reach the window only through
+ * `onEventAppended`, which seats `frame.event` - the host's persisted record,
+ * `eventAppended` carrying a `chatEvent` on the wire - and the one other
+ * `appendLiveRecords` caller passes `events: []`. No client-minted timestamp
+ * can reach here.
+ *
+ * ## Without it, the legacy inference stands
+ *
+ * A host predating `closedAt` omits it, and `precedingBucketEmpty` is what this
+ * file did before: an empty preceding bucket reads as "the tail of that
+ * window". That inference is genuinely ambiguous - a new lifecycle arriving
+ * after a window whose events are ALL cold leaves the same empty bucket - and
+ * it is retained only as skew behaviour for old hosts, never as a claim that it
+ * is sound.
+ */
+function belongsToPrecedingWindow(input: {
+  readonly window: SetupCardWindow;
+  readonly preceding: SetupCardWindowIdentity;
+  readonly precedingBucketEmpty: boolean;
+  /**
+   * Every `worktree.missing` stamp the slice holds, ascending. These are the
+   * boundaries the local partition consumed - it splits on them and then keeps
+   * none of them, since a boundary belongs to no window - so they have to be
+   * carried alongside rather than read back off the windows.
+   */
+  readonly observedBoundaries: ReadonlyArray<number>;
+}): boolean {
+  const closedAt =
+    input.preceding.closedAt ??
+    // `?? undefined` rather than a `!== null` branch: a host that never sends
+    // the field and one that sends `null` are both "no bound published", and
+    // an observed boundary answers for either.
+    observedBoundaryClosing(
+      input.preceding.createdAt,
+      input.observedBoundaries,
+    );
+  // A KNOWN bound settles it outright, whether the host published it or the
+  // slice supplied it. Without one, the empty-bucket inference is what is left.
+  if (closedAt === undefined) return input.precedingBucketEmpty;
+  return input.window.createdAt < closedAt;
+}
+
+/**
+ * The earliest observed boundary that could have closed a lifecycle opened at
+ * `createdAt`, or `undefined` when the slice holds none.
+ *
+ * `>=` rather than `>`: a boundary stamped in the identity's own millisecond is
+ * ambiguous, and this seam's costly direction is the one that re-attaches a new
+ * lifecycle to a historical row - so the tie splits, exactly as the `closedAt`
+ * tie below does.
+ */
+function observedBoundaryClosing(
+  createdAt: number,
+  observedBoundaries: ReadonlyArray<number>,
+): number | undefined {
+  return observedBoundaries.find((boundary) => boundary >= createdAt);
+}
+
+/**
+ * Distribute one local window's events across the host windows it covers.
+ *
+ * Extracted from {@link alignToWholeLog} rather than inlined, because the two
+ * are different questions - which host window a local one anchors at, and where
+ * each of its events lands - and keeping them in one body put that function
+ * over the complexity ceiling. Returns the FURTHEST host window reached, which
+ * is where the caller's forward cursor resumes.
+ *
+ * Each event goes to the last host window that had started by the time it was
+ * stamped, never earlier than the anchor. A host window stamped in the SAME
+ * millisecond as the anchor cannot take anything, and that guard is
+ * load-bearing rather than defensive: without it the anchor's own earliest
+ * event - the one whose timestamp IS the anchor - would shift to the sibling,
+ * leaving the anchor with an empty bucket and drawing no card for it at all.
+ * Two lifecycles a millisecond apart have no timestamp boundary to be split on,
+ * so that pair stays merged exactly as it was before this alignment existed,
+ * which is a degradation and not a loss.
+ */
+function bucketWindowEvents(input: {
+  readonly window: SetupCardWindow;
+  readonly wholeLog: ReadonlyArray<SetupCardWindowIdentity>;
+  readonly anchor: number;
+  readonly held: ChatEvent[][];
+}): number {
+  const { window, wholeLog, anchor, held } = input;
+  const anchoredAt = wholeLog[anchor].createdAt;
+  let furthest = anchor;
+  for (const event of window.events) {
+    let target = anchor;
+    while (
+      target + 1 < wholeLog.length &&
+      wholeLog[target + 1].createdAt <= event.timestamp &&
+      wholeLog[target + 1].createdAt > anchoredAt
     ) {
-      current = null;
+      target += 1;
     }
+    held[target].push(event);
+    if (target > furthest) furthest = target;
+  }
+  return furthest;
+}
 
-    if (current === null) {
-      current = [];
-      windows.push(current);
-    }
-    current.push(event);
+/**
+ * Re-attach the locally-partitioned windows to the host's whole-log partition.
+ *
+ * On the windowed line `events` is a SLICE, so the local partition answers four
+ * questions wrongly and silently. Three are per-window flags: the first window
+ * it can see is numbered 0 whatever its real position, a historically closed
+ * window looks active because the `worktree.missing` boundary that closed it is
+ * outside the slice, and a genesis window can lose its `setup.creating` the
+ * same way. The renumber is the worst of those, because `windowIndex` is part
+ * of the card's ROW ID - the card then computes an id the skeleton never
+ * published, its ordinal is suppressed, and it draws unplaced at the tail.
+ *
+ * The fourth is the COUNT, and no per-window correction can reach it. That same
+ * absent `worktree.missing` does not merely mislabel a window, it MERGES two:
+ * the boundary is not a setup event, so a slice that dropped it partitions two
+ * lifecycles into one. One card is then drawn for two reserved ordinals, and
+ * the second reads to the row merge as a row renderer policy withheld
+ * (`transcript-list-rows.ts`) rather than one nobody built - so it silently
+ * renders nothing at all, with no placeholder either.
+ *
+ * Hence the host's list decides HOW MANY cards exist, and the slice supplies
+ * only their contents. A merged local window is re-split across the host's own
+ * anchors; the events are all present, only the boundary between them was
+ * missing.
+ *
+ * ## Which local window belongs to which host window
+ *
+ * Matched on `createdAt` walking both lists in order, which is sound because
+ * both are chronological and the local one is a SUBSEQUENCE of the host's.
+ * Walking rather than a map lookup is what makes two lifecycles stamped in the
+ * same millisecond map one-to-one instead of both resolving to the first.
+ *
+ * Being a subsequence does NOT make the timestamps agree, and assuming it did
+ * was a defect. A local window anchors at the earliest event the SLICE holds,
+ * which is the host's own `createdAt` only when the slice reaches back that
+ * far. A live setup event for a lifecycle whose opening is still cold gives a
+ * window stamped later than the host's, matching nothing - so the equality test
+ * needs a second answer for "no match", below.
+ *
+ * ## Two deliberate asymmetries
+ *
+ * A host window the slice holds NO events for draws no card. That is the
+ * ordinary cold card - its row is unhydrated, so the transcript wants the
+ * skeleton placeholder there, and a card built from no events would replace a
+ * "loading" row with a permanently blank one.
+ *
+ * A local window the host's list does not name draws one anyway, numbered past
+ * the end of that list. That is the genuinely new lifecycle whose events
+ * arrived as live deltas after the last snapshot: the host has not published it
+ * yet, and its next partition will append it at exactly that index. It is
+ * recognised by sitting after a host window the slice DID supply; one sitting
+ * after an EMPTY host window is that window's cold-opening tail instead, and is
+ * anchored to it rather than numbered past the end.
+ */
+function alignToWholeLog(
+  local: ReadonlyArray<SetupCardWindow>,
+  wholeLog: ReadonlyArray<SetupCardWindowIdentity>,
+  observed: ReadonlyArray<number>,
+): ReadonlyArray<AlignedSetupCardWindow> {
+  if (wholeLog.length === 0) {
+    // The legacy line: the host sent no list because `events` IS the whole log,
+    // so the local partition is authoritative for the count and the flags
+    // alike.
+    return local.map((window, index) => ({
+      identity: {
+        createdAt: window.createdAt,
+        windowIndex: index,
+        isActive: window.isActive,
+        hasCreatingEvent: window.hasCreatingEvent,
+      },
+      events: window.events,
+      triggeringMessageId: window.triggeringMessageId,
+    }));
   }
 
-  // `current` is non-null only when the final window is still open (no closing
-  // boundary followed its last setup event), and it always references that
-  // last-pushed window - so an identity check marks exactly the one live
-  // lifecycle active. A historical window stranded at `setting-up` (worktree
-  // vanished mid-setup, no terminal setup event) is therefore NOT active.
-  return windows.map((windowEvents) =>
-    deriveRow(windowEvents, binding, windowEvents === current),
+  const held: ChatEvent[][] = wholeLog.map(() => []);
+  const live: SetupCardWindow[] = [];
+  let cursor = 0;
+  for (const window of local) {
+    while (
+      cursor < wholeLog.length &&
+      wholeLog[cursor].createdAt < window.createdAt
+    ) {
+      cursor += 1;
+    }
+    const exactMatch =
+      cursor < wholeLog.length &&
+      wholeLog[cursor].createdAt === window.createdAt;
+    // A local window that matches no host `createdAt` is one of two very
+    // different things, and treating both as "new" is what puts a card at the
+    // tail of the transcript.
+    //
+    // The subsequence argument above holds only while the slice contains the
+    // lifecycle's EARLIEST event. It need not: `onEventAppended` seats a live
+    // setup event in `liveEvents`, and `hydratedRecords` publishes it straight
+    // away, so a lifecycle whose opening events are still cold is partitioned
+    // locally from its LATER events alone - and stamps the window at their
+    // timestamp, which is past the host's.
+    //
+    // The two cases look identical in this function's INPUTS, so the
+    // discriminator is what the walk has already done: whether the host window
+    // just behind this one still has no events at all. A genuinely new
+    // lifecycle sits after a host window the slice DID supply (that is what
+    // moved the cursor past it), while a cold-opening tail sits after the very
+    // window it belongs to - which is empty precisely because its events are
+    // the ones that did not arrive. The cursor only moves forward, so an empty
+    // bucket here can no longer be filled by anything else.
+    //
+    // Not `hasCreatingEvent`: a lifecycle can legitimately open on
+    // `setup.running`, so its absence does not mean the opening is missing.
+    const orphanAnchor =
+      !exactMatch &&
+      cursor > 0 &&
+      belongsToPrecedingWindow({
+        window,
+        preceding: wholeLog[cursor - 1],
+        precedingBucketEmpty: held[cursor - 1].length === 0,
+        observedBoundaries: observed,
+      })
+        ? cursor - 1
+        : null;
+    if (!exactMatch && orphanAnchor === null) {
+      live.push(window);
+      continue;
+    }
+    // This local window anchors here and may cover the host windows AFTER it
+    // too, when the boundaries separating them are outside the slice - see
+    // {@link bucketWindowEvents}.
+    const anchor = exactMatch ? cursor : (orphanAnchor ?? cursor);
+    cursor = bucketWindowEvents({ window, wholeLog, anchor, held }) + 1;
+  }
+
+  const fromHost = wholeLog.flatMap<AlignedSetupCardWindow>(
+    (identity, index) => {
+      const windowEvents = held[index];
+      if (windowEvents.length === 0) return [];
+      return [
+        {
+          identity,
+          events: windowEvents,
+          triggeringMessageId: triggeringMessageIdOf(windowEvents),
+        },
+      ];
+    },
   );
+  return [
+    ...fromHost,
+    ...live.map((window, offset) => ({
+      identity: {
+        createdAt: window.createdAt,
+        windowIndex: wholeLog.length + offset,
+        isActive: window.isActive,
+        hasCreatingEvent: window.hasCreatingEvent,
+      },
+      events: window.events,
+      triggeringMessageId: window.triggeringMessageId,
+    })),
+  ];
 }
 
 /**
- * True once the window holds a setup event PAST its initial creating phase - any
- * `setup.running`/`succeeded`/`failed`/`cancelled`. A fresh `setup.creating`
- * arriving after this point belongs to a SEPARATE create send and must open a new
- * window. The consecutive `setup.creating` events of ONE multi-worktree send all
- * arrive before any such event, so they still consolidate into one window.
+ * The id of the user message whose send carried this window's creation.
+ *
+ * Re-read here rather than carried over from the local window, because a local
+ * window re-split across two host anchors has one `setup.creating` per half and
+ * the merged window's answer is only ever the first half's. Same rule
+ * `describeWindow` states: every creating event in a window comes from the same
+ * send, so the first match is authoritative.
  */
-function windowHasProgressedPastCreating(
+function triggeringMessageIdOf(
   windowEvents: ReadonlyArray<ChatEvent>,
-): boolean {
-  return windowEvents.some((event) => event.type !== "setup.creating");
+): string | null {
+  const creating = windowEvents.find(
+    (event) => event.type === "setup.creating",
+  );
+  return creating === undefined
+    ? null
+    : readMetadataString(creating, "triggeringMessageId");
 }
 
 /**
- * True when this lifecycle window already holds a `setup.creating` for the
- * workspace - i.e. a create was already announced for it before this one.
+ * Build one lifecycle window's consolidated VIEW MODEL.
+ *
+ * `createdAt` and `isActive` arrive from `partitionSetupCardWindows` rather
+ * than being re-derived here - they are placement facts the host reads too, and
+ * a second derivation of the window anchor is exactly the drift the shared
+ * projection exists to prevent.
  */
-function windowHasCreating(
-  windowEvents: ReadonlyArray<ChatEvent>,
-  workspacePath: string,
-): boolean {
-  return windowEvents.some(
-    (event) =>
-      event.type === "setup.creating" &&
-      readMetadataString(event, "workspacePath") === workspacePath,
-  );
-}
-
-function windowHasSucceeded(
-  windowEvents: ReadonlyArray<ChatEvent>,
-  workspacePath: string,
-): boolean {
-  return windowEvents.some(
-    (event) =>
-      event.type === "setup.succeeded" &&
-      readMetadataString(event, "workspacePath") === workspacePath,
-  );
-}
-
-/**
- * Build one consolidated row from a single lifecycle window's setup events
- * (every event already filtered to a setup type carrying a non-empty path).
- */
-function deriveRow(
+function deriveViewModel(
   windowEvents: ReadonlyArray<ChatEvent>,
   binding: SetupCardBinding,
+  createdAt: number,
   isActive: boolean,
-): SetupCardRow {
+): SetupCardViewModel {
   // Group by `workspacePath`, preserving first-seen order so the consolidated
   // card lists workspaces in the order their lifecycle began.
   const groups = new Map<string, ChatEvent[]>();
@@ -238,37 +529,7 @@ function deriveRow(
     deriveWorkspace(workspacePath, groupEvents),
   );
 
-  // Anchor the row at the genesis of THIS lifecycle: the earliest setup-event
-  // timestamp in the window. This is the transcript sort key and the live
-  // elapsed counter's seed. Use the min timestamp (not array position) so
-  // out-of-order arrivals still anchor deterministically at the true start.
-  const createdAt = windowEvents.reduce(
-    (earliest, event) => Math.min(earliest, event.timestamp),
-    windowEvents[0].timestamp,
-  );
-
-  // The window's `setup.creating` event (if any) is emitted ONLY by the in-chat
-  // send path. Resolve it once and derive both signals from it:
-  //  - `hasCreatingEvent` (its PRESENCE) marks a live mid-conversation creation
-  //    (reliable `createdAt`) vs the chat's back-filled genesis worktree, and
-  //    drives the genesis-pin discriminator.
-  //  - `triggeringMessageId` (the ID it carries) drives the transcript anchor.
-  // These are intentionally distinct, not redundant: a creating event missing
-  // its id (a defensive shape the host never emits today) still marks a
-  // mid-chat creation (so it must NOT pin as genesis) yet has no anchor target
-  // (so it floats by `createdAt`). Pinning on presence and anchoring on the id
-  // keeps that case correct. Every creating event in a window is from the same
-  // send, so `.find` (first match) is authoritative. See the field docs above.
-  const creatingEvent = windowEvents.find(
-    (event) => event.type === "setup.creating",
-  );
-  const hasCreatingEvent = creatingEvent !== undefined;
-  const triggeringMessageId =
-    creatingEvent === undefined
-      ? null
-      : readMetadataString(creatingEvent, "triggeringMessageId");
-
-  const model: SetupCardViewModel = {
+  return {
     aggregate: {
       epicId: binding.epicId,
       ownerId: binding.ownerId,
@@ -282,7 +543,6 @@ function deriveRow(
     // re-deriving it from the row state.
     isActive,
   };
-  return { createdAt, model, isActive, hasCreatingEvent, triggeringMessageId };
 }
 
 function deriveWorkspace(

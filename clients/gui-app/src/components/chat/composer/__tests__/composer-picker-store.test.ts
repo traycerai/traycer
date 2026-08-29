@@ -41,6 +41,7 @@ function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
     action: { kind: "back" },
     updatedAt: null,
     archived: false,
+    dormant: false,
     preview: null,
   };
 }

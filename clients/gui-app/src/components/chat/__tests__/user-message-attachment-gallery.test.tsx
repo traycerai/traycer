@@ -29,6 +29,7 @@ describe("UserMessageAttachmentGallery", () => {
     const { container } = render(
       <UserMessageAttachmentGallery
         align="end"
+        browserAnnotations={undefined}
         attachments={[
           {
             kind: "image",
