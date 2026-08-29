@@ -1522,7 +1522,10 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
   it("resolves one flush waiter per pong when two captures overlap", async () => {
     const bridge = new FakeBridge();
     installNativeBridge(bridge);
-    const hostTransport = installTransportForHost("host-a", "ws://host-a/stream");
+    const hostTransport = installTransportForHost(
+      "host-a",
+      "ws://host-a/stream",
+    );
     const hostClient = createTestHostClient("user-a");
 
     render(
