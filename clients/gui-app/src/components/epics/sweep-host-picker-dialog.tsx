@@ -278,12 +278,19 @@ function SweepHostPickerOption(props: {
           row.isDefault && "bg-foreground/5",
         )}
       >
+        {/* `updateView` is the shared row's opt-IN badge channel, and Sweep is
+            one of the pickers that deliberately opts out: it holds no observed
+            fleet-update view, and the row's contract forbids fabricating one.
+            An update badge here would also answer a question this step does
+            not ask - which machine holds the worktrees, not which needs
+            updating. */}
         <HostOptionRow
           host={row.host}
           picked={row.isDefault}
           active={row.host.isActive}
           intent="pin"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+          updateView={null}
         />
         {row.isDefault ? (
           <span className="sr-only">Current host for this surface</span>
