@@ -5,6 +5,8 @@ import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /** The renameable kinds a mobile surface can address, and how they rename. */
@@ -97,6 +99,25 @@ export function useSwitcherRename(
       }
       if (kind === "artifact") {
         renameArtifact.mutate({ epicId, artifactId: nodeId, title: trimmed });
+        return;
+      }
+      // Last line for a chat the host's chat store cannot address. The menu
+      // entry that reaches this is already disabled (`switcher-row-actions`),
+      // so this catches the surfaces that rename without one - the current-tile
+      // bar's inline edit. Nothing is sent AND nothing is written to the doc:
+      // on a host with a record plane the doc is not the authority, so a local
+      // write loses to record-wins on the next answer. No overlay stamp
+      // either - an optimistic patch for a mutation that is never sent is a
+      // row that renames and then snaps back, which is the dnd commit's rule
+      // for a move it cannot make.
+      if (
+        resolveChatWriteRoute({
+          chatsById: epicHandle.store.getState().chats.byId,
+          isChatRow: kind === "chat",
+          nodeId,
+          sessionHostId: getEpicSessionHandleHostId(epicHandle),
+        }) === "unavailable"
+      ) {
         return;
       }
       const requestId = epicHandle.store

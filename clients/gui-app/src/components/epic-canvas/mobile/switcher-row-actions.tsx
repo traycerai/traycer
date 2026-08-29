@@ -19,6 +19,8 @@ import {
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
@@ -61,6 +63,10 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const rename = useSwitcherRename(epicId);
+  // Rename and Delete both reach `ChatRegistryWriter` for a chat row, so both
+  // are gated together. `"artifact"` and `"terminal"` rows are never chats.
+  const writeRoute = useChatWriteRoute(kind === "chat", nodeId);
+  const chatWriteUnavailable = writeRoute === "unavailable";
   const deleteChat = useEpicDeleteChat();
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact();
@@ -145,8 +151,8 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       id: "rename",
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
-      disabled: false,
-      disabledTooltip: null,
+      disabled: chatWriteUnavailable,
+      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
       variant: "default",
       testIds: {
         dropdown: `switcher-rename-${nodeId}`,
@@ -160,8 +166,8 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       id: "delete",
       label: deleteLabel,
       icon: <Trash2 className="size-3.5" />,
-      disabled: isTerminal ? killTerminal.isPending : false,
-      disabledTooltip: null,
+      disabled: isTerminal ? killTerminal.isPending : chatWriteUnavailable,
+      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
       variant: "destructive",
       testIds: {
         dropdown: `switcher-delete-${nodeId}`,
@@ -200,6 +206,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       />
       {isTerminal ? null : (
         <ConfirmDestructiveDialog
+          blockedReason={null}
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title={`Delete "${name}"?`}

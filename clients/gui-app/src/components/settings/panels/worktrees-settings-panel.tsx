@@ -1778,6 +1778,7 @@ export function WorktreesList(props: {
         </div>
 
         <ConfirmDestructiveDialog
+          blockedReason={null}
           open={singleDialog.open}
           onOpenChange={(open) => {
             if (!open) setPendingDeleteTargets(null);

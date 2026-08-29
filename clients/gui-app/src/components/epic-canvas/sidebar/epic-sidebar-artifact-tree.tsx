@@ -1299,6 +1299,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
         onToggleSelection={onToggleSelection}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${artifactType} "${nodeName}"?`}

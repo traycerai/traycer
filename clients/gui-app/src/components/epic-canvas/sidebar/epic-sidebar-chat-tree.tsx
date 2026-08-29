@@ -17,6 +17,11 @@ import {
   useEpicRenameChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
+import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import {
+  CHAT_NOT_ADOPTED_COPY,
+  type ChatWriteRoute,
+} from "@/stores/epics/open-epic/chat-write-routing";
 import { useCloudChatVisibilitySupported } from "@/hooks/epic/use-chat-sharing-support";
 import { useEpicSetCloudChatVisibility } from "@/hooks/epic/use-epic-chat-visibility-mutations";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -1568,15 +1573,26 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     [nodeId, toggleExpanded],
   );
 
+  // Chat rows only - the hook returns `"registry-rpc"` for every other kind,
+  // so a terminal agent or artifact in this same row component is untouched.
+  // Read HERE rather than in the shell body because `startRename` needs it:
+  // an unadopted chat's title must never become editable in the first place.
+  const writeRoute = useChatWriteRoute(artifactType === "chat", nodeId);
+
   const startRename = useCallback(() => {
     if (!canMutate) return;
+    // The menu entry that calls this is already disabled, so this is the
+    // keyboard and double-click path. Refusing to ENTER edit mode is the
+    // point: the user is told before they type, not after - a commit-time
+    // refusal would silently discard what they wrote.
+    if (writeRoute === "unavailable") return;
     setRenameValue(nodeName);
     setIsRenaming(true);
     setTimeout(() => {
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
     }, 0);
-  }, [canMutate, nodeName]);
+  }, [canMutate, nodeName, writeRoute]);
 
   const commitRename = useCallback(() => {
     const trimmed = renameValue.trim();
@@ -1761,6 +1777,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
       treeFilter={treeFilter}
+      writeRoute={writeRoute}
       onStartRename={startRename}
       onPerformDelete={performDelete}
       confirmDeleteOpen={confirmDeleteOpen}
@@ -1781,6 +1798,10 @@ interface ChatNodeShellProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly nodeId: string;
+  /** Resolved once in the row and threaded down, so the menu entries, the
+   *  archive hover button and `startRename` cannot disagree about whether this
+   *  row's registry-backed mutations may be sent. */
+  readonly writeRoute: ChatWriteRoute;
   /** The row's OWN owner host, resolved once in `ChatNode` and threaded down
    *  so the leading icon and the archive affordances read the same session. */
   readonly ownerHostId: string | null;
@@ -1960,11 +1981,22 @@ function ChatNodeShellBody(
     openNewConversationModal,
     tabId,
   ]);
-  const { decision } = props;
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
+  const { writeRoute } = props;
+  // The hover button is the SECOND dispatcher of `epic.setChatArchived`, so
+  // gating only the menu entry would leave a one-click path to an RPC naming
+  // no registry row. It is withdrawn rather than disabled, which is this
+  // file's existing rule for it - see `chatRowArchiveState`: the button is a
+  // pointer shortcut that may only appear on an otherwise-quiet row, and "the
+  // entry, not the button, carries the explanation".
+  const decision: ChatRowArchiveDecision =
+    writeRoute === "unavailable" && props.decision.showButton
+      ? { ...props.decision, showButton: false }
+      : props.decision;
   const rowMenuEntries = chatRowMenuEntries({
     nodeId,
     canMutate,
+    writeRoute,
     archiveEntry: decision.entry,
     sharingEntry: sharing.entry,
     onNewChildAgent: handleNewChildAgent,
@@ -2070,6 +2102,7 @@ function ChatNodeShellBody(
         onToggleSelection={onToggleSelection}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
@@ -3379,6 +3412,17 @@ function chatRowArchiveState(args: {
 interface ChatRowMenuEntriesProps {
   readonly nodeId: string;
   readonly canMutate: boolean;
+  /**
+   * Whether this row's registry-backed mutations can be sent on this
+   * connection. `"unavailable"` disables Rename / Archive / Delete - the three
+   * that reach `ChatRegistryWriter` - with {@link CHAT_NOT_ADOPTED_COPY}.
+   *
+   * Never a doc write: on a host with a record plane the doc is not the
+   * authority, so a local edit loses to record-wins on the next answer and the
+   * affordance reads as working while changing nothing. "Not yet" is a thing
+   * the UI can say. Always `"registry-rpc"` for a non-chat row.
+   */
+  readonly writeRoute: ChatWriteRoute;
   readonly archiveEntry: ChatRowArchiveEntry | null;
   readonly sharingEntry: ChatSharingMenuDecision;
   readonly onNewChildAgent: () => void;
@@ -3386,6 +3430,21 @@ interface ChatRowMenuEntriesProps {
   readonly onToggleArchive: () => void;
   readonly onToggleSharing: () => void;
   readonly onPerformDelete: () => void;
+}
+
+/**
+ * The disabled-tooltip for a registry-backed entry, or `null` when it is not
+ * this gate that is blocking.
+ *
+ * `!canMutate` greys out the whole menu at once, so a per-entry tooltip there
+ * would be noise - the same rule {@link archiveMenuEntries} already follows for
+ * its busy arm.
+ */
+function chatWriteBlockedTooltip(
+  props: ChatRowMenuEntriesProps,
+): string | null {
+  if (!props.canMutate) return null;
+  return props.writeRoute === "unavailable" ? CHAT_NOT_ADOPTED_COPY : null;
 }
 
 /**
@@ -3410,10 +3469,17 @@ function archiveMenuEntries(
       ) : (
         <Archive className="size-3.5" />
       ),
-      disabled: !props.canMutate || archiveEntry.disabled,
+      disabled:
+        !props.canMutate ||
+        archiveEntry.disabled ||
+        props.writeRoute === "unavailable",
       // Only the busy arm explains itself. `!canMutate` greys out every entry
-      // in the menu at once, so a per-entry tooltip there would be noise.
-      disabledTooltip: props.canMutate ? archiveEntry.disabledTooltip : null,
+      // in the menu at once, so a per-entry tooltip there would be noise. The
+      // unadopted arm outranks busy: a row the writer cannot address stays
+      // unaddressable however idle it goes.
+      disabledTooltip:
+        chatWriteBlockedTooltip(props) ??
+        (props.canMutate ? archiveEntry.disabledTooltip : null),
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-archive-item-${props.nodeId}`,
@@ -3528,8 +3594,8 @@ function chatRowMenuEntries(
       id: "rename",
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
+      disabled: !props.canMutate || props.writeRoute === "unavailable",
+      disabledTooltip: chatWriteBlockedTooltip(props),
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-rename-${props.nodeId}`,
@@ -3545,8 +3611,8 @@ function chatRowMenuEntries(
       id: "delete",
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
+      disabled: !props.canMutate || props.writeRoute === "unavailable",
+      disabledTooltip: chatWriteBlockedTooltip(props),
       variant: "destructive",
       testIds: {
         dropdown: `epic-sidebar-delete-${props.nodeId}`,

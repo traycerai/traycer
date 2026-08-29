@@ -73,11 +73,14 @@ import {
   terminalAgentProjectionsEq,
   terminalAgentSlicesEq,
   treeNodesEq,
+  composeEpicProjection,
+  readEpicRawProjectionSources,
   unionChatsForConnection,
   unionTuiAgentsForConnection,
 } from "../projection-helpers";
 import type {
   EpicDocRecordArms,
+  EpicRawProjectionSources,
   ProjectionInputs,
 } from "../projection-helpers";
 import type {
@@ -99,14 +102,33 @@ import type {
 } from "../types";
 import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "../types";
 
-interface AttachedConfig {
-  readonly doc: Y.Doc;
-  readonly sink: ProjectionSink<EpicProjectedSlices>;
-  readonly handler: (
-    events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
-    transaction: Y.Transaction,
-  ) => void;
-}
+/**
+ * What the projector is currently reading, and how.
+ *
+ * A union because the two heads differ in one structural way beyond where the
+ * rows come from: the `@1` head has an INCREMENTAL path (a Y `observeDeep`
+ * handler that turns a doc transaction into a patch), and the lane head has
+ * none - its rows arrive as decoded envelopes the replica has already
+ * reconciled, so every lane frame is a full recompute of an already-cheap
+ * source. Modelling that as one config with a nullable handler would invite a
+ * `handler?.()` somewhere and quietly make the legacy path optional.
+ */
+type AttachedConfig =
+  | {
+      readonly kind: "doc";
+      readonly doc: Y.Doc;
+      readonly sink: ProjectionSink<EpicProjectedSlices>;
+      readonly handler: (
+        events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
+        transaction: Y.Transaction,
+      ) => void;
+    }
+  | {
+      readonly kind: "lane";
+      /** Read LIVE: the lane replica recomputes its slices as frames land. */
+      readonly readRaw: () => EpicRawProjectionSources;
+      readonly sink: ProjectionSink<EpicProjectedSlices>;
+    };
 
 interface ProjectorPatches {
   artifactsChanged: Set<string>;
@@ -197,6 +219,17 @@ function patchesEmpty(p: ProjectorPatches): boolean {
 
 export interface EpicProjector {
   attach: (doc: Y.Doc, sink: ProjectionSink<EpicProjectedSlices>) => void;
+  /**
+   * Bind the LANE head instead of a `Y.Doc`.
+   *
+   * Mutually exclusive with {@link attach} - binding either detaches the other,
+   * because a projector reading two heads at once would publish whichever ran
+   * last and the two would fight over the same sink.
+   */
+  attachLaneSources: (
+    readRaw: () => EpicRawProjectionSources,
+    sink: ProjectionSink<EpicProjectedSlices>,
+  ) => void;
   detach: () => void;
   /**
    * Whether a doc is currently attached. Callers that want to force a
@@ -296,9 +329,21 @@ export function createEpicProjector(
 
   function detachInternal(): void {
     if (attached === null) return;
-    const epicMap = getEpicMap(attached.doc);
-    epicMap.unobserveDeep(attached.handler);
+    if (attached.kind === "doc") {
+      const epicMap = getEpicMap(attached.doc);
+      epicMap.unobserveDeep(attached.handler);
+    }
     attached = null;
+  }
+
+  /** The raw populations of whichever head is attached. */
+  function readAttachedRaw(
+    config: AttachedConfig,
+    currentUserId: string | null,
+  ): EpicRawProjectionSources {
+    return config.kind === "doc"
+      ? readEpicRawProjectionSources(config.doc, currentUserId)
+      : config.readRaw();
   }
 
   function attach(doc: Y.Doc, sink: ProjectionSink<EpicProjectedSlices>): void {
@@ -359,7 +404,7 @@ export function createEpicProjector(
         }),
       });
     };
-    attached = { doc, sink, handler };
+    attached = { kind: "doc", doc, sink, handler };
     getEpicMap(doc).observeDeep(handler);
 
     // Initial full projection so attaching to a non-empty doc populates the
@@ -400,16 +445,45 @@ export function createEpicProjector(
 
   function projectFull(): EpicProjectedSlices {
     if (attached === null) return EMPTY_PROJECTED_SLICES;
+    const currentUserId = getCurrentUserId();
     const slices = stabilizeProjectedSlices(
       attached.sink.read(),
-      projectFullState(attached.doc, getCurrentUserId(), currentInputs()),
+      composeEpicProjection(
+        readAttachedRaw(attached, currentUserId),
+        currentUserId,
+        currentInputs(),
+      ),
     );
     attached.sink.publish(slices);
     return slices;
   }
 
+  /**
+   * Bind the LANE head: raw populations decoded from
+   * `epic.state.subscribe@1.0`, with no Y observer because there is no doc to
+   * observe. Everything downstream - the union, the dead sweep, the overlay,
+   * the tree, and the identity-preserving reconcile against what is published -
+   * is the same code the doc head runs.
+   */
+  function attachLaneSources(
+    readRaw: () => EpicRawProjectionSources,
+    sink: ProjectionSink<EpicProjectedSlices>,
+  ): void {
+    detachInternal();
+    attached = { kind: "lane", readRaw, sink };
+    if (ingesting) return;
+    const currentUserId = getCurrentUserId();
+    sink.publish(
+      stabilizeProjectedSlices(
+        sink.read(),
+        composeEpicProjection(readRaw(), currentUserId, currentInputs()),
+      ),
+    );
+  }
+
   return {
     attach,
+    attachLaneSources,
     detach,
     isAttached: () => attached !== null,
     ingest,

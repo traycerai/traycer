@@ -57,6 +57,9 @@ import {
   RECORD_PLANE_COVERS_BOTH,
   type ProjectionInputs,
 } from "@/stores/epics/open-epic/projection-helpers";
+import { createEpicStateLaneAdapter } from "@traycer-clients/shared/epic-lanes";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime";
 import {
   createEpicLaneStateReplica,
   laneRawProjectionSources,
@@ -71,6 +74,26 @@ import {
 
 const EPOCH = "epoch-equiv";
 const VIEWER = "user-a";
+
+/**
+ * The adapter host's environment. Inert on purpose: the records adapter reads
+ * nothing off it on the snapshot path, and a real clock or scheduler here would
+ * be a nondeterminism this comparison has no use for.
+ */
+const TEST_ENVIRONMENT: RuntimeEnvironment = {
+  clock: { now: () => 0 },
+  scheduler: {
+    schedule: () => ({ cancel: () => {} }),
+    scheduleMicrotask: (callback: () => void) => {
+      callback();
+    },
+  },
+  logger: {
+    debug: () => {},
+    warn: () => {},
+    error: () => {},
+  },
+};
 
 /**
  * ONE description of an epic's content. Both heads are materialised from this
@@ -214,9 +237,9 @@ function seedLegacyDoc(content: EpicContent): Y.Doc {
  * construction here rather than produce a half-populated head that happened to
  * compare equal on the fields the fixture bothered to set.
  */
-function laneSnapshotRows(
+function snapshotFrame(
   content: EpicContent,
-): readonly RecordRow<EpicStateRow>[] {
+): Extract<EpicStateSubscribeServerFrameV10, { kind: "snapshot" }> {
   const parsed: EpicStateSubscribeServerFrameV10 =
     epicStateSubscribeServerFrameSchemaV10.parse({
       kind: "snapshot",
@@ -278,7 +301,14 @@ function laneSnapshotRows(
       },
     });
   if (parsed.kind !== "snapshot") throw new Error("expected a snapshot frame");
+  return parsed;
+}
 
+/** The same frame, decoded to rows by hand - the HEAD path's input. */
+function laneSnapshotRows(
+  content: EpicContent,
+): readonly RecordRow<EpicStateRow>[] {
+  const parsed = snapshotFrame(content);
   const rows: RecordRow<EpicStateRow>[] = [];
   for (const record of parsed.artifactRecords) {
     rows.push({
@@ -368,6 +398,93 @@ function laneProjection(): EpicProjectedSlices {
     INPUTS,
   );
 }
+
+// ─── The contract half: through the REAL adapter ──────────────────────────
+
+/**
+ * Drive the same content through the REAL `epic.state.subscribe@1.0` adapter.
+ *
+ * The head test above hands `RecordRow`s straight to the replica, which is what
+ * makes it a diagnostic - it isolates the replica and the composition. This one
+ * adds the piece that test deliberately skips: the adapter's own decode, which
+ * is where the snapshot's four populations become rows, where the role-claim and
+ * metadata singletons are synthesised onto every snapshot, and where a
+ * tombstone's two key spaces are minted. A defect in any of those is invisible
+ * to the head test and visible here.
+ *
+ * The stream client is a fake, and only the stream client: the adapter, the
+ * replica, the composition and the frame schema are all real, and the frame is
+ * the one `laneSnapshotRows` already parsed - so both halves of this file are
+ * driven from one description of one epic.
+ */
+function laneProjectionThroughAdapter(): EpicProjectedSlices {
+  const replica = createEpicLaneStateReplica({
+    getCurrentUserId: () => VIEWER,
+    isDisposed: () => false,
+    onChanged: () => {},
+  });
+  const captured: { callbacks: EpicStateStreamCallbacks | null } = {
+    callbacks: null,
+  };
+  const adapter = createEpicStateLaneAdapter({
+    epicId: "epic-1",
+    streamClientFactory: (_epicId, callbacks) => {
+      captured.callbacks = callbacks;
+      return { close: () => {} };
+    },
+    readAppliedCursor: () => replica.appliedCursor(),
+    isDisposed: () => false,
+  });
+  adapter.attach({
+    environment: TEST_ENVIRONMENT,
+    emit: (event) => {
+      replica.apply(event);
+    },
+    reportResume: () => {},
+    reportStatus: () => {},
+    requestReplacement: () => {},
+  });
+  const callbacks = captured.callbacks;
+  if (callbacks === null) throw new Error("adapter never opened a client");
+  callbacks.onSnapshot(snapshotFrame(CONTENT));
+  return composeEpicProjection(
+    laneRawProjectionSources(replica.slices()),
+    VIEWER,
+    INPUTS,
+  );
+}
+
+describe("the exit line, end to end: identical content through BOTH adapters", () => {
+  it("the real lane adapter's decode projects identically to the @1 doc head", () => {
+    // The ticket's exit criterion, at the level it is written for. Whole
+    // values, one normalised field, same fixture as the head test.
+    expect(normalized(laneProjectionThroughAdapter())).toEqual(
+      normalized(legacyProjection()),
+    );
+  });
+
+  it("agrees with the head-level path, so a failure localises to the adapter", () => {
+    // If this ever fails while the head test passes, the defect is in the
+    // adapter's decode and nowhere else - which is the whole reason both exist.
+    expect(laneProjectionThroughAdapter()).toEqual(laneProjection());
+  });
+
+  it("the adapter really ran - the replica holds the watermark the frame carried", () => {
+    // Anti-vacuity: without this, a factory that never invoked `onSnapshot`
+    // would leave both sides empty and the equality above would pass on two
+    // empty projections.
+    const projection = laneProjectionThroughAdapter();
+    expect(projection.artifacts.allIds.slice().sort()).toEqual([
+      "spec-orphan",
+      "spec-root",
+      "ticket-child",
+    ]);
+    expect(projection.deletedArtifacts.allIds.slice().sort()).toEqual([
+      "spec-gone",
+      "ticket-gone",
+    ]);
+  });
+});
 
 describe("lane and legacy heads are indistinguishable to the projection layer", () => {
   it("produces byte-identical WHOLE projections on identical epic content", () => {

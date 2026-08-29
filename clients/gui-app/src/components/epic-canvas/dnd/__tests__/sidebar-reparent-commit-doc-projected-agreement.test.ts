@@ -29,7 +29,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import { QueryClient } from "@tanstack/react-query";
 import { commitSidebarReparentDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import { canReparentProjected } from "@/lib/reparent-projection-rules";
@@ -143,7 +143,13 @@ function makeTerminalAgentEntry(id: string, title: string): Y.Map<unknown> {
   return agent;
 }
 
-function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+/**
+ * An `epic.listChatRecords@1.1` row - what `applyChatRecords` takes. Registry
+ * shaped, so `docResident: false`; a doc-homed case would override it.
+ */
+function chatRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -159,6 +165,7 @@ function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    docResident: false,
     ...overrides,
   };
 }

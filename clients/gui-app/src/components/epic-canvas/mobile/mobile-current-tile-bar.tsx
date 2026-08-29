@@ -14,6 +14,7 @@ import {
   useEpicLiveArtifactTitleGenerating,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
+import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
@@ -65,6 +66,11 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
 
   const renameKind = tileRenameKind(tile);
   const canMutate = isEditableRole(useEpicPermissionRole());
+  // An unadopted chat's title must not become EDITABLE. Refusing at commit
+  // would silently discard what the user typed; refusing to enter edit mode
+  // tells them before they type, which is the same rule the sidebar's
+  // disabled Rename entry follows.
+  const chatWriteRoute = useChatWriteRoute(tile.type === "chat", tile.id);
   const rename = useSwitcherRename(epicId);
   const handleCommit = useCallback(
     (next: string) => {
@@ -91,7 +97,9 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
         />
         <InlineTitleField
           value={displayTitle}
-          editable={renameKind !== null && canMutate}
+          editable={
+            renameKind !== null && canMutate && chatWriteRoute !== "unavailable"
+          }
           onCommit={handleCommit}
           inputLabel="Tab title"
           testId="mobile-current-tile-title"

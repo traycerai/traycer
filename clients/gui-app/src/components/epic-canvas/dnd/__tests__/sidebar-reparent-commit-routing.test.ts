@@ -425,10 +425,15 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
   });
 
-  it("dual-writes an artifact drop to the doc and epic.reparentArtifact", () => {
-    // The store seam alone would stay green on a persist no-op: the RPC
-    // assertion is the one that would have caught shipping the dual-write
-    // with a mock that returned undefined (falsy → mutated guard skips RPC).
+  it("enqueues an artifact drop as a write command, with no direct doc write", () => {
+    // RETARGETED, not patched. T11 moved the artifact reparent off the
+    // dual-write (a local `reparentArtifact` Y write PLUS an
+    // `epic.reparentArtifact` RPC) onto the write-command queue, which owns
+    // ordering, idempotency and the rejected/superseded lifecycle. The
+    // assertion follows the seam: the command must carry the same intent the
+    // direct pair used to express, and the direct Y write must NOT still
+    // happen beside it - a doc write racing a queued command is exactly the
+    // double-apply the queue exists to prevent.
     seam.tree = treeOf([
       node("spec-1", "spec", null),
       node("spec-parent", "spec", null),
@@ -443,18 +448,25 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       queryClient,
     });
 
-    expect(seam.reparentArtifact).toHaveBeenCalledWith("spec-1", "spec-parent");
-    expect(seam.request).toHaveBeenCalledTimes(1);
-    expect(seam.request).toHaveBeenCalledWith("epic.reparentArtifact", {
-      epicId: "epic-1",
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledTimes(1);
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
+      kind: "reparent-artifact",
       artifactId: "spec-1",
-      newParentId: "spec-parent",
+      parentId: "spec-parent",
     });
+    // The queue is the only writer now. A surviving direct write would apply
+    // the move twice - once locally, once when the command commits.
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // And the RPC is the queue's to send, not this file's.
+    expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("keeps the artifact doc write when the session has no client", () => {
-    // Unlike a record-backed agent (silent cancel), an artifact pointer
-    // still lives in the doc: no serving client skips the RPC, not the Y write.
+  it("still enqueues an artifact drop when the session has no client", () => {
+    // Unlike a record-backed agent (silent cancel), an artifact drop is always
+    // accepted locally: the queue holds it and sends it when a transport comes
+    // back, which is the whole point of an offline-tolerant write path. Before
+    // T11 this branch asserted the doc write survived a missing client; the
+    // command queue is now what survives it.
     seam.tree = treeOf([
       node("spec-1", "spec", null),
       node("spec-parent", "spec", null),
@@ -470,7 +482,12 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       queryClient,
     });
 
-    expect(seam.reparentArtifact).toHaveBeenCalledWith("spec-1", "spec-parent");
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
+      kind: "reparent-artifact",
+      artifactId: "spec-1",
+      parentId: "spec-parent",
+    });
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
     expect(seam.request).not.toHaveBeenCalled();
   });
 

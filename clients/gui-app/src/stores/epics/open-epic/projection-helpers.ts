@@ -818,13 +818,24 @@ export function unionChatsSlice(
  * derive this - `epic.subscribe`'s major is negotiated independently of
  * `epic.listTuiAgents`' minor - so this constant is the whole answer.
  *
- * FLIP IT IN THE SAME CHANGE THAT DELETES THE DOC ARM. Leaving it `true` past
- * that point costs the doc-resident agents their only remaining source (the
- * `@1` behaviour this minor exists to replace); flipping it early costs the
- * duplicate-row conflict. `true` is the safe end of that trade, which is why
- * it is the value that ships until the doc arm is actually gone.
+ * FLIPPED at the cutover, together with both request declarations, and safe to
+ * flip because the doc arm is no longer unconditional. `EpicDocRecordArms`
+ * decides per population whether the doc is still a SOURCE, from what the host
+ * negotiated:
+ *
+ *  - a host serving `@1.1` serves the doc-resident remainder, so it covers the
+ *    rows this constant used to protect, and the doc arm is off - one row, one
+ *    source, no duplicate-row conflict;
+ *  - a host that cannot read this field at all (it predates the minor) never
+ *    sees the declaration, and its doc arm stays ON because nothing else covers
+ *    its rows.
+ *
+ * So the trade this comment used to describe no longer exists: the value that
+ * was "safe" only because the doc arm was unconditional is now simply the true
+ * answer to the question the field asks. The GUI does not project records out
+ * of the epic doc on any path where a record plane can serve them.
  */
-export const GUI_PROJECTS_EPIC_DOC_REPLICA = true;
+export const GUI_PROJECTS_EPIC_DOC_REPLICA = false;
 
 function projectTerminalAgentsSlice(
   doc: Y.Doc,

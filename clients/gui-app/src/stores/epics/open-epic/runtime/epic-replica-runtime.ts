@@ -38,10 +38,13 @@ import type {
   TuiAgentRecordDelta,
 } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type {
+  AdapterDetachReason,
   CommandIdFactory,
   CommandQueue,
   CommandRecord,
   FreshnessReport,
+  ReplicaReplacementReason,
+  ReplicaResetCause,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import {
@@ -87,6 +90,17 @@ import {
   createLegacyEpicStreamAdapter,
   type EpicStreamClientFactory,
 } from "./legacy-epic-stream-adapter";
+import type {
+  EpicStateStreamClientFactory,
+  EpicStatusStreamClientFactory,
+} from "@traycer-clients/shared/epic-lanes";
+import { createEpicLaneArm, type EpicLaneArm } from "./epic-lane-arm";
+import {
+  readEpicAdapterVerdict,
+  type EpicAdapterArm,
+  type EpicMethodSupportReader,
+} from "./epic-adapter-selection";
+import { planEpicAdapterTransition } from "./epic-adapter-lifecycle";
 import {
   classifyEpicWriteCommandFailure,
   EpicWriteCommandTransportUnavailableError,
@@ -127,6 +141,34 @@ export interface EpicReplicaRuntimeOptions {
   readonly onAuthError: (() => void) | null;
   readonly commandIdFactory: CommandIdFactory;
   readonly writeCommandSender: EpicWriteCommandSender;
+  /**
+   * Everything the lane arm needs, or `null` when this caller cannot serve
+   * lanes at all.
+   *
+   * ONE field rather than three, and nullable rather than three nullable
+   * members, because the three are only ever meaningful together: a support
+   * reader with no stream clients cannot open anything, and stream clients with
+   * no support reader could never be selected. `null` is a fact about the
+   * CALLER - a consumer that never built the clients - and it pins the arm to
+   * legacy without the support reader ever being consulted.
+   */
+  readonly laneSelection: EpicLaneSelectionSources | null;
+}
+
+/** What a lane-capable composition supplies. All three, or none. */
+export interface EpicLaneSelectionSources {
+  /**
+   * This connection's negotiated support for the three lane methods, read LIVE.
+   *
+   * Selection is per CONNECTION: a host that upgrades under an open tab
+   * reconnects advertising the lanes, and the tab moves to them. See
+   * `epic-adapter-selection.ts` for why `"unknown"` is not a selection.
+   */
+  readonly support: EpicMethodSupportReader;
+  /** Notified whenever any method's support changes. Returns an unsubscribe. */
+  readonly subscribeSupport: (listener: () => void) => () => void;
+  readonly stateStreamClientFactory: EpicStateStreamClientFactory;
+  readonly statusStreamClientFactory: EpicStatusStreamClientFactory;
 }
 
 export interface EpicReplicaRuntime {
@@ -248,6 +290,7 @@ export function createEpicReplicaRuntime(
     onAuthError,
     commandIdFactory,
     writeCommandSender,
+    laneSelection,
   } = options;
 
   let disposed = false;
@@ -564,6 +607,147 @@ export function createEpicReplicaRuntime(
     records.emitCurrentAwareness();
   }
 
+  // ── Adapter selection ─────────────────────────────────────────────────────
+  //
+  // Which arm serves this connection, and what happens when that changes. The
+  // DECISION is `epic-adapter-selection.ts`, the ORDERED STEPS are
+  // `epic-adapter-lifecycle.ts`, and this is the only place that executes them -
+  // so the mid-session upgrade every long-lived tab hits exactly once has one
+  // implementation rather than one per caller.
+
+  const laneArm: EpicLaneArm | null =
+    laneSelection === null
+      ? null
+      : createEpicLaneArm({
+          epicId,
+          environment,
+          stateStreamClientFactory: laneSelection.stateStreamClientFactory,
+          statusStreamClientFactory: laneSelection.statusStreamClientFactory,
+          getCurrentUserId,
+          isDisposed,
+          onStateSlices: (slices) => {
+            delivery.batch(() => {
+              records.applyLaneState(slices);
+            });
+          },
+          onControlEvent: (event) => {
+            delivery.batch(() => {
+              control.apply(event);
+            });
+          },
+          onReplacementRequested: (reason) => {
+            replaceForAuthority(reason);
+          },
+        });
+
+  let installedArm: EpicAdapterArm | null = null;
+  let unsubscribeLaneSupport: (() => void) | null = null;
+
+  function attachArm(arm: EpicAdapterArm): void {
+    if (arm === "legacy") {
+      // The doc head: the projector binds the root `Y.Doc` and the `@1` adapter
+      // opens the one multiplexed socket.
+      records.start();
+      adapter.attach({
+        environment,
+        emit: routeEvent,
+        // `@1` cannot report a resume outcome - see the adapter's module doc.
+        reportResume: () => {},
+        reportStatus: () => {},
+        // Replacement on this line is client-initiated only: `@1` carries no
+        // epoch, so there is no authority-side signal that could ask for one.
+        requestReplacement: () => {},
+      });
+      return;
+    }
+    if (laneArm === null) return;
+    records.attachLaneHead();
+    laneArm.attach();
+  }
+
+  function detachArm(arm: EpicAdapterArm, reason: AdapterDetachReason): void {
+    if (arm === "legacy") {
+      adapter.detach(reason);
+      return;
+    }
+    laneArm?.detach(reason);
+  }
+
+  /**
+   * Empty every plane, carrying the cause.
+   *
+   * The same sequence `requestFreshSnapshot` runs, minus the transport dance:
+   * the caller owns the sockets, because a replacement closes BEFORE it
+   * discards and opens AFTER, while a targeted authority reset does not close
+   * at all.
+   */
+  function resetAllPlanes(cause: ReplicaResetCause): void {
+    records.clearUnsyncedQueue();
+    control.beginFreshCycle();
+    records.replaceReplica();
+    records.resetCoverage();
+    laneArm?.reset(cause);
+    rooms.reset(cause);
+    records.publishFreshCycle();
+  }
+
+  /**
+   * An adapter asking for the replica to be rebuilt.
+   *
+   * COALESCED by construction: both lanes route here, and one epoch change
+   * reported by both produces one rebuild, because the second call finds the
+   * planes already emptied for that cause. That is the design the seam names -
+   * two lanes each asking once for one real epoch change is two true
+   * statements, not two replacements.
+   */
+  function replaceForAuthority(reason: ReplicaReplacementReason): void {
+    if (disposed) return;
+    delivery.batch(() => {
+      resetAllPlanes({ origin: "authority", reason });
+      replicaGenerationCounter += 1;
+    });
+  }
+
+  /**
+   * Re-read the manifest and move the arm if it says to.
+   *
+   * Idempotent and cheap: an unchanged verdict plans no steps, and an
+   * `"undecided"` one holds whatever is installed - which is what makes this
+   * safe to call from a support-change listener that also fires on every
+   * reconnect's support reset.
+   */
+  function applySelection(): void {
+    if (disposed) return;
+    const verdict =
+      laneSelection === null
+        ? "legacy"
+        : readEpicAdapterVerdict(laneSelection.support);
+    const transition = planEpicAdapterTransition(installedArm, verdict);
+    if (transition.steps.length === 0) {
+      installedArm = transition.installed;
+      return;
+    }
+    for (const step of transition.steps) {
+      switch (step.kind) {
+        case "detach":
+          detachArm(step.arm, "superseded");
+          break;
+        case "reset":
+          delivery.batch(() => {
+            resetAllPlanes(step.cause);
+          });
+          break;
+        case "bump-generation":
+          replicaGenerationCounter += 1;
+          break;
+        case "attach":
+          attachArm(step.arm);
+          break;
+      }
+    }
+    installedArm = transition.installed;
+  }
+
   function routeEvent(runtimeEvent: EpicRuntimeEvent): void {
     delivery.batch(() => {
       switch (runtimeEvent.plane) {
@@ -606,8 +790,17 @@ export function createEpicReplicaRuntime(
     delivery.batch(() => {
       records.clearUnsyncedQueue();
       control.beginFreshCycle();
-      adapter.closeTransport();
+      // Close BEFORE discarding and open AFTER: the re-subscribe reads the
+      // resume offer (a `@1` seed offer, or the lane's applied cursor), and an
+      // offer taken before the discard would name state this client has just
+      // thrown away.
+      if (installedArm === "lanes") {
+        laneArm?.closeTransport();
+      } else {
+        adapter.closeTransport();
+      }
       records.replaceReplica();
+      laneArm?.reset({ origin: "client", intent: "fresh-snapshot-requested" });
       records.resetCoverage();
       // The rooms plane's reset, carrying its PROVENANCE: nothing is wrong
       // upstream, the client asked. Naming an authority reason here (
@@ -618,7 +811,11 @@ export function createEpicReplicaRuntime(
       records.publishFreshCycle();
       replicaGenerationCounter += 1;
     });
-    adapter.openTransport();
+    if (installedArm === "lanes") {
+      laneArm?.openTransport();
+    } else {
+      adapter.openTransport();
+    }
   }
 
   return {
@@ -631,20 +828,16 @@ export function createEpicReplicaRuntime(
     replicaGeneration: () => replicaGenerationCounter,
 
     start(): void {
-      records.start();
-      adapter.attach({
-        environment,
-        emit: routeEvent,
-        // `@1` cannot report a resume outcome - see the adapter's module doc.
-        reportResume: () => {},
-        // The transport's own status reaches the control plane as an event,
-        // because what follows a close is a policy decision. Nothing else in
-        // this runtime observes the adapter's status directly today.
-        reportStatus: () => {},
-        // Replacement on this line is client-initiated only: `@1` carries no
-        // epoch, so there is no authority-side signal that could ask for one.
-        requestReplacement: () => {},
-      });
+      // Selection FIRST, then the listener. On a connection whose manifest has
+      // not resolved this installs nothing at all - it does not open
+      // `epic.subscribe@1` speculatively - and the status lane's own open is
+      // the probe that settles it. The listener is what carries a host that
+      // upgrades under this tab onto the lanes without a reopen.
+      applySelection();
+      unsubscribeLaneSupport =
+        laneSelection?.subscribeSupport(() => {
+          applySelection();
+        }) ?? null;
     },
 
     applyLocalUpdate: (updateBytes) => {
@@ -828,7 +1021,7 @@ export function createEpicReplicaRuntime(
       // retained.
       delivery.batch(() => {
         records.detach();
-        adapter.detach("transport-only");
+        if (installedArm !== null) detachArm(installedArm, "transport-only");
         control.noteTransportDetached();
       });
     },
@@ -840,7 +1033,9 @@ export function createEpicReplicaRuntime(
       // decoded into a doc that is about to be destroyed, and while the guards
       // above would already refuse it, "already refused" is a weaker property
       // than "the socket was gone first".
-      adapter.detach("disposed");
+      if (installedArm !== null) detachArm(installedArm, "disposed");
+      unsubscribeLaneSupport?.();
+      unsubscribeLaneSupport = null;
       unsubscribeCommandQueue();
       commandQueue.dispose();
       attemptedHostByCommandId.clear();

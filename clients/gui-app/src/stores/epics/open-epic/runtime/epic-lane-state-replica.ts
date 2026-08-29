@@ -121,7 +121,13 @@ export interface EpicLaneStateSlices {
   readonly commentThreads: CommentThreadsSlice;
 }
 
-const EMPTY_LANE_SLICES: EpicLaneStateSlices = Object.freeze({
+/**
+ * The lane head's populations before its first snapshot. Exported because the
+ * records replica holds this as its starting value on the lane arm - one shared
+ * reference, so a session that has not yet heard from the lane publishes the
+ * same empty projection every time it recomputes.
+ */
+export const EMPTY_LANE_STATE_SLICES: EpicLaneStateSlices = Object.freeze({
   artifacts: EMPTY_PROJECTED_SLICES.artifacts,
   deletedArtifacts: EMPTY_PROJECTED_SLICES.deletedArtifacts,
   epicHeader: EMPTY_PROJECTED_SLICES.epic,
@@ -244,8 +250,8 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   const deletedById: Record<string, DeletedArtifactProjection> = {};
   const deletedIds: string[] = [];
   const threadsByArtifactId: Record<string, CommentThreadWire[]> = {};
-  let roleClaims: readonly RoleClaim[] = EMPTY_LANE_SLICES.roleClaims;
-  let epicHeader: EpicHeader = EMPTY_LANE_SLICES.epicHeader;
+  let roleClaims: readonly RoleClaim[] = EMPTY_LANE_STATE_SLICES.roleClaims;
+  let epicHeader: EpicHeader = EMPTY_LANE_STATE_SLICES.epicHeader;
 
   for (const held of rows) {
     const row = held.row;
@@ -397,7 +403,7 @@ export function createEpicLaneStateReplica(
           candidate.revision > held.revision,
         buildSlice: (visibleRows) => buildLaneSlices(visibleRows),
         slicesEq: laneSlicesEq,
-        emptySlice: EMPTY_LANE_SLICES,
+        emptySlice: EMPTY_LANE_STATE_SLICES,
       },
       {
         getCurrentUserId,
@@ -419,7 +425,7 @@ export function createEpicLaneStateReplica(
   /** The whole `EpicMeta` currently held, for folding a patch onto. */
   function heldEpicMeta(): EpicMeta | null {
     const header = table.current().epicHeader;
-    if (header === EMPTY_LANE_SLICES.epicHeader) return null;
+    if (header === EMPTY_LANE_STATE_SLICES.epicHeader) return null;
     return { title: header.title, updatedAt: header.updatedAt };
   }
 

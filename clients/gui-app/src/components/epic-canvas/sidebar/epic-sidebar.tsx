@@ -50,6 +50,11 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicStore } from "@/hooks/use-epic-store";
+import {
+  describeBlockedChatWrites,
+  resolveChatWriteRoute,
+} from "@/hooks/epic/use-chat-write-route";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -1421,6 +1426,8 @@ function SidebarBulkDeleteController(props: {
   const deleteArtifact = useEpicDeleteArtifact();
   const deleteChat = useEpicDeleteChat();
   const deleteTerminalAgent = useEpicDeleteTuiAgent();
+  const sessionHostId = useEpicSessionHostId();
+  const chatsById = useEpicStore((s) => s.chats.byId);
   const recordById = useMemo(
     () => new Map(liveRecords.map((record) => [record.id, record])),
     [liveRecords],
@@ -1435,8 +1442,35 @@ function SidebarBulkDeleteController(props: {
     cancelSelection,
   } = selection;
 
+  // The bulk path dispatches `epic.deleteChat` per row, so it needs the same
+  // gate the per-row menus have. It REFUSES AS A WHOLE rather than deleting
+  // what it can: a partial delete of a confirmed multi-select is the worse
+  // failure, because that is exactly where a user is least likely to notice
+  // the one row that silently remained.
+  const blockedDeleteReason = useMemo(() => {
+    if (pendingDeleteIds === null) return null;
+    const blockedTitles = rootmostSelectedSidebarIds({
+      ids: pendingDeleteIds,
+      tree,
+    }).flatMap((id) => {
+      const record = recordById.get(id);
+      if (record === undefined || record.type !== "chat") return [];
+      const route = resolveChatWriteRoute({
+        chatsById,
+        isChatRow: true,
+        nodeId: id,
+        sessionHostId,
+      });
+      return route === "unavailable" ? [record.name] : [];
+    });
+    return describeBlockedChatWrites(blockedTitles);
+  }, [chatsById, pendingDeleteIds, recordById, sessionHostId, tree]);
+
   const handleConfirmDelete = useCallback(() => {
     if (pendingDeleteIds === null || deletePending) return;
+    // The dialog's confirm is already disabled while this is non-null; the
+    // check is here too because a keyboard submit is not the button.
+    if (blockedDeleteReason !== null) return;
     const rootmostIds = rootmostSelectedSidebarIds({
       ids: pendingDeleteIds,
       tree,
@@ -1516,6 +1550,7 @@ function SidebarBulkDeleteController(props: {
         setDeletePending(false);
       });
   }, [
+    blockedDeleteReason,
     cancelSelection,
     clearSelectedIds,
     closeCanvasTab,
@@ -1537,6 +1572,7 @@ function SidebarBulkDeleteController(props: {
 
   return (
     <ConfirmDestructiveDialog
+      blockedReason={blockedDeleteReason}
       open={pendingDeleteIds !== null}
       onOpenChange={(open) => {
         if (!open) closeDeleteDialog();

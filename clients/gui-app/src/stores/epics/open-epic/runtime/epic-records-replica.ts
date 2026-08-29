@@ -71,6 +71,11 @@ import type { EpicRecordsProjection } from "./epic-runtime-projection";
 import { projectedSlicesView } from "./projection-delivery";
 import { createHostCoverage, type HostCoverage } from "./host-coverage";
 import { createUnsyncedRootQueue } from "./unsynced-root-queue";
+import {
+  EMPTY_LANE_STATE_SLICES,
+  laneRawProjectionSources,
+  type EpicLaneStateSlices,
+} from "./epic-lane-state-replica";
 import { createChatRecordTable } from "./chat-record-table";
 import { createTuiAgentRecordTable } from "./tui-agent-record-table";
 import {
@@ -279,6 +284,25 @@ export interface EpicRecordsReplica extends Replica<
 
   /** Settle in-flight attachment reads and drop the projector. */
   detach(): void;
+  /**
+   * Bind the LANE head instead of the root `Y.Doc`, and feed it.
+   *
+   * The doc, host coverage, the unsynced queue and the attachment map all still
+   * exist on this arm and are simply never fed - `epic.state.subscribe@1.0`
+   * carries typed rows and no bytes. That is deliberate dead weight for one
+   * landing rather than a second replica: everything ABOVE the raw populations
+   * - the two record tables, the optimistic overlay, the projector's identity
+   * reconcile, the change gates - is identical on both arms, and duplicating it
+   * is how the two heads would start disagreeing about what a chat is. Phase 5
+   * retires the doc with the legacy adapter.
+   */
+  attachLaneHead(): void;
+  /**
+   * The records lane's populations, as its replica last recomputed them.
+   * Re-projects: the lane replica has already reconciled the rows, so a frame
+   * that changed nothing has already been gated before it reaches here.
+   */
+  applyLaneState(slices: EpicLaneStateSlices): void;
   /** Publish the first projection. Called once the sink's consumer is live. */
   start(): void;
   /** Logical count of root updates the transport has not carried yet. */
@@ -303,6 +327,13 @@ export function createEpicRecordsReplica(
 
   let doc = new Y.Doc();
   let awareness = new Awareness(doc);
+  /**
+   * The records lane's populations on the LANE arm, empty until its first
+   * snapshot. Held here rather than read back out of the projection because the
+   * projector runs inside the publish path, and reading what it is about to
+   * write is how a projection gets built from half-updated state.
+   */
+  let laneSlices: EpicLaneStateSlices = EMPTY_LANE_STATE_SLICES;
   const coverage: HostCoverage = createHostCoverage();
   const unsynced = createUnsyncedRootQueue();
   let observedAtMs: number | null = null;
@@ -1220,6 +1251,19 @@ export function createEpicRecordsReplica(
     },
 
     readSeedOffer: () => coverage.readSeedOffer(),
+
+    attachLaneHead(): void {
+      projector.attachLaneSources(
+        () => laneRawProjectionSources(laneSlices),
+        projectorSink,
+      );
+    },
+
+    applyLaneState(slices): void {
+      if (isDisposed()) return;
+      laneSlices = slices;
+      projector.projectFull();
+    },
 
     applyChatRecords(records, issuedAtSeq): void {
       if (isDisposed()) return;

@@ -65,6 +65,7 @@ import { readEpicDocRecordArms } from "./doc-record-arms";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createEpicReplicaRuntime,
+  type EpicLaneSelectionSources,
   type EpicReplicaRuntime,
 } from "./runtime/epic-replica-runtime";
 import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
@@ -119,6 +120,23 @@ export interface OpenEpicStoreOptions {
   readonly onAuthError: (() => void) | null;
   /** Production's host-pinned requester; omitted by stores that never write. */
   readonly commandRequester?: HostRequester<HostRpcRegistry> | null;
+  /**
+   * Everything the lane arm needs, or absent/`null` for a caller that cannot
+   * serve lanes.
+   *
+   * OPTIONAL, unlike `getDocArm` on the runtime, and the asymmetry is argued
+   * rather than convenient. The two fields fail in opposite directions when a
+   * caller forgets them: an absent `getDocArm` would either silently empty a
+   * released-floor host's epic or silently restore the double-count, so it must
+   * be stated. An absent lane selection yields the `@1` arm - today's behaviour,
+   * on today's wire, which is precisely what a caller with no lane stream
+   * clients wants and what all 147 existing call sites already mean.
+   *
+   * Making it required would put one noise line in 62 test files to express a
+   * default that is both correct and unsurprising. `commandRequester` is
+   * optional here for the same reason.
+   */
+  readonly laneSelection?: EpicLaneSelectionSources | null;
 }
 
 /**
@@ -837,6 +855,7 @@ export function createOpenEpicStore(
     // constructed before the auth profile hydrates must pick up the id on its
     // next projection.
     getCurrentUserId: () => useAuthStore.getState().profile?.userId ?? null,
+    laneSelection: options.laneSelection ?? null,
     // Read LIVE off the negotiated manifest, never captured: a host that
     // handshakes after this session is constructed - or upgrades in place -
     // must move the arms without the tab reopening. See `readEpicDocRecordArms`

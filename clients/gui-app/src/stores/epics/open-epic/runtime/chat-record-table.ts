@@ -12,7 +12,6 @@
  */
 import type {
   ChatRecordRemovalReason,
-  ChatRecordSummary,
   ChatRecordSummaryV11,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
@@ -133,7 +132,7 @@ export function createChatRecordTable(
    * able to retire the viewer's own in-flight creation - the row that replaces
    * a stand-in has to be the SAME chat, not merely a chat with the same id.
    */
-  const expirePendingCreationForRecord = (record: ChatRecordSummary): void => {
+  const expirePendingCreationForRecord = (record: HeldChatRecordRow): void => {
     pendingCreations.delete(recordKey(record.ownerUserId, record.chatId));
   };
 
@@ -168,7 +167,17 @@ export function createChatRecordTable(
     return dropped;
   };
 
-  const table: RecordTable<HeldChatRecordRow, ChatsSlice> = createRecordTable(
+  // EXPLICIT type arguments, not inference. `TRow` has exactly one annotated
+  // inference site among these callbacks - `onRowServed` - so before this the
+  // whole table silently inferred the BASE wire row from that one parameter,
+  // and every `docResident` read in the plane config was a property access on a
+  // type that does not have it. The `RecordTable<…>` annotation on the binding
+  // does not prevent that: it is checked against the inferred result rather
+  // than driving it.
+  const table: RecordTable<HeldChatRecordRow, ChatsSlice> = createRecordTable<
+    HeldChatRecordRow,
+    ChatsSlice
+  >(
     {
       rowKey: (row) => recordKey(row.ownerUserId, row.chatId),
       /**

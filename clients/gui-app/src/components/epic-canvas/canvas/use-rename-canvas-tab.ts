@@ -4,6 +4,8 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
@@ -78,6 +80,25 @@ export function useRenameCanvasTab(
             () => renameArtifactInTab(viewTabId, id, trimmed),
             () => {},
           );
+        return;
+      }
+      // Last line for a chat the host's chat store cannot address. A tab
+      // title is renamed by inline edit rather than by a menu entry, so
+      // there is no affordance to disable here; the sidebar and switcher
+      // entries that DO have one are disabled with `CHAT_NOT_ADOPTED_COPY`.
+      // Nothing is sent and nothing is written to the doc - on a host with a
+      // record plane the doc is not the authority, so a local write loses to
+      // record-wins on the next answer - and no overlay stamp is taken, since
+      // an optimistic patch for a mutation that is never sent is a row that
+      // renames and then snaps back.
+      if (
+        resolveChatWriteRoute({
+          chatsById: epicHandle.store.getState().chats.byId,
+          isChatRow: tab.type === "chat",
+          nodeId: id,
+          sessionHostId: getEpicSessionHandleHostId(epicHandle),
+        }) === "unavailable"
+      ) {
         return;
       }
       // The optimistic overlay, NOT the doc write this used to do. The doc
