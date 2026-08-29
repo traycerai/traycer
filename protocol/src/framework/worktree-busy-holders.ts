@@ -87,13 +87,16 @@ export const holdersRevisionWireFieldSchema = z
 /**
  * `WORKTREE_BUSY` envelope a current client parses when it wants the typed
  * inventory. `holders` omitted = old host; the prose `message` still names
- * the refusal. `holdersRevision` is the digest of that inventory.
+ * the refusal. `holdersRevision` is the digest of that inventory — a
+ * non-digest sanitizes to absent so a GUI that echoes it as
+ * `expectedHoldersRevision` cannot be handed a value the request schema
+ * rejects.
  */
 export const worktreeBusyErrorDetailsSchema = z.object({
   code: z.literal("WORKTREE_BUSY"),
   message: z.string(),
   holders: worktreeBusyHoldersSchema.optional(),
-  holdersRevision: z.string().optional(),
+  holdersRevision: holdersRevisionWireFieldSchema,
 });
 export type WorktreeBusyErrorDetails = z.infer<
   typeof worktreeBusyErrorDetailsSchema
@@ -104,13 +107,16 @@ export type WorktreeBusyErrorDetails = z.infer<
  * `WORKTREE_BUSY` (`message` + optional `holders` + optional
  * `holdersRevision`); a distinguishable `code` so a current GUI can
  * refresh consent instead of treating it as a generic busy. Old clients
- * see an unknown code and keep the 4xx busy-class refusal.
+ * see an unknown code and keep the 4xx busy-class refusal. The HOLDERS_CHANGED
+ * envelope is the echo path: the GUI reads this revision for re-review
+ * and later sends it as `expectedHoldersRevision`, so it uses the same
+ * sanitize-to-absent digest field as the failure-frame wire.
  */
 export const worktreeHoldersChangedErrorDetailsSchema = z.object({
   code: z.literal("WORKTREE_HOLDERS_CHANGED"),
   message: z.string(),
   holders: worktreeBusyHoldersSchema.optional(),
-  holdersRevision: z.string().optional(),
+  holdersRevision: holdersRevisionWireFieldSchema,
 });
 export type WorktreeHoldersChangedErrorDetails = z.infer<
   typeof worktreeHoldersChangedErrorDetailsSchema

@@ -9,7 +9,10 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import {
+  chatOpensPublishedCopy,
+  makeChatOpenTileRef,
+} from "@/lib/chats/chat-open-tile-ref";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useEpicArchiveChat,
@@ -1508,42 +1511,34 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const ownerUserId = useEpicNodeOwnerUserId(nodeId);
-  const opensPublishedCopy = chatRowOpensPublishedCopy({
-    isChat: openableType === "chat",
-    ownerHostId,
-    ownerUserId,
-    ownerIsUnreachable: ownerReachability.status === "unreachable",
-  });
   const openRef = useCallback(
     () =>
-      // The null re-checks below are for the COMPILER, not for the logic:
-      // `chatRowOpensPublishedCopy` guarantees both are non-null whenever it
-      // returns true, but that fact lives behind the function call where
-      // TypeScript's narrowing cannot follow it.
-      opensPublishedCopy && ownerHostId !== null && ownerUserId !== null
-        ? makePublishedChatTileRef({
+      openableType === "chat"
+        ? makeChatOpenTileRef({
             taskId: epicId,
             chatId: nodeId,
-            ownerUserId,
             ownerHostId,
+            ownerUserId,
+            ownerIsUnreachable: ownerReachability.status === "unreachable",
             name: nodeName,
-            hostId: readingHostId,
+            sessionHostId: readingHostId,
           })
         : {
             id: nodeId,
-            type: openableType ?? "chat",
+            instanceId: uuidv4(),
+            type: openableType ?? "terminal-agent",
             name: nodeName,
             hostId: openHostId,
           },
     [
-      opensPublishedCopy,
+      openableType,
       ownerHostId,
       ownerUserId,
+      ownerReachability.status,
       epicId,
       nodeId,
       nodeName,
       readingHostId,
-      openableType,
       openHostId,
     ],
   );
@@ -1554,7 +1549,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     navigateNested(epicId, tabId, () =>
       prepareOpenTilePreviewInTabFocusTarget(tabId, {
         ...openRef(),
-        instanceId: uuidv4(),
       }),
     );
     // The opening itself is the tree's, on every surface. A mounting surface
@@ -2650,30 +2644,6 @@ interface ChatRowButtonProps {
 const ARCHIVED_ROW_CLASS = "opacity-55";
 
 /**
- * Whether a chat row's click opens the published copy instead of a live tab.
- *
- * ONE predicate for the two components that must agree on the answer:
- * `ChatNode` builds the tile ref from it and `ChatRowButton` renders the lock
- * (and its "opens read-only" tooltip) from it. They started as two inlined
- * copies and drifted - the button showed the lock for a record with no owner
- * user while the click fell back to a live ref, promising a read-only copy and
- * then dialing the dead host - so the decision lives here and both read it.
- */
-function chatRowOpensPublishedCopy(input: {
-  readonly isChat: boolean;
-  readonly ownerHostId: string | null;
-  readonly ownerUserId: string | null;
-  readonly ownerIsUnreachable: boolean;
-}): boolean {
-  return (
-    input.isChat &&
-    input.ownerHostId !== null &&
-    input.ownerUserId !== null &&
-    input.ownerIsUnreachable
-  );
-}
-
-/**
  * The row button's accessible name. Its explicit `aria-label` replaces the
  * subtree as the name, so every state a glyph inside the row shows visually
  * (archived prefix, offline lock) has to be restated here or a keyboard /
@@ -2795,7 +2765,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
-  const showUnreachableLock = chatRowOpensPublishedCopy({
+  const showUnreachableLock = chatOpensPublishedCopy({
     isChat: artifactType === "chat",
     ownerHostId,
     ownerUserId: rowOwnerUserId,

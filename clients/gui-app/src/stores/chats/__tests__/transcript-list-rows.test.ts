@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
+import {
+  assistantRowId,
+  assistantSliceRowId,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import type {
+  ChatEvent,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type {
   HydratedSpan,
@@ -50,6 +59,25 @@ function model(id: string): ChatMessageModel {
   };
 }
 
+function modelWithPersistentMessageId(
+  id: string,
+  persistentMessageId: string,
+): ChatMessageModel {
+  return { ...model(id), persistentMessageId };
+}
+
+function modelWithoutPersistentMessageId(id: string): ChatMessageModel {
+  return { ...model(id), persistentMessageId: null };
+}
+
+function pendingModel(id: string): ChatMessageModel {
+  return {
+    ...modelWithoutPersistentMessageId(id),
+    role: "user",
+    statusLabel: "Pending",
+  };
+}
+
 function skeletonEntry(rowId: string): RowSkeletonEntry {
   return {
     rowId,
@@ -80,6 +108,8 @@ function windowOf(input: {
   skeleton: readonly (RowSkeletonEntry | undefined)[];
   skeletonComplete: boolean;
   invalidated: boolean;
+  liveMessages?: readonly Message[];
+  liveEvents?: readonly ChatEvent[];
 }): TranscriptWindow {
   return {
     epoch: 1,
@@ -90,8 +120,12 @@ function windowOf(input: {
     skeletonComplete: input.skeletonComplete,
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
     spans: input.spans,
-    liveMessages: [],
-    liveEvents: [],
+    liveMessages: [...(input.liveMessages ?? [])],
+    liveEvents: [...(input.liveEvents ?? [])],
+    snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
+    unavailableRowIds: [],
+    unavailableRowOrdinals: [],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
@@ -106,6 +140,123 @@ function kinds(rows: readonly TranscriptListRow[]): string[] {
 }
 
 describe("transcriptListRows", () => {
+  it("keeps a live stopped-turn row visible while the index is invalidated", () => {
+    const turnId = "turn-stopped";
+    const stopped: ChatEvent = {
+      eventId: "stopped-1",
+      type: "turn.stopped",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId,
+      messageId: "triggering-user",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { reason: "user_requested", turnHadOutput: false },
+    };
+    const stoppedRow = {
+      ...modelWithoutPersistentMessageId(assistantRowId(turnId)),
+      statusLabel: "Completed" as const,
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveEvents: [stopped],
+      }),
+      rendered: [stoppedRow],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${assistantRowId(turnId)}`]);
+  });
+
+  it("keeps a setup card projected from live events while invalidated", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-live",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const setupRowId = "setup-card:chat-1:3:2";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveEvents: [setup],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId("setup-card:chat-1:1:2"),
+        modelWithoutPersistentMessageId(setupRowId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${setupRowId}`]);
+  });
+
+  it("keeps every same-timestamp setup card projected from live events", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"] = "setup.running",
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const firstRowId = "setup-card:chat-1:2:2";
+    const secondRowId = "setup-card:chat-1:3:2";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveEvents: [
+          setupEvent("setup-live-1"),
+          // This boundary splits the same-timestamp setup events into two
+          // projected setup-card windows, which is the cardinality under test.
+          setupEvent("setup-boundary", "worktree.missing"),
+          setupEvent("setup-live-2"),
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId("setup-card:chat-1:1:2"),
+        modelWithoutPersistentMessageId(firstRowId),
+        modelWithoutPersistentMessageId(secondRowId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${firstRowId}`, `H:${secondRowId}`]);
+  });
+
   it("leaves a partially-hydrated turn's unserved rows as placeholders", () => {
     // Codex P1 (#1459): hydrating ONE row of a steer-split assistant turn
     // pulls the turn's shared records, and rendering those projects EVERY row
@@ -147,6 +298,89 @@ describe("transcriptListRows", () => {
     });
 
     expect(kinds(rows)).toEqual(["H:r-0", "H:r-1", "H:live-turn"]);
+  });
+
+  it("keeps a transient assistant seated when the skeleton names its projected row", () => {
+    const turnId = "turn-1";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const projectedRowId = assistantRowId(turnId);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(projectedRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithPersistentMessageId(projectedRowId, transientId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${projectedRowId}`]);
+    expect(rows[0].ordinal).toBe(0);
+  });
+
+  it("seats every projected slice backed by one transient assistant record", () => {
+    const turnId = "turn-split";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const firstRowId = assistantSliceRowId(turnId, 0, true);
+    const secondRowId = assistantSliceRowId(turnId, 1, true);
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry(firstRowId), skeletonEntry(secondRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [transient],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(firstRowId, transientId),
+        modelWithPersistentMessageId(secondRowId, transientId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${firstRowId}`, `H:${secondRowId}`]);
   });
 
   it("is the identity mapping on the legacy line", () => {
@@ -264,7 +498,7 @@ describe("transcriptListRows", () => {
     expect(rows[2].ordinal).toBe(null);
   });
 
-  it("renders only what it holds when the index is void", () => {
+  it("keeps the ordinal space mounted when the index is void", () => {
     const rows = transcriptListRows({
       window: windowOf({
         rowCount: 9,
@@ -276,8 +510,295 @@ describe("transcriptListRows", () => {
       rendered: [model("r-0")],
     });
 
-    // No placeholders drawn from a coordinate space the client has left.
-    expect(kinds(rows)).toEqual(["H:r-0"]);
+    expect(kinds(rows)).toEqual([
+      "P:0",
+      "P:1",
+      "P:2",
+      "P:3",
+      "P:4",
+      "P:5",
+      "P:6",
+      "P:7",
+      "P:8",
+    ]);
+    expect(rows.slice(0, 9).every((row) => row.kind === "placeholder")).toBe(
+      true,
+    );
+  });
+
+  it("does not expose a known nonempty void as an empty chat", () => {
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 5_000,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [],
+    });
+
+    expect(rows).toHaveLength(5_000);
+    expect(rows[0]).toMatchObject({ kind: "placeholder", ordinal: 0 });
+    expect(rows.at(-1)).toMatchObject({
+      kind: "placeholder",
+      ordinal: 4_999,
+    });
+  });
+
+  it("does not append a span-backed synthetic row after void placeholders", () => {
+    const syntheticId = "forked-chat-link:event-1";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [span(0, [syntheticId])],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [modelWithoutPersistentMessageId(syntheticId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
+  it("keeps a skeleton-named live row after void placeholders", () => {
+    const liveId = "accepted-user-in-skeleton";
+    const liveMessage: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: liveId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId: "turn-in-skeleton",
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(liveId)],
+        skeletonComplete: true,
+        invalidated: true,
+        liveMessages: [liveMessage],
+      }),
+      rendered: [modelWithPersistentMessageId(liveId, liveId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${liveId}`]);
+  });
+
+  it("keeps a genuinely pending null-record row after void placeholders", () => {
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [pendingModel("pending-user")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
+  });
+
+  it("keeps an orphaned steer projected from the live assistant during invalidation", () => {
+    const turnId = "turn-live-steer";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: "steer-live",
+          status: "completed",
+          timestamp: 1,
+          type: "steer",
+          queueItemId: "queue-live",
+          messageId: "missing-steered-user",
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId("steer:queue-live")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "H:steer:queue-live"]);
+  });
+
+  it("projects a live steer with its retained span-backed user dependency", () => {
+    const turnId = "turn-live-steer-with-user";
+    const steeredMessageId = "steered-user";
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientLiveAssistantMessageId(turnId),
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: "steer-with-user",
+          status: "completed",
+          timestamp: 1,
+          type: "steer",
+          queueItemId: "queue-with-user",
+          messageId: steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 1,
+      sessionAnchor: null,
+    };
+    const retainedSpan = {
+      ...span(0, [assistantRowId("retained-sibling")]),
+      messages: [steeredUser],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [retainedSpan],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId(steeredMessageId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${steeredMessageId}`]);
+  });
+
+  it("does not retain an unrelated historical orphan steer during invalidation", () => {
+    const turnId = "turn-unrelated-live";
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientLiveAssistantMessageId(turnId),
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [span(0, [""])],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId("steer:historical")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
+  it("does not append a synthetic row from an unresolved tail span", () => {
+    const syntheticId = "forked-chat-link:event-unresolved";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [span(0, [""])],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+      }),
+      rendered: [modelWithoutPersistentMessageId(syntheticId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
+  it("reuses invalidated placeholder objects across streaming renders", () => {
+    const window = windowOf({
+      rowCount: 2,
+      spans: [],
+      skeleton: [],
+      skeletonComplete: false,
+      invalidated: true,
+    });
+    const first = transcriptListRows({ window, rendered: [] });
+    const streamed = transcriptListRows({
+      window,
+      rendered: [pendingModel("pending-user")],
+    });
+
+    expect(streamed[0]).toBe(first[0]);
+    expect(streamed[1]).toBe(first[1]);
   });
 
   it("drops a span row that claims an ordinal past rowCount", () => {

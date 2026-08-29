@@ -1,4 +1,5 @@
 import {
+  holdersRevisionWireFieldSchema,
   isRpcErrorCode,
   worktreeBusyHoldersSchema,
   type LatestContract,
@@ -114,12 +115,18 @@ export class HostRpcError extends Error {
    */
   readonly fatalDetails: FatalErrorDetails | null;
   /**
-   * Typed `WORKTREE_BUSY` holder inventory. `null` when the envelope omitted
-   * it (old host), carried a different code, or failed schema parse. Callers
-   * that render a confirm dialog read this; they must not fall back to
-   * parsing `message`.
+   * Typed holder inventory on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED`. `null` when the envelope omitted it (old
+   * host), carried a different code, or failed schema parse. Callers that
+   * render a confirm dialog read this; they must not fall back to parsing
+   * `message`.
    */
   readonly holders: readonly WorktreeBusyHolder[] | null;
+  /**
+   * Opaque host digest of that inventory. `null` when the envelope omitted
+   * it, carried a different code, or was not a non-empty string.
+   */
+  readonly holdersRevision: string | null;
 
   constructor(details: {
     code: RpcErrorCode;
@@ -128,6 +135,7 @@ export class HostRpcError extends Error {
     method: string;
     fatalDetails: FatalErrorDetails | null;
     holders?: readonly WorktreeBusyHolder[] | null;
+    holdersRevision?: string | null;
   }) {
     super(details.message);
     this.name = "HostRpcError";
@@ -135,8 +143,12 @@ export class HostRpcError extends Error {
     this.requestId = details.requestId;
     this.method = details.method;
     this.fatalDetails = details.fatalDetails;
-    this.holders =
-      details.code === "WORKTREE_BUSY" ? (details.holders ?? null) : null;
+    this.holders = isHolderCarryingCode(details.code)
+      ? (details.holders ?? null)
+      : null;
+    this.holdersRevision = isHolderCarryingCode(details.code)
+      ? (details.holdersRevision ?? null)
+      : null;
   }
 
   static fromErrorDetails(
@@ -151,19 +163,25 @@ export class HostRpcError extends Error {
       method,
       fatalDetails: null,
       holders: holdersForBusyCode(error.code, error.holders),
+      holdersRevision: holdersRevisionForBusyCode(
+        error.code,
+        error.holdersRevision,
+      ),
     });
   }
 
   /**
    * Build from a decoded wire error envelope (`code` is an open string).
-   * Unknown codes collapse to `RPC_ERROR`. `holders` survive only on
-   * `WORKTREE_BUSY` when they match the protocol schema.
+   * Unknown codes collapse to `RPC_ERROR`. `holders` (and
+   * `holdersRevision`) survive only on `WORKTREE_BUSY` /
+   * `WORKTREE_HOLDERS_CHANGED` when they match the protocol schema.
    */
   static fromWireEnvelope(
     error: {
       readonly code: string;
       readonly message: string;
       readonly holders?: unknown;
+      readonly holdersRevision?: unknown;
     },
     requestId: string,
     method: string,
@@ -175,15 +193,23 @@ export class HostRpcError extends Error {
       method,
       fatalDetails: null,
       holders: holdersForBusyCode(error.code, error.holders),
+      holdersRevision: holdersRevisionForBusyCode(
+        error.code,
+        error.holdersRevision,
+      ),
     });
   }
+}
+
+function isHolderCarryingCode(code: string): boolean {
+  return code === "WORKTREE_BUSY" || code === "WORKTREE_HOLDERS_CHANGED";
 }
 
 function holdersForBusyCode(
   code: string,
   holders: unknown,
 ): readonly WorktreeBusyHolder[] | null {
-  if (code !== "WORKTREE_BUSY") {
+  if (!isHolderCarryingCode(code)) {
     return null;
   }
   if (holders === undefined || holders === null) {
@@ -191,6 +217,22 @@ function holdersForBusyCode(
   }
   const parsed = worktreeBusyHoldersSchema.safeParse(holders);
   return parsed.success ? parsed.data : null;
+}
+
+function holdersRevisionForBusyCode(
+  code: string,
+  revision: unknown,
+): string | null {
+  if (!isHolderCarryingCode(code)) return null;
+  const parsed = holdersRevisionWireFieldSchema.safeParse(revision);
+  if (
+    !parsed.success ||
+    parsed.data === undefined ||
+    parsed.data.length === 0
+  ) {
+    return null;
+  }
+  return parsed.data;
 }
 
 /**
