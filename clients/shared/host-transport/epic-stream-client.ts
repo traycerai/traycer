@@ -526,12 +526,27 @@ export class EpicStreamClient {
     return this.peerSpeaksAtLeast(EPIC_SUBSCRIBE_DURABILITY_STATUS_VERSION);
   }
 
+  /**
+   * A floor WITHIN one major line, which is the only kind of floor a minor
+   * describes.
+   *
+   * A different major is `false`, never "newer, therefore also this". A major
+   * is an independent contract, not a superset of the one before it, and
+   * `epic.subscribe` is the method that proves it: this branch's durability
+   * minors are @1.4-@1.6, while mainline's own work on the same method landed
+   * as @2.0 - a typed metadata/body plane carrying no `cloudSyncStatus` frame
+   * at all. Answering `2.0 > 1.6` told the renderer durability had been
+   * negotiated on a line that never defined it, so comment availability could
+   * sit in `checking` forever and absent v1 legs would be read as guarantees
+   * v2 never made.
+   *
+   * If a v2 durability capability is ever defined, it gets its own predicate
+   * and its own version constant. It does not arrive by arithmetic.
+   */
   private peerSpeaksAtLeast(version: SchemaVersion): boolean {
     const negotiated = this.session.getNegotiatedSchemaVersion();
     if (negotiated === null) return false;
-    if (negotiated.major !== version.major) {
-      return negotiated.major > version.major;
-    }
+    if (negotiated.major !== version.major) return false;
     return negotiated.minor >= version.minor;
   }
 
