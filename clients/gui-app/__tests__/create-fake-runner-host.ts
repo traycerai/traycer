@@ -123,6 +123,7 @@ export function createFakeRunnerHost(
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
+    fileSave: null,
     tokenStore: {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),

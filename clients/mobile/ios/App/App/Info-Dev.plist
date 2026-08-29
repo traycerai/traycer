@@ -56,6 +56,8 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Traycer uses the camera to scan the sign-in QR code shown on your desktop.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Traycer saves exported images to your photo library when you choose Save Image.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

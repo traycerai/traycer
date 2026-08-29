@@ -68,6 +68,7 @@ import type {
   HostRestartRequestResult,
   IDeviceFlowHost,
   IDeviceDescriber,
+  IFileSaveHost,
   ILinkCodeScanner,
   ILinkLoginDeepLinkSource,
   INotificationHost,
@@ -170,6 +171,15 @@ export interface MobileRunnerHostOptions {
    * host is even built, since a cold launch delivers the URL once.
    */
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
+  /**
+   * Native save route for everything the GUI exports (artifact markdown, the
+   * usage image, a Mermaid PNG, a chat image), or `null` where the plugins it
+   * needs have no implementation - the dev web entry, tests. Constructed by
+   * the entry point for the same web-safety reason as the scanner above, and
+   * `null` is not a degradation there: a browser tab still has the File System
+   * Access API and `<a download>`, which is exactly what gui-app falls back to.
+   */
+  readonly fileSave: IFileSaveHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -215,6 +225,7 @@ export class MobileRunnerHost implements IRunnerHost {
     ): Promise<readonly string[]> => paths,
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  readonly fileSave: IFileSaveHost | null;
   readonly zoom = null;
   readonly service = null;
   readonly traycerCli = null;
@@ -274,6 +285,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
+    this.fileSave = options.fileSave;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -1237,7 +1249,9 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * The shell's plugin set is kept SMALL rather than fixed at a number, and each
  * member earns its place by being the only way to reach an OS capability:
  * core, keyboard, push-notifications, app-launcher, secure-storage,
- * native-settings, device, barcode-scanner, network, and app. `@capacitor/app`
+ * native-settings, device, barcode-scanner, network, app, and the
+ * filesystem/share pair a WKWebView save has no browser route to (see
+ * `file-save.ts`). `@capacitor/app`
  * first earned its place because a URL the OS opens (a QR scanned by the
  * system camera) has no other route into JS (see `link-login-deep-links.ts`);
  * its lifecycle events are the second capability it is the only route to.
