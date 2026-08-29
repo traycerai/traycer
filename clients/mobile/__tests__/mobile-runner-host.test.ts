@@ -253,6 +253,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     linkCodeScanner: null,
     deviceDescriber: null,
     linkLoginDeepLinks: null,
+    hasAppTabs: true,
   });
 }
 
@@ -320,6 +321,7 @@ function phoneRunner(input: {
     linkCodeScanner: null,
     deviceDescriber: null,
     linkLoginDeepLinks: null,
+    hasAppTabs: true,
   });
 }
 

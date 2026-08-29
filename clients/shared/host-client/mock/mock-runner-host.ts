@@ -109,6 +109,12 @@ export interface MockRunnerHostOptions {
    */
   readonly hasLocalHost: boolean | undefined;
   /**
+   * Mirrors `IRunnerHost.hasAppTabs`. Pass `undefined` to fall back to
+   * `true`; a browser-flavoured test passes `false` to exercise the shell
+   * whose tabs the surrounding environment already provides.
+   */
+  readonly hasAppTabs?: boolean;
+  /**
    * In-memory `traycerCli` surface. Pass `null` to match mobile/web shells
    * that do not bundle the CLI; pass `undefined` for the same effect to keep
    * call sites terse. Tests that exercise the bootstrap-status failure card
@@ -160,6 +166,9 @@ export class MockRunnerHost implements IRunnerHost {
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
+  // Desktop-flavoured like `hasLocalHost`'s default: the mock stands in
+  // for a shell that owns its own tab layer unless a test says otherwise.
+  readonly hasAppTabs: boolean;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
     readonly title: string;
@@ -367,6 +376,8 @@ export class MockRunnerHost implements IRunnerHost {
         : options.workspaceFolderPickerPaths;
     this.hasLocalHost =
       options.hasLocalHost === undefined ? true : options.hasLocalHost;
+    this.hasAppTabs =
+      options.hasAppTabs === undefined ? true : options.hasAppTabs;
     this.traycerCli =
       options.traycerCli === undefined ? null : options.traycerCli;
     this.hostManagement =

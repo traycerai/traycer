@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
 // Frameless-desktop detection: Electron's preload bridge exposes
@@ -67,14 +68,57 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
  * native title bar: tabs and controls stay interactive, while the empty spacer
  * before the right-side controls remains available for window dragging.
  */
+interface HeaderComposition {
+  readonly showTabStrip: boolean;
+  /** Router history controls: present whenever the app itself is. */
+  readonly showHistoryNav: boolean;
+  readonly navDisabled: boolean;
+  readonly showBell: boolean;
+}
+
+/**
+ * Which pieces of the header this render puts on screen.
+ *
+ * Two independent inputs, kept apart on purpose. `variant` says what the app
+ * is currently able to show - host-loading renders above the router and above
+ * the notifications provider, so nav links would crash and the bell would
+ * throw looking for a stream context. `drawsTabLayer` says whether this SHELL
+ * draws the app's own tabs at all, which is a fact about its surroundings and
+ * not about this render.
+ *
+ * Only the strip reads both. History controls follow the app, not the strip:
+ * they move the router's own history, which exists whether or not the tabs
+ * above it are drawn here or by a browser.
+ */
+function headerComposition(
+  variant: AppHeaderVariant,
+  drawsTabLayer: boolean,
+): HeaderComposition {
+  const isAppVariant = variant === "app";
+  return {
+    showTabStrip: isAppVariant && drawsTabLayer,
+    showHistoryNav: isAppVariant,
+    navDisabled: variant === "host-loading",
+    showBell: variant !== "host-loading",
+  };
+}
+
+/**
+ * Whether the shell around this render draws the app's own tab layer.
+ *
+ * `null` is a host-less harness rather than a shell that declined, so it keeps
+ * the strip the app has always drawn.
+ */
+function useShellDrawsTabLayer(): boolean {
+  const runnerHost = useRunnerHostOrNull();
+  return runnerHost?.hasAppTabs ?? true;
+}
+
 function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
-  const showTabStrip = variant === "app";
-  // Host-loading renders above the router and above the
-  // notifications provider: nav links would crash, and the bell would
-  // throw when its hooks can't find the stream context.
-  const navDisabled = variant === "host-loading";
-  const showBell = variant !== "host-loading";
+  const drawsTabLayer = useShellDrawsTabLayer();
+  const { showTabStrip, showHistoryNav, navDisabled, showBell } =
+    headerComposition(variant, drawsTabLayer);
   const framelessDesktop = isFramelessDesktop();
   const showGlobalResourceMonitor = useSettingsStore(
     (state) => state.showGlobalResourceMonitor,
@@ -105,7 +149,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       )}
     >
       <WindowsMenuBar />
-      {showTabStrip ? <HistoryNavButtons /> : null}
+      {showHistoryNav ? <HistoryNavButtons /> : null}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor

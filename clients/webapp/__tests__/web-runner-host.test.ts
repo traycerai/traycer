@@ -49,6 +49,9 @@ describe("WebRunnerHost capability posture", () => {
     const host = runner();
 
     expect(host.hasLocalHost).toBe(false);
+    // The browser is already the tab bar: a strip inside one of its tabs
+    // would be a second row of tabs above the one in use.
+    expect(host.hasAppTabs).toBe(false);
     expect(host.workspaceFolders.canPickNatively).toBe(false);
     expect(await host.workspaceFolders.pickFolders()).toEqual([]);
     expect(await host.getLastKnownLocalHostId()).toBeNull();

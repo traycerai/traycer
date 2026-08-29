@@ -236,6 +236,11 @@ function bootstrap(): void {
       ? new MobileDeviceDescriber()
       : null,
     linkLoginDeepLinks,
+    // Same native gate as everything above: an installed app has one webview
+    // holding every context, so it draws the tabs itself. A browser tab of
+    // this same bundle already sits in a tab bar, and a strip inside it would
+    // be a second row of tabs above the one the person is using.
+    hasAppTabs: Capacitor.isNativePlatform(),
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

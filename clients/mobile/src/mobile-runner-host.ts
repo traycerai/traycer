@@ -170,6 +170,15 @@ export interface MobileRunnerHostOptions {
    * host is even built, since a cold launch delivers the URL once.
    */
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
+  /**
+   * Whether the app draws its own top-level tab layer here. `true` on an
+   * installed app, where one webview holds every context; `false` on the dev
+   * web entry, where the browser's own tabs already separate them and a strip
+   * inside one of them would be a second row of tabs above the first. Decided
+   * by the entry point, like every other browser-vs-native difference in this
+   * shell.
+   */
+  readonly hasAppTabs: boolean;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -193,6 +202,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost = false;
+  readonly hasAppTabs: boolean;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
@@ -274,6 +284,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
+    this.hasAppTabs = options.hasAppTabs;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,

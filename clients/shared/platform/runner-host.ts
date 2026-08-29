@@ -422,6 +422,26 @@ export interface IRunnerHost {
   readonly hasLocalHost: boolean;
 
   /**
+   * Whether this shell draws the app's own top-level Task-tab layer.
+   *
+   * `true` where one window holds every context and nothing outside the app
+   * separates them: the desktop shell and the installed phone app each have a
+   * single surface to put everything in, so the app has to provide the tabs
+   * itself.
+   *
+   * `false` where the surroundings ALREADY multiplex contexts, and an in-app
+   * strip would be a second row of tabs above the first. A browser tab is a
+   * whole document - its own URL, its own history, its own place in a tab bar
+   * the person already knows - so the browser's tabs ARE this app's tabs, and
+   * drawing more inside one of them splits one idea across two controls.
+   *
+   * A fact about the surroundings, not a product identity: it says what the
+   * environment already provides, which is why it is declared here beside the
+   * other capabilities instead of derived from which build is running.
+   */
+  readonly hasAppTabs: boolean;
+
+  /**
    * Subscribes to local-host snapshot changes. The handler fires
    * synchronously on subscribe with the current snapshot (or `null`), then
    * again whenever the snapshot transitions. Mobile shells emit a single

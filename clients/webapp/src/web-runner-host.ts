@@ -147,6 +147,12 @@ export class WebRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost = false;
+  /**
+   * The browser already gives every context its own tab, its own URL and
+   * its own history, so an in-app strip would be a second row of tabs above
+   * the one the person is already using.
+   */
+  readonly hasAppTabs = false;
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost = buildNotifications();

@@ -307,6 +307,7 @@ function createBaseRunnerHost(): IRunnerHost {
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
+    hasAppTabs: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
     listRegisteredHosts: () =>

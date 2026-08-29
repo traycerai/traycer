@@ -88,6 +88,21 @@ export function configureBrowserTabsPersistence(): void {
   setTabsLocalPersistenceEnabled(true);
 }
 
+/**
+ * A shell that draws no tab layer of its own: nothing can be split, and there
+ * is no strip whose arrangement would be worth restoring.
+ *
+ * Turning the local writer off is the coherent half, not a saving: the layout
+ * it persists is per-ORIGIN, while a shell without its own tabs gets its
+ * contexts from the environment - so a restore would hand a freshly opened
+ * context the arrangement of a different one, and the address it was opened at
+ * is the only thing that should decide what it shows.
+ */
+export function configureSingleContextTabs(): void {
+  setTabSplitCompatibility(false);
+  setTabsLocalPersistenceEnabled(false);
+}
+
 /** Only a successfully negotiated desktop authority disables the local writer. */
 export function configureDesktopTabsAuthority(supported: boolean): void {
   setTabSplitCompatibility(supported);

@@ -12,12 +12,20 @@ import { createFakeRunnerHost } from "./create-fake-runner-host";
  * BETWEEN rows, and a suite that builds its own host inline can only assert
  * one row at a time. Two facts this table is meant to make unmissable:
  *
- * - `installedMobile`, `webapp` and `browserDev` have the SAME capability
- *   posture. Any gate that means "this shell cannot do X" must treat all
- *   three alike, and a gate keyed on `mobileApp` demonstrably does not.
+ * - `installedMobile`, `webapp` and `browserDev` have the same capability
+ *   posture for everything the MACHINE can do - no local host, no native
+ *   folder dialog, no power bridge. Any gate that means "this shell cannot do
+ *   X" must treat all three alike, and a gate keyed on `mobileApp`
+ *   demonstrably does not. They part company on one axis only, and it is not
+ *   about the machine: `hasAppTabs` asks what the SURROUNDINGS already give
+ *   the user, and an installed app is alone on the screen where a browser tab
+ *   is one of many.
  * - `webapp` and `browserDev` are capability-identical AND product-flag
  *   identical, which is why the analytics surface is declared rather than
- *   derived - nothing observable distinguishes them.
+ *   derived - nothing observable distinguishes them. That equality is a
+ *   CONSTRAINT, not a coincidence: both are a browser tab, so a shell fact
+ *   that came out differently for the two would be a fact nothing in either
+ *   runtime could have told them apart by.
  */
 export interface ShellSurfaceFixture {
   /** How a failing assertion names the shell. */
@@ -50,9 +58,10 @@ function createDesktopRunnerHost(): IRunnerHost {
  * No local host and no power bridge: every host it can reach is another
  * machine, and nothing on the other side of a `setSleepBlocked` call.
  */
-function createRemoteOnlyRunnerHost(): IRunnerHost {
+function createRemoteOnlyRunnerHost(hasAppTabs: boolean): IRunnerHost {
   return createFakeRunnerHost({
     hasLocalHost: false,
+    hasAppTabs,
     workspaceFolders: {
       canPickNatively: false,
       pickFolders: () => Promise.resolve([]),
@@ -70,19 +79,19 @@ export function shellSurfaces(): readonly ShellSurfaceFixture[] {
     },
     {
       name: "installed mobile",
-      runnerHost: createRemoteOnlyRunnerHost(),
+      runnerHost: createRemoteOnlyRunnerHost(true),
       mobileApp: true,
       analyticsSurface: "mobile",
     },
     {
       name: "webapp",
-      runnerHost: createRemoteOnlyRunnerHost(),
+      runnerHost: createRemoteOnlyRunnerHost(false),
       mobileApp: false,
       analyticsSurface: "web",
     },
     {
       name: "browser dev",
-      runnerHost: createRemoteOnlyRunnerHost(),
+      runnerHost: createRemoteOnlyRunnerHost(false),
       mobileApp: false,
       analyticsSurface: "browser_dev",
     },

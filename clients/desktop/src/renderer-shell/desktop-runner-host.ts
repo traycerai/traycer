@@ -651,6 +651,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost: boolean = true;
+  // One window holds every context here, so the app draws its own tabs.
+  readonly hasAppTabs = true;
 
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
