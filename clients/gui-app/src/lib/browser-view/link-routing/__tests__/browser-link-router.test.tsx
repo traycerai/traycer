@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/link-routing/browser-link-router";
 import { BrowserLinkRoutingContext } from "@/lib/browser-view/link-routing/browser-link-routing-context";
 import type { BrowserLinkSource } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -24,11 +25,6 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState | null }>(
 );
 let routingSource: BrowserLinkSource | null = null;
 
-/** What `sessions.openTab` reports when the host has opened a tab. */
-interface OpenedTab {
-  readonly sessionId: string;
-  readonly tabId: string;
-}
 
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => viewportState.mobile,
@@ -125,7 +121,7 @@ describe("useBrowserLinkRouterForRunnerHost", () => {
     // racing the microtask queue. Tearing it down inside the `openTab` stub
     // gets that ordering from the call sequence itself: the router calls this
     // synchronously, so the canvas is empty by the time the `.then()` runs.
-    sessionsState.value = liveSessions((): Promise<OpenedTab> => {
+    sessionsState.value = liveSessions((): Promise<BrowserTabIdentity> => {
       useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
       return Promise.resolve({ sessionId: "sess-1", tabId: "tab-1" });
     });

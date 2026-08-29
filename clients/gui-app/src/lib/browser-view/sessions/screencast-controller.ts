@@ -721,7 +721,17 @@ export function createScreencastController(options: {
     // would wave it through, because it would be comparing the new frame
     // against itself.
     const downSequence = touch.downSequence;
-    if (downSequence === null) return;
+    // Refused, not merely stamped. A tap belongs to the frame it was made
+    // against; once that frame is gone the coordinates describe content that
+    // has been replaced, and BOTH delivery paths must say so. Sending it here
+    // while the queued path rejects the identical situation would make the
+    // answer depend on how busy the host happened to be.
+    if (downSequence === null || downSequence !== presentedSequence) {
+      // The page receives no click, so the multi-click chain it would have
+      // continued does not exist.
+      pointerClickCount = null;
+      return;
+    }
     const pressed = buildPointerFrame({
       event: touchPointerLikeAt(touch, event, 1),
       type: "down",
