@@ -437,6 +437,82 @@ describe("index deltas", () => {
     expect(appended.skeleton[101]?.rowId).toBe("row-101");
   });
 
+  it("applies an append whose rows a snapshot already counted, at the frame's own ordinals", () => {
+    // The host's append republish emits the bounded snapshot FIRST - stamped
+    // with the post-append `rowCount` and the subscriber's pre-delta
+    // `indexRevision` - and the delta for the same append right behind it. So
+    // the delta lands on a window whose `rowCount` already includes its rows.
+    // Read against `window.rowCount`, that has the `0 !== appendedRows`
+    // signature of a lost frame; voiding on it blanked the transcript and
+    // forced a resnapshot on EVERY append for the life of a turn, which is an
+    // empty chat under an active stream. The frame is self-consistent - its
+    // entries occupy `[rowCount - appended, rowCount)` - so it must apply, and
+    // seat at the frame-derived base rather than one past it.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: 0,
+      tail: {
+        fromOrdinal: 0,
+        messages: [userMessage("m-0", 0)],
+        events: [],
+      },
+    });
+    expect(seeded.rowCount).toBe(1);
+
+    const appended = applyIndexChange(seeded, {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "appended", entries: [skeletonEntry("m-0", 0)] }],
+    });
+
+    expect(appended.invalidated).toBe(false);
+    expect(appended.rowCount).toBe(1);
+    // At ordinal 0 - the ordinal the frame names - not at `window.rowCount`.
+    expect(appended.skeleton[0]?.rowId).toBe("m-0");
+    expect(appended.skeleton[1]).toBeUndefined();
+    // And the same baseline governs the stream prefix. The snapshot moved
+    // `rowCount` to 1 while the prefix was still 0, so an equality against
+    // `window.rowCount` never holds again: the prefix freezes below `rowCount`
+    // for the rest of the epoch, `skeletonComplete` can never be re-established
+    // from it, and the completion watchdog reads a healthy stream as stalled.
+    expect(appended.skeletonStreamCoveredThrough).toBe(1);
+    expect(appended.skeletonComplete).toBe(true);
+  });
+
+  it("leaves the skeleton incomplete when the append does not fill what the snapshot got ahead by", () => {
+    // The negative that keeps the assertion above from passing for the wrong
+    // reason: re-establishing completeness is conditional on the append
+    // actually accounting for what the snapshot got ahead by, not on the frame
+    // being an append. Here the snapshot moved `rowCount` by three and the
+    // delta names only the last of them, so ordinals 0 and 1 are undelivered -
+    // whatever the cause - and the client must keep saying so.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 3,
+      indexRevision: 0,
+      tail: {
+        fromOrdinal: 0,
+        messages: [userMessage("m-0", 0)],
+        events: [],
+      },
+    });
+
+    const appended = applyIndexChange(seeded, {
+      epoch: 0,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "appended", entries: [skeletonEntry("m-2", 2)] }],
+    });
+
+    expect(appended.invalidated).toBe(false);
+    expect(appended.skeleton[2]?.rowId).toBe("m-2");
+    expect(appended.skeleton[1]).toBeUndefined();
+    expect(appended.skeletonStreamCoveredThrough).toBe(0);
+    expect(appended.skeletonComplete).toBe(false);
+  });
+
   it("drops the whole span containing a row that was rewritten in place", () => {
     // The whole span, not the row: a span's records are a DEDUPLICATED union
     // across its rows, so the client cannot say which records belong to the
@@ -1660,6 +1736,38 @@ describe("what an overlap keeps", () => {
     // And the span survives - adopting is not the same as contradicting.
     expect(hydratedRecords(described).messages.map((m) => m.messageId)).toEqual(
       ["row-2"],
+    );
+  });
+
+  it("fills them from an appended delta when no chunk will reach them again", () => {
+    // The other authority, and the only one for a row appended AFTER the
+    // skeleton stream finished: a chunk backfilled the tail above, but nothing
+    // re-streams for a row the delta itself introduces. Left unadopted the span
+    // keeps `""` at that ordinal, `transcriptListRows` finds no model with that
+    // id and suppresses the ordinal, and then drops the real model as one the
+    // skeleton has already placed - so the row renders nowhere at all.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 0,
+      tail: {
+        fromOrdinal: 0,
+        messages: [userMessage("row-0", 1)],
+        events: [],
+      },
+    });
+    expect(seeded.spans[0].rowIds).toEqual([""]);
+
+    const described = applyIndexChange(seeded, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "appended", entries: [skeletonEntry("row-0", 0)] }],
+    });
+
+    expect(described.spans[0].rowIds).toEqual(["row-0"]);
+    expect(hydratedRecords(described).messages.map((m) => m.messageId)).toEqual(
+      ["row-0"],
     );
   });
 
