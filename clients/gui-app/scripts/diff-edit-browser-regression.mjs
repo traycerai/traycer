@@ -15,9 +15,9 @@ const projectRoot = path.resolve(
 );
 const fixtureUrlPath = "/src/__tests__/browser/diff-edit-focus.html";
 const chromePath = await findChrome();
-const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-diff-edit-"));
 const vitePort = await freePort();
 let chrome;
+let chromeProfilePath;
 let client;
 let viteProcess;
 
@@ -54,35 +54,11 @@ try {
 
   const chromeEnv = { ...process.env };
   delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
-  chrome = spawn(
-    chromePath,
-    [
-      "--headless=new",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-default-apps",
-      "--disable-extensions",
-      "--disable-features=Translate",
-      "--disable-sync",
-      "--no-default-browser-check",
-      "--no-first-run",
-      "--no-sandbox",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profilePath}`,
-      "about:blank",
-    ],
-    { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"] },
-  );
-  let chromeError = "";
-  chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", (chunk) => {
-    chromeError += chunk;
-  });
-
-  const devtoolsWebSocketUrl = await waitForDevToolsUrl(
-    chrome,
-    () => chromeError,
-  );
+  const launched = await launchChromeWithDevTools(chromePath, chromeEnv);
+  chrome = launched.chrome;
+  chromeProfilePath = launched.profilePath;
+  const readChromeError = launched.readError;
+  const devtoolsWebSocketUrl = launched.devtoolsWebSocketUrl;
   const devtoolsUrl = new URL(devtoolsWebSocketUrl);
   devtoolsUrl.protocol = "http:";
   devtoolsUrl.pathname = "";
@@ -91,7 +67,7 @@ try {
   await waitForHttp(
     new URL("/json/version", devtoolsUrl).href,
     chrome,
-    () => chromeError,
+    readChromeError,
     "Chrome DevTools",
   );
   const targetResponse = await fetch(
@@ -440,9 +416,17 @@ try {
   console.log("diff edit browser regression passed");
 } finally {
   client?.close();
-  chrome?.kill("SIGTERM");
+  if (chrome !== undefined) {
+    await terminateProcessTree(chrome);
+  }
   viteProcess?.kill("SIGTERM");
-  await rm(profilePath, { recursive: true, force: true, maxRetries: 3 });
+  if (chromeProfilePath !== undefined) {
+    await rm(chromeProfilePath, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+    });
+  }
 }
 
 async function findChrome() {
@@ -517,6 +501,93 @@ async function waitForDevToolsUrl(process, readError) {
     await delay(50);
   }
   throw new Error(`Timed out waiting for Chrome DevTools:\n${readError()}`);
+}
+
+/**
+ * Launches headless Chrome and waits for its DevTools endpoint, retrying the
+ * whole spawn on timeout.
+ *
+ * A cold CI runner has been observed to take Chrome past the 30s DevTools
+ * deadline outright (its FIRST stderr line arrived 21s after spawn), and a
+ * single flat deadline makes that a hard failure. A retry only helps when it
+ * starts clean, so each attempt gets a fresh profile directory, and a
+ * timed-out attempt is fully killed (SIGTERM, then SIGKILL after a grace
+ * period, awaited to the exit event) and its profile removed before the next
+ * spawn - otherwise the retry inherits a locked profile plus the previous
+ * attempt's crashpad children, which is exactly the orphan pile the runner
+ * had to reap.
+ */
+async function launchChromeWithDevTools(chromePath, chromeEnv) {
+  const attempts = 3;
+  let lastError = new Error("Chrome launch was not attempted");
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const profilePath = await mkdtemp(
+      path.join(tmpdir(), "traycer-diff-edit-"),
+    );
+    const chrome = spawn(
+      chromePath,
+      [
+        "--headless=new",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-features=Translate",
+        "--disable-sync",
+        "--no-default-browser-check",
+        "--no-first-run",
+        "--no-sandbox",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profilePath}`,
+        "about:blank",
+      ],
+      { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let chromeError = "";
+    chrome.stderr.setEncoding("utf8");
+    chrome.stderr.on("data", (chunk) => {
+      chromeError += chunk;
+    });
+    try {
+      const devtoolsWebSocketUrl = await waitForDevToolsUrl(
+        chrome,
+        () => chromeError,
+      );
+      return {
+        chrome,
+        profilePath,
+        devtoolsWebSocketUrl,
+        readError: () => chromeError,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.error(
+        `Chrome launch attempt ${attempt}/${attempts} failed: ${lastError.message}`,
+      );
+      await terminateProcessTree(chrome);
+      await rm(profilePath, { recursive: true, force: true, maxRetries: 3 });
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Ends a spawned process for real: SIGTERM, a 2s grace period, then SIGKILL,
+ * resolving only once the `exit` event has fired. Chrome ignores SIGTERM
+ * during early startup, and a fire-and-forget kill left it (and its crashpad
+ * handlers) alive for the CI runner to reap as orphans.
+ */
+async function terminateProcessTree(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => {
+    child.once("exit", () => resolve(true));
+  });
+  child.kill("SIGTERM");
+  const terminated = await Promise.race([exited, delay(2_000, false)]);
+  if (terminated === false) {
+    child.kill("SIGKILL");
+    await exited;
+  }
 }
 
 async function connectCdp(url) {
