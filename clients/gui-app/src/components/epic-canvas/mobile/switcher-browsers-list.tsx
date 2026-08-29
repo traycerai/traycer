@@ -117,7 +117,11 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
   // with a toast and opens nothing, and a sheet that left anyway would take the
   // unavailable state's Retry with it. Same rule the Terminals row follows,
   // which closes on `onLaunched`.
-  const handleAdd = useAddBrowserAction(epicId, tabId, onClose);
+  const { add: handleAdd, isAdding } = useAddBrowserAction(
+    epicId,
+    tabId,
+    onClose,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -140,6 +144,7 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
             aria-label="Add browser"
             data-testid="switcher-new-browser"
             className="text-muted-foreground hover:text-foreground"
+            disabled={isAdding}
             onClick={handleAdd}
           >
             <Plus className="size-4" />
@@ -162,6 +167,7 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
         tabId={tabId}
         onClose={onClose}
         onAddBrowser={handleAdd}
+        isAddingBrowser={isAdding}
       />
     </div>
   );
@@ -180,6 +186,7 @@ function SwitcherBrowsersBody(props: {
   readonly tabId: string;
   readonly onClose: () => void;
   readonly onAddBrowser: () => void;
+  readonly isAddingBrowser: boolean;
 }) {
   const sessions = useBrowserSessionsContext();
   const { tabs, filteredTabs } = props;
@@ -206,7 +213,10 @@ function SwitcherBrowsersBody(props: {
         />
       ) : null}
       {isEmpty ? (
-        <BrowsersPanelEmptyState onAddBrowser={props.onAddBrowser} />
+        <BrowsersPanelEmptyState
+          onAddBrowser={props.onAddBrowser}
+          isAdding={props.isAddingBrowser}
+        />
       ) : null}
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
       {filteredTabs.length > 0 ? (

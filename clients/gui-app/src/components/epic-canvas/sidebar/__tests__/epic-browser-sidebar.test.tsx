@@ -1324,7 +1324,9 @@ describe("BrowsersPanelActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
 
-    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
     await waitFor(() => {
       expect(navigateNested).toHaveBeenCalledWith(
         "epic-1",
@@ -1352,7 +1354,9 @@ describe("BrowsersPanelActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
 
-    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
     await waitFor(() => {
       expect(navigateNested).toHaveBeenCalledOnce();
     });

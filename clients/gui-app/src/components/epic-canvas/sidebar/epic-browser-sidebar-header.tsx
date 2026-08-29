@@ -87,7 +87,11 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const resolvedHost = useHostDirectoryEntryForHostId(hostPin.resolvedHostId);
-  const addBrowser = useAddBrowserAction(props.epicId, props.tabId, null);
+  const { add: addBrowser, isAdding } = useAddBrowserAction(
+    props.epicId,
+    props.tabId,
+    null,
+  );
   const handleAdd = useCallback(() => {
     if (collapsed) setPanelSectionCollapsed("browsers", false);
     addBrowser();
@@ -131,6 +135,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
         aria-label="Add browser"
         data-testid="epic-browsers-panel-add"
         className="text-muted-foreground hover:text-foreground"
+        disabled={isAdding}
         onClick={handleAdd}
       >
         <Plus className="size-4" aria-hidden />

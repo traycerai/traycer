@@ -96,7 +96,11 @@ function BrowsersPanelBodyLive(props: {
   const prepareFocus = useEpicCanvasStore(
     (state) => state.prepareSetActiveTileTabFocusTarget,
   );
-  const addBrowser = useAddBrowserAction(props.epicId, props.tabId, null);
+  const { add: addBrowser, isAdding } = useAddBrowserAction(
+    props.epicId,
+    props.tabId,
+    null,
+  );
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -169,7 +173,12 @@ function BrowsersPanelBodyLive(props: {
           onRetry={sessions.retry}
         />
       ) : null}
-      {isEmpty ? <BrowsersPanelEmptyState onAddBrowser={addBrowser} /> : null}
+      {isEmpty ? (
+        <BrowsersPanelEmptyState
+          onAddBrowser={addBrowser}
+          isAdding={isAdding}
+        />
+      ) : null}
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
       {hasResults ? (
         <ul
@@ -246,6 +255,7 @@ export function BrowsersPanelUnavailableState(props: {
 
 export function BrowsersPanelEmptyState(props: {
   readonly onAddBrowser: () => void;
+  readonly isAdding: boolean;
 }) {
   return (
     <div
@@ -263,6 +273,7 @@ export function BrowsersPanelEmptyState(props: {
         type="button"
         variant="outline"
         size="sm"
+        disabled={props.isAdding}
         onClick={props.onAddBrowser}
       >
         <Plus className="size-3.5" aria-hidden />

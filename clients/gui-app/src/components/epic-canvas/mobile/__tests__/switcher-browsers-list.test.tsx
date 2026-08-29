@@ -280,12 +280,36 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockResolvedValue({ sessionId: "sess-2", tabId: "tab-9" });
     renderList(onClose);
 
-    await user.click(screen.getByTestId("switcher-new-browser"));
+    // A list with rows renders no empty state, so the header "+" is the only
+    // control carrying this name here - the two-match case is pinned by its own
+    // test below.
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
 
-    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
+  });
+
+  it("opens one browser for two taps while the host is still answering", async () => {
+    const user = userEvent.setup();
+    // A request that never settles is the whole of the window this guards: on a
+    // phone the host round-trip is long enough to be tapped through, and two
+    // answers would mean two tabs and two tiles with nothing downstream to
+    // collapse them.
+    openTab.mockImplementation(() => new Promise(() => undefined));
+    renderList(() => undefined);
+    const add = screen.getByRole("button", { name: "Add browser" });
+
+    await user.click(add);
+    await waitFor(() => {
+      expect(add.hasAttribute("disabled")).toBe(true);
+    });
+    await user.click(add);
+
+    expect(openTab).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the sheet open when a browser cannot be created", async () => {
@@ -294,7 +318,7 @@ describe("SwitcherBrowsersList", () => {
     replaceSessions([], "failed");
     renderList(onClose);
 
-    await user.click(screen.getByTestId("switcher-new-browser"));
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
 
     // Nothing opened, so there is nothing for the sheet to get out of the way
     // of - and leaving would take this state's Retry with it.
@@ -309,7 +333,7 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockRejectedValue(new Error("no runtime"));
     renderList(onClose);
 
-    await user.click(screen.getByTestId("switcher-new-browser"));
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalled();
