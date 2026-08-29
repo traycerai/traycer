@@ -323,6 +323,27 @@ export const assistantMessageSchema = z.object({
    */
   serviceTier: z.string().nullable().default(null),
   /**
+   * NAME of the environment variable whose credential authenticated this turn
+   * (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`); `null` when the turn ran
+   * on the profile the user signed into.
+   *
+   * Recorded, not derived. The provider CLI prefers an env key/token over its
+   * own signed-in store, so "which account did this turn actually run on?" has
+   * an answer the displayed profile label alone gets WRONG - and the answer is
+   * knowable only at spawn time. It is stamped from the adapter's `turn.started`
+   * and never recomputed; a renderer that re-derived it at display time would
+   * answer for today's environment, not this turn's.
+   *
+   * `null` IS the claim "the profile sign-in was used", so the field carries
+   * meaning in both states. Defaulted so turns persisted before it existed parse
+   * cleanly - those legacy rows read as `null` and therefore make that claim
+   * without evidence, which is why the renderer shows the annotation only on a
+   * POSITIVE value and never renders a "signed in normally" badge from absence.
+   *
+   * The name only, never the value: this record replicates cross-host.
+   */
+  envCredentialVar: z.string().nullable().default(null),
+  /**
    * Durable image resolution record for this message's markdown-referenced
    * images (`chat.subscribe@1.6`), one entry per distinct `canonicalSource`.
    * Defaulted so messages persisted before image support existed parse
