@@ -1,3 +1,8 @@
+// FIRST, ahead of every import that reaches the shared renderer: the tab
+// store reads its persisted layout while its module evaluates, so this
+// entry's answer has to be on the record before that module is reached.
+// See `single-context-tabs.ts`.
+import "./single-context-tabs";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";
