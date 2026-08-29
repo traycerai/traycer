@@ -385,6 +385,13 @@ export interface IRunnerHost {
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   /**
+   * How this shell commits a blob the user asked to keep, or `null` where it
+   * owns no native route and the caller falls back to the browser save APIs.
+   * A capability, not an identity: a plain desktop browser tab is `null` here
+   * without being any less of a desktop.
+   */
+  readonly fileSave: IFileSaveHost | null;
+  /**
    * Desktop display-zoom surface. Present on desktop shells and `null` on
    * shells that do not own a native app-scale control.
    */
@@ -669,6 +676,47 @@ export interface IFileDropHost {
    * paste event whose DOM clipboard has no usable content.
    */
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
+}
+
+/** The bytes and their identity, as handed to `IFileSaveHost.saveFile`. */
+export interface FileSaveRequest {
+  readonly name: string;
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
+/**
+ * Where a completed save landed. `name` is display copy for the confirmation;
+ * `path` is the absolute location, which only a shell whose save mechanism
+ * REPORTS one can fill in - a native save dialog names the file it wrote,
+ * while a share sheet hands the bytes to another app and never says where they
+ * went. `path` is `null` there, and no "open it" affordance is possible.
+ */
+export interface SavedFileLocation {
+  readonly name: string;
+  readonly path: string | null;
+}
+
+/**
+ * The shell's native "put these bytes somewhere the user keeps files"
+ * capability, or `null` on `IRunnerHost.fileSave` where the shell has none and
+ * the caller must fall back to the web save APIs (a plain browser tab, tests).
+ *
+ * The two shells that have one reach it very differently - Electron opens a
+ * native save dialog and learns a path, a phone writes a temporary file and
+ * offers it to the OS share sheet - so this contract states only what both can
+ * honour: the bytes go out, the user may dismiss the surface, and a path comes
+ * back only when the mechanism produced one.
+ */
+export interface IFileSaveHost {
+  /** `null` when the user dismissed the dialog or sheet without saving. */
+  saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null>;
+  /**
+   * Re-opens a file this shell saved, by the `path` it reported, with the OS
+   * default application. `null` where the shell never learns a path, which is
+   * also every case where `saveFile` reports `path: null`.
+   */
+  readonly openSavedFile: ((path: string) => Promise<void>) | null;
 }
 
 /**
