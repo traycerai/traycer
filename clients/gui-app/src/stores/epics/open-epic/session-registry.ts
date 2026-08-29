@@ -3,6 +3,11 @@ import type {
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import * as Y from "yjs";
+import {
+  createSessionRegistry,
+  type SessionRegistry,
+} from "@traycer-clients/shared/replica-runtime";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
 import {
@@ -20,8 +25,17 @@ import {
  * temporarily stays above the cap until at least one entry becomes clean and
  * inactive, at which point it prunes down to the cap. Closing an Epic tab
  * forcibly disposes that session regardless of the cap.
+ *
+ * The warm-pool CORE - the entry map, the mounted-reference count, the MRU
+ * ordering, the cap walk, the one teardown path, the listener set - is the
+ * shared `createSessionRegistry`, which the chat and terminal registries also
+ * run on. What is genuinely this plane's stays here: the retention of dirty
+ * handles across a host re-point, the unsynced-edits projection over both
+ * collections, the desktop ownership release listener, and the per-entry
+ * eligibility subscriptions that make a prune-relevant change observable at
+ * all.
  */
-export const DEFAULT_MAX_LIVE_EPICS = 5;
+export { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
 const loggedLiveTitleReadFailures = new Set<string>();
 
 /**
@@ -42,15 +56,27 @@ const loggedLiveTitleReadFailures = new Set<string>();
  */
 const RETAINED_UNSYNCED_SOFT_CAP = 16;
 
+/**
+ * Every epic entry shares one scope. The registry's scope key discriminates
+ * REBUILDS within one identity, and this plane has none: a re-point goes
+ * through {@link OpenEpicSessionRegistry.replaceMounted}, which is an explicit
+ * swap with its own retention rules, not a rebuild the registry may perform on
+ * its own.
+ */
+const EPIC_SESSION_SCOPE = "epic";
+
 export interface OpenEpicSessionRegistryOptions {
   readonly maxLive: number;
 }
 
-interface RegistryEntry {
+/**
+ * What the registry holds per epic: the handle, the subscriptions that make a
+ * prune-relevant change observable, and the call-scoped retention answer for
+ * whichever teardown is about to happen.
+ */
+interface EpicRegistrySession {
   readonly epicId: string;
   readonly handle: OpenEpicStoreHandle;
-  lastUsedAt: number;
-  mountedRefs: number;
   /**
    * Unsubscribe from the handle's unsynced-queue signal. Reaped on
    * release / disposeAll so we don't leak a zustand subscription after
@@ -70,6 +96,18 @@ interface RegistryEntry {
    * re-emitting to every React subscriber per character.
    */
   lastEligibilityKey: string;
+  /**
+   * The retention answer for the teardown that is about to happen, or `null`
+   * to destroy the handle with its edits.
+   *
+   * Recorded on the outgoing session BY THE CALL that knows it, because that is
+   * where the answer lives: whether a dirty handle should be retained depends
+   * on the host stamp and owner identity the caller can prove, and on whether
+   * the caller already transferred those edits into a replacement - none of
+   * which is readable off the session. `onBeforeDispose` consumes it and clears
+   * it, so it can never be read by a later, unrelated teardown.
+   */
+  pendingRetention: RetainedHandleIdentity | null;
 }
 
 function eligibilityKeyFor(
@@ -270,10 +308,7 @@ function findMergeTarget(
  *     active entries.
  */
 export class OpenEpicSessionRegistry {
-  private readonly entries = new Map<string, RegistryEntry>();
-  private readonly maxLive: number;
-  private nextTick: number = 0;
-  private readonly listeners = new Set<() => void>();
+  private readonly sessions: SessionRegistry<EpicRegistrySession>;
   private releaseListener: ((epicId: string) => void) | null = null;
   /**
    * Cached snapshot of the last-computed `getUnsyncedEdits()` result. We
@@ -284,10 +319,11 @@ export class OpenEpicSessionRegistry {
   private cachedUnsynced: ReadonlyArray<UnsyncedEditsEntry> = [];
   private cachedKey: string = "";
   /**
-   * Dirty sessions preserved across a host re-point, by epic. Parallel to
-   * `entries` and deliberately NOT reachable through it: a retained buffer has
-   * no mounted tab and must never be handed back by `get`/`peek`/`acquire`,
-   * or a re-point would adopt the corpse of the session it just replaced.
+   * Dirty sessions preserved across a host re-point, by epic. Parallel to the
+   * registry's entries and deliberately NOT reachable through them: a retained
+   * buffer has no mounted tab and must never be handed back by
+   * `get`/`peek`/`acquire`, or a re-point would adopt the corpse of the session
+   * it just replaced.
    *
    * `prune()` cannot reach these and must not: MRU eviction exists to reclaim
    * idle *clean* sessions, and every entry here is dirty by construction.
@@ -301,11 +337,58 @@ export class OpenEpicSessionRegistry {
   private nextRetentionSeq: number = 0;
 
   constructor(options: OpenEpicSessionRegistryOptions) {
-    this.maxLive = options.maxLive;
+    this.sessions = createSessionRegistry<EpicRegistrySession>({
+      environment: createRendererRuntimeEnvironment(),
+      policy: {
+        // No clock: this plane prunes on acquire and on an eligibility change,
+        // never on elapsed time.
+        idleTtlMs: null,
+        maxWarm: options.maxLive,
+        // `DEFAULT_MAX_LIVE_EPICS` bounds the RESIDENT set, so a mounted epic
+        // counts against the cap even though it can never be the entry the
+        // walk evicts.
+        warmCapScope: "all-entries",
+        // Not consulted under `"all-entries"`; every entry is counted already.
+        busyCountsTowardWarmCap: true,
+        maxActiveDeferMs: null,
+        // `releaseMounted` decrements without touching `lastUsedAt`: the epic a
+        // prune picks is the least recently USED, not the least recently
+        // released.
+        refreshOrderOnRelease: false,
+        retainWhenIdle: () => true,
+        hasActiveWork: (session) => hasActiveAgentWork(session.epicId),
+        // Never evict a session holding unsynced edits or unflushed writes.
+        isEvictable: (session) => session.handle.isClean(),
+        onBeforeDispose: (session, cause) => {
+          // Same teardown for every route out of the registry, retention
+          // included: the entry's subscriptions close over it and call
+          // `prune()`/`emit()`, and it is no longer registered for either to be
+          // about.
+          unsubscribeSession(session);
+          // Desktop ownership belongs to the tab/Epic, not to one transient
+          // transport during that tab's lifetime, so a re-point deliberately
+          // does not announce a release. Announced on the retention arm too:
+          // the live SESSION is gone either way, and a retained buffer has no
+          // transport and claims nothing, so holding that ownership open for it
+          // would pin the epic to a window that can no longer serve it.
+          if (cause !== "replaced") this.releaseListener?.(session.epicId);
+          const retention = session.pendingRetention;
+          session.pendingRetention = null;
+          if (retention === null) return "dispose";
+          this.retainDirtyHandle(session, retention);
+          return "retain";
+        },
+        dispose: (session) => {
+          session.handle.dispose();
+        },
+        onParked: () => {},
+        onRevived: () => {},
+      },
+    });
   }
 
   size(): number {
-    return this.entries.size;
+    return this.sessions.size();
   }
 
   /**
@@ -325,10 +408,7 @@ export class OpenEpicSessionRegistry {
   }
 
   get(epicId: string): OpenEpicStoreHandle | null {
-    const entry = this.entries.get(epicId);
-    if (entry === undefined) return null;
-    entry.lastUsedAt = this.tick();
-    return entry.handle;
+    return this.sessions.get(epicId)?.handle ?? null;
   }
 
   /**
@@ -340,31 +420,46 @@ export class OpenEpicSessionRegistry {
    * when the caller is actively opening/interacting with the session.
    */
   peek(epicId: string): OpenEpicStoreHandle | null {
-    return this.entries.get(epicId)?.handle ?? null;
+    return this.sessions.peek(epicId)?.handle ?? null;
   }
 
   acquire(
     epicId: string,
     factory: (epicId: string) => OpenEpicStoreHandle,
   ): OpenEpicStoreHandle {
-    return this.acquireWithMountRefs(epicId, factory, 0);
+    return this.sessions.transact(() => {
+      const handle = this.sessions.materialize(epicId, EPIC_SESSION_SCOPE, () =>
+        this.createSession(epicId, factory(epicId)),
+      ).handle;
+      this.sessions.pruneWarm();
+      this.sessions.notify();
+      return handle;
+    });
   }
 
   acquireMounted(
     epicId: string,
     factory: (epicId: string) => OpenEpicStoreHandle,
   ): OpenEpicStoreHandle {
-    return this.acquireWithMountRefs(epicId, factory, 1);
+    return this.sessions.transact(() => {
+      const handle = this.sessions.acquire(epicId, EPIC_SESSION_SCOPE, () =>
+        this.createSession(epicId, factory(epicId)),
+      ).handle;
+      this.sessions.pruneWarm();
+      this.sessions.notify();
+      return handle;
+    });
   }
 
   releaseMounted(epicId: string): void {
-    const entry = this.entries.get(epicId);
-    if (entry === undefined) return;
-    if (entry.mountedRefs > 0) {
-      entry.mountedRefs -= 1;
-    }
-    this.prune();
-    this.emit();
+    this.sessions.transact(() => {
+      // `"warm"` because a dropped mount reference is not a decision about the
+      // session - the tab is still open, and the cap is what decides whether
+      // this epic stays resident.
+      this.sessions.release(epicId, "warm");
+      this.sessions.pruneWarm();
+      this.sessions.notify();
+    });
   }
 
   /**
@@ -382,59 +477,61 @@ export class OpenEpicSessionRegistry {
     nextHandle: OpenEpicStoreHandle,
     previousDisposition: ReplacedHandleDisposition,
   ): boolean {
-    const previous = this.entries.get(epicId);
-    if (previous === undefined || previous.handle !== previousHandle) {
-      return false;
-    }
-    const next = this.createEntry(epicId, nextHandle, previous.mountedRefs);
-    this.entries.set(epicId, next);
-    // The one disposal path that used to ignore the rule `prune()` already
-    // follows: never destroy a session holding unsynced edits. Below `@1.2`
-    // the cross-host merge is unreachable, so this dispose WAS the data loss
-    // (F10). Gated on `isDirty` rather than `isClean()` deliberately -
-    // `isClean()` also requires an open transport, which a re-point has by
-    // definition taken away, so it would retain every failover including
-    // fully-synced ones and nothing would ever retire them.
-    //
-    // `editsTransferredToReplacement` is the second half of that rule and has
-    // to be checked FIRST: a transferred handle is still `isDirty` (its own
-    // store never saw an acknowledgement and never will), so the dirty test
-    // alone cannot tell "the only copy" apart from "a duplicate of what the
-    // replacement now holds" - and retaining the duplicate is what pins the
-    // epic as permanently unsyncable. See `ReplacedHandleDisposition`.
-    if (
-      previous.handle.store.getState().isDirty &&
-      !previousDisposition.editsTransferredToReplacement
-    ) {
-      this.retainDirtyHandle(previous, previousDisposition);
-    } else {
-      this.disposeEntry(previous, false);
-    }
-    this.prune();
-    this.emit();
-    return true;
+    return this.sessions.transact(() => {
+      const entry = this.sessions.peekEntry(epicId);
+      if (entry === null || entry.session.handle !== previousHandle) {
+        return false;
+      }
+      // The one disposal path that used to ignore the rule `prune()` already
+      // follows: never destroy a session holding unsynced edits. Below `@1.2`
+      // the cross-host merge is unreachable, so this dispose WAS the data loss
+      // (F10). Gated on `isDirty` rather than `isClean()` deliberately -
+      // `isClean()` also requires an open transport, which a re-point has by
+      // definition taken away, so it would retain every failover including
+      // fully-synced ones and nothing would ever retire them.
+      //
+      // `editsTransferredToReplacement` is the second half of that rule and has
+      // to be checked FIRST: a transferred handle is still `isDirty` (its own
+      // store never saw an acknowledgement and never will), so the dirty test
+      // alone cannot tell "the only copy" apart from "a duplicate of what the
+      // replacement now holds" - and retaining the duplicate is what pins the
+      // epic as permanently unsyncable. See `ReplacedHandleDisposition`.
+      entry.session.pendingRetention =
+        previousHandle.store.getState().isDirty &&
+        !previousDisposition.editsTransferredToReplacement
+          ? previousDisposition
+          : null;
+      const replaced = this.sessions.replace(
+        epicId,
+        entry.session,
+        this.createSession(epicId, nextHandle),
+      );
+      if (!replaced) {
+        entry.session.pendingRetention = null;
+        return false;
+      }
+      this.sessions.pruneWarm();
+      this.sessions.notify();
+      return true;
+    });
   }
 
   /**
-   * Move a dirty entry out of `entries` and into the retention, transport
-   * first. The caller has already installed the replacement, so this is only
-   * ever the outgoing handle.
+   * Move a dirty handle out of the registry and into the retention, transport
+   * first. The caller has already installed the replacement, or is closing the
+   * tab, so this is only ever an outgoing handle the registry no longer tracks.
    */
   private retainDirtyHandle(
-    entry: RegistryEntry,
+    session: EpicRegistrySession,
     identity: RetainedHandleIdentity,
   ): void {
-    // Same teardown `disposeEntry` does, minus the handle: the entry's
-    // subscriptions close over `entry` and call `prune()`/`emit()`, and it is
-    // no longer in `entries` for either to be about.
-    this.unsubscribeEntry(entry);
     // Before anything else: stop it dialing. A retained handle that keeps its
     // stream client reports dial evidence for a host this window has left,
     // into the selection authority's death-detection input.
-    entry.handle.detachTransport();
+    session.handle.detachTransport();
 
-    const queueSize = entry.handle.store.getState().unsyncedQueueSize;
-    const bucket = this.retained.get(entry.epicId) ?? [];
+    const queueSize = session.handle.store.getState().unsyncedQueueSize;
+    const bucket = this.retained.get(session.epicId) ?? [];
     const mergeTarget = findMergeTarget(bucket, identity);
     if (mergeTarget !== null) {
       // Same epic, same host, same proven owner identity - so the same room,
@@ -443,23 +540,23 @@ export class OpenEpicSessionRegistry {
       // would show the user two rows for one task.
       Y.applyUpdate(
         mergeTarget.handle.doc,
-        Y.encodeStateAsUpdate(entry.handle.doc),
+        Y.encodeStateAsUpdate(session.handle.doc),
       );
       mergeTarget.queueSize += queueSize;
-      entry.handle.dispose();
+      session.handle.dispose();
       return;
     }
 
     this.nextRetentionSeq += 1;
     bucket.push({
-      epicId: entry.epicId,
+      epicId: session.epicId,
       hostStamp: identity.hostStamp,
       ownerIdentityKey: identity.ownerIdentityKey,
       seq: this.nextRetentionSeq,
-      handle: entry.handle,
+      handle: session.handle,
       queueSize,
     });
-    this.retained.set(entry.epicId, bucket);
+    this.retained.set(session.epicId, bucket);
     this.retainedCount += 1;
     this.warnOnceIfRetentionGrowthLooksWrong();
   }
@@ -491,45 +588,26 @@ export class OpenEpicSessionRegistry {
     }
   }
 
-  private acquireWithMountRefs(
-    epicId: string,
-    factory: (epicId: string) => OpenEpicStoreHandle,
-    mountedRefs: number,
-  ): OpenEpicStoreHandle {
-    const existing = this.entries.get(epicId);
-    if (existing !== undefined) {
-      existing.lastUsedAt = this.tick();
-      existing.mountedRefs += mountedRefs;
-      return existing.handle;
-    }
-    const handle = factory(epicId);
-    const entry = this.createEntry(epicId, handle, mountedRefs);
-    this.entries.set(epicId, entry);
-    this.prune();
-    this.emit();
-    return handle;
-  }
-
-  private createEntry(
+  private createSession(
     epicId: string,
     handle: OpenEpicStoreHandle,
-    mountedRefs: number,
-  ): RegistryEntry {
-    const entry: RegistryEntry = {
+  ): EpicRegistrySession {
+    const session: EpicRegistrySession = {
       epicId,
       handle,
-      lastUsedAt: this.tick(),
-      mountedRefs,
       unsubscribe: null,
       unsubscribeActivity: null,
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
+      pendingRetention: null,
     };
     const handleEligibilityChange = (): void => {
       const nextKey = eligibilityKeyFor(epicId, handle);
-      if (nextKey === entry.lastEligibilityKey) return;
-      entry.lastEligibilityKey = nextKey;
-      this.prune();
-      this.emit();
+      if (nextKey === session.lastEligibilityKey) return;
+      session.lastEligibilityKey = nextKey;
+      this.sessions.transact(() => {
+        this.sessions.pruneWarm();
+        this.sessions.notify();
+      });
     };
     // Subscribe to the underlying store so prune-relevant changes trigger a
     // registry-level emit. Per-keystroke `projection.revision` bumps fire
@@ -539,7 +617,7 @@ export class OpenEpicSessionRegistry {
     // Test fakes don't always hand back a full zustand store, so guard on
     // the method existing before calling.
     const maybeSubscribe = handle.store.subscribe;
-    entry.unsubscribe =
+    session.unsubscribe =
       typeof maybeSubscribe === "function"
         ? maybeSubscribe.call(handle.store, handleEligibilityChange)
         : null;
@@ -547,8 +625,10 @@ export class OpenEpicSessionRegistry {
     // guard re-evaluates off the per-user room instead. Same contract as
     // before: an epic whose agents just started working must stop being
     // prunable without waiting for an unrelated store write.
-    entry.unsubscribeActivity = subscribeAgentActivity(handleEligibilityChange);
-    return entry;
+    session.unsubscribeActivity = subscribeAgentActivity(
+      handleEligibilityChange,
+    );
+    return session;
   }
 
   /**
@@ -603,33 +683,27 @@ export class OpenEpicSessionRegistry {
     retainedBuffers: "discard" | "keep",
     dirtyLiveHandle: RetainedHandleIdentity | null,
   ): void {
-    const entry = this.entries.get(epicId);
-    if (retainedBuffers === "discard") {
-      // Ordered before the early return: a retention must not outlive the tab
-      // that could have acted on it, even if the live entry is already gone.
-      this.disposeRetainedForEpic(epicId);
-    }
-    if (entry === undefined) {
-      this.emit();
-      return;
-    }
-    this.entries.delete(epicId);
-    const retainsLiveEdits =
-      retainedBuffers === "keep" &&
-      dirtyLiveHandle !== null &&
-      entry.handle.store.getState().isDirty;
-    if (retainsLiveEdits) {
-      this.retainDirtyHandle(entry, dirtyLiveHandle);
-      // Still announced: the live SESSION is gone either way, and the listener
-      // it drives releases this window's desktop ownership of the epic. A
-      // retained buffer has no transport and claims nothing, so holding that
-      // ownership open for it would pin the epic to a window that can no
-      // longer serve it.
-      this.releaseListener?.(epicId);
-    } else {
-      this.disposeEntry(entry, true);
-    }
-    this.emit();
+    this.sessions.transact(() => {
+      if (retainedBuffers === "discard") {
+        // Ordered before the early return: a retention must not outlive the tab
+        // that could have acted on it, even if the live entry is already gone.
+        this.disposeRetainedForEpic(epicId);
+      }
+      const entry = this.sessions.peekEntry(epicId);
+      if (entry === null) {
+        this.sessions.notify();
+        return;
+      }
+      const retainsLiveEdits =
+        retainedBuffers === "keep" &&
+        dirtyLiveHandle !== null &&
+        entry.session.handle.store.getState().isDirty;
+      entry.session.pendingRetention = retainsLiveEdits
+        ? dirtyLiveHandle
+        : null;
+      this.sessions.discard(epicId, "released");
+      this.sessions.notify();
+    });
   }
 
   /**
@@ -646,41 +720,45 @@ export class OpenEpicSessionRegistry {
    * this buffer" are the same operation.
    */
   drainUnsyncedEdits(epicId: string): void {
-    const entry = this.entries.get(epicId);
-    if (entry !== undefined) {
-      entry.handle.store.getState().discardUnsyncedEdits();
-    }
-    this.disposeRetainedForEpic(epicId);
-    this.emit();
+    this.sessions.transact(() => {
+      const session = this.sessions.peek(epicId);
+      if (session !== null) {
+        session.handle.store.getState().discardUnsyncedEdits();
+      }
+      this.disposeRetainedForEpic(epicId);
+      this.sessions.notify();
+    });
   }
 
   requestFreshSnapshot(epicId: string): void {
-    const entry = this.entries.get(epicId);
-    if (entry === undefined) return;
-    entry.handle.requestFreshSnapshot();
-    this.emit();
+    this.sessions.transact(() => {
+      const session = this.sessions.peek(epicId);
+      if (session === null) return;
+      session.handle.requestFreshSnapshot();
+      this.sessions.notify();
+    });
   }
 
   disposeAll(): void {
-    for (const entry of this.entries.values()) {
-      this.disposeEntry(entry, true);
-    }
-    this.entries.clear();
-    // Retentions go too. This is the auth lifecycle's hook - sign-out,
-    // user-switch, token expiry - and its whole contract is that no prior
-    // identity's Y.Doc survives into the next session. A retention that
-    // outlived it would be that leak with an unsynced buffer attached, and
-    // `entries.clear()` alone would not touch it. The edits are lost, which
-    // is the same policy already applied to a dirty live session here.
-    for (const bucket of this.retained.values()) {
-      for (const buffer of bucket) {
-        buffer.handle.dispose();
+    this.sessions.transact(() => {
+      this.sessions.disposeAll();
+      // Retentions go too. This is the auth lifecycle's hook - sign-out,
+      // user-switch, token expiry - and its whole contract is that no prior
+      // identity's Y.Doc survives into the next session. A retention that
+      // outlived it would be that leak with an unsynced buffer attached, and
+      // disposing the live entries alone would not touch it. The edits are
+      // lost, which is the same policy already applied to a dirty live session
+      // here.
+      for (const bucket of this.retained.values()) {
+        for (const buffer of bucket) {
+          buffer.handle.dispose();
+        }
       }
-    }
-    this.retained.clear();
-    this.retainedCount = 0;
-    this.retainedSoftCapLogged = false;
-    this.emit();
+      this.retained.clear();
+      this.retainedCount = 0;
+      this.retainedSoftCapLogged = false;
+      this.sessions.notify();
+    });
   }
 
   /**
@@ -692,7 +770,7 @@ export class OpenEpicSessionRegistry {
   /**
    * The ONE walk over both collections. `getUnsyncedEdits()` and
    * {@link hasUnsyncedEdits} are both projections of it, and nothing else may
-   * traverse `entries` to answer "does this epic have unsynced work".
+   * traverse the entries to answer "does this epic have unsynced work".
    *
    * Two independent traversals is what let the projection and
    * `epicHasUnsyncedEdits` drift apart in the first place - one gained the
@@ -707,11 +785,11 @@ export class OpenEpicSessionRegistry {
   private collectUnsyncedRows(): UnsyncedRow[] {
     const out: UnsyncedRow[] = [];
     const seen = new Set<string>();
-    for (const entry of this.entries.values()) {
-      const state = entry.handle.store.getState();
-      const retainedBucket = this.retained.get(entry.epicId) ?? [];
+    for (const session of this.sessions.list()) {
+      const state = session.handle.store.getState();
+      const retainedBucket = this.retained.get(session.epicId) ?? [];
       const retainedQueueSize = sumRetainedQueueSize(retainedBucket);
-      seen.add(entry.epicId);
+      seen.add(session.epicId);
       // The row's EXISTENCE condition, not just its content: a clean live
       // session beside a dirty retained buffer must still produce a row.
       // Skipping on the live entry alone is exactly the state a re-point
@@ -720,12 +798,12 @@ export class OpenEpicSessionRegistry {
       // first moment F10 does.
       if (!state.isDirty && retainedBucket.length === 0) continue;
       out.push({
-        epicId: entry.epicId,
+        epicId: session.epicId,
         title: resolveUnsyncedTitle(
-          liveTitleCandidates(entry.handle, entry.epicId, state).concat(
-            retainedTitleCandidates(retainedBucket, entry.epicId),
+          liveTitleCandidates(session.handle, session.epicId, state).concat(
+            retainedTitleCandidates(retainedBucket, session.epicId),
           ),
-          entry.epicId,
+          session.epicId,
         ),
         queueSize: state.unsyncedQueueSize + retainedQueueSize,
         isDirty: state.isDirty || retainedBucket.length > 0,
@@ -764,7 +842,7 @@ export class OpenEpicSessionRegistry {
    */
   hasUnsyncedEdits(epicId: string): boolean {
     // A real projection of the shared walk, not a parallel implementation.
-    // This used to do its own `entries` + `retained` lookup, which agreed with
+    // This used to do its own entries + retained lookup, which agreed with
     // `collectUnsyncedRows` only by maintenance - and the comment above that
     // method already asserted the enforcement that did not exist. Two
     // independent traversals of this fact is exactly what let the projection
@@ -835,16 +913,7 @@ export class OpenEpicSessionRegistry {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  private emit(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    return this.sessions.subscribe(listener);
   }
 
   /**
@@ -854,39 +923,15 @@ export class OpenEpicSessionRegistry {
    * `prune()` calls will finish the job.
    */
   prune(): void {
-    if (this.entries.size <= this.maxLive) return;
-    const ordered = Array.from(this.entries.values()).sort(
-      (a, b) => a.lastUsedAt - b.lastUsedAt,
-    );
-    for (const entry of ordered) {
-      if (this.entries.size <= this.maxLive) return;
-      if (entry.mountedRefs > 0) continue;
-      if (!entry.handle.isClean()) continue;
-      if (hasActiveAgentWork(entry.epicId)) continue;
-      this.entries.delete(entry.epicId);
-      this.disposeEntry(entry, true);
-    }
+    this.sessions.pruneWarm();
   }
+}
 
-  private unsubscribeEntry(entry: RegistryEntry): void {
-    if (entry.unsubscribe !== null) entry.unsubscribe();
-    if (entry.unsubscribeActivity !== null) entry.unsubscribeActivity();
-    entry.unsubscribe = null;
-    entry.unsubscribeActivity = null;
-  }
-
-  private disposeEntry(entry: RegistryEntry, notifyRelease: boolean): void {
-    this.unsubscribeEntry(entry);
-    entry.handle.dispose();
-    if (notifyRelease) {
-      this.releaseListener?.(entry.epicId);
-    }
-  }
-
-  private tick(): number {
-    this.nextTick += 1;
-    return this.nextTick;
-  }
+function unsubscribeSession(session: EpicRegistrySession): void {
+  if (session.unsubscribe !== null) session.unsubscribe();
+  if (session.unsubscribeActivity !== null) session.unsubscribeActivity();
+  session.unsubscribe = null;
+  session.unsubscribeActivity = null;
 }
 
 /**

@@ -2,7 +2,7 @@
  * One warm-pool registry, parameterised, replacing three.
  *
  * There are currently three independent implementations of this idea - chats
- * (388 lines), terminals ("the terminal twin", 344 lines), and the registry
+ * (388 lines), terminals ("the terminal twin", 434 lines), and the registry
  * core inside the open-epic registry (982 lines) - with three eviction policies
  * for one problem. They differ in vocabulary, not in mechanism: every one of
  * them counts demand, keeps a released session warm for a while, bounds the
@@ -12,8 +12,17 @@
  * happens instead of disposal). What is not parameterised is the mechanism, and
  * that is deliberate: each plane keeps its own policy VALUES, so unifying is a
  * deletion rather than a behaviour change.
+ *
+ * That last sentence is a constraint on this file, not a hope. Every member of
+ * {@link SessionRegistryPolicy} names the incumbent code its value comes from,
+ * so that "unifying changed nothing" is checkable knob by knob rather than
+ * argued. Where the three planes genuinely disagreed - and they disagree on
+ * more than the original five members could express - the disagreement is a
+ * named member here rather than a branch, an averaged value, or a plane
+ * quietly adopting another's answer.
  */
 import type { RuntimeEnvironment } from "./runtime-environment";
+import { createMonotonicSequence } from "./runtime-environment";
 
 /**
  * A registry key built from its parts.
@@ -59,6 +68,14 @@ export type SessionDisposeCause =
   | "scope-mismatch"
   /** A replacement handle took this key over (a host re-point). */
   | "replaced"
+  /**
+   * The session became unusable where it stands - a terminal that exited, or
+   * one whose stream closed for good. Distinct from `"released"` because
+   * nobody asked for it: the terminal registry drops such an entry the moment
+   * it is demand-free, and a plane that treats an involuntary teardown like a
+   * requested one is how work gets destroyed without a decision.
+   */
+  | "unusable"
   /** Sign-out, user switch, token expiry. Nothing survives. */
   | "dispose-all";
 
@@ -75,23 +92,131 @@ export type SessionDisposeCause =
  */
 export type SessionDisposeVerdict = "dispose" | "retain";
 
+/**
+ * Which sessions the warm cap counts.
+ *
+ * The three planes cap three different populations, and every one of them has
+ * a recorded reason, so this is a fact about the plane rather than a tuning
+ * choice:
+ *
+ *  - `"demand-free"` - the chat and terminal registries bound the WARM pool.
+ *    "Leased sessions are outside the warm pool" is stated in both, and it is
+ *    why a window with many open tiles keeps them all.
+ *  - `"all-entries"` - the open-epic registry bounds the RESIDENT set
+ *    (`DEFAULT_MAX_LIVE_EPICS`, `entries.size <= maxLive`). A mounted epic
+ *    counts against the cap; it just is not a candidate for eviction.
+ */
+export type WarmCapScope = "demand-free" | "all-entries";
+
+/**
+ * What the LAST unit of demand leaving should do, as the releasing caller sees
+ * it.
+ *
+ * Separate from {@link SessionRegistryPolicy.retainWhenIdle} because the two
+ * answer different questions: that one is about the session (is this worth
+ * keeping), this one is about the moment (can it even be kept). The terminal
+ * registry's `transportAlive` is the live case - the acquire effect's readiness
+ * at cleanup time - and it "fails toward disposal" because the captured factory
+ * throws once the directory or user is gone, and a throw from effect cleanup
+ * would leave a demand-free entry whose stream is already closed.
+ *
+ * Required at every call site rather than defaulted, so a caller with a reason
+ * to destroy a session states it where the reason is.
+ */
+export type ReleaseDisposition = "warm" | "dispose";
+
 export interface SessionRegistryPolicy<TSession> {
   /**
    * How long a demand-free session stays warm. Its websocket stays open and
    * its snapshot is retained, so switching back paints instantly.
+   *
+   * `null` means the plane has no time-based expiry at all and its warm set is
+   * bounded only by {@link maxWarm} - the open-epic registry, which prunes on
+   * acquire and never on a clock. It is `null` rather than a very large number
+   * because `setTimeout(fn, Infinity)` fires immediately in a browser, so a
+   * sentinel would be the eviction it is trying to suppress.
+   *
+   * Incumbent values: chats `DEFAULT_CHAT_IDLE_TTL_MS` (10 min); terminals
+   * `PLAIN_TERMINAL_RELEASE_LINGER_MS` (10 min, explicitly "matches
+   * `DEFAULT_CHAT_IDLE_TTL_MS` so a tab switch treats the chats and the
+   * terminals it hides identically"); epics none.
    */
-  readonly idleTtlMs: number;
+  readonly idleTtlMs: number | null;
   /**
-   * Ceiling on demand-free sessions, so cycling through many inside one TTL
-   * window cannot pin an unbounded set of open sockets. Oldest-released go
-   * first. Leased sessions are outside this pool.
+   * Ceiling on the population {@link warmCapScope} names, so cycling through
+   * many sessions inside one TTL window cannot pin an unbounded set of open
+   * sockets. Oldest-released go first.
+   *
+   * Incumbent values: chats `DEFAULT_MAX_WARM_CHAT_SESSIONS` (6); terminals
+   * `MAX_LINGERING_PLAIN_TERMINALS` (6, "mirrors
+   * `DEFAULT_MAX_WARM_CHAT_SESSIONS`"); epics `DEFAULT_MAX_LIVE_EPICS` (5).
    */
   readonly maxWarm: number;
+  /** Which sessions {@link maxWarm} counts. */
+  readonly warmCapScope: WarmCapScope;
+  /**
+   * Whether a busy demand-free session counts toward {@link maxWarm}.
+   *
+   * The two planes that bound a warm pool answer this oppositely, both with a
+   * reason on the record, so it cannot be settled either way in the mechanism:
+   *
+   *  - chats `true` - "Lease-free sessions with active chat work are never
+   *    evicted by the cap, but they still contribute to overflow and can crowd
+   *    out older inactive warm sessions."
+   *  - terminals `false` - the linger cap counts lingering plain terminals
+   *    only, because "counting them would let N running agents flush every
+   *    lingering shell immediately".
+   *
+   * Under `"all-entries"` this is not consulted: that scope counts everything
+   * already.
+   */
+  readonly busyCountsTowardWarmCap: boolean;
   /**
    * Ceiling on how long a busy demand-free session may defer its own eviction.
    * Without it, a session whose work never settles is retained forever.
+   *
+   * `null` is that forever, chosen deliberately by the terminal plane: a
+   * running terminal-agent "is kept warm indefinitely (its tab may reopen any
+   * time while the agent works)". A plane that defers indefinitely arms no
+   * expiry timer for a busy session at all, so `null` is not a very large
+   * timeout - it is the absence of one.
+   *
+   * Incumbent values: chats `MAX_ACTIVE_CHAT_IDLE_DEFER_MS` (60 min);
+   * terminals none; epics not applicable (no TTL).
    */
-  readonly maxActiveDeferMs: number;
+  readonly maxActiveDeferMs: number | null;
+  /**
+   * Whether losing the last unit of demand refreshes a session's eviction
+   * order.
+   *
+   * Not cosmetic, and the planes split on it:
+   *
+   *  - chats and terminals `true` - a released session goes to the BACK of the
+   *    eviction queue. Chats set `entry.lastUsedAt = releasedAt` on release;
+   *    terminals stamp `releaseSequence` at park time and sort on it.
+   *  - epics `false` - `releaseMounted` decrements and prunes without touching
+   *    `lastUsedAt`, so the epic evicted is the least recently USED, not the
+   *    least recently released. Refreshing here would change which epic a
+   *    prune picks.
+   */
+  readonly refreshOrderOnRelease: boolean;
+
+  /**
+   * Whether a session that has just lost its last unit of demand should be
+   * kept warm at all.
+   *
+   * `false` disposes it immediately instead of parking it, which is the
+   * terminal plane's rule for a session that can no longer serve a reattach:
+   * an exited session is disposed "as soon as the last lease releases", and a
+   * plain terminal whose stream is `lost` or `reaped` must not be revived
+   * because reviving it "would shadow the fresh create-then-acquire bootstrap
+   * after recovery".
+   *
+   * Distinct from {@link isEvictable}, which asks whether a session may be
+   * destroyed. This asks whether it is worth keeping. Chats and epics answer
+   * `true` unconditionally.
+   */
+  retainWhenIdle(session: TSession): boolean;
 
   /**
    * Whether this session is doing something that must not be interrupted.
@@ -102,8 +227,8 @@ export interface SessionRegistryPolicy<TSession> {
    * same situation), and an epic with an agent working in it must stop being
    * prunable without waiting for an unrelated store write.
    *
-   * A busy session is deferred, not exempt - it still counts toward
-   * {@link maxWarm} and can crowd out older idle sessions.
+   * A busy session is deferred, not exempt - whether it still counts toward
+   * {@link maxWarm} is {@link busyCountsTowardWarmCap}.
    */
   hasActiveWork(session: TSession): boolean;
 
@@ -126,6 +251,25 @@ export interface SessionRegistryPolicy<TSession> {
 
   /** Tear down the session. Called only after a `"dispose"` verdict. */
   dispose(session: TSession): void;
+
+  /**
+   * A session has just been parked warm (demand reached zero, and
+   * {@link retainWhenIdle} kept it).
+   *
+   * The terminal plane retags its subscription `cache` here, because
+   * "attachment intent follows lease state, not session kind: a lease-free
+   * running terminal-agent or lingering plain terminal must not claim
+   * attention". A THROW is meaningful and not swallowed: that plane's
+   * `setViewer` can fail when the transport is already gone, and it "fails
+   * toward disposal" rather than leaving a warm entry whose stream is closed.
+   */
+  onParked(session: TSession): void;
+
+  /**
+   * A warm session has just been re-acquired. The terminal plane retags it
+   * `presentation` - "a tile looking again is presentation".
+   */
+  onRevived(session: TSession): void;
 }
 
 export interface SessionRegistry<TSession> {
@@ -140,8 +284,24 @@ export interface SessionRegistry<TSession> {
    */
   acquire(key: SessionKey, scopeKey: string, factory: () => TSession): TSession;
 
+  /**
+   * Ensure a session exists and refresh its recency, taking NO demand.
+   *
+   * A distinct operation rather than an oversight, and the open-epic registry
+   * is the plane that needs it: its cap bounds the resident set, so "this epic
+   * exists and is the most recently used" is a meaningful state that nothing is
+   * currently holding. A session materialized this way is immediately eligible
+   * for the cap, which is exactly what `OpenEpicSessionRegistry.acquire` (as
+   * opposed to `acquireMounted`) has always meant.
+   */
+  materialize(
+    key: SessionKey,
+    scopeKey: string,
+    factory: () => TSession,
+  ): TSession;
+
   /** Drop one unit of demand. The last one starts the warm clock. */
-  release(key: SessionKey): void;
+  release(key: SessionKey, disposition: ReleaseDisposition): void;
 
   /**
    * Drop demand held under a specific handle.
@@ -149,7 +309,11 @@ export interface SessionRegistry<TSession> {
    * Guards the release against a session that was already rebuilt underneath
    * the caller: a late unmount must not decrement demand on the replacement.
    */
-  releaseHandle(key: SessionKey, session: TSession): void;
+  releaseHandle(
+    key: SessionKey,
+    session: TSession,
+    disposition: ReleaseDisposition,
+  ): void;
 
   /** Read and refresh recency. For a caller actively opening/interacting. */
   get(key: SessionKey): TSession | null;
@@ -163,14 +327,45 @@ export interface SessionRegistry<TSession> {
    */
   peek(key: SessionKey): TSession | null;
 
+  /**
+   * The entry at `key` without touching recency.
+   *
+   * The read a scope-aware caller needs: the chat registry answers `null` for a
+   * SCOPE mismatch without disposing anything, which is a different decision
+   * from `acquire`'s rebuild and has to be made before recency moves.
+   */
+  peekEntry(key: SessionKey): SessionEntryView<TSession> | null;
+
   /** Every live session, for aggregate reads. */
   list(): readonly TSession[];
 
-  /** Sessions matching a caller-supplied predicate, without touching recency. */
-  filter(predicate: (session: TSession) => boolean): readonly TSession[];
+  /** Every live key, for callers that address sessions rather than read them. */
+  keys(): readonly SessionKey[];
+
+  /**
+   * Every live entry, for a caller that needs the key and the session
+   * together - the two registries that answer "which sessions belong to host
+   * X" read an acquire-time identity that lives in the key, not in the
+   * session.
+   */
+  entries(): readonly SessionEntryView<TSession>[];
 
   /** End a session now regardless of demand. */
   forceRelease(key: SessionKey): void;
+
+  /** End a session now, naming why. {@link forceRelease} is `"released"`. */
+  discard(key: SessionKey, cause: SessionDisposeCause): void;
+
+  /**
+   * Move a demand-free session to a different key, re-parking it.
+   *
+   * The terminal plane's tab-reopen adoption: closing a tab keeps a running
+   * session warm, but reopening mints a fresh tab instance id, and without
+   * this the reopened tile builds a SECOND subscription while the warm one
+   * lingers as an unreachable zombie. Refuses when the entry is held, absent,
+   * or the target key is taken, so a losing race is a no-op.
+   */
+  rekey(previousKey: SessionKey, nextKey: SessionKey): boolean;
 
   /**
    * Atomically swap the session behind a key, inheriting its demand count.
@@ -183,16 +378,477 @@ export interface SessionRegistry<TSession> {
    */
   replace(key: SessionKey, previous: TSession, next: TSession): boolean;
 
+  /**
+   * Enforce the warm cap now.
+   *
+   * Public because eligibility is not only the registry's to observe: the epic
+   * plane learns that a session became clean, or that its agents stopped
+   * working, from subscriptions the registry does not own, and an entry that
+   * became evictable while over the cap has to be collected then rather than
+   * at the next acquire.
+   */
+  pruneWarm(): void;
+
   size(): number;
 
   /** Fires on membership changes and on demand transitions. */
   subscribe(listener: () => void): () => void;
 
+  /**
+   * Announce a change the registry cannot see.
+   *
+   * Coalesced with whatever the current {@link transact} is doing, so a plane
+   * that emits for its own reasons still costs its subscribers one wake-up per
+   * operation rather than one per step.
+   */
+  notify(): void;
+
+  /**
+   * Run several registry operations as ONE observable step.
+   *
+   * Without it, a plane method that releases and then prunes wakes every
+   * subscriber twice for one user gesture. The incumbent registries all emit
+   * exactly once per public method, and this is what preserves that while
+   * their internals become calls into here.
+   */
+  transact(operation: () => void): void;
+
   /** Sign-out semantics: dispose everything, notify once. */
   disposeAll(): void;
+}
+
+/** One live entry, as a reader sees it. */
+export interface SessionEntryView<TSession> {
+  readonly key: SessionKey;
+  readonly scopeKey: string;
+  readonly session: TSession;
+  /** Units of demand held. `0` is a warm session. */
+  readonly demand: number;
 }
 
 export interface SessionRegistryOptions<TSession> {
   readonly environment: RuntimeEnvironment;
   readonly policy: SessionRegistryPolicy<TSession>;
+}
+
+interface RegistryEntry<TSession> {
+  key: SessionKey;
+  readonly scopeKey: string;
+  readonly session: TSession;
+  demand: number;
+  /**
+   * Eviction order. A monotonic counter rather than a clock read: two releases
+   * in one synchronous batch (`closeAllTabs`) land on the same millisecond and
+   * make a `Date.now()`-ordered sort ambiguous - the terminal registry says so
+   * in as many words, and the room tier records the same reason.
+   */
+  order: number;
+  /**
+   * When this entry became demand-free, by the wall clock, or `null` while it
+   * is held. The TTL is checked against this rather than against the timer
+   * having fired, because a timer may fire late (a throttled background tab)
+   * and firing is not proof that the window elapsed.
+   */
+  parkedAtMs: number | null;
+  /** Pending expiry, set only while parked and only when the plane has a TTL. */
+  idleTimer: { cancel(): void } | null;
+}
+
+export function createSessionRegistry<TSession>(
+  options: SessionRegistryOptions<TSession>,
+): SessionRegistry<TSession> {
+  const { environment, policy } = options;
+  const entries = new Map<SessionKey, RegistryEntry<TSession>>();
+  const listeners = new Set<() => void>();
+  const order = createMonotonicSequence();
+  let transactionDepth = 0;
+  let notifyPending = false;
+
+  function emit(): void {
+    for (const listener of Array.from(listeners)) {
+      listener();
+    }
+  }
+
+  function requestNotify(): void {
+    if (transactionDepth > 0) {
+      notifyPending = true;
+      return;
+    }
+    emit();
+  }
+
+  function transact<T>(operation: () => T): T {
+    transactionDepth += 1;
+    try {
+      return operation();
+    } finally {
+      transactionDepth -= 1;
+      if (transactionDepth === 0 && notifyPending) {
+        notifyPending = false;
+        emit();
+      }
+    }
+  }
+
+  function cancelIdleTimer(entry: RegistryEntry<TSession>): void {
+    if (entry.idleTimer === null) return;
+    entry.idleTimer.cancel();
+    entry.idleTimer = null;
+  }
+
+  /**
+   * Whether a parked session gets an expiry timer.
+   *
+   * A plane with no TTL never schedules one. A plane that defers busy sessions
+   * indefinitely schedules none for a session that is busy at park time -
+   * arming a timer that can only ever re-arm itself is not the same as the
+   * terminal plane's "kept warm indefinitely", it is that plus a wake-up every
+   * ten minutes for the life of the agent.
+   */
+  function shouldArmIdleTimer(entry: RegistryEntry<TSession>): boolean {
+    if (policy.idleTtlMs === null) return false;
+    if (policy.maxActiveDeferMs !== null) return true;
+    return !policy.hasActiveWork(entry.session);
+  }
+
+  function armIdleTimer(entry: RegistryEntry<TSession>): void {
+    cancelIdleTimer(entry);
+    const ttlMs = policy.idleTtlMs;
+    if (ttlMs === null) return;
+    if (!shouldArmIdleTimer(entry)) return;
+    entry.idleTimer = environment.scheduler.schedule(ttlMs, () => {
+      entry.idleTimer = null;
+      expireIfIdle(entry.key);
+    });
+  }
+
+  function expireIfIdle(key: SessionKey): void {
+    const entry = entries.get(key);
+    if (entry === undefined) return;
+    if (entry.demand > 0) return;
+    const ttlMs = policy.idleTtlMs;
+    if (ttlMs === null) return;
+    const checkedAt = environment.clock.now();
+    const parkedAtMs = entry.parkedAtMs;
+    // A timer that fired is not proof the window elapsed - re-check the clock,
+    // and re-arm for the remainder if it has not.
+    if (parkedAtMs !== null && checkedAt - parkedAtMs < ttlMs) {
+      armIdleTimer(entry);
+      return;
+    }
+    if (policy.hasActiveWork(entry.session)) {
+      const deferMs = policy.maxActiveDeferMs;
+      // No cap on deferral means the plane keeps busy sessions warm for as
+      // long as they are busy; nothing more is scheduled, and the plane's own
+      // observation of the work finishing is what collects it.
+      if (deferMs === null) return;
+      if (parkedAtMs !== null && checkedAt - parkedAtMs < deferMs) {
+        // The deferral is measured from when the session went demand-free, not
+        // from this check, so a session whose work never settles still goes at
+        // the cap. Its eviction ORDER is refreshed on the same plane rule as a
+        // release, which is what the incumbent chat registry does here.
+        if (policy.refreshOrderOnRelease) entry.order = order.next();
+        armIdleTimer(entry);
+        return;
+      }
+    }
+    transact(() => {
+      teardown(entry, "idle-expired");
+    });
+  }
+
+  /**
+   * The ONE removal path. Every caller goes through it so a plane's
+   * `"retain"` verdict cannot be bypassed by whichever route happened to
+   * reach the entry.
+   */
+  function teardown(
+    entry: RegistryEntry<TSession>,
+    cause: SessionDisposeCause,
+  ): void {
+    cancelIdleTimer(entry);
+    if (entries.get(entry.key) === entry) entries.delete(entry.key);
+    const verdict = policy.onBeforeDispose(entry.session, cause);
+    if (verdict === "dispose") policy.dispose(entry.session);
+    requestNotify();
+  }
+
+  function park(
+    entry: RegistryEntry<TSession>,
+    disposition: ReleaseDisposition,
+  ): void {
+    if (disposition === "dispose" || !policy.retainWhenIdle(entry.session)) {
+      teardown(entry, "released");
+      return;
+    }
+    entry.parkedAtMs = environment.clock.now();
+    if (policy.refreshOrderOnRelease) entry.order = order.next();
+    try {
+      policy.onParked(entry.session);
+    } catch (error) {
+      // Fail toward disposal: the plane could not put the session into its
+      // warm state, and a warm entry whose stream is already closed would be
+      // revived later as a permanently dead one.
+      environment.logger.error(
+        "[session-registry] parking a released session failed",
+        { key: entry.key },
+        error,
+      );
+      teardown(entry, "released");
+      return;
+    }
+    armIdleTimer(entry);
+    enforceWarmCap();
+  }
+
+  /** The population {@link SessionRegistryPolicy.maxWarm} counts. */
+  function warmPopulation(): RegistryEntry<TSession>[] {
+    const population: RegistryEntry<TSession>[] = [];
+    for (const entry of entries.values()) {
+      if (policy.warmCapScope === "all-entries") {
+        population.push(entry);
+        continue;
+      }
+      if (entry.demand > 0) continue;
+      if (
+        !policy.busyCountsTowardWarmCap &&
+        policy.hasActiveWork(entry.session)
+      )
+        continue;
+      population.push(entry);
+    }
+    return population;
+  }
+
+  function enforceWarmCap(): void {
+    // The cheap short-circuit every release takes: the counted population can
+    // never exceed the total, so an under-cap registry skips the walk.
+    if (entries.size <= policy.maxWarm) return;
+    const overflow = warmPopulation().length - policy.maxWarm;
+    if (overflow <= 0) return;
+    const candidates: RegistryEntry<TSession>[] = [];
+    for (const entry of entries.values()) {
+      if (entry.demand > 0) continue;
+      if (policy.hasActiveWork(entry.session)) continue;
+      if (!policy.isEvictable(entry.session)) continue;
+      candidates.push(entry);
+    }
+    candidates.sort((a, b) => a.order - b.order);
+    transact(() => {
+      for (const entry of candidates.slice(0, overflow)) {
+        teardown(entry, "warm-overflow");
+      }
+    });
+  }
+
+  function createEntry(
+    key: SessionKey,
+    scopeKey: string,
+    session: TSession,
+    demand: number,
+  ): RegistryEntry<TSession> {
+    const entry: RegistryEntry<TSession> = {
+      key,
+      scopeKey,
+      session,
+      demand,
+      order: order.next(),
+      parkedAtMs: demand > 0 ? null : environment.clock.now(),
+      idleTimer: null,
+    };
+    entries.set(key, entry);
+    requestNotify();
+    return entry;
+  }
+
+  function attach(
+    key: SessionKey,
+    scopeKey: string,
+    factory: () => TSession,
+    demand: number,
+  ): TSession {
+    return transact<TSession>(() => {
+      const existing = entries.get(key);
+      if (existing !== undefined && existing.scopeKey !== scopeKey) {
+        // Same key, but the session was opened against an older
+        // user/transport/owner-identity scope. Close it before creating the
+        // replacement so callers never get a store backed by a stale client.
+        teardown(existing, "scope-mismatch");
+      } else if (existing !== undefined) {
+        const wasWarm = existing.demand === 0;
+        existing.demand += demand;
+        existing.order = order.next();
+        if (wasWarm && existing.demand > 0) {
+          existing.parkedAtMs = null;
+          cancelIdleTimer(existing);
+          policy.onRevived(existing.session);
+        } else if (wasWarm) {
+          // Still demand-free: a read that refreshes recency also restarts the
+          // eviction window, which is what stops a passive reader from being
+          // the only thing keeping the window open AND the only thing closing
+          // it.
+          existing.parkedAtMs = environment.clock.now();
+          armIdleTimer(existing);
+        }
+        return existing.session;
+      }
+      const created = createEntry(key, scopeKey, factory(), demand);
+      if (created.demand === 0) armIdleTimer(created);
+      return created.session;
+    });
+  }
+
+  function dropDemand(
+    entry: RegistryEntry<TSession>,
+    disposition: ReleaseDisposition,
+  ): void {
+    // Refcount underflow guard: a stray double-release must not drive demand
+    // negative, which a later acquire would revive only to 0 - leaving an
+    // in-use session tracked as warm and eligible for eviction.
+    if (entry.demand <= 0) return;
+    entry.demand -= 1;
+    if (entry.demand > 0) return;
+    transact(() => {
+      park(entry, disposition);
+    });
+  }
+
+  return {
+    acquire: (key, scopeKey, factory) => attach(key, scopeKey, factory, 1),
+    materialize: (key, scopeKey, factory) => attach(key, scopeKey, factory, 0),
+
+    release(key, disposition) {
+      const entry = entries.get(key);
+      if (entry === undefined) return;
+      dropDemand(entry, disposition);
+    },
+
+    releaseHandle(key, session, disposition) {
+      const entry = entries.get(key);
+      if (entry === undefined || entry.session !== session) return;
+      dropDemand(entry, disposition);
+    },
+
+    get(key) {
+      const entry = entries.get(key);
+      if (entry === undefined) return null;
+      entry.order = order.next();
+      if (entry.demand === 0) {
+        entry.parkedAtMs = environment.clock.now();
+        armIdleTimer(entry);
+      }
+      return entry.session;
+    },
+
+    peek: (key) => entries.get(key)?.session ?? null,
+
+    peekEntry(key) {
+      const entry = entries.get(key);
+      if (entry === undefined) return null;
+      return {
+        key: entry.key,
+        scopeKey: entry.scopeKey,
+        session: entry.session,
+        demand: entry.demand,
+      };
+    },
+
+    list: () => Array.from(entries.values(), (entry) => entry.session),
+
+    keys: () => Array.from(entries.keys()),
+
+    entries: () =>
+      Array.from(entries.values(), (entry) => ({
+        key: entry.key,
+        scopeKey: entry.scopeKey,
+        session: entry.session,
+        demand: entry.demand,
+      })),
+
+    forceRelease(key) {
+      const entry = entries.get(key);
+      if (entry === undefined) return;
+      transact(() => {
+        teardown(entry, "released");
+      });
+    },
+
+    discard(key, cause) {
+      const entry = entries.get(key);
+      if (entry === undefined) return;
+      transact(() => {
+        teardown(entry, cause);
+      });
+    },
+
+    rekey(previousKey, nextKey) {
+      const entry = entries.get(previousKey);
+      if (entry === undefined) return false;
+      if (entry.demand > 0) return false;
+      if (entries.has(nextKey)) return false;
+      transact(() => {
+        cancelIdleTimer(entry);
+        entries.delete(previousKey);
+        entry.key = nextKey;
+        entries.set(nextKey, entry);
+        // Re-parked rather than carried over: an adoption whose acquire never
+        // lands (a tile that errored before the handle enabled) would
+        // otherwise leave the entry warm forever.
+        park(entry, "warm");
+        requestNotify();
+      });
+      return true;
+    },
+
+    replace(key, previous, next) {
+      const existing = entries.get(key);
+      if (existing === undefined || existing.session !== previous) return false;
+      transact(() => {
+        cancelIdleTimer(existing);
+        entries.delete(key);
+        // The replacement is freshly used, not a continuation of the outgoing
+        // entry's recency: `OpenEpicSessionRegistry.replaceMounted` builds its
+        // entry through the same constructor an acquire uses, which takes a new
+        // tick.
+        const replacement = createEntry(
+          key,
+          existing.scopeKey,
+          next,
+          existing.demand,
+        );
+        const verdict = policy.onBeforeDispose(existing.session, "replaced");
+        if (verdict === "dispose") policy.dispose(existing.session);
+        // A replacement that inherits no demand is warm from the moment it
+        // lands, so its window starts here rather than at the next release.
+        if (replacement.demand === 0) armIdleTimer(replacement);
+      });
+      return true;
+    },
+
+    pruneWarm: () => enforceWarmCap(),
+
+    size: () => entries.size,
+
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+
+    notify: () => requestNotify(),
+
+    transact,
+
+    disposeAll() {
+      if (entries.size === 0) return;
+      transact(() => {
+        for (const entry of Array.from(entries.values())) {
+          teardown(entry, "dispose-all");
+        }
+        entries.clear();
+      });
+    },
+  };
 }

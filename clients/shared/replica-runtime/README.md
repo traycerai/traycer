@@ -29,7 +29,7 @@ moves, is what makes the extraction mechanical.
 | `adapter.ts`             | Decodes one wire lane; owns stream lifecycle and resume cursor               | `EpicStreamClient` consumption (as the legacy `@1` adapter) and every lane subscription that replaces it            |
 | `lease.ts`               | Refcounted demand, async materialise, deterministic teardown                 | The artifact-room hot/cold tier, its cooldown, and `acquireArtifactBodyLease`                                       |
 | `session-registry.ts`    | One warm pool, policy-parameterised                                          | `stores/chats/session-registry.ts`, `stores/terminals/terminal-session-registry.ts`, the open-epic registry's core  |
-| `memory-accountant.ts`   | Process-wide budgets, soft, with protected regions                           | The uncoordinated per-plane constants — per-chat window bytes, hot-room cap, live-epic cap                          |
+| `memory-accountant.ts`   | Process-wide budgets, soft, with protected regions; `createMemoryAccountant` | The uncoordinated per-plane constants — per-chat window bytes, hot-room cap, live-epic cap                          |
 | `command-overlay.ts`     | Client-generated ids, queue, `pending → committed \| rejected \| superseded` | The doc-write mutation path and `pending-metadata-overlay.ts`                                                       |
 | `replica-runtime.ts`     | The composition root that orders the pieces                                  | The closure itself                                                                                                  |
 
@@ -84,9 +84,12 @@ and every long-lived tab hits it exactly once.
 
 ## What this directory deliberately does not do
 
-- No implementations beyond the pure helpers above. The registry, the
-  accountant, the lease registry, and the command queue are named here and
-  built elsewhere.
+- No implementations beyond the pure helpers above (`createGenerationGuard`,
+  `createTransactionalProjectionSink`, `createMemoryAccountant`,
+  `createMonotonicSequence`, the cursor comparators, `sessionKeyOf`). The
+  lease registry and the command queue are named here and built where they
+  are used; the accountant's process-wide wiring (which planes register, which
+  eviction hook each plane supplies) is also elsewhere.
 - No protocol types. Adapters instantiate the generic envelopes with whatever
   their contract serves; the runtime knows about cursors, revisions,
   tombstones, barriers and trust, and nothing about rows.

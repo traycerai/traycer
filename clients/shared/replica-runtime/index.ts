@@ -111,14 +111,17 @@ export type {
 } from "./lease";
 
 export type {
+  ReleaseDisposition,
   SessionDisposeCause,
   SessionDisposeVerdict,
+  SessionEntryView,
   SessionKey,
   SessionRegistry,
   SessionRegistryOptions,
   SessionRegistryPolicy,
+  WarmCapScope,
 } from "./session-registry";
-export { sessionKeyOf } from "./session-registry";
+export { createSessionRegistry, sessionKeyOf } from "./session-registry";
 
 export type {
   AccountantSnapshot,
@@ -128,6 +131,7 @@ export type {
   BudgetPressure,
   BudgetRegistration,
   EvictionOutcome,
+  KnownBudgetPlaneId,
   MemoryAccountant,
   MemoryAccountantOptions,
   PlaneBudgetSpec,
@@ -135,9 +139,11 @@ export type {
   ProtectedBytes,
   ProtectedRegionKind,
 } from "./memory-accountant";
+export { BUDGET_PLANE_IDS, createMemoryAccountant } from "./memory-accountant";
 
 export type {
   CommandEnqueueRequest,
+  CommandDeliveryState,
   CommandId,
   CommandIdFactory,
   CommandOverlay,
@@ -145,7 +151,9 @@ export type {
   CommandQueueOptions,
   CommandRecord,
   CommandResolution,
+  CommandSendFailure,
   CommandState,
 } from "./command-overlay";
+export { createCommandQueue } from "./command-overlay";
 
 export type { PlaneRegistration, ReplicaRuntime } from "./replica-runtime";

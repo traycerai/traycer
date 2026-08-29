@@ -26,7 +26,14 @@ import {
 import { createTransactionalProjectionSink } from "../projection-sink";
 import { unknownFreshness } from "../freshness";
 import { createGenerationGuard, guardHandler } from "../generation-guard";
-import { sessionKeyOf, type SessionRegistryPolicy } from "../session-registry";
+import {
+  sessionKeyOf,
+  createSessionRegistry,
+  type SessionRegistryPolicy,
+  type SessionDisposeCause,
+  type SessionDisposeVerdict,
+  type WarmCapScope,
+} from "../session-registry";
 import type {
   Replica,
   ReplicaApplyOutcome,
@@ -386,9 +393,10 @@ function createFakeEnvironment(): RuntimeEnvironment & {
 }
 
 /** A minimal in-memory `Replica<FakeEvent, FakeProjection>` for one records plane. */
-function createFakeReplica(
-  planeId: string,
-): Replica<FakeEvent, FakeProjection> & {
+function createFakeReplica(planeId: string): Replica<
+  FakeEvent,
+  FakeProjection
+> & {
   readonly resetCauses: ReplicaResetCause[];
 } {
   const rows = new Map<string, { revision: number; row: FakeRow }>();
@@ -605,7 +613,13 @@ function createFakeSessionPolicy(): SessionRegistryPolicy<FakeSession> {
   return {
     idleTtlMs: 60_000,
     maxWarm: 4,
+    warmCapScope: "demand-free",
+    busyCountsTowardWarmCap: true,
     maxActiveDeferMs: 30_000,
+    refreshOrderOnRelease: true,
+    retainWhenIdle(): boolean {
+      return true;
+    },
     hasActiveWork(session: FakeSession): boolean {
       return session.busy;
     },
@@ -619,6 +633,8 @@ function createFakeSessionPolicy(): SessionRegistryPolicy<FakeSession> {
     dispose(session: FakeSession): void {
       session.disposed = true;
     },
+    onParked(): void {},
+    onRevived(): void {},
   };
 }
 
@@ -645,6 +661,676 @@ describe("SessionRegistryPolicy conformance", () => {
     );
     policy.dispose(cleanSession);
     expect(cleanSession.disposed).toBe(true);
+  });
+});
+
+// ─── createSessionRegistry ──────────────────────────────────────────────────
+//
+// The unified registry behind chats, terminals, and open-epic sessions. These
+// cases target the policy knobs new to the unification — the ones an
+// implementation that hardcoded one plane's answer, or dropped a knob
+// entirely, would still pass every OTHER test here while getting wrong.
+
+interface RegSession {
+  readonly id: string;
+  busy: boolean;
+  evictable: boolean;
+  disposed: boolean;
+}
+
+function makeSession(id: string): RegSession {
+  return { id, busy: false, evictable: true, disposed: false };
+}
+
+interface PolicyConfig {
+  readonly idleTtlMs: number | null;
+  readonly maxWarm: number;
+  readonly warmCapScope: WarmCapScope;
+  readonly busyCountsTowardWarmCap: boolean;
+  readonly maxActiveDeferMs: number | null;
+  readonly refreshOrderOnRelease: boolean;
+  readonly retainWhenIdle: (session: RegSession) => boolean;
+  readonly onBeforeDisposeVerdict: (
+    session: RegSession,
+    cause: SessionDisposeCause,
+  ) => SessionDisposeVerdict;
+}
+
+function defaultPolicyConfig(): PolicyConfig {
+  return {
+    idleTtlMs: 10_000,
+    maxWarm: 10,
+    warmCapScope: "demand-free",
+    busyCountsTowardWarmCap: true,
+    maxActiveDeferMs: null,
+    refreshOrderOnRelease: true,
+    retainWhenIdle: () => true,
+    onBeforeDisposeVerdict: () => "dispose",
+  };
+}
+
+type TrackedPolicy = SessionRegistryPolicy<RegSession> & {
+  readonly disposeSpy: Mock;
+  readonly onParkedSpy: Mock;
+  readonly onRevivedSpy: Mock;
+};
+
+function createTrackedPolicy(config: PolicyConfig): TrackedPolicy {
+  const disposeSpy = vi.fn();
+  const onParkedSpy = vi.fn();
+  const onRevivedSpy = vi.fn();
+  return {
+    idleTtlMs: config.idleTtlMs,
+    maxWarm: config.maxWarm,
+    warmCapScope: config.warmCapScope,
+    busyCountsTowardWarmCap: config.busyCountsTowardWarmCap,
+    maxActiveDeferMs: config.maxActiveDeferMs,
+    refreshOrderOnRelease: config.refreshOrderOnRelease,
+    retainWhenIdle: config.retainWhenIdle,
+    hasActiveWork(session: RegSession): boolean {
+      return session.busy;
+    },
+    isEvictable(session: RegSession): boolean {
+      return session.evictable;
+    },
+    onBeforeDispose: config.onBeforeDisposeVerdict,
+    dispose(session: RegSession): void {
+      session.disposed = true;
+      disposeSpy(session.id);
+    },
+    onParked(session: RegSession): void {
+      onParkedSpy(session.id);
+    },
+    onRevived(session: RegSession): void {
+      onRevivedSpy(session.id);
+    },
+    disposeSpy,
+    onParkedSpy,
+    onRevivedSpy,
+  };
+}
+
+describe("createSessionRegistry", () => {
+  describe("warmCapScope", () => {
+    it('"demand-free" excludes held sessions from the cap entirely — N held + 1 warm evicts nothing under maxWarm 1', () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "demand-free",
+        idleTtlMs: null,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+
+      registry.acquire("held-1", "scope", () => makeSession("held-1"));
+      registry.acquire("held-2", "scope", () => makeSession("held-2"));
+      registry.acquire("warm-1", "scope", () => makeSession("warm-1"));
+      registry.release("warm-1", "warm");
+
+      expect(registry.peek("held-1")).not.toBeNull();
+      expect(registry.peek("held-2")).not.toBeNull();
+      expect(registry.peek("warm-1")).not.toBeNull();
+      expect(policy.disposeSpy).not.toHaveBeenCalled();
+    });
+
+    it('"all-entries" counts a held session toward the cap but never evicts it — the demand-free entry is evicted instead', () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "all-entries",
+        idleTtlMs: null,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+
+      const held = registry.acquire("held-1", "scope", () =>
+        makeSession("held-1"),
+      );
+      registry.acquire("warm-1", "scope", () => makeSession("warm-1"));
+      registry.release("warm-1", "warm");
+
+      // The held session counted toward the cap (it is why warm-1 overflowed)
+      // but was never itself a candidate.
+      expect(registry.peek("held-1")).toBe(held);
+      expect(registry.peek("warm-1")).toBeNull();
+      expect(policy.disposeSpy).toHaveBeenCalledWith("warm-1");
+    });
+  });
+
+  describe("busyCountsTowardWarmCap", () => {
+    it("true: a busy demand-free session is counted in overflow and can push an older idle one out, but is never itself evicted", () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "demand-free",
+        busyCountsTowardWarmCap: true,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+
+      const idleOld = registry.acquire("idle-old", "scope", () =>
+        makeSession("idle-old"),
+      );
+      registry.release("idle-old", "warm");
+
+      const busyNew = registry.acquire("busy-new", "scope", () => {
+        const session = makeSession("busy-new");
+        session.busy = true;
+        return session;
+      });
+      registry.release("busy-new", "warm");
+
+      // Positive premise: busy-new really is busy at the moment of the cap check.
+      expect(policy.hasActiveWork(busyNew)).toBe(true);
+      expect(registry.peek("idle-old")).toBeNull();
+      expect(registry.peek("busy-new")).toBe(busyNew);
+      expect(policy.disposeSpy).toHaveBeenCalledWith("idle-old");
+      expect(policy.disposeSpy).not.toHaveBeenCalledWith("busy-new");
+      expect(idleOld.disposed).toBe(true);
+    });
+
+    it("false: N busy demand-free sessions do not flush the idle ones — they are excluded from the cap arithmetic entirely", () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "demand-free",
+        busyCountsTowardWarmCap: false,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+
+      registry.acquire("idle-1", "scope", () => makeSession("idle-1"));
+      registry.release("idle-1", "warm");
+
+      const busy1 = registry.acquire("busy-1", "scope", () => {
+        const session = makeSession("busy-1");
+        session.busy = true;
+        return session;
+      });
+      registry.release("busy-1", "warm");
+
+      const busy2 = registry.acquire("busy-2", "scope", () => {
+        const session = makeSession("busy-2");
+        session.busy = true;
+        return session;
+      });
+      registry.release("busy-2", "warm");
+
+      // Positive premise: both really are busy, and there are two of them —
+      // "counting them would let N running agents flush every lingering
+      // shell immediately" is the bug this knob prevents.
+      expect(policy.hasActiveWork(busy1)).toBe(true);
+      expect(policy.hasActiveWork(busy2)).toBe(true);
+      expect(registry.peek("idle-1")).not.toBeNull();
+      expect(registry.peek("busy-1")).not.toBeNull();
+      expect(registry.peek("busy-2")).not.toBeNull();
+      expect(policy.disposeSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("idleTtlMs: null", () => {
+    it("never schedules an expiry timer, however long the clock advances", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: null,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+
+      registry.release("s1", "warm");
+      environment.advanceClock(1_000_000);
+
+      // The load-bearing assertion: the scheduler was never touched, not
+      // merely that the session happened to survive.
+      expect(scheduleSpy).not.toHaveBeenCalled();
+      expect(registry.peek("s1")).toBe(session);
+    });
+  });
+
+  describe("maxActiveDeferMs", () => {
+    it("null defers a busy session indefinitely — no timer armed at park time, survives arbitrary clock advancement", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 10_000,
+        maxActiveDeferMs: null,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      session.busy = true;
+      registry.acquire("s1", "scope", () => session);
+
+      registry.release("s1", "warm");
+
+      // Positive premise: the session really is busy going into park().
+      expect(policy.hasActiveWork(session)).toBe(true);
+      expect(scheduleSpy).not.toHaveBeenCalled();
+
+      environment.advanceClock(10_000_000);
+      expect(registry.peek("s1")).toBe(session);
+    });
+
+    it("a numeric value re-arms on each early check and disposes once the defer window elapses, measured from park time", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1_000,
+        maxActiveDeferMs: 5_000,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      session.busy = true;
+      registry.acquire("s1", "scope", () => session);
+
+      registry.release("s1", "warm");
+      expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+      // Each 1000ms tick re-arms because the busy session has not yet been
+      // parked for the full 5000ms defer window.
+      environment.advanceClock(1000); // 1000ms since park
+      expect(session.disposed).toBe(false);
+      environment.advanceClock(1000); // 2000ms since park
+      expect(session.disposed).toBe(false);
+      environment.advanceClock(1000); // 3000ms since park
+      expect(session.disposed).toBe(false);
+      environment.advanceClock(1000); // 4000ms since park
+      expect(registry.peek("s1")).toBe(session);
+
+      // The 5th tick crosses the 5000ms defer window measured from park —
+      // not from the previous check — and the session is finally disposed.
+      environment.advanceClock(1000); // 5000ms since park
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+    });
+  });
+
+  describe("refreshOrderOnRelease", () => {
+    interface ReleaseOrderScenario {
+      readonly sessionA: RegSession;
+      readonly sessionB: RegSession;
+    }
+
+    function runReleaseOrderScenario(
+      refreshOrderOnRelease: boolean,
+    ): ReleaseOrderScenario {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "demand-free",
+        idleTtlMs: null,
+        refreshOrderOnRelease,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const sessionA = makeSession("A");
+      const sessionB = makeSession("B");
+      // A acquired first, held longest; B acquired second, released first.
+      registry.acquire("A", "scope", () => sessionA);
+      registry.acquire("B", "scope", () => sessionB);
+      registry.release("B", "warm"); // released first
+      registry.release("A", "warm"); // released last — triggers the cap check
+      return { sessionA, sessionB };
+    }
+
+    it("picks the earlier-RELEASED session when true, and the earlier-ACQUIRED session when false — for the identical release sequence", () => {
+      const refreshed = runReleaseOrderScenario(true);
+      // B released before A: refreshing on release means B is older in the
+      // eviction queue despite A being acquired first.
+      expect(refreshed.sessionB.disposed).toBe(true);
+      expect(refreshed.sessionA.disposed).toBe(false);
+
+      const notRefreshed = runReleaseOrderScenario(false);
+      // Order never moves on release: A, acquired first, stays oldest and is
+      // evicted regardless of which one released last.
+      expect(notRefreshed.sessionA.disposed).toBe(true);
+      expect(notRefreshed.sessionB.disposed).toBe(false);
+    });
+  });
+
+  describe("retainWhenIdle", () => {
+    it("returning false disposes the session at demand zero instead of parking it — no timer, gone immediately", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        retainWhenIdle: () => false,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+
+      registry.release("s1", "warm");
+
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+      expect(scheduleSpy).not.toHaveBeenCalled();
+      expect(policy.onParkedSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("ReleaseDisposition", () => {
+    it('"dispose" tears the session down at demand zero even when retainWhenIdle would keep it warm', () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        retainWhenIdle: () => true,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+
+      registry.release("s1", "dispose");
+
+      expect(session.disposed).toBe(true);
+      expect(policy.onParkedSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not dispose while a unit of demand remains — a second holder keeps the session alive", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session); // first unit of demand
+      registry.acquire("s1", "scope", () => session); // second unit of demand
+
+      registry.release("s1", "dispose"); // drops only one unit
+
+      // Positive premise: one unit of demand is still held.
+      expect(registry.peekEntry("s1")?.demand).toBe(1);
+      expect(session.disposed).toBe(false);
+
+      registry.release("s1", "warm"); // last unit — retainWhenIdle defaults true
+      expect(session.disposed).toBe(false);
+      expect(registry.peek("s1")).toBe(session);
+    });
+  });
+
+  describe("onParked / onRevived", () => {
+    it("fires onParked exactly when a session goes warm, and onRevived only when a warm session is re-acquired", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+
+      registry.acquire("s1", "scope", () => session); // fresh acquire
+      expect(policy.onParkedSpy).not.toHaveBeenCalled();
+      expect(policy.onRevivedSpy).not.toHaveBeenCalled();
+
+      registry.acquire("s1", "scope", () => session); // second unit of demand — never was warm
+      expect(policy.onRevivedSpy).not.toHaveBeenCalled();
+
+      registry.release("s1", "warm"); // demand 2 -> 1, still held
+      expect(policy.onParkedSpy).not.toHaveBeenCalled();
+
+      registry.release("s1", "warm"); // demand 1 -> 0, now warm
+      expect(policy.onParkedSpy).toHaveBeenCalledTimes(1);
+      expect(policy.onParkedSpy).toHaveBeenCalledWith("s1");
+      expect(policy.onRevivedSpy).not.toHaveBeenCalled();
+
+      registry.acquire("s1", "scope", () => session); // re-acquiring the WARM session — a revival
+      expect(policy.onRevivedSpy).toHaveBeenCalledTimes(1);
+      expect(policy.onRevivedSpy).toHaveBeenCalledWith("s1");
+    });
+
+    it("fails toward disposal when onParked throws — the session is disposed, not left warm", () => {
+      const environment = createFakeEnvironment();
+      const config = defaultPolicyConfig();
+      const policy = createTrackedPolicy(config);
+      policy.onParked = (): void => {
+        throw new Error("boom");
+      };
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+
+      registry.release("s1", "warm");
+
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+      expect(environment.logger.error).toHaveBeenCalled();
+    });
+  });
+
+  describe("transact coalescing", () => {
+    it("notifies subscribers exactly once for a transact that changes membership several times, folding an inner notify() into it", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      const listener = vi.fn();
+      registry.subscribe(listener);
+
+      registry.transact(() => {
+        registry.acquire("s1", "scope", () => makeSession("s1"));
+        registry.acquire("s2", "scope", () => makeSession("s2"));
+        registry.release("s1", "dispose");
+        registry.notify(); // an explicit notify folded into the same transaction
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("materialize vs acquire", () => {
+    it("materialize takes no demand and is immediately cap-eligible; acquire takes one unit", () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "demand-free",
+        idleTtlMs: null,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+
+      registry.materialize("mat-1", "scope", () => makeSession("mat-1"));
+      // Zero demand from the start — no acquire ever happened for it.
+      expect(registry.peekEntry("mat-1")?.demand).toBe(0);
+
+      registry.acquire("acq-1", "scope", () => makeSession("acq-1"));
+      registry.release("acq-1", "warm");
+
+      // The cap check on acq-1's release finds two demand-free entries under
+      // maxWarm 1 — mat-1 was cap-eligible from the moment it was
+      // materialized, so it is the one that gets evicted.
+      expect(registry.peek("mat-1")).toBeNull();
+      expect(registry.peek("acq-1")).not.toBeNull();
+    });
+
+    it("acquire takes one unit of demand", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+
+      registry.acquire("s1", "scope", () => makeSession("s1"));
+
+      expect(registry.peekEntry("s1")?.demand).toBe(1);
+    });
+  });
+
+  describe("rekey", () => {
+    it("moves a demand-free entry to a new key and re-parks it with a fresh window", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1000,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("old-key", "scope", () => session);
+      registry.release("old-key", "warm"); // parks, arms one timer
+
+      expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+      const moved = registry.rekey("old-key", "new-key");
+
+      expect(moved).toBe(true);
+      expect(registry.peek("old-key")).toBeNull();
+      expect(registry.peek("new-key")).toBe(session);
+      // Re-parked: the old timer was cancelled and a fresh one armed.
+      expect(scheduleSpy).toHaveBeenCalledTimes(2);
+
+      // The window is fresh from the rekey, not inherited from the original
+      // park — 900ms is short of the 1000ms TTL measured from either point,
+      // but this proves the new timer (not a stale leftover) is what governs.
+      environment.advanceClock(900);
+      expect(registry.peek("new-key")).toBe(session);
+    });
+
+    it("refuses when the entry is held", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      registry.acquire("held-key", "scope", () => makeSession("held-key"));
+
+      expect(registry.rekey("held-key", "new-key")).toBe(false);
+      expect(registry.peek("held-key")).not.toBeNull();
+      expect(registry.peek("new-key")).toBeNull();
+    });
+
+    it("refuses when the source entry is absent", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+
+      expect(registry.rekey("missing", "new-key")).toBe(false);
+    });
+
+    it("refuses when the target key is already taken", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      const source = makeSession("source");
+      const target = makeSession("target");
+      registry.acquire("source-key", "scope", () => source);
+      registry.release("source-key", "warm");
+      registry.acquire("target-key", "scope", () => target);
+
+      expect(registry.rekey("source-key", "target-key")).toBe(false);
+      expect(registry.peek("source-key")).toBe(source);
+      expect(registry.peek("target-key")).toBe(target);
+    });
+  });
+
+  describe("replace", () => {
+    it('inherits the demand count and routes the outgoing session through onBeforeDispose with cause "replaced"', () => {
+      const environment = createFakeEnvironment();
+      const disposeCauses: SessionDisposeCause[] = [];
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        onBeforeDisposeVerdict: (
+          _session: RegSession,
+          cause: SessionDisposeCause,
+        ): SessionDisposeVerdict => {
+          disposeCauses.push(cause);
+          return "dispose";
+        },
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const previous = makeSession("prev");
+      const next = makeSession("next");
+      registry.acquire("k1", "scope", () => previous);
+      registry.acquire("k1", "scope", () => previous); // second unit of demand
+
+      const replaced = registry.replace("k1", previous, next);
+
+      expect(replaced).toBe(true);
+      expect(disposeCauses).toEqual(["replaced"]);
+      expect(previous.disposed).toBe(true);
+      expect(registry.peekEntry("k1")?.session).toBe(next);
+      // The replacement inherits the outgoing entry's demand count.
+      expect(registry.peekEntry("k1")?.demand).toBe(2);
+    });
+
+    it("returns false when previous is no longer the session at that key", () => {
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      const actual = makeSession("actual");
+      const stale = makeSession("stale");
+      const next = makeSession("next");
+      registry.acquire("k1", "scope", () => actual);
+
+      const replaced = registry.replace("k1", stale, next);
+
+      expect(replaced).toBe(false);
+      expect(registry.peek("k1")).toBe(actual);
+      expect(next.disposed).toBe(false);
+    });
+  });
+
+  describe('onBeforeDispose returning "retain"', () => {
+    it("removes the entry from the registry without calling dispose", () => {
+      const environment = createFakeEnvironment();
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        onBeforeDisposeVerdict: () => "retain",
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+
+      registry.forceRelease("s1");
+
+      expect(registry.peek("s1")).toBeNull();
+      expect(policy.disposeSpy).not.toHaveBeenCalled();
+      expect(session.disposed).toBe(false);
+    });
+  });
+
+  describe("the timer-fired-early re-check", () => {
+    it("re-arms instead of evicting when the scheduled callback fires before the TTL has actually elapsed on the clock", () => {
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const config: PolicyConfig = {
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1000,
+      };
+      const policy = createTrackedPolicy(config);
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+      registry.release("s1", "warm");
+
+      expect(scheduleSpy).toHaveBeenCalledTimes(1);
+      const firstScheduledCallback = scheduleSpy.mock.calls[0][1];
+
+      // Fire the scheduled callback directly, WITHOUT moving the clock — the
+      // throttled-background-tab scenario the re-check exists to guard
+      // against. A suite that only ever advances clock and timers together
+      // never exercises this branch.
+      firstScheduledCallback();
+
+      // Not evicted: re-checking against the clock finds 0ms actually
+      // elapsed, so the entry re-arms instead.
+      expect(registry.peek("s1")).toBe(session);
+      expect(session.disposed).toBe(false);
+      expect(scheduleSpy).toHaveBeenCalledTimes(2);
+
+      // Now genuinely advance the clock past the TTL — the re-armed timer
+      // fires and this time the re-check finds the window really elapsed.
+      environment.advanceClock(1000);
+      expect(session.disposed).toBe(true);
+      expect(registry.peek("s1")).toBeNull();
+    });
   });
 });
 

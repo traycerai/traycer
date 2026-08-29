@@ -1,19 +1,14 @@
 /**
- * The host's store-backed chat records, and the reconciliation that keeps the
- * poll and the push from fighting over them.
+ * The host's store-backed chat records: this plane's answers to
+ * `record-table.ts`, plus the pending-creation registry that is chats-only.
  *
- * Re-homed from the open-epic closure: five collections, three counters and
- * seven closures that lived as `let`s beside a websocket. Nothing about the
- * logic changed - the revision guard, the request-time fence, the absorbing
- * retractions and the ingest-time owner selection are the same rules with the
- * same comments, which is the point. This is the algorithm the north-star
- * architecture names as implemented three times in this codebase; unifying the
- * copies is a separate change, and it operates on this file rather than on a
- * closure.
- *
- * Push is the trigger and the poll is the backup, so both write this table and
- * neither owns it: a host without the stream loses latency and nothing else,
- * and a delta lost to a disconnect is repaired by the next 20s list read.
+ * The reconciliation itself - the request-time fence, the per-row revision
+ * guard, the absorbing retractions, the one gated recompute - lives in
+ * {@link createRecordTable} and is shared with the terminal-agent twin. What is
+ * here is what the shared algorithm cannot know: that a chat record's identity
+ * composes its owner, that a removal frame is addressed more coarsely than
+ * that, and that this plane holds stand-ins for creations no record has come
+ * back for yet.
  */
 import type {
   ChatRecordRemovalReason,
@@ -32,6 +27,7 @@ import {
   type PendingChatCreation,
   type RetainedChatCreation,
 } from "../pending-chat-creations";
+import { createRecordTable, type RecordTable } from "./record-table";
 
 /**
  * What a mutation the table now backs needs to hear, and when.
@@ -114,60 +110,9 @@ export function createChatRecordTable(
   const { getCurrentUserId, onBeforePublish, now } = sources;
 
   /**
-   * The host's store-backed chat records, held as the projector's INPUT (the
-   * mirrored copy in the published projection is what components and tests
-   * read). Held here rather than read back out of the projection because the
-   * projector runs inside the publish path, where reading what it is about to
-   * write is exactly the kind of cycle that produces a projection built from
-   * half-updated state.
-   */
-  let chatRecords: ChatsSlice = EMPTY_CHATS_SLICE;
-
-  /**
-   * The RAW rows behind {@link chatRecords}, keyed by OWNER AND CHAT.
-   *
-   * The projected slice cannot serve as the record layer's own state on two
-   * counts. It drops `revision`, which is the entire basis of the staleness
-   * test a push delta has to make; and it is keyed on `chatId` ALONE, which is
-   * not a record identity - see {@link recordKey}.
-   *
-   * Held beside the slice rather than folded into `ChatProjection`, because a
-   * revision is sync bookkeeping and nothing that renders should be able to
-   * read it.
-   */
-  const rows = new Map<string, ChatRecordSummary>();
-
-  /**
-   * Chats the record plane RETRACTED while this session was open, and why -
-   * ABSORBING for the life of the session, so an id in here is filtered out of
-   * every later record answer, poll included.
-   *
-   * Keyed by `chatId` alone, unlike {@link rows}, because that is all a
-   * `remove` frame carries: the delta names `(epicId, chatId, reason)` and no
-   * owner. The frame's addressing is therefore COARSER than a record identity,
-   * so a removal retracts every retained row with that id in this epic.
-   * Bounded and invisible today - the display filter already withholds every
-   * row whose owner is not the signed-in user, so the only rows that can render
-   * are ones for which `chatId` IS unique. Widening the frame is a protocol
-   * change, not something to guess at here.
-   */
-  const retractions = new Map<string, ChatRecordRemovalReason>();
-
-  /**
-   * Local ingest order for the chat rows, and the watermark the last
-   * `epic.listChatRecords` answer left behind. `revision` orders two versions
-   * of ONE row and says nothing about a row an answer omits, so an omission may
-   * only retract a row that was already held when the answer was issued, and a
-   * served row may only replace a strictly older version.
-   */
-  const rowSeq = new Map<string, number>();
-  let ingestSeq = 0;
-  let snapshotFence = 0;
-
-  /**
-   * Locally initiated creations with no record back yet, keyed like
-   * {@link rows} - `(ownerUserId, chatId)` - and held in their OWN map rather
-   * than seeded into that one.
+   * Locally initiated creations with no record back yet, keyed like the record
+   * rows - `(ownerUserId, chatId)` - and held in their OWN map rather than
+   * seeded into that one.
    *
    * Separate because these are not records and must not be treated as any: the
    * row map's entries carry a per-chat `revision` that the delta path's
@@ -187,10 +132,9 @@ export function createChatRecordTable(
    * able to retire the viewer's own in-flight creation - the row that replaces
    * a stand-in has to be the SAME chat, not merely a chat with the same id.
    */
-  const expirePendingCreationForRecord = (
-    ownerUserId: string,
-    chatId: string,
-  ): boolean => pendingCreations.delete(recordKey(ownerUserId, chatId));
+  const expirePendingCreationForRecord = (record: ChatRecordSummary): void => {
+    pendingCreations.delete(recordKey(record.ownerUserId, record.chatId));
+  };
 
   /**
    * Drops every retained creation for `chatId`, whoever it was registered for.
@@ -223,163 +167,98 @@ export function createChatRecordTable(
     return dropped;
   };
 
-  /**
-   * Re-derives the record slice from the raw rows.
-   *
-   * The ONE recompute, shared by the poll and the push so the two halves of one
-   * table cannot drift in how they publish it. The slice is keyed on `chatId`
-   * alone, so it can only be built from rows for which that id is unambiguous -
-   * i.e. ONE owner's. Selecting that owner here (rather than letting
-   * `unionChatsSlice`'s filter do it downstream) is what stops a collaborator's
-   * same-id row from taking the `byId` slot the viewer's own chat needs.
-   *
-   * The objection this used to carry - that filtering at ingest freezes the
-   * answer at the moment the rows ARRIVED - is answered by {@link rows}, which
-   * retains EVERY row regardless of owner. A user switch re-runs this from the
-   * retained rows, so nothing is frozen and nothing is lost.
-   * `unionChatsSlice` still applies the same predicate at projection time; two
-   * boundaries, one shared rule, so they cannot disagree.
-   */
-  function recompute(withRetractions: boolean): ChatRecordPublication | null {
-    const currentUserId = getCurrentUserId();
-    // Record provenance for any pending metadata mutation this table now
-    // backs, BEFORE the change gate below can early-return.
-    onBeforePublish();
-    const visible: ChatRecordSummary[] = [];
-    for (const row of rows.values()) {
-      if (!isChatVisibleToUser(row.ownerUserId, currentUserId)) continue;
-      visible.push(row);
-    }
-    // Creations this client has asked for but has no record back for, folded
-    // in HERE - the one seam both the poll and the push path publish through,
-    // so neither can see a table the other cannot. A real row always wins over
-    // its pending stand-in.
-    const next = unionPendingChatCreations(
-      chatRecordsSlice(visible),
-      pendingCreations.values(),
-      currentUserId,
-    );
-    const nextSlice = next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
-    if (!withRetractions && chatSlicesEq(chatRecords, nextSlice)) return null;
-    chatRecords = nextSlice;
+  const table: RecordTable<ChatRecordSummary, ChatsSlice> = createRecordTable(
+    {
+      rowKey: (row) => recordKey(row.ownerUserId, row.chatId),
+      /**
+       * A `remove` frame names `(epicId, chatId, reason)` and no owner, so the
+       * frame's addressing is COARSER than a record identity and a removal
+       * retracts every retained row with that id in this epic.
+       *
+       * Bounded and invisible today - the display filter already withholds
+       * every row whose owner is not the signed-in user, so the only rows that
+       * can render are ones for which `chatId` IS unique. Widening the frame is
+       * a protocol change, not something to guess at here.
+       */
+      retractionIdOf: (row) => row.chatId,
+      isVisibleToUser: (row, currentUserId) =>
+        isChatVisibleToUser(row.ownerUserId, currentUserId),
+      /**
+       * No doc-resident carve-out here, unlike the terminal-agent twin: chat
+       * records are registry-only, so every row carries a real revision and the
+       * same monotonic test governs both paths.
+       */
+      supersedesOnSnapshot: (candidate, held) =>
+        candidate.revision > held.revision,
+      supersedesOnUpsert: (candidate, held) =>
+        candidate.revision > held.revision,
+      /**
+       * Creations this client has asked for but has no record back for, folded
+       * in HERE - the one seam both the poll and the push path publish through,
+       * so neither can see a table the other cannot. A real row always wins over
+       * its pending stand-in.
+       */
+      buildSlice: (visibleRows, currentUserId) => {
+        const next = unionPendingChatCreations(
+          chatRecordsSlice(visibleRows),
+          pendingCreations.values(),
+          currentUserId,
+        );
+        return next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
+      },
+      slicesEq: chatSlicesEq,
+      emptySlice: EMPTY_CHATS_SLICE,
+    },
+    {
+      getCurrentUserId,
+      onBeforePublish,
+      // The record for a creation this client is holding open has arrived: the
+      // stand-in has served its purpose and the served row takes over.
+      onRowServed: expirePendingCreationForRecord,
+      // Same handover as the poll's, on the same full identity: whichever path
+      // delivers the real row first retires the stand-in, so the row never
+      // blinks out between the two.
+      onUpsertAdmitted: expirePendingCreationForRecord,
+      // A retraction outranks a creation this client is still holding open:
+      // removal is terminal and absorbing, and an optimistic row is the weakest
+      // claim there is.
+      onRemoval: dropPendingCreationsForChat,
+    },
+  );
+
+  function published(
+    publication: {
+      readonly slice: ChatsSlice;
+      readonly retractions: Readonly<
+        Record<string, ChatRecordRemovalReason>
+      > | null;
+    } | null,
+  ): ChatRecordPublication | null {
+    if (publication === null) return null;
     return {
-      chatRecords: nextSlice,
-      chatRetractions: withRetractions ? Object.fromEntries(retractions) : null,
+      chatRecords: publication.slice,
+      chatRetractions: publication.retractions,
     };
   }
 
   return {
-    current: () => chatRecords,
-    ingestSeq: () => ingestSeq,
+    current: () => table.current(),
+    ingestSeq: () => table.ingestSeq(),
 
-    applyRecords(records, issuedAtSeq) {
-      const served = new Map<string, ChatRecordSummary>();
-      for (const row of records) {
-        // A retracted chat never comes back through the poll. The list read is
-        // a SNAPSHOT of the host's SQLite and the host applies a removal before
-        // it emits one, so a response that still carries the row was
-        // necessarily issued before the retraction - letting it through would
-        // resurrect a chat seconds after its tab said it was gone.
-        if (retractions.has(row.chatId)) continue;
-        served.set(recordKey(row.ownerUserId, row.chatId), row);
-      }
-      // Omissions first, against the fence - see `rowSeq`. A row this answer
-      // does not carry is dropped only if it was already held when the answer
-      // was ISSUED; anything ingested since then (a push delta, a faster later
-      // answer) is newer than this snapshot by construction and survives it.
-      const fence = issuedAtSeq ?? snapshotFence;
-      for (const key of [...rows.keys()]) {
-        if (served.has(key)) continue;
-        if ((rowSeq.get(key) ?? 0) > fence) continue;
-        rows.delete(key);
-        rowSeq.delete(key);
-      }
-      for (const [key, row] of served) {
-        // The record for a creation this client is holding open has arrived:
-        // the stand-in has served its purpose and the served row takes over.
-        // Runs for EVERY served row - stale-rejected ones included, since even
-        // an old version proves the record exists - which is what lets a later
-        // answer retire a stand-in registered while the row was already held.
-        expirePendingCreationForRecord(row.ownerUserId, row.chatId);
-        const held = rows.get(key);
-        // The same monotonic-`revision` test the delta path applies, in the
-        // same direction: a snapshot row that does not strictly exceed what is
-        // held is an older version of that row, and overwriting with it would
-        // regress a push the client has already shown - and, through the
-        // optimistic overlay's supersession rule, terminally kill a healthy
-        // pending chain over a read that was merely slow. (No doc-resident
-        // carve-out here, unlike the terminal-agent twin: chat records are
-        // registry-only, so every row carries a real revision.)
-        if (held !== undefined && row.revision <= held.revision) continue;
-        rows.set(key, row);
-        ingestSeq += 1;
-        rowSeq.set(key, ingestSeq);
-      }
-      snapshotFence = ingestSeq;
-      return recompute(false);
-    },
+    applyRecords: (records, issuedAtSeq) =>
+      published(table.applySnapshot(records, issuedAtSeq)),
 
-    applyDelta(delta) {
-      if (delta.kind === "remove") {
-        // Every retained row with this id, because the frame carries no owner
-        // to narrow by - see the retraction map for why that is bounded rather
-        // than wrong.
-        const doomed = Array.from(rows.entries())
-          .filter(([, row]) => row.chatId === delta.chatId)
-          .map(([key]) => key);
-        // A retraction outranks a creation this client is still holding open:
-        // removal is terminal and absorbing, and an optimistic row is the
-        // weakest claim there is. Dropped BEFORE the idempotence test so a
-        // redelivered removal that is the first one to race a registration
-        // still retires it.
-        const hadPending = dropPendingCreationsForChat(delta.chatId);
-        // Idempotent: a redelivered removal for the same reason is not a state
-        // change, and re-publishing on it would re-project the epic for
-        // nothing.
-        if (
-          retractions.get(delta.chatId) === delta.reason &&
-          doomed.length === 0 &&
-          !hadPending
-        ) {
-          return null;
-        }
-        retractions.set(delta.chatId, delta.reason);
-        for (const key of doomed) {
-          rows.delete(key);
-          rowSeq.delete(key);
-        }
-        return recompute(true);
-      }
-      const { record } = delta;
-      // Removal is TERMINAL AND ABSORBING - the one lifecycle rule in this
-      // design - so no later upsert resurrects the row here.
-      if (retractions.has(record.chatId)) return null;
-      const key = recordKey(record.ownerUserId, record.chatId);
-      const held = rows.get(key);
-      // The staleness test, and the only ordering fact on a row: `revision` is
-      // per-chat monotonic, so a delta that does not strictly exceed what is
-      // held is a replay, a reorder or a duplicate. Dropping it is what makes
-      // those harmless with no merge logic anywhere. NOT a timestamp
-      // comparison - host clocks skew and `updatedAt` is display metadata no
-      // ordering decision may read.
-      if (held !== undefined && record.revision <= held.revision) return null;
-      rows.set(key, record);
-      // Past the fence the last snapshot left: an `epic.listChatRecords` answer
-      // already in flight cannot carry this row's new version, so its omission
-      // - or its stale copy, via the revision test above - must not defeat it.
-      ingestSeq += 1;
-      rowSeq.set(key, ingestSeq);
-      // Same handover as the poll's, on the same full identity: whichever path
-      // delivers the real row first retires the stand-in, so the row never
-      // blinks out between the two.
-      expirePendingCreationForRecord(record.ownerUserId, record.chatId);
-      return recompute(false);
-    },
+    applyDelta: (delta) =>
+      published(
+        delta.kind === "remove"
+          ? table.applyRemoval(delta.chatId, delta.reason)
+          : table.applyUpsert(delta.record),
+      ),
 
     beginPendingCreation(pending) {
       // A chat this session has already seen retracted cannot be created back
       // into view - the same absorbing rule the record paths apply.
-      if (retractions.has(pending.chatId)) return null;
+      if (table.isRetracted(pending.chatId)) return null;
       // No signed-in user means no identity to retain this under, and an
       // unattributed stand-in is worse than none: it could be retired by a
       // stranger's same-id row, or rendered to whoever signs in next. The chat
@@ -409,24 +288,17 @@ export function createChatRecordTable(
         ownerUserId,
         createdAt: now(),
       });
-      return recompute(false);
+      return published(table.republish());
     },
 
     clearPendingCreation(chatId) {
       if (!dropPendingCreationsForChat(chatId)) return null;
-      return recompute(false);
+      return published(table.republish());
     },
 
-    republishForCurrentUser() {
-      return recompute(false);
-    },
+    republishForCurrentUser: () => published(table.republish()),
 
-    servesNodeToViewer(nodeId, currentUserId) {
-      for (const row of rows.values()) {
-        if (row.chatId !== nodeId) continue;
-        if (isChatVisibleToUser(row.ownerUserId, currentUserId)) return true;
-      }
-      return false;
-    },
+    servesNodeToViewer: (nodeId, currentUserId) =>
+      table.servesNodeToViewer(nodeId, currentUserId),
   };
 }
