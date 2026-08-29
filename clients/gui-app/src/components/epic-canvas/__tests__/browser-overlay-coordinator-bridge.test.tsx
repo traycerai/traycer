@@ -26,6 +26,7 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
   BrowserViewBridge,
+  BrowserPersistenceState,
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
@@ -44,6 +45,17 @@ function registerTestBrowserOverlayTile(input: {
 }): void {
   unregisterTiles.add(registerBrowserOverlayTile(input));
 }
+
+const ENABLED_PERSISTENCE_STATE: BrowserPersistenceState = {
+  decision: { kind: "enabled", decidedAt: 0 },
+  cryptoState: {
+    mode: "real",
+    persistence: "persistent",
+    reason: "os-backed",
+    storageBackend: null,
+    encryptionAvailable: true,
+  },
+};
 
 class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
@@ -191,6 +203,22 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
       storageBackend: null,
       encryptionAvailable: true,
     });
+  }
+
+  getPersistenceState(): Promise<BrowserPersistenceState> {
+    return Promise.resolve(ENABLED_PERSISTENCE_STATE);
+  }
+
+  enablePersistence(): Promise<BrowserPersistenceState> {
+    return Promise.resolve(ENABLED_PERSISTENCE_STATE);
+  }
+
+  declinePersistence(): Promise<BrowserPersistenceState> {
+    return Promise.resolve(ENABLED_PERSISTENCE_STATE);
+  }
+
+  relaunchForPersistence(): Promise<void> {
+    return Promise.resolve();
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {

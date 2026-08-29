@@ -539,17 +539,12 @@ function isWebOriginUrl(url: string): boolean {
 
 function cookieCryptoHeadline(state: BrowserCookieCryptoState): string {
   if (state.persistence === "ephemeral") return "Logins aren't saved";
-  return state.mode === "real"
-    ? "Logins saved securely"
-    : "Logins saved with basic protection";
+  return "Logins saved securely";
 }
 
 function cookieCryptoDetail(state: BrowserCookieCryptoState): string {
   if (state.mode === "degraded" || state.persistence === "ephemeral") {
     return browserCookieDegradedMessage(state);
   }
-  if (state.mode === "real") {
-    return "Cookies and saved logins on this page are encrypted by your operating system.";
-  }
-  return "Cookies and saved logins on this page use basic, less secure encryption.";
+  return "Cookies and saved logins on this page are encrypted by your operating system.";
 }

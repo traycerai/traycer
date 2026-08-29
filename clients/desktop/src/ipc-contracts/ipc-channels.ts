@@ -346,6 +346,13 @@ export const RunnerHostInvoke = {
     "runnerHost:browserView:primaryProfile:capture",
   browserViewCookieCryptoStateGet:
     "runnerHost:browserView:cookieCryptoState:get",
+  // Lazy persistence (keychain refactor ticket 01). `...Enable` is the only
+  // channel that may raise an OS keystore prompt.
+  browserViewPersistenceStateGet: "runnerHost:browserView:persistence:get",
+  browserViewPersistenceEnable: "runnerHost:browserView:persistence:enable",
+  browserViewPersistenceDecline: "runnerHost:browserView:persistence:decline",
+  browserViewRelaunchForPersistence:
+    "runnerHost:browserView:persistence:relaunch",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:

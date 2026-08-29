@@ -8,6 +8,7 @@ import type {
   BrowserViewPopupWindow,
   ManagedBrowserView,
 } from "../browser-view-port";
+import type { BrowserSessionProfileRequest } from "../browser-session";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
 import type {
@@ -25,7 +26,9 @@ import type { BrowserViewPopups } from "./browser-view-popups";
 import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
-  readonly createView: () => ManagedBrowserView;
+  readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly geometry: BrowserViewGeometry;
   readonly overlay: BrowserViewOverlay;
@@ -57,7 +60,9 @@ interface BrowserViewEntryFactoryOptions {
  * the coordinator only owns what a caller asks for.
  */
 export class BrowserViewEntryFactory {
-  private readonly createView: () => ManagedBrowserView;
+  private readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly geometry: BrowserViewGeometry;
   private readonly overlay: BrowserViewOverlay;
@@ -101,7 +106,13 @@ export class BrowserViewEntryFactory {
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
   ): BrowserViewEntry {
-    const view = this.createView();
+    // Every Electron guest is the shared `primary` identity today; `isolated`
+    // arrives with ticket 09 and picks a per-session partition from the same
+    // seam.
+    const view = this.createView({
+      profile: "primary",
+      sessionId: identity.key.sessionId,
+    });
     const entry: BrowserViewEntry = {
       surface: null,
       surfaceBindingId: null,

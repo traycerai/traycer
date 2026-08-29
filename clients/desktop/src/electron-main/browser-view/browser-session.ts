@@ -6,19 +6,41 @@ import {
   type WebPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewDownloadState,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../app/logger";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
-import { getBrowserCookieCryptoState } from "./storage/browser-cookie-crypto";
+import { ensureBrowserPersistenceForTileOpen } from "./storage/browser-cookie-crypto";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
-const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+
+/**
+ * Which jar a browser guest gets. `primary` is the one shared identity (user
+ * tabs, agent Electron tabs, popups); `isolated` is the per-session throwaway
+ * partition, which lands with ticket 09.
+ */
+export type BrowserSessionProfile = "primary" | "isolated";
+
+export interface BrowserSessionProfileRequest {
+  readonly profile: BrowserSessionProfile;
+  readonly sessionId: string;
+}
+
+export class BrowserProfileNotSupportedError extends Error {
+  readonly code = "not-supported";
+  readonly profile: BrowserSessionProfile;
+  readonly sessionId: string;
+
+  constructor(profile: BrowserSessionProfile, sessionId: string) {
+    super(`Browser profile "${profile}" is not supported yet`);
+    this.name = "BrowserProfileNotSupportedError";
+    this.profile = profile;
+    this.sessionId = sessionId;
+  }
+}
 
 type BrowserPermissionRequestHandler = (
   webContents: unknown,
@@ -153,33 +175,53 @@ const pendingCertificateErrorsById = new Map<
   BrowserSessionPendingCertificateError
 >();
 
-export function ensureBrowserViewSession(): Session {
-  const browserSession = session.fromPartition(getBrowserViewPartition(), {
-    cache: true,
-  });
+/**
+ * Sessions are memoised per partition name, not globally: enabling persistence
+ * mid-process moves new guests from the ephemeral partition to the persistent
+ * one, and each partition needs the hardening installed exactly once.
+ * `session.defaultSession` is never touched here - the app shell owns it.
+ */
+const sessionsByPartition = new Map<string, Session>();
+
+export function ensureBrowserViewSession(
+  request: BrowserSessionProfileRequest,
+): Session {
+  const partition = partitionForProfile(request.profile, request.sessionId);
+  const existing = sessionsByPartition.get(partition);
+  if (existing !== undefined) return existing;
+  const browserSession = session.fromPartition(partition, { cache: true });
   installBrowserViewSessionPolicy(browserSession);
+  sessionsByPartition.set(partition, browserSession);
   return browserSession;
 }
 
-export function createBrowserViewWebPreferences(): WebPreferences {
+export function createBrowserViewWebPreferences(
+  request: BrowserSessionProfileRequest,
+): WebPreferences {
   return {
-    partition: getBrowserViewPartition(),
+    partition: partitionForProfile(request.profile, request.sessionId),
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,
   };
 }
 
-function getBrowserViewPartition(): string {
-  return browserViewPartitionForCryptoState(getBrowserCookieCryptoState());
-}
-
-function browserViewPartitionForCryptoState(
-  state: BrowserCookieCryptoState,
+/**
+ * The single place that decides whether a guest gets a durable jar. `primary`
+ * only reaches `persist:` when the user enabled persistence on this machine
+ * *and* the keystore probe succeeded in this process - anything else stays
+ * in memory, which is what keeps a denied keychain usable rather than fatal.
+ */
+export function partitionForProfile(
+  profile: BrowserSessionProfile,
+  sessionId: string,
 ): string {
-  return state.mode === "degraded"
-    ? BROWSER_VIEW_EPHEMERAL_PARTITION
-    : BROWSER_VIEW_PARTITION;
+  if (profile === "isolated") {
+    throw new BrowserProfileNotSupportedError(profile, sessionId);
+  }
+  return ensureBrowserPersistenceForTileOpen().persistence === "persistent"
+    ? BROWSER_VIEW_PARTITION
+    : BROWSER_VIEW_EPHEMERAL_PARTITION;
 }
 
 function installBrowserViewSessionPolicy(

@@ -3,6 +3,9 @@ import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/
 export function browserCookieDegradedMessage(
   cryptoState: BrowserCookieCryptoState,
 ): string {
+  if (cryptoState.reason === "not-enabled") {
+    return "Logins aren't saved yet. Enable saved logins from the shield to keep them.";
+  }
   if (cryptoState.reason === "keychain-denied") {
     return "Logins in this browser are temporary for this session. Choose Always Allow for Traycer Safe Storage on the next launch to keep persistent logins.";
   }

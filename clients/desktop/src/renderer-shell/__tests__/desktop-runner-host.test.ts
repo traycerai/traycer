@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { BrowserPersistenceState } from "@traycer-clients/shared/platform/browser-view";
 import type {
   HostControllerStatus,
   HostRegistryUpdateState,
@@ -14,6 +15,17 @@ import {
   DesktopRunnerHost,
   type DesktopPreloadBridge,
 } from "../desktop-runner-host";
+
+const persistedPersistenceState: BrowserPersistenceState = {
+  decision: { kind: "enabled", decidedAt: 0 },
+  cryptoState: {
+    mode: "real",
+    persistence: "persistent",
+    reason: "os-backed",
+    storageBackend: null,
+    encryptionAvailable: true,
+  },
+};
 
 // In vitest's jsdom env the `encrypt-storage` UMD wrapper fails to pick up
 // `window.localStorage` correctly; we don't need to exercise the AES path
@@ -584,6 +596,10 @@ function buildFakeBridge(
         storageBackend: null,
         encryptionAvailable: true,
       }),
+      getPersistenceState: async () => persistedPersistenceState,
+      enablePersistence: async () => persistedPersistenceState,
+      declinePersistence: async () => persistedPersistenceState,
+      relaunchForPersistence: async () => undefined,
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),

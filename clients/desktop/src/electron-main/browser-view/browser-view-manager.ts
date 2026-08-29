@@ -29,6 +29,7 @@ import { describeLogError, log } from "../app/logger";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
+  BrowserSessionProfileRequest,
 } from "./browser-session";
 import type {
   BrowserViewDevToolsWindow,
@@ -86,10 +87,13 @@ export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
 
 interface BrowserViewManagerOptions {
-  readonly createView: () => ManagedBrowserView;
+  readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
     windowId: string,
+    request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly createDevToolsWindow: (
     windowId: string,

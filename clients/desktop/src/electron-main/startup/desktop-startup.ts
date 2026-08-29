@@ -121,7 +121,8 @@ import {
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
-import { resolveBrowserCookieCryptoStateAtReady } from "../browser-view/storage/browser-cookie-crypto";
+import { initBrowserPersistence } from "../browser-view/storage/browser-cookie-crypto";
+import { browserPersistenceFilePath } from "../browser-view/storage/browser-persistence-decision";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,
@@ -387,8 +388,14 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "user-agent", () => configureUserAgent()),
     timed("on-ready", "host-resolver-doh", () => configureHostResolverDoH()),
     timed("on-ready", "harden-session", () => hardenDefaultSession()),
-    timed("on-ready", "browser-cookie-crypto", () => {
-      resolveBrowserCookieCryptoStateAtReady();
+    // File read only - deliberately does NOT touch the OS keystore. The
+    // keychain is first reached when the user enables persistence (or, on a
+    // machine that already consented, from inside this call).
+    timed("on-ready", "browser-persistence", async () => {
+      await initBrowserPersistence({
+        decisionFilePath: browserPersistenceFilePath(),
+        platform: process.platform,
+      });
     }),
     timed("on-ready", "spell-check", () => enableSpellCheck()),
     timed("on-ready", "notification-handler", () =>

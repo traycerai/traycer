@@ -41,6 +41,11 @@ vi.mock("electron", () => {
     constructor(_options: unknown) {}
   }
   return {
+    app: {
+      getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+      relaunch: (): void => undefined,
+      exit: (_code: number): void => undefined,
+    },
     BrowserWindow,
     WebContentsView,
     dialog: {
@@ -133,17 +138,25 @@ vi.mock("../../browser-view/browser-session", () => ({
   registerBrowserViewWebContents: vi.fn(),
 }));
 
-vi.mock("../../browser-view/storage/browser-cookie-crypto", () => ({
-  getBrowserCookieCryptoState: vi.fn(() =>
-    Promise.resolve({
-      mode: "real",
-      persistence: "persistent",
-      reason: "os-backed",
-      storageBackend: null,
-      encryptionAvailable: true,
-    }),
-  ),
-}));
+vi.mock("../../browser-view/storage/browser-cookie-crypto", () => {
+  const cryptoState = {
+    mode: "real",
+    persistence: "persistent",
+    reason: "os-backed",
+    storageBackend: null,
+    encryptionAvailable: true,
+  };
+  const persistenceState = {
+    decision: { kind: "enabled", decidedAt: 0 },
+    cryptoState,
+  };
+  return {
+    getBrowserCookieCryptoState: vi.fn(() => cryptoState),
+    getBrowserPersistenceState: vi.fn(() => persistenceState),
+    enableBrowserPersistence: vi.fn(() => Promise.resolve(cryptoState)),
+    declineBrowserPersistence: vi.fn(() => Promise.resolve(cryptoState)),
+  };
+});
 
 vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {

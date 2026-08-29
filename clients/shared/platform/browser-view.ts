@@ -221,7 +221,7 @@ export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTa
   >["reason"];
 }
 
-type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
+type BrowserCookieCryptoMode = "real" | "degraded";
 type BrowserCookiePersistence = "persistent" | "ephemeral";
 export type BrowserCookieStorageBackend =
   | "basic_text"
@@ -233,6 +233,8 @@ export type BrowserCookieStorageBackend =
   | null;
 export type BrowserCookieCryptoReason =
   | "os-backed"
+  /** The keystore was never touched: nobody has enabled saved logins here. */
+  | "not-enabled"
   | "linux-basic-text"
   | "keychain-denied"
   | "encryption-unavailable"
@@ -244,6 +246,27 @@ export interface BrowserCookieCryptoState {
   readonly reason: BrowserCookieCryptoReason;
   readonly storageBackend: BrowserCookieStorageBackend;
   readonly encryptionAvailable: boolean;
+}
+
+/**
+ * Desktop-local, per-machine record of whether the user let Traycer touch this
+ * machine's OS keystore for browser logins. It is a statement about the
+ * machine, never about the Traycer account, so it lives in desktop userData
+ * (`browser-persistence.json`) and never travels to the host.
+ */
+export type BrowserPersistenceDecision =
+  /** Never asked (macOS, and Linux until a backend is known). */
+  | { readonly kind: "undecided" }
+  /** The user clicked Enable, or a silent platform auto-enabled. */
+  | { readonly kind: "enabled"; readonly decidedAt: number }
+  /** The user chose "Not now" on the explainer card. */
+  | { readonly kind: "declined"; readonly decidedAt: number }
+  /** The OS cached a denial; re-probe (and enable) on the next launch. */
+  | { readonly kind: "relaunch-pending"; readonly decidedAt: number };
+
+export interface BrowserPersistenceState {
+  readonly decision: BrowserPersistenceDecision;
+  readonly cryptoState: BrowserCookieCryptoState;
 }
 
 export type BrowserViewConsoleLevel =
@@ -333,6 +356,13 @@ export interface BrowserViewBridge {
     input: BrowserViewOverlayRelease,
   ): Promise<BrowserViewOverlayReleaseResult>;
   getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
+  /** Decision + live crypto state, without touching the OS keystore. */
+  getPersistenceState(): Promise<BrowserPersistenceState>;
+  /** Runs the keystore probe (this is what shows the OS prompt). */
+  enablePersistence(): Promise<BrowserPersistenceState>;
+  declinePersistence(): Promise<BrowserPersistenceState>;
+  /** Relaunches the desktop so a cached OS denial can be re-asked. */
+  relaunchForPersistence(): Promise<void>;
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;

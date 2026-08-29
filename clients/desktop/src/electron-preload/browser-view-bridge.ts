@@ -6,6 +6,7 @@ import {
 import type {
   BrowserViewBridge,
   BrowserCookieCryptoState,
+  BrowserPersistenceState,
   BrowserPrimaryProfileCaptureResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
@@ -142,6 +143,22 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewCookieCryptoStateGet,
         ) as Promise<BrowserCookieCryptoState>,
+      getPersistenceState: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewPersistenceStateGet,
+        ) as Promise<BrowserPersistenceState>,
+      enablePersistence: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewPersistenceEnable,
+        ) as Promise<BrowserPersistenceState>,
+      declinePersistence: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewPersistenceDecline,
+        ) as Promise<BrowserPersistenceState>,
+      relaunchForPersistence: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewRelaunchForPersistence,
+        ) as Promise<void>,
       capturePrimaryProfile: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,

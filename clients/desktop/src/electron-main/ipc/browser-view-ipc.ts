@@ -1,4 +1,5 @@
 import {
+  app,
   BrowserWindow,
   WebContentsView,
   type BrowserWindowConstructorOptions,
@@ -28,8 +29,15 @@ import {
   onBrowserViewDownloadChange,
   readBrowserViewPendingCertificateError,
   registerBrowserViewWebContents,
+  type BrowserSessionProfileRequest,
 } from "../browser-view/browser-session";
-import { getBrowserCookieCryptoState } from "../browser-view/storage/browser-cookie-crypto";
+import { log } from "../app/logger";
+import {
+  declineBrowserPersistence,
+  enableBrowserPersistence,
+  getBrowserCookieCryptoState,
+  getBrowserPersistenceState,
+} from "../browser-view/storage/browser-cookie-crypto";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
@@ -40,6 +48,15 @@ import {
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
+/**
+ * The whole-jar capture reads the one shared `primary` identity, so its
+ * session lookup carries no per-tab session id.
+ */
+const PRIMARY_PROFILE_REQUEST: BrowserSessionProfileRequest = {
+  profile: "primary",
+  sessionId: "primary",
+};
+
 export function registerBrowserViewIpc(
   bridge: RunnerIpcBridge,
 ): BrowserViewManager {
@@ -47,7 +64,7 @@ export function registerBrowserViewIpc(
     (origins) =>
       captureBrowserPrimaryProfile(origins, {
         readCryptoState: getBrowserCookieCryptoState,
-        getSession: ensureBrowserViewSession,
+        getSession: () => ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
       }),
     captureBrowserOriginLocalStorage,
   );
@@ -57,8 +74,8 @@ export function registerBrowserViewIpc(
       toBrowserViewWindow(
         bridge.windowRegistry.getRecordById(windowId)?.window,
       ),
-    createPopupWindowOptions: (windowId) =>
-      createBrowserPopupWindowOptions(bridge, windowId),
+    createPopupWindowOptions: (windowId, request) =>
+      createBrowserPopupWindowOptions(bridge, windowId, request),
     createDevToolsWindow: (windowId) =>
       createBrowserDevToolsWindow(bridge, windowId),
     registerPopupWebContents: (webContents) => {
@@ -331,20 +348,61 @@ export function registerBrowserViewIpc(
     getBrowserCookieCryptoState(),
   );
 
+  bridge.handleInvoke(RunnerHostInvoke.browserViewPersistenceStateGet, () =>
+    getBrowserPersistenceState(),
+  );
+
+  // The only invoke allowed to reach the OS keystore. Ticket 02 puts the
+  // explainer card in front of it; migrating existing tiles is ticket 02 too,
+  // so live guests keep the partition they were created with.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewPersistenceEnable,
+    async () => {
+      const cryptoState = await enableBrowserPersistence();
+      // Create the durable partition now so the next guest attaches to an
+      // already-hardened session.
+      if (cryptoState.persistence === "persistent") {
+        ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
+      }
+      return getBrowserPersistenceState();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewPersistenceDecline,
+    async () => {
+      await declineBrowserPersistence();
+      return getBrowserPersistenceState();
+    },
+  );
+
+  // Chromium caches the macOS keychain lookup per process, so a denial can
+  // only be re-asked from a fresh one.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewRelaunchForPersistence,
+    () => {
+      log.info("[browser-view] relaunching to retry browser persistence");
+      app.relaunch();
+      app.exit(0);
+    },
+  );
+
   bridge.disposeFns.push(() => {
     manager.dispose();
   });
   return manager;
 }
 
-function createElectronBrowserView(): ManagedBrowserView {
+function createElectronBrowserView(
+  request: BrowserSessionProfileRequest,
+): ManagedBrowserView {
   // Browser page webContents are intentionally not registered as trusted IPC
   // senders. They get no preload / Node integration; the Traycer renderer
   // mediates all browser-view IPC through RunnerIpcBridge's existing sender
   // gate.
-  ensureBrowserViewSession();
+  ensureBrowserViewSession(request);
   const view = new WebContentsView({
-    webPreferences: createBrowserViewWebPreferences(),
+    webPreferences: createBrowserViewWebPreferences(request),
   });
   registerBrowserViewWebContents(view.webContents);
   return view;
@@ -353,6 +411,7 @@ function createElectronBrowserView(): ManagedBrowserView {
 function createBrowserPopupWindowOptions(
   bridge: RunnerIpcBridge,
   windowId: string,
+  request: BrowserSessionProfileRequest,
 ): BrowserWindowConstructorOptions {
   const parentWindow = bridge.windowRegistry.getRecordById(windowId)?.window;
   return {
@@ -361,7 +420,7 @@ function createBrowserPopupWindowOptions(
     width: 900,
     height: 700,
     backgroundColor: "#0b0b0d",
-    webPreferences: createBrowserViewWebPreferences(),
+    webPreferences: createBrowserViewWebPreferences(request),
   };
 }
 

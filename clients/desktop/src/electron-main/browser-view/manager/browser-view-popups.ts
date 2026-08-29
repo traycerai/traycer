@@ -6,6 +6,7 @@ import {
   type BrowserViewEntry,
   type BrowserViewSend,
 } from "./browser-view-entry";
+import type { BrowserSessionProfileRequest } from "../browser-session";
 import type {
   BrowserViewPopupWebContents,
   BrowserViewPopupWindow,
@@ -16,6 +17,7 @@ import type {
 interface BrowserViewPopupsOptions {
   readonly createPopupWindowOptions: (
     windowId: string,
+    request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly registerPopupWebContents: (
     webContents: BrowserViewPopupWebContents,
@@ -30,6 +32,7 @@ interface BrowserViewPopupsOptions {
 export class BrowserViewPopups {
   private readonly createPopupWindowOptions: (
     windowId: string,
+    request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   private readonly registerPopupWebContents: (
     webContents: BrowserViewPopupWebContents,
@@ -64,8 +67,13 @@ export class BrowserViewPopups {
     }
     return {
       action: "allow",
+      // A popup shares its opener's jar; same profile, same session id.
       overrideBrowserWindowOptions: this.createPopupWindowOptions(
         surface.windowId,
+        {
+          profile: "primary",
+          sessionId: entry.identity.key.sessionId,
+        },
       ),
       outlivesOpener: false,
     };

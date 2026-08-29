@@ -1,9 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { Certificate, CertificatePrincipal } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
+  BrowserSessionProfileRequest,
 } from "../browser-session";
 
 type BrowserPermissionRequestHandler = (
@@ -45,6 +47,9 @@ const electronState = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
+  app: {
+    getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
@@ -285,25 +290,32 @@ function requestAllowed(
   return allowed;
 }
 
-function realCookieCryptoState() {
+function realCookieCryptoState(): BrowserCookieCryptoState {
   return {
-    mode: "real" as const,
-    persistence: "persistent" as const,
-    reason: "os-backed" as const,
+    mode: "real",
+    persistence: "persistent",
+    reason: "os-backed",
     storageBackend: null,
     encryptionAvailable: true,
   };
 }
 
-function degradedCookieCryptoState() {
+function degradedCookieCryptoState(
+  reason: BrowserCookieCryptoState["reason"],
+): BrowserCookieCryptoState {
   return {
-    mode: "degraded" as const,
-    persistence: "ephemeral" as const,
-    reason: "keychain-denied" as const,
+    mode: "degraded",
+    persistence: "ephemeral",
+    reason,
     storageBackend: null,
-    encryptionAvailable: false,
+    encryptionAvailable: reason === "linux-basic-text",
   };
 }
+
+const PRIMARY: BrowserSessionProfileRequest = {
+  profile: "primary",
+  sessionId: "session-1",
+};
 
 describe("browser view session policy", () => {
   beforeEach(() => {
@@ -315,17 +327,20 @@ describe("browser view session policy", () => {
     electronState.messageBoxResult = 1;
     electronState.messageBoxCalls = 0;
     vi.clearAllMocks();
+    // `browser-session` memoises one hardened Session per partition name, so
+    // each case needs a fresh module instance to pair with its fresh fakes.
+    vi.resetModules();
   });
 
   it("uses a dedicated persistent partition without mutating defaultSession", async () => {
     const crypto = await import("../storage/browser-cookie-crypto");
-    vi.spyOn(crypto, "getBrowserCookieCryptoState").mockReturnValue(
+    vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen").mockReturnValue(
       realCookieCryptoState(),
     );
     const mod = await import("../browser-session");
 
-    const browserSession = mod.ensureBrowserViewSession();
-    const preferences = mod.createBrowserViewWebPreferences();
+    const browserSession = mod.ensureBrowserViewSession(PRIMARY);
+    const preferences = mod.createBrowserViewWebPreferences(PRIMARY);
 
     expect(electronState.fromPartitionCalls).toEqual([
       {
@@ -350,13 +365,13 @@ describe("browser view session policy", () => {
 
   it("uses a session-only partition when cookie crypto is degraded", async () => {
     const crypto = await import("../storage/browser-cookie-crypto");
-    vi.spyOn(crypto, "getBrowserCookieCryptoState").mockReturnValue(
-      degradedCookieCryptoState(),
+    vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen").mockReturnValue(
+      degradedCookieCryptoState("keychain-denied"),
     );
     const mod = await import("../browser-session");
 
-    mod.ensureBrowserViewSession();
-    const preferences = mod.createBrowserViewWebPreferences();
+    mod.ensureBrowserViewSession(PRIMARY);
+    const preferences = mod.createBrowserViewWebPreferences(PRIMARY);
     const partition = preferences.partition;
     if (partition === undefined) throw new Error("partition missing");
 
@@ -372,12 +387,98 @@ describe("browser view session policy", () => {
     });
   });
 
+  it("keeps one hardened session per partition and never re-installs policy", async () => {
+    const crypto = await import("../storage/browser-cookie-crypto");
+    const readState = vi
+      .spyOn(crypto, "ensureBrowserPersistenceForTileOpen")
+      .mockReturnValue(degradedCookieCryptoState("not-enabled"));
+    const mod = await import("../browser-session");
+
+    const first = mod.ensureBrowserViewSession(PRIMARY);
+    const second = mod.ensureBrowserViewSession({
+      profile: "primary",
+      sessionId: "session-2",
+    });
+
+    expect(second).toBe(first);
+    expect(electronState.fromPartitionCalls).toHaveLength(1);
+    expect(electronState.fromPartitionCalls[0]?.partition).toBe(
+      mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+    );
+
+    // Enabling persistence later moves new guests to the durable partition,
+    // which is a different session and gets its own hardening pass.
+    readState.mockReturnValue(realCookieCryptoState());
+    const hardened = new FakePolicySession();
+    electronState.browserSession = hardened;
+    const persistent = mod.ensureBrowserViewSession(PRIMARY);
+
+    expect(persistent).not.toBe(first);
+    expect(persistent).toBe(hardened);
+    expect(electronState.fromPartitionCalls).toHaveLength(2);
+    expect(electronState.fromPartitionCalls[1]?.partition).toBe(
+      mod.BROWSER_VIEW_PARTITION,
+    );
+    expect(requestAllowed(readRequestHandler(hardened), "fullscreen")).toBe(
+      true,
+    );
+    expect(hardened.downloadListeners).toHaveLength(1);
+  });
+
+  it("maps decision x probe to a partition, and refuses isolated until ticket 09", async () => {
+    const crypto = await import("../storage/browser-cookie-crypto");
+    const readState = vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen");
+    const mod = await import("../browser-session");
+
+    const cases: ReadonlyArray<{
+      readonly state: BrowserCookieCryptoState;
+      readonly partition: string;
+    }> = [
+      { state: realCookieCryptoState(), partition: mod.BROWSER_VIEW_PARTITION },
+      {
+        state: degradedCookieCryptoState("not-enabled"),
+        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+      },
+      {
+        state: degradedCookieCryptoState("keychain-denied"),
+        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+      },
+      {
+        state: degradedCookieCryptoState("linux-basic-text"),
+        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+      },
+      {
+        state: degradedCookieCryptoState("encryption-unavailable"),
+        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+      },
+      {
+        state: degradedCookieCryptoState("unresolved"),
+        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+      },
+    ];
+
+    for (const testCase of cases) {
+      readState.mockReturnValue(testCase.state);
+      expect(mod.partitionForProfile("primary", "session-1")).toBe(
+        testCase.partition,
+      );
+    }
+    expect(mod.BROWSER_VIEW_PARTITION.startsWith("persist:")).toBe(true);
+    expect(mod.BROWSER_VIEW_EPHEMERAL_PARTITION.startsWith("persist:")).toBe(
+      false,
+    );
+
+    expect(() => mod.partitionForProfile("isolated", "session-1")).toThrow(
+      mod.BrowserProfileNotSupportedError,
+    );
+  });
+
   it("installs browser-specific permission and download handlers", async () => {
     const mod = await import("../browser-session");
     const session = new FakePolicySession();
     electronState.browserSession = session;
 
-    mod.ensureBrowserViewSession();
+    mod.ensureBrowserViewSession(PRIMARY);
 
     const requestHandler = readRequestHandler(session);
     const checkHandler = readCheckHandler(session);
@@ -405,7 +506,7 @@ describe("browser view session policy", () => {
     });
     electronState.browserSession = session;
 
-    mod.ensureBrowserViewSession();
+    mod.ensureBrowserViewSession(PRIMARY);
     const listener = session.downloadListeners[0];
     if (listener === undefined) throw new Error("download listener missing");
     const webContents = new FakeDownloadWebContents(7, "https://app.test/");
@@ -473,7 +574,7 @@ describe("browser view session policy", () => {
     electronState.messageBoxResult = 0;
     electronState.browserSession = session;
 
-    mod.ensureBrowserViewSession();
+    mod.ensureBrowserViewSession(PRIMARY);
     const listener = session.downloadListeners[0];
     if (listener === undefined) throw new Error("download listener missing");
     const item = new FakeDownloadItem(
