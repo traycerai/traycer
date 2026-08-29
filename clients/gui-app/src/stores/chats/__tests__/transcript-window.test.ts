@@ -3345,6 +3345,45 @@ describe("what an overlap keeps", () => {
     expect(hydrated.liveMessages).toEqual([]);
   });
 
+  it("retires structurally equal stand-ins despite nested key insertion order", () => {
+    const turnId = "turn-structural-body";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const transient = {
+      ...assistantMessage(transientId, turnId, 2),
+      usage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
+        contextWindow: 4,
+      },
+    };
+    const durable = {
+      ...assistantMessage("assistant-structural-body", turnId, 2),
+      usage: {
+        contextWindow: 4,
+        totalTokens: 3,
+        outputTokens: 2,
+        inputTokens: 1,
+      },
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      { messages: [transient], events: [] },
+    );
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [durable],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
   it("folds complete assistant records before comparing a stand-in", () => {
     const turnId = "turn-multi-record";
     const transientId = transientLiveAssistantMessageId(turnId);

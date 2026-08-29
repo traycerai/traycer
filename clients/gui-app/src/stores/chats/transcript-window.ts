@@ -547,14 +547,14 @@ function assistantRenderBodyEqual(
   right: Extract<Message, { role: "assistant" }>,
 ): boolean {
   return (
-    JSON.stringify([
+    stableJsonStringify([
       left.blocks,
       left.usage,
       left.imageResolutions,
       left.reasoningEffort,
       left.serviceTier,
     ]) ===
-    JSON.stringify([
+    stableJsonStringify([
       right.blocks,
       right.usage,
       right.imageResolutions,
@@ -562,6 +562,24 @@ function assistantRenderBodyEqual(
       right.serviceTier,
     ])
   );
+}
+
+/** Canonical JSON encoding for structural comparisons across record sources. */
+function stableJsonStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, nested: unknown) => {
+    if (
+      nested === null ||
+      Array.isArray(nested) ||
+      typeof nested !== "object"
+    ) {
+      return nested;
+    }
+    return Object.fromEntries(
+      Object.entries(nested).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+  });
 }
 
 function servedAssistantTurns(
