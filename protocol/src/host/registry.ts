@@ -424,8 +424,10 @@ import {
 } from "@traycer/protocol/host/epic/contracts";
 import {
   epicListTuiAgentsUpgradeV10ToV11,
+  epicListTuiAgentsUpgradeV11ToV12,
   epicListTuiAgentsV10,
   epicListTuiAgentsV11,
+  epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
@@ -580,6 +582,7 @@ import {
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
+  hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
@@ -6663,7 +6666,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // surface of its own. Never on the unary released floor.
   "epic.listTuiAgents": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListTuiAgentsV10,
@@ -6701,6 +6704,33 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // IMPORT, so the registry throws for every consumer - the app, not
           // just a test. `bun run compile` passes clean through that, because
           // it is a runtime assertion over registry values, not a type.
+        },
+        2: {
+          contract: epicListTuiAgentsV12,
+          upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV11ToV12,
+          // 1.2 DOES declare it, and the contrast with 1.1 above is the
+          // whole rule rather than an inconsistency.
+          //
+          // 1.1 added a plain object KEY (`docResident`), which zod strips
+          // unconditionally - nothing an older peer's schema refuses, so
+          // there was no growth to gate and declaring it would have thrown.
+          //
+          // 1.2 replaces the row OBJECT with a discriminated `origin` union
+          // whose third arm (`cloud`) is NARROW: it carries no
+          // `workspaceFolders` and no `agentMode`, both required on the 1.0
+          // row a 1.1 peer validates against. That is exactly the response
+          // VALUE GROWTH an older peer actively refuses, and the annotation
+          // is the reviewed claim that its emission is gated: the resolver
+          // serves cloud replicas only when `ctx.schemaVersion` is at least
+          // 1.2, so a 1.1 caller receives none and keeps parsing every row
+          // it is handed. The `registry` / `doc` arms are the 1.1 row plus
+          // one added key, which is why the older shape still projects.
+          //
+          // The gate is the NEGOTIATED VERSION here, unlike 1.1's, because
+          // the question is what the caller can PARSE rather than what it
+          // already holds - `hasDocReplica` answers the second and is
+          // untouched by this minor.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -8892,15 +8922,23 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // @1.0 stays installed and FROZEN: a client that negotiated it never
   // receives the new kinds, and the host gates emission on the negotiated
   // version.
+  // @1.2 keeps the same four frame kinds and widens the row `tuiUpsert`
+  // carries to the three-arm `origin` union, so a delta about a terminal agent
+  // owned by ANOTHER of the viewer's hosts can be pushed. @1.1 stays installed
+  // and FROZEN on its registry-shaped row; the host gates the narrow `cloud`
+  // arm on the negotiated version exactly as it gates the @1.1 kinds.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
         },
         1: {
           contract: hostChatRecordsSubscribeV11,
+        },
+        2: {
+          contract: hostChatRecordsSubscribeV12,
         },
       },
     },

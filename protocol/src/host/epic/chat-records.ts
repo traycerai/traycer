@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
-import { tuiAgentRecordSummarySchema } from "@traycer/protocol/host/epic/tui-agent-records";
+import {
+  tuiAgentRecordSummarySchema,
+  tuiAgentRecordSummaryV12Schema,
+} from "@traycer/protocol/host/epic/tui-agent-records";
 // The PERSISTED variant, with its `.default(...)` backstops, and not the
 // wire-strict one: this is a read of a record that may have been written before
 // `serviceTier` or `profileId` existed, and the strict schema exists to stop a
@@ -598,6 +601,45 @@ export type HostChatRecordsSubscribeServerFrameV11 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV11
 >;
 
+// ─── `host.chatRecords.subscribe@1.2` - cross-host terminal-agent replicas ──
+//
+// The TUI roster's phase-2 freshness half. The frame KINDS are unchanged from
+// `@1.1`; what grows is the row `tuiUpsert` carries, from the single registry
+// shape to the three-arm `origin` union - so a delta about a terminal agent
+// owned by ANOTHER of the viewer's hosts can be pushed at all.
+//
+// `@1.1` stays installed and FROZEN, and the gate is the negotiated version as
+// before: a `@1.1` subscriber agreed to a `tuiUpsert` carrying the full
+// registry row, so the host must never hand it a narrow `cloud` arm it cannot
+// parse. It keeps receiving its own host's rows exactly as it did.
+export const hostChatRecordsSubscribeServerFrameSchemaV12 = z
+  .discriminatedUnion("kind", [
+    ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+    z.object({
+      kind: z.literal("tuiUpsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: tuiAgentRecordSummaryV12Schema,
+    }),
+    // Unchanged from `@1.1`, restated rather than shared: the frozen `@1.1`
+    // union is declared above this point and must not take a reference to a
+    // const introduced below it.
+    z.object({
+      kind: z.literal("tuiRemove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ])
+  .superRefine(refineChatUpsertEnvelope)
+  .superRefine(refineTuiUpsertEnvelope);
+export type HostChatRecordsSubscribeServerFrameV12 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV12
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 =
   z.discriminatedUnion("kind", [
     z.object({
@@ -622,5 +664,13 @@ export const hostChatRecordsSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV11,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+export const hostChatRecordsSubscribeV12 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV12,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });
