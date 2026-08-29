@@ -42,7 +42,6 @@ import type {
   CommandIdFactory,
   CommandQueue,
   CommandRecord,
-  FreshnessReport,
   ReplicaReplacementReason,
   ReplicaResetCause,
   RuntimeEnvironment,
@@ -86,7 +85,7 @@ import {
 import type { EpicRuntimeDelivery } from "./projection-delivery";
 import { deliverInto } from "./projection-delivery";
 import { createArtifactRoomTier } from "./artifact-room-tier";
-import { createEpicRecordsReplica } from "./epic-records-replica";
+import { createEpicRecordsReplica, LOCAL_ORIGIN } from "./epic-records-replica";
 import { createEpicRoomsReplica } from "./epic-rooms-replica";
 import { createEpicControlReplica } from "./epic-control-replica";
 import {
@@ -193,6 +192,35 @@ export interface EpicReplicaRuntime {
    */
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
+  /**
+   * The root replica's whole state, encoded for transfer into another session.
+   *
+   * A PORT over what two call sites do today as `Y.encodeStateAsUpdate(handle.doc)`
+   * against a doc they reach directly. Introduced while the replica is still
+   * in-process - "seams before relocation" - so the flip changes this port's
+   * IMPLEMENTATION and not one call site.
+   *
+   * Async from the start for the same reason. A `Uint8Array` return would have
+   * to become a `Promise` at the flip, and that is the signature change that
+   * would then ripple through both callers' lifecycles at the worst moment.
+   * Paying it here makes the flip a one-file change.
+   */
+  encodeRootState(): Promise<Uint8Array>;
+  /**
+   * Apply another session's encoded root state into this one.
+   *
+   * `asLocalEdit` is not a convenience: the two merge sites differ, and the
+   * difference is load-bearing. The provider's replacement merge applies with
+   * `LOCAL_ORIGIN` so the union routes through the replacement's normal
+   * local-update path and unacknowledged edits survive for recovery; the
+   * registry's retention merge applies with no origin, because a retained
+   * buffer is not re-sending anything. Collapsing them would either strand
+   * edits or re-send a whole document.
+   *
+   * Answers whether the update LANDED. `false` means the caller must treat the
+   * edits as still living only in the source - see the merge sites.
+   */
+  applyRootUpdate(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
   /**
    * Bumped every time the root replica is REPLACED. The consumer compares it to
    * decide whether the doc/awareness handles it publishes are still current -
@@ -302,8 +330,6 @@ export interface EpicReplicaRuntime {
   detachTransport(): void;
   dispose(): void;
   isDisposed(): boolean;
-  /** Per-class freshness, never collapsed into one verdict. */
-  freshness(): FreshnessReport;
   /** Ids of the artifact rooms currently materialized as live `Y.Doc`s. */
   materializedArtifactRoomIds(): readonly string[];
 }
@@ -1097,6 +1123,21 @@ export function createEpicReplicaRuntime(
     get awareness() {
       return records.awareness;
     },
+    encodeRootState: () => Promise.resolve(Y.encodeStateAsUpdate(records.doc)),
+    applyRootUpdate: (update, asLocalEdit) => {
+      if (disposed) return Promise.resolve(false);
+      // Reported, not thrown. A merge that cannot land is a fact the caller
+      // must act on - it decides whether the source's edits have been
+      // transferred - and a throw at this seam would reach a synchronous
+      // lifecycle callback that has no way to answer it.
+      try {
+        if (asLocalEdit) Y.applyUpdate(records.doc, update, LOCAL_ORIGIN);
+        else Y.applyUpdate(records.doc, update);
+        return Promise.resolve(true);
+      } catch {
+        return Promise.resolve(false);
+      }
+    },
     replicaGeneration: () => replicaGenerationCounter,
 
     start(): void {
@@ -1361,12 +1402,6 @@ export function createEpicReplicaRuntime(
     },
 
     isDisposed,
-
-    freshness: () => [
-      records.freshness(),
-      rooms.freshness(),
-      control.freshness(),
-    ],
 
     materializedArtifactRoomIds: () => tier.materializedIds(),
   };

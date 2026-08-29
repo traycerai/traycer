@@ -944,6 +944,16 @@ describe("<EpicSessionProvider />", () => {
       deliverSnapshot(streams[1], "room-b");
     });
     await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+    // The flag's VALUE, observed through the retention it decides. A
+    // different room means no transfer, so the outgoing dirty handle is the
+    // only copy of its edits and MUST be retained; a flag stuck at `true`
+    // would report those edits as already in the replacement and retire the
+    // only thing holding them.
+    //
+    // This assertion exists because ablating the flag to a hard-coded `true`
+    // left all 374 provider tests green: the transfer itself was covered four
+    // times over, its DERIVATION not once.
+    expect(__getOpenEpicRegistryForTests().getUnsyncedEdits()).toHaveLength(1);
     expect(
       seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
     ).toBeUndefined();

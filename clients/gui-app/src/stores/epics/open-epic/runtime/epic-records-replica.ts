@@ -359,7 +359,20 @@ export function createEpicRecordsReplica(
   };
 
   function publish(patch: Partial<EpicRecordsProjection>): void {
-    sink.publish({ ...sink.read(), ...patch });
+    sink.publish({
+      ...sink.read(),
+      ...patch,
+      // Folded in here, AFTER the patch, so every publish carries the current
+      // counters no matter which path produced it. Naming them per call site
+      // would leave the projection stale the first time a new ingest path
+      // forgot one, and a stale ingest counter reads as "nothing landed while
+      // you were in flight" - the exact claim a caller uses it to make.
+      //
+      // The tables are declared below this function and only ever read when it
+      // RUNS, which is after construction completes.
+      chatIngestSeq: chatTable.ingestSeq(),
+      tuiAgentIngestSeq: tuiTable.ingestSeq(),
+    });
   }
 
   /**

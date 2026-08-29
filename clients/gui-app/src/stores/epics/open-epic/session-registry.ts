@@ -1,3 +1,4 @@
+import type { EpicHeader } from "./types";
 import type {
   OpenEpicState,
   OpenEpicStoreHandle,
@@ -520,6 +521,36 @@ export class OpenEpicSessionRegistry {
    * first. The caller has already installed the replacement, or is closing the
    * tab, so this is only ever an outgoing handle the registry no longer tracks.
    */
+  /**
+   * Transfers a merged-from handle's root state into its target, then disposes
+   * it - after the transfer settles, in BOTH outcomes.
+   *
+   * `finally` and not `then`: a rejected apply still has to dispose the source,
+   * because leaving it alive is a handle with no transport that nothing will
+   * ever retire. What a rejection changes is the CALLER's belief about where
+   * the edits live - see the provider's `editsTransferredToReplacement` - not
+   * whether this handle is cleaned up.
+   *
+   * NO GUARD against a second merge for the same source, because there is no
+   * second merge to guard against. `onBeforeDispose` nulls `pendingRetention`
+   * BEFORE calling here, and the session has left the registry by then - so a
+   * source is merged exactly once, structurally. A guard was written here and
+   * removed: it read as protection while its condition was excluded, which is
+   * the same defect as the `reparentArtifact` catch this ticket deleted.
+   */
+  private mergeRetainedThenDispose(
+    source: OpenEpicStoreHandle,
+    target: OpenEpicStoreHandle,
+  ): void {
+    void source
+      .encodeRootState()
+      .then((update) => target.applyRootUpdate(update, false))
+      .catch(() => false)
+      .finally(() => {
+        source.dispose();
+      });
+  }
+
   private retainDirtyHandle(
     session: EpicRegistrySession,
     identity: RetainedHandleIdentity,
@@ -537,12 +568,18 @@ export class OpenEpicSessionRegistry {
       // which is what makes this legal with no `roomId` and therefore legal
       // below `@1.2`. Merge rather than append; a second slot for one room
       // would show the user two rows for one task.
-      Y.applyUpdate(
-        mergeTarget.handle.doc,
-        Y.encodeStateAsUpdate(session.handle.doc),
-      );
       mergeTarget.queueSize += queueSize;
-      session.handle.dispose();
+      // Through the PORT, and asynchronously. The verdict this method serves is
+      // synchronous - its caller returns `"retain"` immediately - so the async
+      // tail owns exactly one thing: disposing the merged-from handle once the
+      // transfer has settled. Nothing waits on a promise to decide anything.
+      //
+      // The window this opens is real and named: between here and the
+      // `finally`, the source handle is DETACHED (line above), MERGED-FROM, and
+      // NOT YET DISPOSED. Its transport is already gone, so it cannot dial or
+      // claim anything; what it must not do is accept a second merge, which the
+      // guard below refuses.
+      this.mergeRetainedThenDispose(session.handle, mergeTarget.handle);
       return;
     }
 
@@ -991,7 +1028,14 @@ function readLiveTitle(handle: OpenEpicStoreHandle): string {
   // existed because `getMap` throws on a DESTROYED `Y.Doc`, and reading a
   // projected slice cannot. Keeping it would have been a guard against a
   // failure mode this line no longer has.
-  return handle.store.getState().epic.title;
+  // Guarded, and the guard is the POINT rather than defensiveness. The doc read
+  // this replaced was total over any handle - `readMaybeString` answers `""`
+  // for a missing key, and `getMap("epic")` creates the map if absent - so it
+  // never depended on a complete projection. Three provider fixtures build a
+  // partial `OpenEpicState` with no `epic` slice, and an unguarded read threw
+  // on them: the VALUE substitution was exact, the TOTALITY was not.
+  const epic: EpicHeader | undefined = handle.store.getState().epic;
+  return typeof epic?.title === "string" ? epic.title : "";
 }
 
 /**

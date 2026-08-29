@@ -203,6 +203,9 @@ export interface OpenEpicState {
    * older host's doc projection is its authoritative record table.
    */
   readonly chatRecordListAuthoritative: boolean;
+  /** Projected ingest counters - see `EpicRecordsProjection`. */
+  readonly chatIngestSeq: number;
+  readonly tuiAgentIngestSeq: number;
   /**
    * Chats the record plane RETRACTED while this session was open, and why.
    *
@@ -734,6 +737,19 @@ export interface OpenEpicStoreHandle {
   readonly userId: string | null;
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
+  /**
+   * Transfer this session's root state into another, and take one in.
+   *
+   * The PORT the two merge sites use instead of reaching for `.doc`. It exists
+   * now, in-process, so that the flip changes an implementation rather than a
+   * call site - and `doc` above leaves this interface at the flip, while these
+   * two stay.
+   */
+  readonly encodeRootState: () => Promise<Uint8Array>;
+  readonly applyRootUpdate: (
+    update: Uint8Array,
+    asLocalEdit: boolean,
+  ) => Promise<boolean>;
   readonly store: UseBoundStore<StoreApi<OpenEpicState>>;
   readonly dispose: () => void;
   /**
@@ -1019,7 +1035,7 @@ export function createOpenEpicStore(
           applyChatRecords: (records, issuedAtSeq) => {
             runtime.applyChatRecords(records, issuedAtSeq);
           },
-          peekChatIngestSeq: () => runtime.peekChatIngestSeq(),
+          peekChatIngestSeq: () => get().chatIngestSeq,
           markChatRecordListAuthoritative: () => {
             runtime.markChatRecordListAuthoritative();
           },
@@ -1029,7 +1045,7 @@ export function createOpenEpicStore(
           applyTuiAgentRecords: (records, issuedAtSeq) => {
             runtime.applyTuiAgentRecords(records, issuedAtSeq);
           },
-          peekTuiAgentIngestSeq: () => runtime.peekTuiAgentIngestSeq(),
+          peekTuiAgentIngestSeq: () => get().tuiAgentIngestSeq,
           applyTuiAgentRecordDelta: (delta) => {
             runtime.applyTuiAgentRecordDelta(delta);
           },
@@ -1083,8 +1099,32 @@ export function createOpenEpicStore(
             runtime.getArtifactBodyDocKey(artifactId),
           acquireArtifactBodyLease: (artifactId) =>
             runtime.acquireArtifactBodyLease(artifactId),
-          readArtifactTitle: (artifactId) =>
-            runtime.readArtifactTitle(artifactId),
+          readArtifactTitle: (artifactId) => {
+            // The PROJECTION, in the doc read's own family order: artifacts,
+            // then chats, then terminal agents, falling through on ENTRY
+            // PRESENCE exactly as the doc version falls through on a missing
+            // map entry.
+            //
+            // RESIDUAL, stated precisely rather than waved at: the projected
+            // maps carry `readMaybeString`, which collapses "no `title` key"
+            // and `""` into `""`. So the two forms differ in exactly one case -
+            // an entry that EXISTS in an earlier family with no `title` key
+            // AND the same id existing in a later family. The doc read falls
+            // through on the missing key and finds the later title; this
+            // returns `""`. For every id that lives in one family, which is
+            // every id the projector builds, the two are identical.
+            const state = get();
+            if (Object.hasOwn(state.artifacts.byId, artifactId)) {
+              return state.artifacts.byId[artifactId].title;
+            }
+            if (Object.hasOwn(state.chats.byId, artifactId)) {
+              return state.chats.byId[artifactId].title;
+            }
+            if (Object.hasOwn(state.tuiAgents.byId, artifactId)) {
+              return state.tuiAgents.byId[artifactId].title;
+            }
+            return null;
+          },
         };
       },
       {
@@ -1135,6 +1175,9 @@ export function createOpenEpicStore(
     get awareness() {
       return runtime.awareness;
     },
+    encodeRootState: () => runtime.encodeRootState(),
+    applyRootUpdate: (update, asLocalEdit) =>
+      runtime.applyRootUpdate(update, asLocalEdit),
     store,
     dispose: () => {
       store.getState().dispose();

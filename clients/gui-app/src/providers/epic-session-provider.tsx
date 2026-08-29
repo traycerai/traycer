@@ -8,13 +8,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import * as Y from "yjs";
 import { useNavigate } from "@tanstack/react-router";
 import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
-  LOCAL_ORIGIN,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import { EpicStreamClient } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -882,19 +880,50 @@ export function EpicSessionProvider(
       const previousRoomId =
         current.handle.store.getState().snapshotMeta?.roomId;
       const nextRoomId = nextHandle.store.getState().snapshotMeta?.roomId;
-      const editsTransferredToReplacement = shouldMergeEpicRoomSwap(
+      // Whether to ATTEMPT the transfer - not whether it happened. The two
+      // used to be one boolean because the merge was synchronous; through the
+      // port it is a task now (a worker round trip after the flip), so the
+      // outcome is only known in the tail.
+      const shouldTransferEdits = shouldMergeEpicRoomSwap(
         { roomId: previousRoomId },
         { roomId: nextRoomId },
       );
-      if (editsTransferredToReplacement) {
-        // LOCAL_ORIGIN routes the CRDT union through the replacement's normal
-        // local-update path, preserving unacknowledged edits for recovery.
-        Y.applyUpdate(
-          nextHandle.doc,
-          Y.encodeStateAsUpdate(current.handle.doc),
-          LOCAL_ORIGIN,
-        );
+      // `commitReplacement` still returns void here, with `settled` already
+      // set: nothing downstream waits on a promise to decide anything. What
+      // moved into the tail is `replaceMounted` and everything after it, so
+      // the disposition it carries is DERIVED from the real apply outcome.
+      //
+      // The alternative - call `replaceMounted(false)` now and correct it
+      // later - would retain the outgoing handle as "the only copy of its
+      // edits" for the length of the window, and retaining a duplicate is
+      // precisely what pins an epic as permanently unsyncable. See the
+      // registry's own comment on `editsTransferredToReplacement`.
+      void transferThenComplete(shouldTransferEdits);
+    };
+
+    async function transferThenComplete(
+      shouldTransferEdits: boolean,
+    ): Promise<void> {
+      let editsTransferredToReplacement = false;
+      if (shouldTransferEdits) {
+        try {
+          const update = await current.handle.encodeRootState();
+          // `true`: LOCAL_ORIGIN, so the union routes through the
+          // replacement's normal local-update path and unacknowledged edits
+          // survive for recovery.
+          editsTransferredToReplacement = await nextHandle.applyRootUpdate(
+            update,
+            true,
+          );
+        } catch {
+          // The honest false. A failed transfer means the edits still live
+          // only in the outgoing handle, which is exactly what the retention
+          // path must be told - and it must still be TOLD, so this falls
+          // through to `replaceMounted` rather than returning.
+          editsTransferredToReplacement = false;
+        }
       }
+      if (lifecycle.cancelled) return;
       // Identity of the handle being REPLACED, for the retention (F10). Read
       // from the construction stamp rather than from `current.hostId`: the two
       // agree today, but "derive, don't assert" is the whole of step 1, and
@@ -965,7 +994,8 @@ export function EpicSessionProvider(
         targetHostId,
         originalHostId: originalHostIdRef.current,
       });
-    };
+    }
+
     const unsubscribe = nextHandle.store.subscribe(commitReplacement);
     const unsubscribeRegistry = registry.subscribe(commitReplacement);
     const deadline = window.setTimeout(() => {

@@ -509,6 +509,114 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     expect(rows[0]?.queueSize).toBe(7);
   });
 
+  /**
+   * Waits for the merge tail to run to completion.
+   *
+   * A MACROTASK, not a count of microtasks. The tail is
+   * `encode().then(apply).catch().finally(dispose)` - four chained handlers -
+   * and counting ticks means guessing that depth right, which is how a pin
+   * ends up asserting scheduling. Every pending microtask runs before a
+   * `setTimeout` callback, so this needs no depth at all.
+   */
+  async function settled(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  /**
+   * A handle whose root-state PORT is held open, so the merge window is
+   * observable by ORDER rather than by timing.
+   *
+   * The window is real: between the encode and the disposal the source is
+   * DETACHED, MERGED-FROM and NOT YET DISPOSED. Resolving by hand is what makes
+   * "during the window" a place a test can stand; a timer would make these
+   * pins assert scheduling instead of sequence.
+   */
+  function deferredSource(epicId: string): {
+    readonly handle: OpenEpicStoreHandle;
+    readonly settle: (outcome: "resolve" | "reject") => void;
+    readonly disposed: () => number;
+    readonly transportClosed: () => boolean;
+  } {
+    const built = buildRetentionHandle(epicId, true, 3);
+    let release: ((bytes: Uint8Array) => void) | null = null;
+    let fail: ((cause: unknown) => void) | null = null;
+    let disposeCount = 0;
+    const handle: OpenEpicStoreHandle = {
+      ...built.handle,
+      encodeRootState: () =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          release = resolve;
+          fail = reject;
+        }),
+      dispose: () => {
+        disposeCount += 1;
+        built.handle.dispose();
+      },
+    };
+    return {
+      handle,
+      settle: (outcome) => {
+        if (outcome === "resolve") release?.(new Uint8Array([1, 2, 3]));
+        else fail?.(new Error("encode failed"));
+      },
+      disposed: () => disposeCount,
+      transportClosed: built.closed,
+    };
+  }
+
+  it("holds the merged-from handle undisposed until the transfer settles", async () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const first = buildRetentionHandle(EPIC, true, 2);
+    registry.acquireMounted(EPIC, () => first.handle);
+    const source = deferredSource(EPIC);
+    repoint(registry, first.handle, source.handle, IDENTITY_A);
+    const third = buildRetentionHandle(EPIC, false, 0);
+    repoint(registry, source.handle, third.handle, IDENTITY_A);
+
+    // INSIDE the window: encoded, not yet applied, not yet disposed.
+    expect(source.disposed()).toBe(0);
+    // (a) The transport went at detach and does not come back. A source that
+    // reattached here would dial a host this window has left, into the
+    // selection authority's death-detection input.
+    expect(source.transportClosed()).toBe(true);
+
+    source.settle("resolve");
+    await settled();
+
+    expect(source.disposed()).toBe(1);
+    expect(source.transportClosed()).toBe(true);
+  });
+
+  it("disposes the merged-from handle even when the transfer REJECTS", async () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const first = buildRetentionHandle(EPIC, true, 2);
+    registry.acquireMounted(EPIC, () => first.handle);
+    const source = deferredSource(EPIC);
+    repoint(registry, first.handle, source.handle, IDENTITY_A);
+    const third = buildRetentionHandle(EPIC, false, 0);
+    repoint(registry, source.handle, third.handle, IDENTITY_A);
+
+    source.settle("reject");
+    await settled();
+
+    // `finally`, not `then`. A rejected transfer still has to dispose: leaving
+    // it alive is a handle with no transport that nothing will ever retire.
+    // What a rejection changes is the caller's belief about where the edits
+    // live, not whether this handle is cleaned up.
+    expect(source.disposed()).toBe(1);
+  });
+
+  // NO PIN for "a second merge for the same source", and the absence is
+  // deliberate. Two ablations proved it unreachable: removing the guard I had
+  // written left the suite green, and so did moving the `pendingRetention`
+  // null after the merge. A source is out of the registry by the time the
+  // merge runs, so a second repoint naming it never reaches the release path -
+  // any test here asserts "one repoint disposes once", which the pin above
+  // already covers. A named reasoned absence beats a green test that restates
+  // its neighbour.
+
   it("refuses to merge across an owner-identity rotation on the same host", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const first = buildRetentionHandle(EPIC, true, 2);

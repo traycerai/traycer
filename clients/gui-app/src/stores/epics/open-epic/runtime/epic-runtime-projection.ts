@@ -130,6 +130,21 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
    * Missing rows are not deletion evidence until this is true.
    */
   readonly chatRecordListAuthoritative: boolean;
+  /**
+   * The record tables' ingest counters, projected.
+   *
+   * A caller captures one of these before issuing a list RPC and compares it
+   * after, to tell "my response is still the newest thing that happened" from
+   * "a delta landed while I was in flight". That is a READ of replica state,
+   * so it belongs in the projection rather than in a synchronous call into the
+   * replica - which is what it was.
+   *
+   * Published from the ONE `publish` helper rather than from each ingest path:
+   * the counter moves inside the record table, and a patch that had to name it
+   * at every call site would go stale the first time somebody added a path.
+   */
+  readonly chatIngestSeq: number;
+  readonly tuiAgentIngestSeq: number;
   /** Chats the record plane RETRACTED while this session was open, and why. */
   readonly chatRetractions: Readonly<Record<string, ChatRecordRemovalReason>>;
   /** The host's registry-backed terminal-agent rows (`epic.listTuiAgents`). */
@@ -169,6 +184,8 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   ...EMPTY_PROJECTED_SLICES,
   chatRecords: EMPTY_CHATS_SLICE,
   chatRecordListAuthoritative: false,
+  chatIngestSeq: 0,
+  tuiAgentIngestSeq: 0,
   chatRetractions: EMPTY_CHAT_RETRACTIONS,
   tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
   // The same shared "nothing retracted" identity as the chats': one frozen
