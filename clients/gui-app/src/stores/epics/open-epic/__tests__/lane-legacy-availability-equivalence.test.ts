@@ -246,13 +246,7 @@ function createLaneArm(): AvailabilityArm {
   const stateFactory: EpicStateStreamClientFactory = () => ({
     close: () => undefined,
   });
-  const artifactFactory: ArtifactStreamClientFactory = (
-    _epicId,
-    _artifactId,
-    _authorityEpoch,
-    cbs,
-    _seedOfferProvider,
-  ) => {
+  const artifactFactory: ArtifactStreamClientFactory = ({ callbacks: cbs }) => {
     bodyCallbacks = cbs;
     return {
       applyUpdate: () => undefined,

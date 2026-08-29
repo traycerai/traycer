@@ -31,6 +31,7 @@ export type {
   ArtifactLaneAdapterSources,
   ArtifactLaneStreamClient,
   ArtifactStreamClientFactory,
+  ArtifactStreamClientRequest,
 } from "./artifact-lane-adapter";
 export { createArtifactLaneAdapter } from "./artifact-lane-adapter";
 

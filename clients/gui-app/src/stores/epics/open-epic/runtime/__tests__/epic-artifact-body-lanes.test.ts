@@ -127,13 +127,11 @@ interface CountingArtifactFactory {
 
 function createCountingArtifactFactory(): CountingArtifactFactory {
   const clients: ConstructedArtifactClient[] = [];
-  const factory: ArtifactStreamClientFactory = (
-    _epicId,
+  const factory: ArtifactStreamClientFactory = ({
     artifactId,
     authorityEpoch,
     callbacks,
-    _seedOfferProvider,
-  ): ArtifactLaneStreamClient => {
+  }): ArtifactLaneStreamClient => {
     const applyUpdateCalls: ApplyUpdateCall[] = [];
     const awarenessCalls: Uint8Array[] = [];
     let closes = 0;

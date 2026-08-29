@@ -959,7 +959,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
         () => {},
       );
   }, [
-    epicHandle,
     epicId,
     nodeName,
     nodeId,

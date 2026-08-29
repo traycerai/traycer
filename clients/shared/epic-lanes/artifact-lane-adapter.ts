@@ -83,16 +83,20 @@ export interface ArtifactLaneStreamClient {
   close(): void;
 }
 
-export type ArtifactStreamClientFactory = (
-  epicId: string,
-  artifactId: string,
-  authorityEpoch: string,
-  callbacks: ArtifactStreamCallbacks,
+export interface ArtifactStreamClientRequest {
+  readonly epicId: string;
+  readonly artifactId: string;
+  readonly authorityEpoch: string;
+  readonly callbacks: ArtifactStreamCallbacks;
   /**
    * The body state this client already holds, re-read before every wire
    * subscribe. Pure and synchronous by contract.
    */
-  seedOfferProvider: () => ArtifactSubscribeSeedOffer | null,
+  readonly seedOfferProvider: () => ArtifactSubscribeSeedOffer | null;
+}
+
+export type ArtifactStreamClientFactory = (
+  request: ArtifactStreamClientRequest,
 ) => ArtifactLaneStreamClient;
 
 export interface ArtifactLaneAdapterSources {
@@ -319,13 +323,13 @@ export function createArtifactLaneAdapter(
 
   function openStreamClient(): void {
     const generation = guard.next();
-    client = streamClientFactory(
+    client = streamClientFactory({
       epicId,
       artifactId,
       authorityEpoch,
-      buildCallbacks(generation),
-      readDocSeed,
-    );
+      callbacks: buildCallbacks(generation),
+      seedOfferProvider: readDocSeed,
+    });
   }
 
   return {

@@ -9,10 +9,8 @@ import type {
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "./host-directory";
-import {
-  HostBindingAuthorityRegistry,
-  StaleHostBindingAuthorityError,
-} from "./host-binding-authority-registry";
+import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
+import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
 import {
   HostRequestCoordinator,
   type HostRequestAuthorityDomain,
@@ -692,7 +690,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.scheduleRequest(entry, method, params, signal, (authority) =>
-      this.messenger.request(method, params, null, authority),
+      this.messenger.request(method, params, {
+        idempotencyKey: null,
+        authority,
+      }),
     );
   }
 
@@ -703,7 +704,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     idempotencyKey: string | null,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.messenger.request(method, params, idempotencyKey, authority),
+      this.messenger.request(method, params, { idempotencyKey, authority }),
     );
   }
 
@@ -726,8 +727,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         method,
         params,
         responseTimeoutMs,
-        null,
-        authority,
+        {
+          idempotencyKey: null,
+          authority,
+        },
       ),
     );
   }

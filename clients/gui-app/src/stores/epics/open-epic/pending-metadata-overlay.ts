@@ -418,14 +418,12 @@ function applyPendingOverlayToSlice<Row extends OverlayPatchableRow>(
   return { byId, allIds: slice.allIds };
 }
 
-/** `artifacts` with pending renames and reparents applied. */
-export function applyPendingOverlayToArtifacts(
-  artifacts: ArtifactsSlice,
+/** `metadata.byId` with pending status overrides applied, or `null` if none landed. */
+function applyPendingStatusOverrides(
+  metadata: ArtifactsSlice,
   overlay: PendingMetadataOverlay,
-): ArtifactsSlice {
-  const metadata = applyPendingOverlayToSlice(artifacts, overlay);
+): Record<string, ArtifactsSlice["byId"][string]> | null {
   let byId: Record<string, ArtifactsSlice["byId"][string]> | null = null;
-
   for (const id of nodesWithMutations(overlay, "status")) {
     if (!Object.hasOwn(metadata.byId, id)) continue;
     const row = metadata.byId[id];
@@ -442,7 +440,18 @@ export function applyPendingOverlayToArtifacts(
     byId ??= { ...metadata.byId };
     byId[id] = { ...row, status: status.value };
   }
+  return byId;
+}
 
+/**
+ * Ids with a pending, unlanded delete, plus everything that cascades under
+ * them (a tombstoned parent removes every descendant, discovered to a
+ * fixed point since `metadata.allIds` carries no depth ordering).
+ */
+function pendingArtifactRemovals(
+  metadata: ArtifactsSlice,
+  overlay: PendingMetadataOverlay,
+): Set<string> {
   const removed = new Set<string>();
   for (const id of nodesWithMutations(overlay, "delete")) {
     const present = Object.hasOwn(metadata.byId, id);
@@ -464,6 +473,18 @@ export function applyPendingOverlayToArtifacts(
       }
     }
   }
+  return removed;
+}
+
+/** `artifacts` with pending renames and reparents applied. */
+export function applyPendingOverlayToArtifacts(
+  artifacts: ArtifactsSlice,
+  overlay: PendingMetadataOverlay,
+): ArtifactsSlice {
+  const metadata = applyPendingOverlayToSlice(artifacts, overlay);
+  let byId = applyPendingStatusOverrides(metadata, overlay);
+
+  const removed = pendingArtifactRemovals(metadata, overlay);
   if (removed.size > 0) {
     byId ??= { ...metadata.byId };
     for (const id of removed) delete byId[id];

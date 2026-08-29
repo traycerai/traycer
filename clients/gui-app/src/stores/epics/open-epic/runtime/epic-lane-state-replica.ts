@@ -465,71 +465,86 @@ export function createEpicLaneStateReplica(
     return table.applyUpsert(held) !== null;
   }
 
+  function applyRecordSnapshot(
+    event: Extract<EpicStateLaneEvent, { kind: "record-snapshot" }>,
+  ): ReplicaApplyOutcome {
+    epoch = event.watermark.authorityEpoch;
+    seedTrust = event.trust;
+    // The fence is "everything currently held is older than this answer",
+    // which is exactly true for a lane snapshot: it is the authority's
+    // complete row set at a watermark the client has not reached. Passing
+    // the poll's `null` would use the previous answer's fence and retain
+    // rows this snapshot deliberately omits.
+    const fence = table.ingestSeq();
+    const rows: HeldLaneRow[] = [];
+    for (const row of event.rows) {
+      const held = heldRowFor(row);
+      // A snapshot never carries a patch - the contract restates the
+      // metadata whole - so `null` here would be a contract violation
+      // rather than a drop worth tolerating silently. Skipping it keeps
+      // the apply total; the row simply does not exist.
+      if (held !== null) rows.push(held);
+    }
+    const publication = table.applySnapshot(rows, fence);
+    cursor = event.watermark;
+    if (publication !== null) onChanged();
+    return applied(cursor);
+  }
+
+  function applyRecordTransaction(
+    event: Extract<EpicStateLaneEvent, { kind: "record-transaction" }>,
+  ): ReplicaApplyOutcome {
+    if (epoch !== null && event.cursor.authorityEpoch !== epoch) {
+      // The epoch moved. The replica does not rebuild itself: the runtime
+      // does, so two lanes reporting one change coalesce into one
+      // replacement instead of racing.
+      return {
+        kind: "requires-replacement",
+        reason: "authority-epoch-changed",
+      };
+    }
+    if (cursor !== null && event.cursor.position <= cursor.position) {
+      return { kind: "ignored", reason: "duplicate" };
+    }
+    let moved = false;
+    for (const change of event.changes) {
+      if (applyChange(change)) moved = true;
+    }
+    // The cursor advances ONLY here, after every change in the envelope
+    // has been offered to the replica - never per change, and never on
+    // arrival. A position persisted mid-envelope would let a resume ask
+    // the host to continue past a tombstone this client had not absorbed.
+    cursor = event.cursor;
+    if (moved) onChanged();
+    return applied(cursor);
+  }
+
+  function applyRecordTrust(
+    event: Extract<EpicStateLaneEvent, { kind: "record-trust" }>,
+  ): ReplicaApplyOutcome {
+    if (epoch !== null && event.authorityEpoch !== epoch) {
+      return { kind: "ignored", reason: "epoch-mismatch" };
+    }
+    // OVERWRITE, with no revision guard: trust is not an entity, the host
+    // is its sole writer, and there is nothing to be stale against. It
+    // arrives from the `trustChanged` transition AND from every `resumed`
+    // lead, because a resuming client cannot inherit it - the serving
+    // host may have restarted seed-only since the cursor was persisted.
+    seedTrust = event.trust;
+    onChanged();
+    return applied(cursor);
+  }
+
   return {
     apply(event: EpicStateLaneEvent): ReplicaApplyOutcome {
       if (isDisposed()) return { kind: "ignored", reason: "disposed" };
       switch (event.kind) {
-        case "record-snapshot": {
-          epoch = event.watermark.authorityEpoch;
-          seedTrust = event.trust;
-          // The fence is "everything currently held is older than this answer",
-          // which is exactly true for a lane snapshot: it is the authority's
-          // complete row set at a watermark the client has not reached. Passing
-          // the poll's `null` would use the previous answer's fence and retain
-          // rows this snapshot deliberately omits.
-          const fence = table.ingestSeq();
-          const rows: HeldLaneRow[] = [];
-          for (const row of event.rows) {
-            const held = heldRowFor(row);
-            // A snapshot never carries a patch - the contract restates the
-            // metadata whole - so `null` here would be a contract violation
-            // rather than a drop worth tolerating silently. Skipping it keeps
-            // the apply total; the row simply does not exist.
-            if (held !== null) rows.push(held);
-          }
-          const publication = table.applySnapshot(rows, fence);
-          cursor = event.watermark;
-          if (publication !== null) onChanged();
-          return applied(cursor);
-        }
-        case "record-transaction": {
-          if (epoch !== null && event.cursor.authorityEpoch !== epoch) {
-            // The epoch moved. The replica does not rebuild itself: the runtime
-            // does, so two lanes reporting one change coalesce into one
-            // replacement instead of racing.
-            return {
-              kind: "requires-replacement",
-              reason: "authority-epoch-changed",
-            };
-          }
-          if (cursor !== null && event.cursor.position <= cursor.position) {
-            return { kind: "ignored", reason: "duplicate" };
-          }
-          let moved = false;
-          for (const change of event.changes) {
-            if (applyChange(change)) moved = true;
-          }
-          // The cursor advances ONLY here, after every change in the envelope
-          // has been offered to the replica - never per change, and never on
-          // arrival. A position persisted mid-envelope would let a resume ask
-          // the host to continue past a tombstone this client had not absorbed.
-          cursor = event.cursor;
-          if (moved) onChanged();
-          return applied(cursor);
-        }
-        case "record-trust": {
-          if (epoch !== null && event.authorityEpoch !== epoch) {
-            return { kind: "ignored", reason: "epoch-mismatch" };
-          }
-          // OVERWRITE, with no revision guard: trust is not an entity, the host
-          // is its sole writer, and there is nothing to be stale against. It
-          // arrives from the `trustChanged` transition AND from every `resumed`
-          // lead, because a resuming client cannot inherit it - the serving
-          // host may have restarted seed-only since the cursor was persisted.
-          seedTrust = event.trust;
-          onChanged();
-          return applied(cursor);
-        }
+        case "record-snapshot":
+          return applyRecordSnapshot(event);
+        case "record-transaction":
+          return applyRecordTransaction(event);
+        case "record-trust":
+          return applyRecordTrust(event);
         case "record-poll-answer":
           // Never emitted by this lane's adapter, and deliberately not wired -
           // see the module doc. Ignored with a reason rather than dropped, so a

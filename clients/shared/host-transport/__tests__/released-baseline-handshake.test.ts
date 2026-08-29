@@ -333,8 +333,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
-      null,
-      authority,
+      { idempotencyKey: null, authority: authority },
     );
     await flush();
     const stub = sockets[0];
@@ -380,8 +379,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         fastMode: false,
         permissionMode: "full_access",
       },
-      null,
-      authority,
+      { idempotencyKey: null, authority: authority },
     );
     await flush();
     const stub = sockets[0];
@@ -438,8 +436,7 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "host.status",
           {},
-          null,
-          authorityForContext(ctx),
+          { idempotencyKey: null, authority: authorityForContext(ctx) },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -545,8 +542,7 @@ describe.skipIf(baselines.length === 0)(
           {
             label: "x",
           },
-          null,
-          authorityForContext(ctx),
+          { idempotencyKey: null, authority: authorityForContext(ctx) },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -616,8 +612,7 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "synthetic.baselineUnsupported",
           {},
-          null,
-          authorityForContext(ctx),
+          { idempotencyKey: null, authority: authorityForContext(ctx) },
         );
         await flush();
         expect(sockets).toHaveLength(1);

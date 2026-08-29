@@ -19,12 +19,13 @@ import { EpicStreamClient } from "@traycer-clients/shared/host-transport/epic-st
 import { EpicStateStreamClient } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import { EpicStatusStreamClient } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { ArtifactStreamClient } from "@traycer-clients/shared/host-transport/artifact-stream-client";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, type HostRpcRegistry } from "@/lib/host";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
@@ -325,6 +326,13 @@ export function EpicSessionProvider(
   const resolvedSessionHostClient = useHostClientForHostId(
     session?.hostId ?? targetHostId,
   );
+  // Read through an effect event so it is not a dependency of the session
+  // effect: `commandRequester` is consulted once, at handle creation, and
+  // this client legitimately rotates (reconnect, identity re-point) without
+  // that being a reason to tear down and reacquire the session.
+  const getCommandRequester = useEffectEvent(
+    (): HostClient<HostRpcRegistry> | null => resolvedSessionHostClient,
+  );
   // Owner-identity discriminator (R-1), read off THE SESSION'S host - the same
   // client the stream runs on, not the app-wide one.
   //
@@ -599,13 +607,13 @@ export function EpicSessionProvider(
               // session's one durable socket, so a canvas with twelve open
               // tiles multiplexes twelve subscriptions - it does not dial
               // twelve times.
-              artifactStreamClientFactory: (
-                laneEpicId,
+              artifactStreamClientFactory: ({
+                epicId: laneEpicId,
                 artifactId,
                 authorityEpoch,
                 callbacks,
                 seedOfferProvider,
-              ) =>
+              }) =>
                 new ArtifactStreamClient({
                   wsStreamClient,
                   epicId: laneEpicId,
@@ -620,7 +628,7 @@ export function EpicSessionProvider(
         streamClientFactory,
         userId: sessionUserId,
         onAuthError: handleSessionAuthError,
-        commandRequester: resolvedSessionHostClient,
+        commandRequester: getCommandRequester(),
         laneSelection,
       });
       // Construction-honest stamp, written exactly once: `streamClientFactory`

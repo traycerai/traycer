@@ -35,6 +35,18 @@ export interface HostRequestAuthority {
 }
 
 /**
+ * Per-request options shared by every unary send: the idempotency key that
+ * lets a retried request be recognized as the same attempt, and the frozen
+ * authority it may dispatch under. Grouped so `request` and
+ * `requestWithResponseTimeout` take the same trailing shape rather than two
+ * positional tails that drift apart as the seam grows.
+ */
+export interface HostRequestOptions {
+  readonly idempotencyKey: string | null;
+  readonly authority: HostRequestAuthority;
+}
+
+/**
  * App-facing host messenger abstraction.
  *
  * `IHostMessenger` sits above the committed versioned RPC envelope. Callers
@@ -55,8 +67,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
-    idempotencyKey: string | null,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 
   /**
@@ -73,8 +84,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
-    idempotencyKey: string | null,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 

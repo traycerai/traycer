@@ -143,13 +143,10 @@ function createFakeStreamClientFactory(): {
   readonly latest: () => FakeHandle;
 } {
   const handles: FakeHandle[] = [];
-  const factory: ArtifactStreamClientFactory = (
-    _epicId,
-    _artifactId,
-    _authorityEpoch,
+  const factory: ArtifactStreamClientFactory = ({
     callbacks,
     seedOfferProvider,
-  ) => {
+  }) => {
     const applyUpdateCalls: { docGuid: string; update: Uint8Array }[] = [];
     const awarenessCalls: Uint8Array[] = [];
     let closeCalls = 0;

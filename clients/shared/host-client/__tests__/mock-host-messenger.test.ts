@@ -56,8 +56,7 @@ describe("MockHostMessenger", () => {
     const result = await messenger.request(
       "host.echo",
       { message: "hi" },
-      null,
-      authority(),
+      { idempotencyKey: null, authority: authority() },
     );
     expect(result).toEqual({ echoed: "HI" });
     expect(messenger.calls).toHaveLength(1);
@@ -79,7 +78,11 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }, null, authority()),
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        { idempotencyKey: null, authority: authority() },
+      ),
     ).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof HostRpcError &&
@@ -100,7 +103,11 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }, null, authority()),
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        { idempotencyKey: null, authority: authority() },
+      ),
     ).rejects.toSatisfy(
       (err: unknown) => err instanceof HostRpcError && err.message === "boom",
     );
@@ -130,7 +137,11 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }, null, authority()),
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        { idempotencyKey: null, authority: authority() },
+      ),
     ).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof HostRpcError &&
@@ -181,7 +192,11 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }, null, authority()),
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        { idempotencyKey: null, authority: authority() },
+      ),
     ).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof HostRpcError &&
@@ -207,7 +222,11 @@ describe("MockHostMessenger", () => {
       seen.push(event);
     });
 
-    await messenger.request("host.echo", { message: "hi" }, null, authority());
+    await messenger.request(
+      "host.echo",
+      { message: "hi" },
+      { idempotencyKey: null, authority: authority() },
+    );
     unsubscribe();
 
     const kinds = seen.map((event) => event.kind);
@@ -249,7 +268,11 @@ describe("MockHostMessenger", () => {
     });
 
     await expect(
-      messenger.request("host.echo", { message: "x" }, null, authority()),
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        { idempotencyKey: null, authority: authority() },
+      ),
     ).rejects.toBeInstanceOf(HostRpcError);
 
     const kinds = messenger.phases.map((event) => event.kind);
@@ -279,10 +302,17 @@ describe("MockHostMessenger", () => {
       },
       requestId: () => "req-abort",
     });
-    const request = messenger.request("host.echo", { message: "x" }, null, {
-      ...authority(),
-      abortSignal: controller.signal,
-    });
+    const request = messenger.request(
+      "host.echo",
+      { message: "x" },
+      {
+        idempotencyKey: null,
+        authority: {
+          ...authority(),
+          abortSignal: controller.signal,
+        },
+      },
+    );
 
     controller.abort();
 

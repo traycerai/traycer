@@ -23,6 +23,7 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
   type HostRequestAuthority,
+  type HostRequestOptions,
   type HostTransportEndpoint,
   type IHostMessenger,
   type RequestOfMethod,
@@ -297,15 +298,13 @@ export class WsRpcClient<
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
-    idempotencyKey: string | null,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.requestWithResponseTimeout(
       method,
       params,
       this.frameTimeoutMs,
-      idempotencyKey,
-      authority,
+      options,
     );
   }
 
@@ -313,9 +312,9 @@ export class WsRpcClient<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
-    idempotencyKey: string | null,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { idempotencyKey, authority } = options;
     const requestId = this.requestIdProvider();
     const selected = authority.endpoint;
 

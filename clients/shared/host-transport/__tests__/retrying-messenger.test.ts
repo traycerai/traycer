@@ -131,8 +131,7 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
-      null,
-      authority(),
+      { idempotencyKey: null, authority: authority() },
     );
 
     expect(result).toEqual({ echoed: "HI" });
@@ -147,8 +146,7 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
-      null,
-      authority(),
+      { idempotencyKey: null, authority: authority() },
     );
 
     expect(result).toEqual({ echoed: "HI" });
@@ -171,8 +169,7 @@ describe("createRetryingMessenger", () => {
         {
           message: "hi",
         },
-        null,
-        authority(),
+        { idempotencyKey: null, authority: authority() },
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
     expect(calls()).toBe(3);
@@ -189,8 +186,7 @@ describe("createRetryingMessenger", () => {
         {
           message: "hi",
         },
-        null,
-        authority(),
+        { idempotencyKey: null, authority: authority() },
       ),
     ).rejects.toSatisfy(
       (error: unknown) =>
@@ -208,8 +204,7 @@ describe("createRetryingMessenger", () => {
       createRetryingMessenger(messenger, NO_RETRY_TRANSPORT_POLICY).request(
         "host.echo",
         { message: "hi" },
-        null,
-        authority(),
+        { idempotencyKey: null, authority: authority() },
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
     expect(calls()).toBe(1);
@@ -225,8 +220,7 @@ describe("createRetryingMessenger", () => {
       {
         message: "hi",
       },
-      null,
-      authority(),
+      { idempotencyKey: null, authority: authority() },
     );
 
     expect(delays).toEqual([

@@ -5,6 +5,7 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
   type HostRequestAuthority,
+  type HostRequestOptions,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -142,21 +143,20 @@ export class MockHostMessenger<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
-    idempotencyKey: string | null,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     // The mock runs handlers inline with no transport timers, so the extended
     // response budget has nothing to bound - the call delegates unchanged.
     void responseTimeoutMs;
-    return this.request(method, params, idempotencyKey, authority);
+    return this.request(method, params, options);
   }
 
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
-    idempotencyKey: string | null,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { idempotencyKey, authority } = options;
     const requestId = this.requestIdProvider();
     this.calls.push({ method, params, requestId, idempotencyKey, authority });
 
