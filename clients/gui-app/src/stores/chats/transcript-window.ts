@@ -1076,6 +1076,31 @@ function rewriteWindowMessage(
     spanIndexes.some((index) => index >= 0) ||
     staleIndexes.some((index) => index >= 0);
   if (!held) return { window, held: false };
+  // Which carry gets the WRITE bump, when several hold this record.
+  //
+  // One record reaches every span its turn's rows do, so a rewrite can touch
+  // several disjoint carries - and stamping them all with the same clock
+  // FLATTENS the tier's warmth ordering, erasing the extra warmth a viewport
+  // report gave the span the reader is actually looking at. The next
+  // `boundedStaleSpans` then cannot tell them apart, and can evict the visible
+  // span in favour of an off-screen duplicate, repainting that span's own
+  // unique rows as placeholders until a refetch lands.
+  //
+  // So only the freshest-served holder is bumped, on the same ownership rule
+  // the rest of the tier reads: its copy is the one the renderer draws, so it
+  // is the one whose eviction would lose the streamed body. A staler duplicate
+  // draws nothing for THIS record and needs no write warmth - its own rows are
+  // protected by the viewport bump, which is exactly what stays legible now.
+  const writeBumpIndex = staleIndexes.reduce(
+    (best, index, spanIndex) =>
+      index < 0 ||
+      (best >= 0 &&
+        window.staleSpans[spanIndex].servedAt <=
+          window.staleSpans[best].servedAt)
+        ? best
+        : spanIndex,
+    -1,
+  );
   const staleSpans = staleIndexes.every((index) => index < 0)
     ? window.staleSpans
     : window.staleSpans.map((span, spanIndex) => {
@@ -1106,7 +1131,13 @@ function rewriteWindowMessage(
           // for the carry. Without this, the squeeze that bound exists for
           // could drop the very copy the reader is watching stream and leave
           // an idle-but-warmer span in its place.
-          touchedAt: window.clock + 1,
+          //
+          // The freshest holder only - see `writeBumpIndex`. Every other carry
+          // keeps the warmth it had, so the viewport's ordering survives a
+          // rewrite of a record they happen to share.
+          ...(spanIndex === writeBumpIndex
+            ? { touchedAt: window.clock + 1 }
+            : {}),
         };
       });
   const spans = window.spans.map((span, spanIndex) => {
