@@ -266,6 +266,6 @@ export function unknownConsequenceForRow(
   row: EpicSweepWorktreeRow,
 ): string | null {
   if (row.note !== "in-use") return null;
-  if (row.holders.length > 0) return null;
+  if (row.holdersStatus !== "unknown") return null;
   return formatUnknownHolderConsequence(worktreeIdentity(row));
 }

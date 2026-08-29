@@ -71,7 +71,10 @@ export function TeardownInlineDisclosure(props: {
       data-testid="teardown-disclosure-inline"
     >
       <p className="text-ui-xs font-medium text-foreground">{props.heading}</p>
-      <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
+      <ul
+        className="m-0 mt-1 flex list-none flex-col gap-1 p-0"
+        role="list"
+      >
         {props.unknownConsequence !== null ? (
           <li className="text-ui-xs wrap-anywhere text-foreground">
             {props.unknownConsequence}
@@ -121,12 +124,13 @@ function ActorGroup(props: {
       >
         {props.heading}
       </p>
-      <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+      <ul className="m-0 flex list-none flex-col gap-0.5 p-0" role="list">
         {props.actors.map((actor) => {
           const failure = firstFailure(actor, props.failures);
           return (
             <li
               key={actor.key}
+              role="listitem"
               className={cn(
                 "flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1 text-ui-sm",
                 props.tone === "working"

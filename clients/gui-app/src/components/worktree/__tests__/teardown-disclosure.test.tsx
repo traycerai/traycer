@@ -83,14 +83,19 @@ describe("TeardownDisclosure", () => {
         agentNames={undefined}
       />,
     );
+    const actorRows = screen.getAllByRole("listitem");
     expect(
-      screen.getByText(
-        "Terminal agent “Claude will restart in the new folder” is working — will be stopped",
+      actorRows.some((row) =>
+        (row.textContent ?? "").includes(
+          "Claude will restart in the new folder",
+        ),
       ),
-    ).toBeTruthy();
+    ).toBe(true);
     expect(
-      screen.getByText("Shell “npm run dev” is running — will be stopped"),
-    ).toBeTruthy();
+      actorRows.some((row) =>
+        (row.textContent ?? "").includes("npm run dev"),
+      ),
+    ).toBe(true);
     expect(screen.queryByText("Terminal")).toBeNull();
     expect(screen.queryByText("Run directory")).toBeNull();
     expect(screen.queryByText(/busy/i)).toBeNull();

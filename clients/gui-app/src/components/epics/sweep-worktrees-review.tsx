@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -35,6 +35,7 @@ export function SweepWorktreesReview(props: {
 }): ReactNode {
   const needsTypedGate = props.snapshot.unproven.length > 0;
   const typedOk = !needsTypedGate || props.typedValue === "sweep";
+  const typedConfirmId = useId();
   const stopActors = formatTeardownActors(
     props.snapshot.disclosedHolders,
     props.agentNames,
@@ -189,14 +190,14 @@ export function SweepWorktreesReview(props: {
         {needsTypedGate ? (
           <div className="space-y-1.5">
             <label
-              htmlFor="sweep-typed-confirm"
+              htmlFor={typedConfirmId}
               className="text-ui-xs font-medium"
             >
               Type <code className="font-mono">sweep</code> to confirm possible
               loss of unmerged work
             </label>
             <Input
-              id="sweep-typed-confirm"
+              id={typedConfirmId}
               value={props.typedValue}
               onChange={(event) =>
                 props.onTypedValueChange(event.currentTarget.value)

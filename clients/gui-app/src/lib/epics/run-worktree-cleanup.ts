@@ -5,6 +5,7 @@ import type { WorktreeDeletionSource } from "@traycer/protocol/host/worktree-del
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { appLogger } from "@/lib/logger";
+import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
 export interface WorktreeCleanupOutcome {
   readonly removed: ReadonlyArray<string>;
@@ -425,7 +426,9 @@ function deleteOneWorktree(input: {
             worktreePath: input.worktreePath,
             scripts: null,
             stopOwners: input.stopOwners,
-            expectedHoldersRevision: input.expectedHoldersRevision,
+            expectedHoldersRevision: input.stopOwners
+              ? sanitizeHoldersRevision(input.expectedHoldersRevision)
+              : undefined,
             callbacks: {
               onStarted: () => {},
               onPhase: () => {},

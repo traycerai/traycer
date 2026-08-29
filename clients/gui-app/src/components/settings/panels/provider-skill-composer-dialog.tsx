@@ -537,8 +537,6 @@ function PickerFields({
           disabled={disabled}
           testId="skill-picker-select-all"
           onToggle={onToggleAll}
-          actionLabel={undefined}
-          shortcut={undefined}
         />
       </div>
       <ul className="flex flex-col gap-2">

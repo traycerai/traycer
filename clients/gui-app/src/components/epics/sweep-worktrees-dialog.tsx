@@ -1202,10 +1202,11 @@ function SweepRowHint(props: {
   } else if (row.note === "shared") {
     detail = sharedRowHint(row, props.selectedEpicIds);
   } else if (row.note === "in-use" && !props.checked) {
-    detail =
-      row.holdersStatus === "unknown" || row.holders.length === 0
-        ? formatUncheckedInUseUnknown()
-        : formatUncheckedInUseKnown(row.holders.length);
+    if (row.holdersStatus === "unknown") {
+      detail = formatUncheckedInUseUnknown();
+    } else if (row.holdersStatus === "ready") {
+      detail = formatUncheckedInUseKnown(row.holders.length);
+    }
   } else if (row.note === "in-use" && props.checked) {
     detail = "In use · selected individually for this review";
   }

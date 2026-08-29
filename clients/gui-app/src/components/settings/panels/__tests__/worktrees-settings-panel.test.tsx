@@ -83,6 +83,7 @@ const streamMock = vi.hoisted(() => ({
   closeCount: 0,
   commandCount: 0,
   stopOwnersByPath: new Map<string, boolean>(),
+  expectedHoldersRevisionByPath: new Map<string, string | undefined>(),
 }));
 
 // Capture the confirm-time "dropped rows" toast so its class-summarized copy can
@@ -199,6 +200,7 @@ vi.mock(
         readonly worktreePath: string;
         readonly scripts: WorktreeEntryScripts | null;
         readonly stopOwners: boolean;
+        readonly expectedHoldersRevision: string | undefined;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
         streamMock.paths.push(options.worktreePath);
@@ -206,6 +208,10 @@ vi.mock(
         streamMock.stopOwnersByPath.set(
           options.worktreePath,
           options.stopOwners,
+        );
+        streamMock.expectedHoldersRevisionByPath.set(
+          options.worktreePath,
+          options.expectedHoldersRevision,
         );
         if (streamMock.throwForPaths.has(options.worktreePath)) {
           throw new Error(`cannot subscribe ${options.worktreePath}`);
@@ -810,6 +816,7 @@ describe("WorktreesList delete flow", () => {
     streamMock.closeCount = 0;
     streamMock.commandCount = 0;
     streamMock.stopOwnersByPath.clear();
+    streamMock.expectedHoldersRevisionByPath.clear();
     toastMock.messages = [];
   });
 
@@ -2135,6 +2142,77 @@ describe("WorktreesList delete flow", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
     expect(streamMock.legacyPaths).toEqual(["/wt/clean"]);
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+  });
+
+  it("retries force-delete with the refusal's holdersRevision", () => {
+    const digest =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        "WORKTREE_BUSY",
+        digest,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+    expect(streamMock.expectedHoldersRevisionByPath.get("/wt/clean")).toBe(
+      digest,
+    );
+  });
+
+  it("surfaces HOLDERS_CHANGED on retry instead of stopping the new inventory", () => {
+    const digestA =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const digestB =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const changedHolders: readonly WorktreeBusyHolder[] = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "chat",
+          ownerId: "chat-1",
+        },
+        holdKind: "chat-turn",
+        activity: "working",
+        label: "new actor is working",
+      },
+    ];
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        "WORKTREE_BUSY",
+        digestA,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Holders changed",
+        changedHolders,
+        "WORKTREE_HOLDERS_CHANGED",
+        digestB,
+      );
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain("Agent “new actor” is working on a turn — will be stopped");
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.expectedHoldersRevisionByPath.get("/wt/clean")).toBe(
+      digestB,
+    );
     expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
   });
 

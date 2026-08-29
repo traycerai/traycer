@@ -16,9 +16,9 @@ export function SelectAllToggle(props: {
    * Visible button text. Settings keeps the default "Select all"; Sweep
    * swaps to "Deselect all" when the bulk scope is fully selected.
    */
-  readonly actionLabel: string | undefined;
+  readonly actionLabel?: string;
   /** Optional keyboard hint shown after the label (Sweep: `A`). */
-  readonly shortcut: string | undefined;
+  readonly shortcut?: string;
 }): ReactNode {
   const allSelected =
     props.selectableCount > 0 && props.selectedCount === props.selectableCount;

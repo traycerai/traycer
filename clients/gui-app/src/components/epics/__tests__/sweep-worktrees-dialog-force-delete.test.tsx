@@ -200,7 +200,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.hostId = "host-1";
     testState.refresh.mockReset();
     testState.refresh.mockImplementation(() => Promise.resolve(testState.rows));
-    testState.refresh.mockClear();
+    testState.rows = [];
   });
 
   it("executes a safe-only selection from step 1 without opening review", () => {
@@ -349,6 +349,30 @@ describe("SweepWorktreesDialog ergonomics", () => {
     expect(
       screen.getByTestId("teardown-disclosure-inline").textContent,
     ).toContain(formatUnknownHolderConsequence("feat-octopus"));
+  });
+
+  it("does not treat a loading holder inventory as unknown", () => {
+    testState.rows = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: true,
+        note: "in-use",
+        holders: [],
+        holdersStatus: "loading",
+      },
+    ];
+    renderDialog();
+    expect(screen.queryByText(/cannot identify it/i)).toBeNull();
+    expect(screen.queryByTestId("teardown-disclosure-inline")).toBeNull();
+    expect(screen.getByTestId("sweep-worktrees-hint").textContent).toBe(
+      "In use",
+    );
   });
 
   it("select-all includes unproven rows, excludes in-use, and deselect-all clears in-use", () => {

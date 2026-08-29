@@ -32,6 +32,7 @@ const legacyMock = vi.hoisted(() => ({
   paths: [] as string[],
   callbacksByPath: new Map<string, WorktreeDeleteStreamCallbacks>(),
   stopOwnersByPath: new Map<string, boolean>(),
+  expectedHoldersRevisionByPath: new Map<string, string | undefined>(),
   /** Paths whose stream fails to open, driving `deleteOneWorktree`'s catch. */
   throwForPaths: new Set<string>(),
   closeCount: 0,
@@ -88,12 +89,17 @@ vi.mock(
       constructor(options: {
         readonly worktreePath: string;
         readonly stopOwners: boolean;
+        readonly expectedHoldersRevision: string | undefined;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
         legacyMock.paths.push(options.worktreePath);
         legacyMock.stopOwnersByPath.set(
           options.worktreePath,
           options.stopOwners,
+        );
+        legacyMock.expectedHoldersRevisionByPath.set(
+          options.worktreePath,
+          options.expectedHoldersRevision,
         );
         if (legacyMock.throwForPaths.has(options.worktreePath)) {
           throw new Error("could not open the delete stream");
@@ -179,6 +185,7 @@ beforeEach(() => {
   legacyMock.paths = [];
   legacyMock.callbacksByPath.clear();
   legacyMock.stopOwnersByPath.clear();
+  legacyMock.expectedHoldersRevisionByPath.clear();
   legacyMock.throwForPaths.clear();
   legacyMock.closeCount = 0;
   loggerMock.throwForMessages.clear();
@@ -640,5 +647,65 @@ describe("runWorktreeCleanup stopOwners paths", () => {
       holdersChanged: [{ worktreePath: "/wt/busy" }],
     });
     expect(commandMock.commands).toHaveLength(0);
+  });
+
+  it("forwards a valid holdersRevision with stopOwners", async () => {
+    const digest =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map([["/wt/busy", digest]]),
+    });
+    expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
+    expect(legacyMock.expectedHoldersRevisionByPath.get("/wt/busy")).toBe(
+      digest,
+    );
+    legacyCallbacksFor("/wt/busy").onComplete(true);
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/busy"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
+    });
+  });
+
+  it("omits expectedHoldersRevision when stopOwners is false", async () => {
+    const promise = runTaskCleanup(["/wt/a"]);
+    reportUnsupported();
+    expect(legacyMock.stopOwnersByPath.get("/wt/a")).toBe(false);
+    expect(
+      legacyMock.expectedHoldersRevisionByPath.get("/wt/a"),
+    ).toBeUndefined();
+    legacyCallbacksFor("/wt/a").onComplete(true);
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/a"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
+    });
+  });
+
+  it("omits an invalid holdersRevision even with stopOwners", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map([["/wt/busy", "not-a-digest"]]),
+    });
+    expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
+    expect(
+      legacyMock.expectedHoldersRevisionByPath.get("/wt/busy"),
+    ).toBeUndefined();
+    legacyCallbacksFor("/wt/busy").onComplete(true);
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/busy"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
+    });
   });
 });

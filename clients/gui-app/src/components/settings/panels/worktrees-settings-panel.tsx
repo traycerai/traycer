@@ -1443,6 +1443,7 @@ export function WorktreesList(props: {
         kept[0],
         reviewedScriptsByPath.get(kept[0].worktreePath) ?? null,
         false,
+        undefined,
       );
     } else if (kept.length > 1) {
       startBatchBackgrounded(kept, reviewedScriptsByPath);
@@ -1578,9 +1579,9 @@ export function WorktreesList(props: {
           confirmed={confirmed}
           run={run}
           reviewedScriptsByPath={reviewedScriptsByPath}
-          onForceDelete={(target, scripts) => {
+          onForceDelete={(target, scripts, expectedHoldersRevision) => {
             close();
-            start(target, scripts, true);
+            start(target, scripts, true, expectedHoldersRevision);
           }}
           onDismissForceDelete={close}
           onCloseProgress={handleCloseModal}
@@ -1597,8 +1598,6 @@ export function WorktreesList(props: {
                 disabled={false}
                 testId="worktrees-select-all"
                 onToggle={toggleSelectAllVisible}
-                actionLabel={undefined}
-                shortcut={undefined}
               />
               <WorktreesRepoExpansionControl
                 allCollapsed={allReposCollapsed}
@@ -1818,6 +1817,7 @@ function WorktreeDeleteForegroundSurface(props: {
   readonly onForceDelete: (
     target: WorktreeHostEntry,
     scripts: WorktreeEntryScripts | null,
+    expectedHoldersRevision: string | undefined,
   ) => void;
   readonly onDismissForceDelete: () => void;
   readonly onCloseProgress: () => void;
@@ -1834,7 +1834,11 @@ function WorktreeDeleteForegroundSurface(props: {
           const scripts =
             props.reviewedScriptsByPath.get(confirmed.worktreePath) ??
             confirmed.scripts;
-          props.onForceDelete(confirmed, scripts);
+          props.onForceDelete(
+            confirmed,
+            scripts,
+            run.pendingHoldersRevision,
+          );
         }}
         onDismiss={props.onDismissForceDelete}
       />

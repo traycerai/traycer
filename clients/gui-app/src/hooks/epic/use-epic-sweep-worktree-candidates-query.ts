@@ -25,6 +25,9 @@ import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
 import { sweepEligibleTier } from "@/lib/worktree/sweep-candidates";
 import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
+// Same bound as run-worktree-cleanup's fallback fan-out.
+const MAX_PARALLEL_CLEANUP_STREAMS = 2;
+
 type PathHolderInventory =
   | { readonly kind: "unknown" }
   | {
@@ -378,15 +381,20 @@ async function loadHoldersForInUseRows(
   worktrees: readonly WorktreeHostEntryV14[],
 ): Promise<ReadonlyMap<string, PathHolderInventory>> {
   const inUse = worktrees.filter((entry) => entry.inUse);
-  const loaded = await Promise.all(
-    inUse.map(async (entry) => {
+  if (inUse.length === 0) return new Map();
+  const loaded: Array<readonly [string, PathHolderInventory]> = [];
+  const queue = [...inUse];
+  const worker = async (): Promise<void> => {
+    for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
       const inventory = await readPathHolderInventory(
         client,
         entry.worktreePath,
       );
-      return [entry.worktreePath, inventory] as const;
-    }),
-  );
+      loaded.push([entry.worktreePath, inventory]);
+    }
+  };
+  const workerCount = Math.min(MAX_PARALLEL_CLEANUP_STREAMS, inUse.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return new Map(loaded);
 }
 
