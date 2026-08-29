@@ -486,9 +486,13 @@ async function waitForHttp(url, process, readError, label) {
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
 }
 
-async function waitForDevToolsUrl(process, readError) {
+async function waitForDevToolsUrl(process, readError, readSpawnFailure) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
+    const spawnFailure = readSpawnFailure();
+    if (spawnFailure !== null) {
+      throw new Error(`Chrome failed to spawn: ${spawnFailure.message}`);
+    }
     if (process.exitCode !== null) {
       throw new Error(
         `Chrome exited before DevTools was ready:\n${readError()}`,
@@ -551,10 +555,18 @@ async function launchChromeWithDevTools(chromePath, chromeEnv) {
     chrome.stderr.on("data", (chunk) => {
       chromeError += chunk;
     });
+    // A spawn failure (ENOENT/EACCES) surfaces as an "error" event, not an
+    // exit; without a listener Node throws it as an uncaught event before
+    // the retry catch can clean up the attempt's profile.
+    let spawnFailure = null;
+    chrome.on("error", (error) => {
+      spawnFailure = error instanceof Error ? error : new Error(String(error));
+    });
     try {
       const devtoolsWebSocketUrl = await waitForDevToolsUrl(
         chrome,
         () => chromeError,
+        () => spawnFailure,
       );
       return {
         chrome,

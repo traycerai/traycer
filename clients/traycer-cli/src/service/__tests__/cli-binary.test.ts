@@ -1042,7 +1042,9 @@ describe("resolveServiceCliInvocation", () => {
     // exactly as the refresh test below does, which also upgrades the
     // size-only comparison to full byte equality.
     const fakeExecPath = join(workHome, "fake-packaged-binary");
-    const packagedBytes = "packaged binary bytes";
+    // Raw non-UTF-8 bytes: a text fixture round-trips through a utf8 decode
+    // and would miss corruption that only shows on binary content.
+    const packagedBytes = Buffer.from([0x00, 0xff, 0x80, 0x7f, 0x01, 0xfe]);
     writeFileSync(fakeExecPath, packagedBytes);
     const originalExecPath = process.execPath;
     Object.defineProperty(process, "execPath", {
@@ -1065,7 +1067,7 @@ describe("resolveServiceCliInvocation", () => {
       const slotStat = await lstat(wellKnownPath);
       expect(slotStat.isSymbolicLink()).toBe(false);
       expect(slotStat.isFile()).toBe(true);
-      expect(readFileSync(wellKnownPath, "utf8")).toBe(packagedBytes);
+      expect(readFileSync(wellKnownPath)).toEqual(packagedBytes);
     } finally {
       Object.defineProperty(process, "execPath", {
         value: originalExecPath,
