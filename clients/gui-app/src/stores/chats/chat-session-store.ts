@@ -2133,7 +2133,50 @@ export function createChatSessionStoreWithNotificationDependencies(
           ? merged
           : { ...merged, pendingActions, acceptedActions };
       });
+      evictWindowAfterInPlaceGrowth();
     };
+
+    /**
+     * Run the fresh tier's eviction after an in-place rewrite grew it.
+     *
+     * `rewriteWindowMessage` recomputes `hydratedBytes` exactly for a CHARGED
+     * write and then applies only `boundStaleTierToBudget`, which by
+     * construction cannot drop a fresh span - and the reducers' callers publish
+     * the returned window directly. So repeated growth on an already-settled
+     * turn (a detached subagent's progress, an image resolving) could hold the
+     * fresh tier above the budget for as long as no range or snapshot was
+     * seated, and keep growing.
+     *
+     * Here rather than inside the window module, because the eviction's
+     * protections are the CALLER's to supply: `visibleTranscriptRange` and the
+     * rows a pending question sits on. The latter especially cannot be retained
+     * on the window the way the viewport can - `onWindowedSnapshot` passes the
+     * FRAME's pair precisely because protecting the rows the previous snapshot
+     * was blocked on would protect the wrong ones - so it is derived from
+     * current state at the moment of use, exactly as `onRange` does.
+     *
+     * Gated on `hydratedBytes` alone, which is what makes this affordable on
+     * the delta path. The figure is exact after a `now` charge and deliberately
+     * UNMOVED by a `deferred` one, so the streaming row's growth cannot trip
+     * this and `settleWindowBytes` is never paid per token - which is the whole
+     * reason the deferred charge exists.
+     */
+    function evictWindowAfterInPlaceGrowth(): void {
+      if (disposed) return;
+      const state = get();
+      if (!isWindowedTranscript(state)) return;
+      if (state.transcriptWindow.hydratedBytes <= TRANSCRIPT_WINDOW_MAX_BYTES) {
+        return;
+      }
+      const evicted = evictTranscriptWindowToBudget(
+        state.transcriptWindow,
+        TRANSCRIPT_WINDOW_MAX_BYTES,
+        visibleTranscriptRange,
+        requiredHydrationOrdinalsOf(state),
+      );
+      if (evicted === state.transcriptWindow) return;
+      publishWindowedTranscript(evicted, null);
+    }
 
     const lease = options.streamFlushCoordinator.register({
       flush: applyBufferedDeltas,
@@ -4563,6 +4606,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             ...(turnIdChanged ? { liveTurnUsage: null } : {}),
           };
         });
+        // The other path that grows the window without seating a range:
+        // `appendLiveRecords` adds the materialized row and `mapWindowMessages`
+        // rewrites every record carrying the remapped turn. Same reason, same
+        // guard - a no-op unless the fresh tier is genuinely over budget.
+        evictWindowAfterInPlaceGrowth();
         // Routed through the shared decider rather than calling
         // `restoreStagedWorktreeIntent` directly, so the swept-claimant rule
         // is applied here too.
