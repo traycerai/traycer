@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assistantRowId,
   assistantSliceRowId,
+  queueSteerRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type {
   ChatEvent,
@@ -85,6 +86,52 @@ function skeletonEntry(rowId: string): RowSkeletonEntry {
     role: "assistant",
     byteLength: 32,
     bodyDigest: `d-${rowId}`,
+  };
+}
+
+/**
+ * An assistant carrying a steer block whose steered USER record is absent.
+ *
+ * That absence is what makes the projected steer row take a synthesized
+ * `steer:<queueItemId>` id rather than the user record's own - so the row is an
+ * INFERENCE with no served identity anywhere, which is the case the id-set
+ * channels structurally cannot answer.
+ */
+function steeredAssistant(
+  turnId: string,
+  queueItemId: string,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId: `assistant-${turnId}`,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "steer" as const,
+        blockId: `steer-${queueItemId}`,
+        status: "completed" as const,
+        timestamp: 1,
+        queueItemId,
+        messageId: "absent-steered-user",
+        content: { type: "doc" as const },
+        mode: "safe_point" as const,
+        sender: null,
+      },
+    ],
+    startedAt: 1,
+    timestamp: 2,
+    turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -944,6 +991,105 @@ describe("transcriptListRows", () => {
     });
 
     expect(kinds(rows)).toEqual(["H:carried-row"]);
+  });
+
+  it("places a duplicated stale row from the FRESHEST carry, not the earliest", () => {
+    // Two carries hold `dup` because `boundedStaleSpans` admits a span for any
+    // single uncovered row it contributes - the older one earned its place
+    // with `only-in-old`, and brought its copy of `dup` along. `staleSpans` is
+    // stored in ordinal order, so a first-match scan hands `dup` to the older
+    // coordinate: after an insertion earlier in the transcript, the row draws
+    // at its pre-insertion position until the skeleton chunk naming it lands.
+    const older: HydratedSpan = {
+      ...span(0, ["only-in-old", "dup"]),
+      servedAt: 5,
+    };
+    const newer: HydratedSpan = { ...span(4, ["dup"]), servedAt: 9 };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 6,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [older, newer],
+      }),
+      rendered: [model("only-in-old"), model("dup")],
+    });
+
+    // `dup` at 4 (the newer serve's coordinate), not at 1 (the older's).
+    expect(kinds(rows)).toEqual([
+      "H:only-in-old",
+      "P:1",
+      "P:2",
+      "P:3",
+      "H:dup",
+      "P:5",
+    ]);
+  });
+
+  it("withholds a steer row inferred from a turn only the stale tier holds", () => {
+    // An INFERRED row was never served, so no id-set fold can contain it: the
+    // steer entry `planAssistantTurnRows` emits for a turn holding a steer
+    // block takes a synthesized `steer:<queueItemId>` id when the steered user
+    // record is absent, and that string appears in no span's `rowIds` and in
+    // no record. Both id channels therefore miss, and pre-rebase steer content
+    // is published at the live tail - a position it never had.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-steered")]),
+            messages: [steeredAssistant("turn-steered", "q-1")],
+          },
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId(queueSteerRowId("q-1")),
+        model(assistantRowId("turn-steered")),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["H:" + assistantRowId("turn-steered")]);
+  });
+
+  it("keeps a steer row whose turn the LIVE tier also holds", () => {
+    // The other direction, and the one this pass has twice been bitten by:
+    // a turn the live tier also holds is not pre-rebase history, and the turn
+    // streaming right now is the turn a rebase most recently demoted. Scoping
+    // the steer projection to stale-ONLY turns is what keeps the current row
+    // at the tail instead of hiding it until replacement hydration arrives.
+    const streaming = steeredAssistant("turn-steered", "q-1");
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        liveMessages: [streaming],
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-steered")]),
+            messages: [streaming],
+          },
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId(queueSteerRowId("q-1")),
+        model(assistantRowId("turn-steered")),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual([
+      "H:" + assistantRowId("turn-steered"),
+      "H:" + queueSteerRowId("q-1"),
+    ]);
   });
 });
 

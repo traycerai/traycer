@@ -2708,24 +2708,36 @@ function boundedStaleSpans(
   const sorted = [...candidates].sort(
     (left, right) => right.touchedAt - left.touchedAt,
   );
-  // Two spaces, deliberately not one set. The empty string is a positionally
-  // seated legacy tail's "identity unverified" MARKER rather than a row id
-  // (see {@link tailRowIdsFor}), so folding it into the id set would make
-  // every unresolved row in the window the same row: after the warmest
-  // positional span was admitted, every other one would read as contributing
-  // nothing and be dropped, however disjoint the ordinals it covers. Its old
-  // ordinal is the only thing known about such a row, so that is what it is
-  // deduplicated by - which still collapses two spans holding the SAME
-  // unresolved ordinal, the case the dedupe is actually for.
+  // By row ID only, and a MARKER never counts as covered.
+  //
+  // The empty string is a positionally seated tail's "identity unverified"
+  // marker rather than a row id (see {@link tailRowIdsFor}), so folding it
+  // into the id set would make every unresolved row in the window the same
+  // row - the warmest positional span would cover the lot, however disjoint
+  // the ordinals the others hold.
+  //
+  // Its old ORDINAL cannot stand in for the identity either, and that is a
+  // fact about these inputs rather than a preference. Spans are disjoint
+  // within a coordinate space (see {@link TranscriptWindow.spans}), and the
+  // stale tier's own dedupe keeps it so; every candidate list here is one
+  // space, or a space mixed with an OLDER carry. Two candidates can therefore
+  // share an ordinal ONLY when they come from different spaces, where the same
+  // number names different rows - so an ordinal dedupe could never fire except
+  // on that coincidence, and firing it discarded a held body whose replacement
+  // had not arrived, which is the loss this tier exists to prevent.
+  //
+  // So a marker always contributes. That is already how
+  // {@link retireCoveredStaleSpans} reads the same value - nothing has spoken
+  // about the row until the replacement skeleton completes - and it cannot
+  // unbound anything: the budget below still applies, and
+  // {@link staleSpanVisibleIn} gives a marker no viewport warmth, so a
+  // duplicated carry is the coldest thing here and the first a squeeze drops.
   const coveredRowIds = new Set<string>();
-  const coveredOrdinals = new Set<number>();
   const carried: HydratedSpan[] = [];
   let bytes = liveBytes;
   for (const span of sorted) {
-    const uncovered = (rowId: string, offset: number): boolean =>
-      rowId === ""
-        ? !coveredOrdinals.has(span.fromOrdinal + offset)
-        : !coveredRowIds.has(rowId);
+    const uncovered = (rowId: string): boolean =>
+      rowId === "" || !coveredRowIds.has(rowId);
     // Coverage BEFORE the budget, so "the warmest contributing span" is the
     // one admitted below rather than whichever duplicate sorted first.
     if (!span.rowIds.some(uncovered)) continue;
@@ -2735,10 +2747,9 @@ function boundedStaleSpans(
     ) {
       continue;
     }
-    span.rowIds.forEach((rowId, offset) => {
-      if (rowId === "") coveredOrdinals.add(span.fromOrdinal + offset);
-      else coveredRowIds.add(rowId);
-    });
+    for (const rowId of span.rowIds) {
+      if (rowId !== "") coveredRowIds.add(rowId);
+    }
     carried.push(span);
     bytes += span.bytes;
   }

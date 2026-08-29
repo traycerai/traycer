@@ -2360,6 +2360,70 @@ describe("stale spans", () => {
     expect(read.staleSpans.map((span) => span.touchedAt)).toEqual(before);
   });
 
+  it("keeps both carries when their markers collide only across coordinate spaces", () => {
+    // Spans are disjoint WITHIN a coordinate space, so two candidates can share
+    // an ordinal only when they come from different ones - where the same
+    // number names different rows. Deduplicating markers by ordinal could
+    // therefore never fire except on that coincidence, and firing it discarded
+    // a held body whose replacement had not arrived.
+    //
+    // Two rebases with no skeleton in between is the shape: each tail seats
+    // positionally, so each carries markers, and the second rebase weighs the
+    // space it is leaving against the carry from the first.
+    const first = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 10,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 8,
+          messages: [userMessage("m-8", 8), userMessage("m-9", 9)],
+          events: [],
+        },
+      },
+      null,
+    );
+    const second = applyWindowedSnapshot(
+      first,
+      {
+        epoch: 2,
+        rowCount: 10,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 8,
+          messages: [userMessage("n-8", 8), userMessage("n-9", 9)],
+          events: [],
+        },
+      },
+      null,
+    );
+    // Epoch 1's tail is the carry; epoch 2's is fresh, and both are markers at
+    // the same two ordinals.
+    expect(second.staleSpans.map((span) => span.rowIds)).toEqual([["", ""]]);
+    expect(second.spans.map((span) => span.rowIds)).toEqual([["", ""]]);
+
+    // The third rebase weighs them against each other. Epoch 2's is warmer, so
+    // an ordinal dedupe reads epoch 1's as contributing nothing.
+    const third = applyWindowedSnapshot(
+      second,
+      {
+        epoch: 3,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
+
+    expect(third.staleSpans).toHaveLength(2);
+    expect(
+      third.staleSpans
+        .flatMap((span) => span.messages.map((message) => message.messageId))
+        .sort(),
+    ).toEqual(["m-8", "m-9", "n-8", "n-9"]);
+  });
+
   it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {
     // A tail the skeleton had only partly reached is seated on real ids AND
     // markers, so this span is subject to both retirement rules at once.

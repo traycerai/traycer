@@ -785,6 +785,19 @@ export interface ChatSessionState {
    * the retained array cannot vouch for anything, whatever its length.
    */
   readonly accumulatedSummaryGenerationSeated: boolean;
+  /**
+   * Whether a replacement generation is being assembled off-screen right now.
+   *
+   * The public face of the store's private assembly buffer, and the reason it
+   * has one: unseated-plus-zero-count is BOTH "a chat with no accumulated
+   * changes", which is complete, and "a generation mid-flight whose count a
+   * delayed same-epoch snapshot rewound to zero", which is not. Nothing
+   * outside this store could tell those apart, so
+   * {@link accumulatedSummarySetComplete} read the second as the first and
+   * every consumer of it treated an empty published array as authoritative -
+   * bundle paths absent from it reading as reverted.
+   */
+  readonly accumulatedSummaryAssemblyStarted: boolean;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
    * The shells this chat created, whatever state they are in - not a subset
@@ -2658,6 +2671,13 @@ export function createChatSessionStoreWithNotificationDependencies(
      * out of the store so the panel renders the previous COMPLETE set while
      * a replacement streams in - publishing partial assemblies is the
      * "2 files changed" flash mid-restream.
+     *
+     * Its EXISTENCE is public even though its contents are not, as
+     * `accumulatedSummaryAssemblyStarted` - the two move together at every one
+     * of the three sites that assign this. Keeping the fact of an in-flight
+     * generation private made the trust gate outside this store unable to see
+     * it, and `accumulatedSummarySetComplete` then read an assembling
+     * generation whose count had been rewound to zero as a finished one.
      */
     let assemblingSummaries:
       | readonly ChatAccumulatedFileChangeSummary[]
@@ -2839,13 +2859,15 @@ export function createChatSessionStoreWithNotificationDependencies(
      * it would be measured against has not been published yet. See the guard
      * itself.
      *
-     * This is deliberately NOT the same predicate as
-     * `accumulatedSummarySetComplete`, which the UI's visibility and action
-     * gates share. That one asks whether the PUBLISHED set is trustworthy and
-     * so can only see published state; this one asks whether a delivery is
-     * still owed, and the assembly is kept out of the store precisely so the
-     * panel keeps rendering the previous complete set while it streams. Two
-     * questions, so two answers - not a drift between copies of one.
+     * Still not the same predicate as `accumulatedSummarySetComplete`, which
+     * the UI's visibility and action gates share: that one asks whether the
+     * PUBLISHED set is trustworthy, this one whether a delivery is still owed.
+     * But they are not independent, and reading them as two clean questions
+     * was the mistake - a published set cannot be trusted while its
+     * replacement is mid-flight, so "a delivery is owed" is an INPUT to
+     * trustworthiness. Both now open on the same clause over the same public
+     * state; what stays private is the assembly's CONTENTS, which is all the
+     * panel needed kept back to keep rendering the previous complete set.
      *
      * Any mismatch, not just a short prefix. A revert LOWERS the count, and
      * the snapshot path deliberately retains the previous summary array until
@@ -2876,12 +2898,20 @@ export function createChatSessionStoreWithNotificationDependencies(
       // same-epoch snapshot can rewind it to zero mid-generation, and against
       // a published array that is still empty a count test then reads
       // `0 !== 0` as a finished delivery and disarms the watchdog on a
-      // generation that never published. `assemblingSummaries` is non-null
-      // exactly while a generation is being assembled, and the null-revision
-      // snapshot that un-seats also clears it, so the two move together.
+      // generation that never published.
+      //
+      // Read from STATE rather than from `assemblingSummaries` directly, and
+      // the same clause is now the first thing
+      // {@link accumulatedSummarySetComplete} asks. That predicate answers a
+      // different question - whether the PUBLISHED set can be trusted, not
+      // whether a delivery is owed - but the answers are not independent: a
+      // set cannot be trusted while its replacement is in flight. Leaving the
+      // in-flight fact private here is what let that predicate call an
+      // assembling zero-count generation complete.
       if (
         !state.accumulatedSummaryGenerationSeated &&
-        (assemblingSummaries !== null || state.accumulatedFileChangeCount > 0)
+        (state.accumulatedSummaryAssemblyStarted ||
+          state.accumulatedFileChangeCount > 0)
       ) {
         return true;
       }
@@ -3542,6 +3572,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         forgetOutstandingHydration();
         clearResnapshotRequest();
         forgetDeferredWindowedSnapshot();
+        // The buffer belongs to the windowed line too. Left behind, the flag
+        // below and it disagree at the one site whose own comment demands a
+        // blank slate for a later re-upgrade.
+        assemblingSummaries = null;
         applyAuthoritativeSnapshot(
           frame,
           {
@@ -3556,6 +3590,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             jumpTargetOrdinal: null,
             accumulatedFileChangeSummaries: [],
             accumulatedSummaryGenerationSeated: false,
+            accumulatedSummaryAssemblyStarted: false,
           },
           // A downgrade frame is a LEGACY snapshot - full records - so the
           // scan is again the whole-transcript answer.
@@ -3726,7 +3761,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The retained array is now the PREVIOUS generation's, so it vouches
           // for nothing until a replacement chunk lands - including when its
           // length already equals the authoritative count.
-          set({ accumulatedSummaryGenerationSeated: false });
+          set({
+            accumulatedSummaryGenerationSeated: false,
+            accumulatedSummaryAssemblyStarted: false,
+          });
         }
         // The window and the snapshot's aux ride the fold's own `set` (or the
         // deferral's single `set`) rather than being published here first - a
@@ -4002,7 +4040,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the completion watchdog measures the ASSEMBLY, not the retained
           // array whose length may coincide with the count.
           assemblingSummaries = [];
-          set({ accumulatedSummaryGenerationSeated: false });
+          set({
+            accumulatedSummaryGenerationSeated: false,
+            accumulatedSummaryAssemblyStarted: true,
+          });
         }
         // A chunk starting PAST the end is a chunk whose predecessor was
         // dropped. `slice(0, fromIndex)` cannot express that - on a shorter
@@ -5149,6 +5190,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       jumpTargetOrdinal: null,
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
+      accumulatedSummaryAssemblyStarted: false,
       backgroundItems: undefined,
       managedCommands: [],
       heldUpdates: [],

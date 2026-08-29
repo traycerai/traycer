@@ -1,3 +1,4 @@
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -204,17 +205,80 @@ function spanBackedRowIds(
 }
 
 /**
- * "Does this tier back the model?" - the same hop {@link liveBackingLookup}
- * makes, for the same reason: a model carrying a `persistentMessageId` was
- * PROJECTED from a record, so that id is where its backing lives.
+ * "Is this rendered model backed by the STALE tier?" - the mirror of
+ * {@link liveBackingLookup}, with the same three channels in the same order
+ * and for the same reasons, because they are one question asked of two tiers.
+ *
+ * A model carrying a `persistentMessageId` was PROJECTED from a record, so that
+ * id is where its backing lives. A model without one can only be an inference
+ * the renderer drew from a sibling's blocks - and an inferred row was never
+ * SERVED, so no id-set fold can ever contain it. That is not an omission the
+ * id channels could be widened to cover: `planAssistantTurnRows` emits a steer
+ * entry for any turn holding a steer block, and when the steered user record is
+ * absent the row takes a synthesized `steer:<queueItemId>` id that appears in
+ * no span's `rowIds` and in no record. So the projection has to be run.
+ *
+ * Scoped to turns the stale tier holds ALONE. A turn the live or fresh tier
+ * also holds is not pre-rebase history, and suppressing its steer row would
+ * hide a current one - the over-suppression this pass has already been bitten
+ * by twice. The live gate downstream is a second guard, not the first.
+ *
+ * Lazy in the same shape and for the same reason: the projection is O(records)
+ * and most models answer on the first membership test.
  */
-function backedBySpanTier(
-  rowIds: ReadonlySet<string>,
-  model: ChatMessageModel,
-): boolean {
-  if (rowIds.has(model.id)) return true;
-  return (
-    model.persistentMessageId !== null && rowIds.has(model.persistentMessageId)
+function staleBackingLookup(
+  window: TranscriptWindow,
+): (model: ChatMessageModel) => boolean {
+  let rowIds: ReadonlySet<string> | null = null;
+  let steerRowIds: ReadonlySet<string> | null = null;
+  return (model) => {
+    if (window.staleSpans.length === 0) return false;
+    rowIds ??= spanBackedRowIds(window.staleSpans);
+    if (rowIds.has(model.id)) return true;
+    if (model.persistentMessageId !== null) {
+      return rowIds.has(model.persistentMessageId);
+    }
+    steerRowIds ??= staleOnlySteerRowIds(window);
+    return steerRowIds.has(model.id);
+  };
+}
+
+/**
+ * Steer rows projected from a turn ONLY the stale tier holds.
+ *
+ * The stale-tier counterpart of {@link transientLiveSteerRowIds}, and written
+ * against it: same projection, same `source.kind === "steer"` filter, a
+ * different turn set. Keep the two in step.
+ */
+function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
+  const turnKeys = new Set<string>();
+  for (const span of window.staleSpans) {
+    for (const message of span.messages) {
+      if (message.role === "assistant") turnKeys.add(assistantTurnKey(message));
+    }
+  }
+  const alsoCurrent = (message: Message): void => {
+    if (message.role === "assistant")
+      turnKeys.delete(assistantTurnKey(message));
+  };
+  for (const message of window.liveMessages) alsoCurrent(message);
+  for (const span of window.spans) {
+    for (const message of span.messages) alsoCurrent(message);
+  }
+  if (turnKeys.size === 0) return new Set();
+  const records = hydratedRecords(window);
+  return new Set(
+    projectTranscriptRows({
+      messages: records.messages,
+      events: records.events,
+      activeTurnId: null,
+      chatId: "",
+    })
+      .filter(
+        (row) =>
+          row.source.kind === "steer" && turnKeys.has(row.source.turnKey),
+      )
+      .map((row) => row.rowId),
   );
 }
 
@@ -445,6 +509,16 @@ function invalidatedPlaceholderRows(
  * Runs after the span and live passes and never displaces either: a fresh
  * body always outranks a carried one.
  *
+ * Within the tier, the FRESHEST SERVE wins a row two carries both hold - the
+ * same rule {@link hydratedRecords} and `hydratedRowContext` resolve bodies and
+ * context by, applied to position. `staleSpans` is stored in ordinal order, so
+ * a first-match scan would hand the row to whichever carry sits earlier in the
+ * OLD space, which after a second rebase is the older one: an insertion earlier
+ * in the transcript would then render the row at its pre-insertion position
+ * until the skeleton chunk naming it arrives. Two carries can hold one row
+ * because {@link boundedStaleSpans} admits a span for any single uncovered row
+ * it contributes, duplicates beside it included.
+ *
  * A carry that holds the body while the renderer withholds the MODEL suppresses
  * its ordinal, as the fresh-span pass does - but only for a row the
  * replacement index still NAMES. Withholding is a renderer policy about the row
@@ -464,7 +538,12 @@ function seatStaleRows(input: {
   readonly suppressedOrdinals: Set<number>;
 }): void {
   const { window } = input;
-  for (const span of window.staleSpans) {
+  // A copy: the STORED order is ordinal, which `hydratedRecords` relies on for
+  // its linear merge, so the serve order is local to this pass.
+  const byFreshestServe = [...window.staleSpans].sort(
+    (left, right) => right.servedAt - left.servedAt,
+  );
+  for (const span of byFreshestServe) {
     span.rowIds.forEach((rowId, offset) => {
       // The empty string is a positionally-seated legacy tail's "identity
       // unverified" marker, not a row id - nothing can match it.
@@ -803,11 +882,11 @@ function appendUnplacedRenderedRows(input: {
 }): void {
   const { window } = input;
   let isLiveBacked: ((model: ChatMessageModel) => boolean) | null = null;
-  const staleRowIds = spanBackedRowIds(window.staleSpans);
+  const isStaleBacked = staleBackingLookup(window);
   for (const model of input.rendered) {
     if (input.placedRowIds.has(model.id)) continue;
     if (input.skeletonOrdinals.has(model.id)) continue;
-    if (backedBySpanTier(staleRowIds, model)) {
+    if (isStaleBacked(model)) {
       // The SAME live-backed question the invalidated merge asks, from the
       // same predicate. Asking a narrower one here - row ids only - suppresses
       // a streaming assistant, a projected setup card or a steer split whose
