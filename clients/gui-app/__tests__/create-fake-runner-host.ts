@@ -105,6 +105,7 @@ export function createFakeRunnerHost(
       delete: () => Promise.resolve(),
     },
     notifications: {
+      systemSettings: null,
       show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),

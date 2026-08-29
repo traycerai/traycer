@@ -1336,6 +1336,12 @@ export type NotificationShowOutcome =
 export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
 
 export interface INotificationHost {
+  /**
+   * Native OS notification preferences for this desktop app. Phones expose
+   * their richer read/request/repair surface through `pushPermission` instead;
+   * browser/dev shells leave this null.
+   */
+  readonly systemSettings: INotificationSystemSettingsHost | null;
   show(
     title: string,
     body: string,
@@ -1349,6 +1355,11 @@ export interface INotificationHost {
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,
   ): Disposable;
+}
+
+export interface INotificationSystemSettingsHost {
+  /** Opens the OS notification preferences owned by this application. */
+  open(): Promise<void>;
 }
 
 /**
