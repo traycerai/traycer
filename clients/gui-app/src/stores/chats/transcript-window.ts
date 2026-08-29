@@ -2789,6 +2789,16 @@ function voidedTranscriptWindow(
     // does. A zero-row authority drops it immediately; otherwise the complete
     // replacement skeleton or durable range retires it.
     liveMessages,
+    // Live EVENTS travel with them, under the rule
+    // {@link provisionalLiveEventsForSnapshot} already states for this same
+    // question: an INVALIDATING transition retains what the client holds live.
+    // A void is the most invalidating one there is - it sets `invalidated`
+    // itself - and it was the only path answering differently, so a setup
+    // card, a forked-chat link or a stopped-turn row that had arrived live and
+    // owned no ordinal yet was discarded here and stayed gone until the
+    // replacement index named it. Gated on `rowCount` for the same reason the
+    // records are: a zero-row authority says those rows no longer exist.
+    liveEvents: input.rowCount > 0 ? window.liveEvents : [],
     // The discarded bodies stay renderable while the replacement index
     // streams in - see {@link TranscriptWindow.staleSpans}. A zero-row
     // authority means the rows themselves are gone, so nothing is carried.

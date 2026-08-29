@@ -2960,6 +2960,54 @@ describe("the streaming row's byte charge", () => {
     ).toEqual(["m-stream", "m-29"]);
   });
 
+  it("carries live events across a void", () => {
+    // `provisionalLiveEventsForSnapshot` already states the rule for this
+    // question: an INVALIDATING transition retains what the client holds live.
+    // A void sets `invalidated` itself, so it is the most invalidating
+    // transition there is - and it was the one path answering differently, so
+    // a setup card, forked-chat link or stopped-turn row that had arrived live
+    // and owned no ordinal yet was discarded and stayed gone until the
+    // replacement index named it.
+    const seeded = appendLiveRecords(windowWithSkeleton(10), {
+      messages: [],
+      events: [event("evt-live", 5)],
+    });
+    expect(seeded.liveEvents).toHaveLength(1);
+
+    const voided = applyIndexChange(seeded, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 10,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(voided.invalidated).toBe(true);
+    expect(voided.liveEvents.map((entry) => entry.eventId)).toEqual([
+      "evt-live",
+    ]);
+  });
+
+  it("drops live events when the void's authority says no rows remain", () => {
+    // The other half, and the reason this is gated rather than unconditional:
+    // a zero-row authority says those rows no longer exist, so retaining what
+    // would render them publishes deleted history.
+    const seeded = appendLiveRecords(windowWithSkeleton(10), {
+      messages: [],
+      events: [event("evt-live", 5)],
+    });
+
+    const voided = applyIndexChange(seeded, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 0,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(voided.liveEvents).toEqual([]);
+  });
+
   it("keeps the warmest carry when the fresh tier alone is over budget", () => {
     // The fresh tier sits over budget between a seat and the eviction that
     // answers it - and STAYS over for as long as protected spans alone exceed

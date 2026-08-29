@@ -732,6 +732,61 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", `H:${steeredMessageId}`]);
   });
 
+  it("withholds a sibling slice of a stale-held record from the live tail", () => {
+    // A stale span lists only the row ids its partial range SERVED, while one
+    // assistant record projects into every slice of its turn. Asking whether a
+    // model is stale-backed by row id alone therefore answers "no" for every
+    // sibling of a record the tier holds - and before the replacement skeleton
+    // names that sibling nothing else catches it either, so pre-rebase history
+    // is published as an ordinal-less live-tail row at the wrong end.
+    //
+    // The counterpart is the test above: a record riding in `span.messages` to
+    // render a DIFFERENT row is not itself drawn, so this wider question is
+    // asked only about backing, never about whether a row is already drawn.
+    const staleAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: "stale-assistant",
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId: "turn-carried",
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-carried")]),
+            messages: [staleAssistant],
+          },
+        ],
+      }),
+      // A slice projected from that record: its own row id was never served,
+      // so only the record it names identifies it as history.
+      rendered: [
+        modelWithPersistentMessageId("carried-slice", "stale-assistant"),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
   it("does not retain an unrelated historical orphan steer during invalidation", () => {
     const turnId = "turn-unrelated-live";
     const transient: Extract<Message, { role: "assistant" }> = {

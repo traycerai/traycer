@@ -195,6 +195,66 @@ function spanRowIds(spans: TranscriptWindow["spans"]): ReadonlySet<string> {
   return rowIds;
 }
 
+/** Its own cache: a DIFFERENT set under the same key. */
+const spanBackedRowIdCache = new WeakMap<
+  TranscriptWindow["spans"],
+  ReadonlySet<string>
+>();
+
+/**
+ * Every id a tier's contents can be rendered FROM - the mirror of
+ * {@link liveRecordRowIds} over a hydrated tier.
+ *
+ * Deliberately not {@link spanRowIds}, and the distinction is the point. Those
+ * are the rows a span DRAWS. These are the identities its contents can back,
+ * which is a larger set: one assistant record projects into every slice of its
+ * turn while a partial range serves only some of them, and one event
+ * materializes rows under two id shapes.
+ *
+ * Ask this only where the question is "what backs this model". Asking it where
+ * the question is "is this row already drawn" over-suppresses - a record can
+ * ride in `span.messages` to render a DIFFERENT row of the same turn without
+ * the span drawing a row for it at all.
+ *
+ * Keep in step with {@link liveRecordRowIds}: the two answer one question
+ * about two tiers, so a channel added to either belongs in both.
+ */
+function spanBackedRowIds(
+  spans: TranscriptWindow["spans"],
+): ReadonlySet<string> {
+  const cached = spanBackedRowIdCache.get(spans);
+  if (cached !== undefined) return cached;
+  const rowIds = new Set<string>();
+  for (const span of spans) {
+    for (const rowId of span.rowIds) rowIds.add(rowId);
+    for (const message of span.messages) rowIds.add(message.messageId);
+    for (const event of span.events) {
+      rowIds.add(chatTranscriptEventRowId(event.eventId));
+      rowIds.add(forkedChatLinkRowId(event.eventId));
+      if (event.type === "turn.stopped" && event.turnId !== null) {
+        rowIds.add(assistantRowId(event.turnId));
+      }
+    }
+  }
+  spanBackedRowIdCache.set(spans, rowIds);
+  return rowIds;
+}
+
+/**
+ * "Does this tier back the model?" - the same hop {@link liveBackingLookup}
+ * makes, for the same reason: a model carrying a `persistentMessageId` was
+ * PROJECTED from a record, so that id is where its backing lives.
+ */
+function backedBySpanTier(
+  rowIds: ReadonlySet<string>,
+  model: ChatMessageModel,
+): boolean {
+  if (rowIds.has(model.id)) return true;
+  return (
+    model.persistentMessageId !== null && rowIds.has(model.persistentMessageId)
+  );
+}
+
 /**
  * The row ids of the records this client holds LIVE - pushed whole by the host
  * and not yet superseded by a span.
@@ -520,6 +580,10 @@ function invalidatedTranscriptListRows(
   rendered: readonly ChatMessageModel[],
 ): readonly TranscriptListRow[] {
   const isLiveBacked = liveBackingLookup(window, rendered);
+  // The rows a retained span DRAWS, not what its records could back. A row
+  // already drawn as an identity-free placeholder must not also be appended;
+  // a record merely riding in `span.messages` to render a sibling row is not
+  // drawn at all, and suppressing on it would delete a live steer projection.
   const retainedSpanRowIds = spanRowIds(window.spans);
   const staleByOrdinal = new Map<number, ChatMessageModel>();
   const staleSeatedRowIds = new Set<string>();
@@ -737,11 +801,11 @@ function appendUnplacedRenderedRows(input: {
 }): void {
   const { window } = input;
   let isLiveBacked: ((model: ChatMessageModel) => boolean) | null = null;
-  const staleRowIds = spanRowIds(window.staleSpans);
+  const staleRowIds = spanBackedRowIds(window.staleSpans);
   for (const model of input.rendered) {
     if (input.placedRowIds.has(model.id)) continue;
     if (input.skeletonOrdinals.has(model.id)) continue;
-    if (staleRowIds.has(model.id)) {
+    if (backedBySpanTier(staleRowIds, model)) {
       // The SAME live-backed question the invalidated merge asks, from the
       // same predicate. Asking a narrower one here - row ids only - suppresses
       // a streaming assistant, a projected setup card or a steer split whose
