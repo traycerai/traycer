@@ -31,7 +31,7 @@
  */
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
@@ -62,6 +62,7 @@ import {
   epicRootHolderId,
 } from "@/stores/replica-memory/epic-replica-budget";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
+import type { EpicDocRecordArms } from "../projection-helpers";
 import type { EpicArtifactRoomAvailability } from "../types";
 import type { PendingChatCreation } from "../pending-chat-creations";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -110,6 +111,15 @@ export interface EpicReplicaRuntimeOptions {
    */
   readonly getCurrentUserId: () => string | null;
   /**
+   * Whether the epic doc is still a record SOURCE, per population - read live,
+   * because it is settled by what this host negotiated for
+   * `epic.listChatRecords` / `epic.listTuiAgents` and that arrives on its own
+   * schedule. Supplied by the composition root: the negotiated-manifest
+   * registry is ambient main-thread state and must not be reached from inside
+   * `runtime/`. See `EpicDocRecordArms`.
+   */
+  readonly getDocArm: () => EpicDocRecordArms;
+  /**
    * Invoked when the host closes the epic stream with an `UNAUTHORIZED` fatal
    * error. Production wires this to `AuthService.revalidateCurrentContext()`.
    * May be `null` in tests that do not exercise the auth-recovery path.
@@ -150,7 +160,7 @@ export interface EpicReplicaRuntime {
 
   // ── Record channels ─────────────────────────────────────────────────────
   applyChatRecords(
-    records: readonly ChatRecordSummary[],
+    records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): void;
   peekChatIngestSeq(): number;
@@ -234,6 +244,7 @@ export function createEpicReplicaRuntime(
     streamClientFactory,
     delivery,
     getCurrentUserId,
+    getDocArm,
     onAuthError,
     commandIdFactory,
     writeCommandSender,
@@ -369,6 +380,7 @@ export function createEpicReplicaRuntime(
     session: control.facts,
     sink: recordsSink,
     getCurrentUserId,
+    getDocArm,
     send: (request) => {
       adapter.send(request);
     },

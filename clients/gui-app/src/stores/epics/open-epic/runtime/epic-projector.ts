@@ -73,10 +73,13 @@ import {
   terminalAgentProjectionsEq,
   terminalAgentSlicesEq,
   treeNodesEq,
-  unionChatsSlice,
-  unionTerminalAgentsSlice,
+  unionChatsForConnection,
+  unionTuiAgentsForConnection,
 } from "../projection-helpers";
-import type { ProjectionInputs } from "../projection-helpers";
+import type {
+  EpicDocRecordArms,
+  ProjectionInputs,
+} from "../projection-helpers";
 import type {
   DeadPendingMutation,
   PendingMetadataOverlay,
@@ -252,6 +255,13 @@ export interface EpicProjectorSources {
    */
   readonly getTuiAgentRecords: () => TerminalAgentsSlice;
   /**
+   * Whether the doc is still a record SOURCE, per population - read at
+   * projection time like everything else here, because it is settled by what
+   * the host ANSWERED to the two list methods and those answers arrive on their
+   * own schedule. See `EpicDocRecordArms`.
+   */
+  readonly getDocArm: () => EpicDocRecordArms;
+  /**
    * Metadata mutations this client has stamped and has no answer for yet.
    * Returns the shared empty map when nothing is in flight, which makes
    * every applier a reference pass-through.
@@ -270,7 +280,7 @@ export function createEpicProjector(
   sources: EpicProjectorSources,
 ): EpicProjector {
   const { getCurrentUserId, getChatRecords, getTuiAgentRecords } = sources;
-  const { getPendingOverlay, onDeadMutations } = sources;
+  const { getDocArm, getPendingOverlay, onDeadMutations } = sources;
   let attached: AttachedConfig | null = null;
   let ingesting = false;
 
@@ -280,6 +290,7 @@ export function createEpicProjector(
       tuiAgentRecords: getTuiAgentRecords(),
       pendingOverlay: getPendingOverlay(),
       reportDeadMutations: onDeadMutations,
+      docArm: getDocArm(),
     };
   }
 
@@ -344,6 +355,7 @@ export function createEpicProjector(
           currentUserId: getCurrentUserId(),
           chatRecords: getChatRecords(),
           tuiAgentRecords: getTuiAgentRecords(),
+          docArm: getDocArm(),
         }),
       });
     };
@@ -960,6 +972,7 @@ interface ApplyChatsArgs {
   readonly next: MutableProjectedPatch;
   readonly currentUserId: string | null;
   readonly chatRecords: ChatsSlice;
+  readonly docArm: EpicDocRecordArms;
 }
 
 /**
@@ -974,7 +987,8 @@ interface ApplyChatsArgs {
  * would go on losing exactly the chats this channel exists to keep.
  */
 function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
-  const { state, doc, patches, next, currentUserId, chatRecords } = args;
+  const { state, doc, patches, next, currentUserId, chatRecords, docArm } =
+    args;
   if (patches.chatsContainerReseeded) {
     reseedFromContainer(doc, getChatsMap, patches.chatsChanged);
   }
@@ -1030,6 +1044,7 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
       docChats: state.docChats,
       chatRecords,
       currentUserId,
+      docArm,
     });
   }
   const allIds = computeIdsFromMap(byId);
@@ -1042,6 +1057,7 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
     docChats: nextDocChats,
     chatRecords,
     currentUserId,
+    docArm,
   });
 }
 
@@ -1063,9 +1079,15 @@ function unionInto(args: {
   readonly docChats: ChatsSlice;
   readonly chatRecords: ChatsSlice;
   readonly currentUserId: string | null;
+  readonly docArm: EpicDocRecordArms;
 }): ChatsSlice {
-  const { state, next, docChats, chatRecords, currentUserId } = args;
-  const union = unionChatsSlice(docChats, chatRecords, currentUserId);
+  const { state, next, docChats, chatRecords, currentUserId, docArm } = args;
+  const union = unionChatsForConnection(
+    docChats,
+    chatRecords,
+    currentUserId,
+    docArm,
+  );
   if (chatSlicesEq(union, state.chats)) return state.chats;
   next.chats = union;
   return union;
@@ -1078,6 +1100,7 @@ interface ApplyTerminalAgentsArgs {
   readonly next: MutableProjectedPatch;
   readonly currentUserId: string | null;
   readonly tuiAgentRecords: TerminalAgentsSlice;
+  readonly docArm: EpicDocRecordArms;
 }
 
 /**
@@ -1096,7 +1119,8 @@ interface ApplyTerminalAgentsArgs {
 function applyTerminalAgentsSlice(
   args: ApplyTerminalAgentsArgs,
 ): TerminalAgentsSlice {
-  const { state, doc, patches, next, currentUserId, tuiAgentRecords } = args;
+  const { state, doc, patches, next, currentUserId, tuiAgentRecords, docArm } =
+    args;
   if (patches.terminalAgentsContainerReseeded) {
     reseedFromContainer(
       doc,
@@ -1159,6 +1183,7 @@ function applyTerminalAgentsSlice(
       next,
       docTuiAgents: state.docTuiAgents,
       tuiAgentRecords,
+      docArm,
     });
   }
   const allIds = computeIdsFromMap(byId);
@@ -1170,6 +1195,7 @@ function applyTerminalAgentsSlice(
     next,
     docTuiAgents: nextDocTuiAgents,
     tuiAgentRecords,
+    docArm,
   });
 }
 
@@ -1186,9 +1212,14 @@ function unionTerminalAgentsInto(args: {
   readonly next: MutableProjectedPatch;
   readonly docTuiAgents: TerminalAgentsSlice;
   readonly tuiAgentRecords: TerminalAgentsSlice;
+  readonly docArm: EpicDocRecordArms;
 }): TerminalAgentsSlice {
-  const { state, next, docTuiAgents, tuiAgentRecords } = args;
-  const union = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
+  const { state, next, docTuiAgents, tuiAgentRecords, docArm } = args;
+  const union = unionTuiAgentsForConnection(
+    docTuiAgents,
+    tuiAgentRecords,
+    docArm,
+  );
   if (terminalAgentSlicesEq(union, state.tuiAgents)) return state.tuiAgents;
   next.tuiAgents = union;
   return union;
@@ -1447,11 +1478,13 @@ interface ApplyPatchesArgs {
   readonly currentUserId: string | null;
   readonly chatRecords: ChatsSlice;
   readonly tuiAgentRecords: TerminalAgentsSlice;
+  readonly docArm: EpicDocRecordArms;
 }
 
 function applyPatches(args: ApplyPatchesArgs): Partial<EpicProjectedSlices> {
   const { state, doc, patches, currentUserId, chatRecords, tuiAgentRecords } =
     args;
+  const docArm = args.docArm;
   const next: MutableProjectedPatch = {};
   applyEpicHeader(state, doc, patches, next);
   const nextArtifacts = applyArtifactsSlice(state, doc, patches, next);
@@ -1463,6 +1496,7 @@ function applyPatches(args: ApplyPatchesArgs): Partial<EpicProjectedSlices> {
     next,
     currentUserId,
     chatRecords,
+    docArm,
   });
   if (nextChats.allIds !== state.chats.allIds) {
     patches.structuralTreeDirty = true;
@@ -1474,6 +1508,7 @@ function applyPatches(args: ApplyPatchesArgs): Partial<EpicProjectedSlices> {
     next,
     currentUserId,
     tuiAgentRecords,
+    docArm,
   });
   if (nextTerminalAgents.allIds !== state.tuiAgents.allIds) {
     patches.structuralTreeDirty = true;

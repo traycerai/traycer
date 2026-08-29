@@ -14,7 +14,10 @@ import {
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import { projectFullState } from "@/stores/epics/open-epic/projection-helpers";
+import {
+  DOC_IS_THE_ONLY_RECORD_SOURCE,
+  projectFullState,
+} from "@/stores/epics/open-epic/projection-helpers";
 import { EMPTY_PENDING_OVERLAY } from "@/stores/epics/open-epic/pending-metadata-overlay";
 import {
   EMPTY_CHATS_SLICE,
@@ -310,6 +313,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     const state = handle.store.getState();
 
@@ -344,6 +348,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(mine.chats.allIds.slice().sort()).toEqual(["mine", "orphan"]);
     expect(Object.keys(mine.chats.byId).sort()).toEqual(["mine", "orphan"]);
@@ -355,6 +360,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(anon.chats.allIds.slice().sort()).toEqual([
       "mine",
@@ -382,6 +388,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(mine.tuiAgents.allIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(Object.keys(mine.tuiAgents.byId).sort()).toEqual(["legacy", "mine"]);
@@ -393,6 +400,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(anon.tuiAgents.allIds.slice().sort()).toEqual([
       "legacy",

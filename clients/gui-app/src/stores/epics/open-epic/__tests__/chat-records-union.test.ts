@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -77,7 +77,15 @@ function docChatEntry(args: {
   return chat;
 }
 
-function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+/**
+ * An `epic.listChatRecords@1.1` row. `docResident: false` by default because
+ * that is what this builder models - a row the host's chat REGISTRY answered
+ * with. Doc-resident cases override it explicitly, so a fixture never inherits
+ * a home it did not mean to claim.
+ */
+function record(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -93,6 +101,7 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    docResident: false,
     ...overrides,
   };
 }
@@ -199,6 +208,10 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       userId: "user-a",
       hostId: "host-1",
       isTitleEditedByUser: true,
+      // The registry answered for this row, so the home it states is the one
+      // that reaches the projection - the post-sweep steady state is exactly
+      // "the store holds it and the doc does not".
+      docResident: false,
       settings: null,
       archivedAt: null,
     });
@@ -390,10 +403,35 @@ describe("chats.byId unions the host's records with the doc projection", () => {
 
     // Un-aliased even though nothing about the content changed.
     expect(store.getState().chats).not.toBe(store.getState().docChats);
-    // But the row itself - and the id array - are still the SAME references:
-    // only the outer wrapper is new, content identity is preserved throughout.
-    expect(store.getState().chats.byId.both).toBe(beforeRow);
     expect(store.getState().chats.byId.both.title).toBe("Same content");
+    // The row reference DOES move on this first answer, and only on it: the
+    // doc entry claims `docResident: true` (the doc is where that row lives)
+    // and the record STATES the home, so the first record answer for a chat
+    // present in both sources genuinely changes a projected field. Asserting
+    // reference identity across that transition would be asserting that a
+    // change did not happen.
+    expect(beforeRow.docResident).toBe(true);
+    expect(store.getState().chats.byId.both.docResident).toBe(false);
+    const afterFirstAnswer = store.getState().chats.byId.both;
+
+    // What this test is actually for: the churn is ONE-TIME, not per poll. A
+    // second identical answer must re-hand the same row object, or every 20s
+    // refresh would re-render every chat consumer in the epic.
+    store.getState().applyChatRecords(
+      [
+        record({
+          chatId: "both",
+          title: "Same content",
+          ownerUserId: "user-a",
+          originHostId: "host-1",
+          updatedAt: 2,
+          archived: false,
+          archivedAt: null,
+        }),
+      ],
+      null,
+    );
+    expect(store.getState().chats.byId.both).toBe(afterFirstAnswer);
     session.handle.dispose();
   });
 

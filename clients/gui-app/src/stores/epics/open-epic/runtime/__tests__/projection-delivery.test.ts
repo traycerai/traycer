@@ -158,6 +158,8 @@ describe("projectedSlicesView", () => {
       userId: null,
       hostId: null,
       isTitleEditedByUser: false,
+      // Neutral scaffolding: nothing in these tests reads this field.
+      docResident: false,
       settings: null,
       archivedAt: null,
     };

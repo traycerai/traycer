@@ -20,6 +20,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { TreeNode, TreeSlice } from "@/stores/epics/open-epic/types";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const seam = vi.hoisted(() => {
   // Typed through a helper rather than an `as TreeSlice` on the literal: the
@@ -60,6 +64,20 @@ const seam = vi.hoisted(() => {
     retirePendingMutation: vi.fn<
       (requestId: string, outcome: "landed" | "failed") => boolean
     >(() => true),
+    /**
+     * Chats the record plane STATED are doc-homed. Everything in
+     * `recordIds` that is dropped as a chat projects `docResident: false`; an
+     * id listed here projects `true`, which is what makes the chat arm of the
+     * addressability gate reachable.
+     */
+    docHomedChatIds: [] as readonly string[],
+    /**
+     * T11's write-command queue, absent from this fake since it landed. Three
+     * ARTIFACT tests in this file were failing on `enqueueWriteCommand is not a
+     * function` before the chat gate existed - a stale fake, not a defect in
+     * the code under test.
+     */
+    enqueueWriteCommand: vi.fn<(intent: unknown) => unknown>(() => null),
   };
 });
 
@@ -98,9 +116,27 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
             ]),
             allIds: [...seam.recordIds, ...seam.docResidentIds],
           },
+          // The chat half of the union the gate reads. `docResident` is the
+          // fact `routeChatWrite` consults on a host that HAS a record plane;
+          // on a host without one the gate never reaches it.
+          chats: {
+            byId: Object.fromEntries<{
+              id: string;
+              docResident: boolean | null;
+            }>([
+              ...seam.recordIds.map(
+                (id) => [id, { id, docResident: false }] as const,
+              ),
+              ...seam.docHomedChatIds.map(
+                (id) => [id, { id, docResident: true }] as const,
+              ),
+            ]),
+            allIds: [...seam.recordIds, ...seam.docHomedChatIds],
+          },
           reparentArtifact: seam.reparentArtifact,
           beginReparentMutation: seam.beginReparentMutation,
           retirePendingMutation: seam.retirePendingMutation,
+          enqueueWriteCommand: seam.enqueueWriteCommand,
         }),
       },
       ...handle,
@@ -161,6 +197,13 @@ beforeEach(() => {
   seam.request.mockResolvedValue({ updated: true });
   seam.recordIds = [];
   seam.docResidentIds = [];
+  seam.docHomedChatIds = [];
+  seam.enqueueWriteCommand.mockClear();
+  // The chat arm of the gate reads THIS host's negotiated record-plane
+  // coverage, which is process-wide module state. Cleared per test so one
+  // test's host cannot decide another's: with nothing recorded the host reads
+  // as floor-era, which is the permissive arm.
+  resetNegotiatedManifests();
   seam.hasClient = true;
   seam.tree = seam.emptyTree();
   seam.beginReparentMutation.mockClear();
@@ -286,6 +329,79 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       "tui-parent",
     );
     expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("sends a doc-homed chat through epic.reparentChat on a FLOOR-ERA host", () => {
+    // No handshake recorded, so this host has no chat record plane at all -
+    // and `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so it exists
+    // there and resolves a doc chat through the host's own storage seam.
+    //
+    // Ablation: gate the chat arm on `docResident` ALONE and this drop stops
+    // being sent - every chat reparent on every floor-era host silently
+    // disabled, which is why the predicate reads the host's coverage first.
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+
+    drop("chat-doc", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-doc",
+      newParentId: "chat-parent",
+    });
+  });
+
+  it("REFUSES a doc-homed chat on a host that serves the chat record plane", () => {
+    // The plane exists and states this row lives in the doc, so the writer
+    // cannot address it: `epic.reparentChat` would name no registry row and
+    // fail HOST-SIDE, after the row rendered fine. Nothing is sent, and
+    // nothing is written to the doc either - on a host with a record plane the
+    // doc is not the authority, so a local write would lose to record-wins on
+    // the next answer and read as an affordance that works while changing
+    // nothing.
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+
+    drop("chat-doc", "chat-parent");
+
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // No optimistic stamp either: an overlay patch for a mutation that is never
+    // sent is a row that moves and then snaps back on the next answer.
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+
+  it("still sends a STORE-homed chat on a host that serves the record plane", () => {
+    // The other half of the same host: the plane stated this row is in the
+    // store, so it is addressable. Without this, the test above would pass just
+    // as well against a gate that refused every chat on a record-plane host.
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    seam.tree = treeOf([
+      node("chat-store", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.recordIds = ["chat-store"];
+
+    drop("chat-store", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-store",
+      newParentId: "chat-parent",
+    });
   });
 
   it("sends a chat through epic.reparentChat even with no terminal records", () => {

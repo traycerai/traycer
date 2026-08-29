@@ -64,8 +64,15 @@ function unavailableHost(): never {
 }
 
 function threadFixture(): CommentThreadWire {
+  return threadFixtureWith("thread-1", QUOTED_TEXT);
+}
+
+function threadFixtureWith(
+  threadId: string,
+  quotedText: string,
+): CommentThreadWire {
   return {
-    threadId: "thread-1",
+    threadId,
     resolved: false,
     createdAt: 1,
     comments: [
@@ -77,7 +84,7 @@ function threadFixture(): CommentThreadWire {
         author: { userId: "user-1", fallbackHandle: "someone" },
       },
     ],
-    data: { createdByUserId: "user-1", quotedText: QUOTED_TEXT },
+    data: { createdByUserId: "user-1", quotedText },
   };
 }
 
@@ -145,7 +152,7 @@ afterEach(() => {
   });
 });
 
-function renderSidebar() {
+function renderSidebar(laneThreads: readonly CommentThreadWire[] | null) {
   return render(
     <QueryClientProvider client={queryClient}>
       <CommentSidebar
@@ -153,6 +160,7 @@ function renderSidebar() {
         hostClient={hostClientRef.current}
         artifactType="spec"
         artifactId={ARTIFACT_ID}
+        laneThreads={laneThreads}
         anchorPositions={{ positions: new Map() }}
         currentUserId="user-1"
         canModerate={false}
@@ -200,7 +208,7 @@ describe("<CommentSidebar /> read failures", () => {
         resolveResponse = resolve;
       });
 
-    renderSidebar();
+    renderSidebar(null);
 
     await waitFor(() => {
       expect(loadingPanel()).not.toBeNull();
@@ -222,7 +230,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be loaded when the cold query is disabled without a host client", async () => {
     hostClientRef.current = null;
 
-    renderSidebar();
+    renderSidebar(null);
 
     expect(
       await screen.findByText("Comments couldn't be loaded."),
@@ -236,7 +244,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be LOADED - never that there are none - when the cold read fails", async () => {
     respondToListThreads = unavailableHost;
 
-    renderSidebar();
+    renderSidebar(null);
 
     expect(
       await screen.findByText(
@@ -259,7 +267,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("still renders the empty state when the read SUCCEEDS with no threads", async () => {
     respondToListThreads = () => ({ threads: [] });
 
-    renderSidebar();
+    renderSidebar(null);
 
     expect(await screen.findByText(/No open comments/)).not.toBeNull();
     expect(unavailablePanel()).toBeNull();
@@ -269,7 +277,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("keeps the last successful threads on screen when a REFETCH fails", async () => {
     respondToListThreads = () => ({ threads: [threadFixture()] });
 
-    renderSidebar();
+    renderSidebar(null);
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
 
     respondToListThreads = unavailableHost;
@@ -313,6 +321,7 @@ describe("<CommentSidebar /> host scope", () => {
           hostClient={hostClientRef.current}
           artifactType="spec"
           artifactId={ARTIFACT_ID}
+          laneThreads={null}
           anchorPositions={{ positions: new Map() }}
           currentUserId="user-1"
           canModerate={false}
@@ -338,5 +347,79 @@ describe("<CommentSidebar /> host scope", () => {
     expect(keys).toHaveLength(1);
     expect(keys[0]).toContain(mockLocalHostEntry.hostId);
     expect(keys[0]).not.toContain(mockRemoteHostEntry.hostId);
+  });
+});
+
+// The list RPC is the released floor - every host serves it - and the state
+// lane is the newer, pushed source that only lane-serving hosts also answer.
+// These pin `resolveArtifactCommentThreads` (`use-lane-comment-threads.ts`) as
+// wired into the sidebar: which source wins, and that a missing lane key is
+// UNKNOWN, never "zero comments".
+describe("<CommentSidebar /> state-lane threads", () => {
+  it("renders the lane's thread over the poll's when both answer", async () => {
+    respondToListThreads = () => ({
+      threads: [threadFixtureWith("poll-thread", "the poll's answer")],
+    });
+
+    renderSidebar([threadFixtureWith("lane-thread", "the lane's answer")]);
+
+    expect(await screen.findByText("the lane's answer")).not.toBeNull();
+    expect(screen.queryByText("the poll's answer")).toBeNull();
+  });
+
+  it("renders the poll's thread when the lane has said nothing - the ordinary case on a poll-only host", async () => {
+    respondToListThreads = () => ({ threads: [threadFixture()] });
+
+    renderSidebar(null);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+  });
+
+  it("does not render the empty state off a missing lane key while the poll is still in flight", async () => {
+    let resolveResponse = (_response: ListCommentThreadsResponse): void => {
+      throw new Error("missing pending response");
+    };
+    respondToListThreads = () =>
+      new Promise<ListCommentThreadsResponse>((resolve) => {
+        resolveResponse = resolve;
+      });
+
+    renderSidebar(null);
+
+    await waitFor(() => {
+      expect(loadingPanel()).not.toBeNull();
+    });
+    expect(emptyPanel()).toBeNull();
+    expect(unavailablePanel()).toBeNull();
+
+    await act(async () => {
+      resolveResponse({ threads: [] });
+      await Promise.resolve();
+    });
+
+    // Same missing lane key as above, now beside a poll that answered zero -
+    // the two truths render differently even though both hold zero threads.
+    expect(await screen.findByText(/No open comments/)).not.toBeNull();
+    expect(emptyPanel()).not.toBeNull();
+  });
+
+  it("renders the empty state off an empty lane answer, even with the poll erroring", async () => {
+    respondToListThreads = unavailableHost;
+
+    renderSidebar([]);
+
+    expect(await screen.findByText(/No open comments/)).not.toBeNull();
+    expect(emptyPanel()).not.toBeNull();
+    expect(unavailablePanel()).toBeNull();
+  });
+
+  it("keeps a lane-served list on screen through a poll outage", async () => {
+    respondToListThreads = unavailableHost;
+
+    renderSidebar([threadFixtureWith("lane-thread", "the lane's answer")]);
+
+    expect(await screen.findByText("the lane's answer")).not.toBeNull();
+    expect(unavailablePanel()).toBeNull();
+    expect(loadingPanel()).toBeNull();
   });
 });

@@ -28,6 +28,7 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactRoomsSlice,
   ChatsSlice,
+  CommentThreadsSlice,
   EpicProjectedSlices,
   TerminalAgentsSlice,
 } from "../types";
@@ -36,6 +37,7 @@ import {
   EMPTY_ARTIFACT_ROOM_DIRTY,
   EMPTY_ARTIFACT_ROOMS_SLICE,
   EMPTY_CHATS_SLICE,
+  EMPTY_COMMENT_THREADS_SLICE,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "../types";
@@ -136,6 +138,18 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
   readonly tuiAgentRetractions: Readonly<
     Record<string, ChatRecordRemovalReason>
   >;
+  /**
+   * Comment threads as the RECORDS LANE serves them, grouped by artifact.
+   *
+   * Empty on every legacy connection, and that is this arm's true value rather
+   * than a placeholder: `epic.subscribe@1` carries no comment records at all,
+   * so `epic.listCommentThreads` is the only source there. The lane path fills
+   * it, the poll remains the cold-read path on BOTH, and a consumer prefers
+   * whichever source has said something about the artifact in hand.
+   *
+   * Absence of an artifact key is NOT emptiness - see `CommentThreadsSlice`.
+   */
+  readonly commentThreads: CommentThreadsSlice;
   readonly snapshotMeta: SnapshotMetaEpic | null;
   readonly snapshotLoaded: boolean;
   /**
@@ -161,6 +175,7 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   // empty object serves both, so neither table's quiet state ever hands
   // subscribers a fresh reference.
   tuiAgentRetractions: EMPTY_CHAT_RETRACTIONS,
+  commentThreads: EMPTY_COMMENT_THREADS_SLICE,
   snapshotMeta: null,
   snapshotLoaded: false,
   isDirty: false,

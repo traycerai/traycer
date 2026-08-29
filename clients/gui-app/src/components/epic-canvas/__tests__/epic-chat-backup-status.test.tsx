@@ -366,6 +366,9 @@ function chatProjection(id: string, updatedAt: number): ChatProjection {
     userId: null,
     hostId: "host-session",
     isTitleEditedByUser: false,
+    // Neutral scaffolding: this suite exercises backup-status derivation,
+    // not doc residency.
+    docResident: false,
     settings: null,
     archivedAt: null,
   };

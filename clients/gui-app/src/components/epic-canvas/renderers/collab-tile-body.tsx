@@ -13,6 +13,10 @@ import {
 } from "@/editor-core";
 import { useActivateCommentThread } from "@/hooks/comments/use-activate-comment-thread";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import {
+  resolveArtifactCommentThreads,
+  useEpicLaneCommentThreads,
+} from "@/hooks/comments/use-lane-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -279,25 +283,43 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     options: { enabled: commentsSupported },
   });
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
+  // The state lane's records for this artifact, or `null` where it has said
+  // nothing. Resolved once here and fed to the decoration sets AND the hover
+  // preview below, because they must agree by construction: a thread the
+  // preview can show while `liveThreadIds` has never heard of it is a thread
+  // whose anchor the decoration layer strips as an orphan, leaving nothing to
+  // hover.
+  const laneThreads = useEpicLaneCommentThreads(node.id);
+  const commentThreads = useMemo(
+    () =>
+      resolveArtifactCommentThreads({
+        laneThreads,
+        pollThreads:
+          threadsQuery.data === undefined ? null : threadsQuery.data.threads,
+      }),
+    [laneThreads, threadsQuery.data],
+  );
   const resolvedThreadIds = useMemo(
     () =>
-      (threadsQuery.data?.threads ?? []).reduce(
+      (commentThreads.threads ?? []).reduce(
         (ids, thread) => (thread.resolved ? ids.add(thread.threadId) : ids),
         new Set<string>(),
       ),
-    [threadsQuery.data],
+    [commentThreads.threads],
   );
-  // `null` until the thread list resolves so we don't transiently treat
-  // every anchor as orphan during initial load. Once loaded, anchors
-  // whose `threadId` is missing from this set get filtered out of the
-  // decoration layer - a defense against historical orphan marks left in
-  // production docs before the host-side strip shipped.
+  // `null` until SOME source resolves the thread list so we don't transiently
+  // treat every anchor as orphan during initial load - and a lane that has said
+  // nothing about this artifact is not such a source, which is why this reads
+  // the resolved value rather than the lane slice. Once loaded, anchors whose
+  // `threadId` is missing from this set get filtered out of the decoration
+  // layer - a defense against historical orphan marks left in production docs
+  // before the host-side strip shipped.
   const liveThreadIds = useMemo<ReadonlySet<string> | null>(
     () =>
-      threadsQuery.data === undefined
+      commentThreads.threads === null
         ? null
-        : new Set(threadsQuery.data.threads.map((thread) => thread.threadId)),
-    [threadsQuery.data],
+        : new Set(commentThreads.threads.map((thread) => thread.threadId)),
+    [commentThreads.threads],
   );
   const ownedDraftRange = useMemo(
     () =>
@@ -588,6 +610,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               hostClient={tabHostClient}
               artifactType={commentArtifactKind}
               artifactId={node.id}
+              laneThreads={laneThreads}
               editor={editor}
               resolvedThreadIds={resolvedThreadIds}
               onActivateThread={onActivateThread}

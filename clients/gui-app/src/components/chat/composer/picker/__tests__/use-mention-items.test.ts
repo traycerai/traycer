@@ -39,6 +39,9 @@ function chat(
     userId: null,
     hostId: null,
     isTitleEditedByUser: false,
+    // Ordinary registry-backed chat - this suite exercises mention-item
+    // ordering, not doc residency.
+    docResident: false,
     archivedAt: null,
     settings: null,
   };

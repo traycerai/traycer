@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
 import {
   createOpenEpicStore,
@@ -141,7 +141,9 @@ function seedDocChat(
   (chats as Y.Map<unknown>).set(id, entry);
 }
 
-function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+function chatRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "chat-1",
     ownerUserId: "user-a",
@@ -157,6 +159,8 @@ function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    // A registry answer (`epic.listChatRecords@1.1`) by default.
+    docResident: false,
     ...overrides,
   };
 }

@@ -22,7 +22,7 @@ import {
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import {
   createMetadataOverlayStore,
   type MetadataOverlaySources,
@@ -65,7 +65,9 @@ function metadataOverlayFixture() {
   return { store: createMetadataOverlayStore(sources), reconciled, scheduled };
 }
 
-function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+function chatRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "c",
     ownerUserId: "user-a",
@@ -81,6 +83,8 @@ function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    // A registry answer (`epic.listChatRecords@1.1`) by default.
+    docResident: false,
     ...overrides,
   };
 }

@@ -71,6 +71,8 @@ import {
   type ProjectedReparentNode,
 } from "@/lib/reparent-projection-rules";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { routeChatWrite } from "@/stores/epics/open-epic/chat-write-routing";
+import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
 import { appLogger } from "@/lib/logger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -654,11 +656,10 @@ function isDocOnlyTerminalAgent(
   state: OpenEpicState,
   node: ProjectedReparentNode,
 ): boolean {
-  if (node.type !== "terminal-agent") return false;
-  // Read the UNION, not the record slice. Absence from `tuiAgentRecords` is
-  // still a doc-only tell on a `@1.0` host, but it is the union that holds
-  // every agent the user can actually grab, and its `docResident` answers for
-  // both planes on every host version.
+  // Read the UNION, not the record slice, on BOTH planes. Absence from the
+  // record slice is still a doc-only tell on a `@1.0` host, but it is the
+  // union that holds every agent the user can actually grab, and its
+  // `docResident` answers for both planes on every host version.
   //
   // `Object.hasOwn` rather than an `=== undefined` compare, for the same
   // reason the record-slice version used it: `byId` is a `Record<string, T>`,
@@ -666,9 +667,47 @@ function isDocOnlyTerminalAgent(
   // - a node id the union does not carry. The undefined check is unreachable
   // to the type system and reachable at runtime, which is exactly the shape
   // `no-unnecessary-condition` refuses to let through.
+  //
+  // CHATS are gated too now, but through `routeChatWrite` rather than through
+  // this function's `docResident` test, because the chat plane needs a second
+  // fact this one cannot see: whether the host serves a chat record plane AT
+  // ALL. `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so on a
+  // floor-era host it works and every chat projects from the doc - a home-only
+  // gate would disable the affordance on exactly the hosts that need no gate.
+  // See `chat-write-routing.ts`; the chat arm is applied at the call site.
+  if (node.type !== "terminal-agent") return false;
   const byId = state.tuiAgents.byId;
   if (!Object.hasOwn(byId, node.id)) return true;
   return byId[node.id].docResident;
+}
+
+/**
+ * Where an agent-family reparent goes: the RPC, the doc, or nowhere.
+ *
+ * Two planes, two different unaddressability rules, and crucially two different
+ * ANSWERS when the row is unaddressable. A terminal agent whose home is the doc
+ * has a doc write as its correct route - that is the `@1.0`-host case
+ * `isDocOnlyTerminalAgent` was written for. A chat the record plane will not
+ * address has NO route: on a host that serves that plane the doc is not the
+ * authority, so a local write loses to record-wins on the next answer and reads
+ * as an affordance that works while changing nothing. Collapsing the two into
+ * one boolean is what sent a refused chat down the doc-write branch.
+ */
+function agentReparentRoute(
+  state: OpenEpicState,
+  node: ProjectedReparentNode,
+  hostId: string | null,
+): "registry-rpc" | "doc" | "unavailable" {
+  if (node.type === "terminal-agent") {
+    return isDocOnlyTerminalAgent(state, node) ? "doc" : "registry-rpc";
+  }
+  if (node.type !== "chat") return "doc";
+  return routeChatWrite({
+    chat: Object.hasOwn(state.chats.byId, node.id)
+      ? state.chats.byId[node.id]
+      : undefined,
+    docArm: readEpicDocRecordArms(hostId),
+  });
 }
 
 /**
@@ -721,10 +760,21 @@ export function commitSidebarReparentDrop(
   ) {
     return;
   }
-  if (
-    evaluation.node.family === "agent" &&
-    !isDocOnlyTerminalAgent(state, evaluation.node)
-  ) {
+  // Resolved before the branch: the chat arm of the addressability test needs
+  // the session host to read this host's negotiated record-plane coverage, and
+  // the terminal arm needs nothing - so one read serves both.
+  const reparentHostId = getEpicSessionHandleHostId(handle);
+  const agentRoute =
+    evaluation.node.family === "agent"
+      ? agentReparentRoute(state, evaluation.node, reparentHostId)
+      : "doc";
+  // A chat the host's record plane will not address has nowhere to go, so the
+  // drop is a silent cancel - this file's own rule for a move it cannot make -
+  // rather than a doc write the next record answer would erase. No overlay
+  // stamp either: an optimistic patch for a mutation that is never sent is a
+  // row that moves and then snaps back.
+  if (agentRoute === "unavailable") return;
+  if (evaluation.node.family === "agent" && agentRoute === "registry-rpc") {
     // The agent family's parent pointer lives on the HOST's record (chat
     // registry row, or the terminal agent's tenant row), not on the doc: a
     // doc write would land on an entry that no longer exists or, for a
@@ -736,7 +786,7 @@ export function commitSidebarReparentDrop(
     // way the hook-based chat mutations surface theirs.
     const client = getEpicSessionHandleHostClient(handle);
     if (client === null) return;
-    const sessionHostId = getEpicSessionHandleHostId(handle);
+    const sessionHostId = reparentHostId;
     const movedNodeType = evaluation.node.type;
     // The optimistic overlay (Phase 1.1): a registry-backed row has no doc
     // entry, so without this the drop had no local feedback and the node sat

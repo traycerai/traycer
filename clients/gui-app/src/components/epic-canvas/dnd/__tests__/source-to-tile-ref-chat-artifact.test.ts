@@ -84,6 +84,9 @@ const SIDEBAR_CHAT: ChatProjection = {
   userId: null,
   hostId: null,
   isTitleEditedByUser: false,
+  // Neutral scaffolding: this suite exercises drag-source-to-tile mapping,
+  // not doc residency.
+  docResident: false,
   settings: null,
   archivedAt: null,
 };

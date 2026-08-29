@@ -24,6 +24,8 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktree-schemas";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -95,6 +97,31 @@ export interface ChatProjection {
    */
   readonly hostId: string | null;
   readonly isTitleEditedByUser: boolean;
+  /**
+   * Whether the epic doc is this chat's authoritative HOME, and the gate every
+   * registry-plane mutation consults - the chat twin of
+   * {@link TuiAgentProjection.docResident}, with one member the terminal plane
+   * does not need.
+   *
+   * `null` is "the plane that delivered this row did not say", and it is
+   * REACHABLE rather than defensive: `host.chatRecords.subscribe` carries the
+   * BASE row, which has no `docResident`, and the host deliberately announces
+   * doc-homed chats on it - `ChatRegistryService.acquire` calls
+   * `hydrateLegacyDocSecondary(legacyDocChats, true)` so a chat-list stream
+   * that won the first acquire with no Y.Doc learns its baseline grew. So a
+   * delta-delivered row genuinely can be either, and the terminal plane's
+   * justification for stamping `false` ("a doc-resident agent has no registry
+   * row, so it can never produce a delta") does not hold here.
+   *
+   * `true` and `null` are both NOT-registry-addressable for write routing.
+   * `renameChat` / `reparentChat` / `setChatArchived` / `deleteChat` reach a
+   * writer that cannot address a record the store does not hold, so a guess in
+   * the `false` direction fails host-side on the WRITE - long after the row
+   * rendered fine. The `@1.1` poll states the home for every row and settles it
+   * within one refresh, and a create invalidates that query immediately, so the
+   * unknown window is one round trip rather than a poll interval.
+   */
+  readonly docResident: boolean | null;
   /** Persisted run settings (harness/model/permission). `null` until set. */
   readonly settings: ChatRunSettings | null;
   /**
@@ -109,6 +136,22 @@ export interface ChatProjection {
 export interface ChatsSlice {
   readonly byId: Readonly<Record<string, ChatProjection>>;
   readonly allIds: readonly string[];
+}
+
+/**
+ * One chat record as the CLIENT holds it: the wire row plus the home the plane
+ * that delivered it stated.
+ *
+ * A client type rather than a wire one, because the two delivery planes state
+ * different amounts. `epic.listChatRecords@1.1` answers with
+ * `ChatRecordSummaryV11`, whose `docResident` is authoritative for every row it
+ * carries. `host.chatRecords.subscribe` answers with the BASE row and says
+ * nothing about the home. Widening the field here is what lets one held row
+ * type serve both without either plane having to fabricate the other's fact -
+ * see {@link ChatProjection.docResident}.
+ */
+export interface HeldChatRecordRow extends ChatRecordSummary {
+  readonly docResident: boolean | null;
 }
 
 /**
@@ -181,6 +224,34 @@ export interface TerminalAgentsSlice {
 
 export interface AgentRolesSlice {
   readonly byAgentId: Readonly<Record<string, readonly RoleClaim[]>>;
+}
+
+/**
+ * Comment threads as the records lane serves them, grouped by artifact.
+ *
+ * The element type is `CommentThreadWire` - the SAME shape
+ * `epic.listCommentThreads` returns - and that is a contract, not a
+ * convenience: `epicCommentThreadRecordSchema` extends
+ * `commentThreadWireSchema` verbatim precisely so the cold read and the push
+ * cannot disagree about what a thread is. Consumers therefore need no second
+ * shape, and the list RPC stays usable as the cold-read path beside this.
+ *
+ * `artifactId` and `revision` ride the WIRE row and are deliberately absent
+ * here: the artifact id is the grouping key, and a revision is sync bookkeeping
+ * that nothing rendering may read.
+ *
+ * ## Absence is not emptiness
+ *
+ * An artifact with no entry has had nothing SAID about it on this lane, which
+ * is different from an artifact the lane has told us has zero threads. A
+ * consumer that renders "no comments" off a missing key asserts something no
+ * frame said - the same rule the freshness model applies one level up - so the
+ * empty array is written explicitly whenever the lane reports a thread set, and
+ * a surface that needs the distinction must read the plane's freshness rather
+ * than the shape of this map.
+ */
+export interface CommentThreadsSlice {
+  readonly byArtifactId: Readonly<Record<string, readonly CommentThreadWire[]>>;
 }
 
 export interface TreeNode {
@@ -291,6 +362,18 @@ export const EMPTY_TERMINAL_AGENTS_SLICE: TerminalAgentsSlice = Object.freeze({
 
 export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
   byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
+});
+
+/**
+ * "Nothing said about any artifact's threads" - the pre-lane state, and the
+ * state of every legacy connection, whose comment threads still come from the
+ * poll. One shared reference so a session that never opens a comment surface
+ * hands the same value to every subscriber.
+ */
+export const EMPTY_COMMENT_THREADS_SLICE: CommentThreadsSlice = Object.freeze({
+  byArtifactId: Object.freeze(
+    {} as Record<string, readonly CommentThreadWire[]>,
+  ),
 });
 
 export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({

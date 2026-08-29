@@ -14,7 +14,10 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  ChatRecordSummary,
+  ChatRecordSummaryV11,
+} from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { ChatRecordsStreamDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -128,6 +131,17 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     origin: "own",
     ...overrides,
   };
+}
+
+/**
+ * The `epic.listChatRecords@1.1` poll's row - what `applyChatRecords` (as
+ * opposed to a stream delta, which carries the BASE `record()` shape above)
+ * takes. `docResident: false` by default: a registry answer.
+ */
+function pollRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
+  return { ...record(overrides), docResident: false, ...overrides };
 }
 
 function tuiRecord(
@@ -260,7 +274,7 @@ describe("<ChatRecordsStreamMount />", () => {
     const handle = openEpic("epic-1", "host-A");
     handle.store
       .getState()
-      .applyChatRecords([record({ chatId: "gone" })], null);
+      .applyChatRecords([pollRecord({ chatId: "gone" })], null);
     render(<ChatRecordsStreamMount />);
 
     emit({
@@ -358,7 +372,7 @@ describe("<ChatRecordsStreamMount />", () => {
     const handle = openEpic("epic-1", "host-A");
     handle.store
       .getState()
-      .applyChatRecords([record({ chatId: "polled" })], null);
+      .applyChatRecords([pollRecord({ chatId: "polled" })], null);
 
     render(<ChatRecordsStreamMount />);
 
@@ -368,7 +382,10 @@ describe("<ChatRecordsStreamMount />", () => {
     handle.store
       .getState()
       .applyChatRecords(
-        [record({ chatId: "polled" }), record({ chatId: "polled-again" })],
+        [
+          pollRecord({ chatId: "polled" }),
+          pollRecord({ chatId: "polled-again" }),
+        ],
         null,
       );
     expect(handle.store.getState().chats.allIds.slice().sort()).toEqual([

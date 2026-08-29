@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 import {
   useActiveThreadId,
   useCommentThreadsStore,
@@ -32,6 +34,13 @@ export interface CommentSidebarProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
+  /** The state lane's comment records for this artifact, or `null` when the
+   *  lane has said nothing about it - which is every artifact on a legacy
+   *  connection, permanently. Resolved by the owner
+   *  (`useEpicLaneCommentThreads`) rather than read here, for the same reason
+   *  {@link hostClient} is: this surface reads no ambient context. `null` here
+   *  is not "no threads" - it hands the question to the poll below. */
+  readonly laneThreads: readonly CommentThreadWire[] | null;
   /** Threads-anchored-in-document positions, derived from the active tile's
    *  Tiptap editor by the parent. Used both for sort order and orphan
    *  detection (no entry → orphan). */
@@ -59,6 +68,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     hostClient,
     artifactType,
     artifactId,
+    laneThreads,
     anchorPositions,
     currentUserId,
     canModerate,
@@ -70,6 +80,9 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
 
+  // The poll is NOT disabled when the lane has rows. It is on the released
+  // floor, so it is the one source every host serves, and it is what keeps
+  // this surface readable if the lane goes quiet.
   const query = useEpicCommentThreadsForClient({
     client: hostClient,
     epicId,
@@ -78,23 +91,42 @@ export function CommentSidebar(props: CommentSidebarProps) {
     options: { enabled: true },
   });
 
-  const sorted = useMemo(() => {
-    if (query.data === undefined) return [];
-    const filtered = filterThreadsByStatus(query.data.threads, filter);
-    return sortThreadsByDocumentOrder(filtered, anchorPositions);
-  }, [query.data, filter, anchorPositions]);
+  const resolved = useMemo(
+    () =>
+      resolveArtifactCommentThreads({
+        laneThreads,
+        pollThreads: query.data === undefined ? null : query.data.threads,
+      }),
+    [laneThreads, query.data],
+  );
 
-  // `query.data === undefined` - not `sorted.length === 0` - separates "we do
-  // not know" from "there are none". TanStack keeps the last successful
-  // snapshot when a REFETCH fails, so a populated sidebar keeps rendering real
-  // threads through an outage; the read that renders nothing is the COLD one
-  // (opening comments, switching artifacts, after cache eviction) while the
-  // host's collab provider is null, which `epic.listCommentThreads` answers
-  // with an error for the whole duration of every reconnect. A cold query
-  // that is disabled because no host client is ready is unknown for the same
-  // reason: it has never produced a snapshot.
+  const sorted = useMemo(() => {
+    if (resolved.threads === null) return [];
+    const filtered = filterThreadsByStatus(resolved.threads, filter);
+    return sortThreadsByDocumentOrder(filtered, anchorPositions);
+  }, [resolved.threads, filter, anchorPositions]);
+
+  // `resolved.threads === null` - not `sorted.length === 0` - separates "we do
+  // not know" from "there are none", and it now takes BOTH sources to reach
+  // unknown. An artifact the lane has said nothing about is not an artifact
+  // with no threads (on a legacy connection the lane says nothing about any of
+  // them), so a missing lane key alone may never render the empty state; it
+  // defers to the poll, and only their combined silence is unknown.
+  //
+  // TanStack keeps the last successful snapshot when a REFETCH fails, so a
+  // populated sidebar keeps rendering real threads through an outage; the read
+  // that renders nothing is the COLD one (opening comments, switching
+  // artifacts, after cache eviction) while the host's collab provider is null,
+  // which `epic.listCommentThreads` answers with an error for the whole
+  // duration of every reconnect. A cold query that is disabled because no host
+  // client is ready is unknown for the same reason: it has never produced a
+  // snapshot.
   const isUnavailable =
-    query.data === undefined && query.fetchStatus !== "fetching";
+    resolved.threads === null && query.fetchStatus !== "fetching";
+
+  // Gated on having nothing to show: a lane-served list must not be replaced
+  // by a spinner while the poll runs its first load beside it.
+  const isLoading = resolved.threads === null && query.isLoading;
 
   const handleExpandedChange = useCallback(
     (threadId: string, next: boolean) => {
@@ -133,7 +165,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2 pb-3">
         <SidebarBody
-          isLoading={query.isLoading}
+          isLoading={isLoading}
           isUnavailable={isUnavailable}
           sorted={sorted}
           filter={filter}

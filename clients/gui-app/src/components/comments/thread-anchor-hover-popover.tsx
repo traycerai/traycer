@@ -24,6 +24,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
@@ -39,6 +40,11 @@ export interface ThreadAnchorHoverPopoverProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
+  /** The state lane's comment records for this artifact, or `null` when the
+   *  lane has said nothing about it. Resolved by the tile alongside the same
+   *  value it feeds its own decoration layer, so a thread this preview can
+   *  show can never be one the tile has stripped the anchor for. */
+  readonly laneThreads: readonly CommentThreadWire[] | null;
   /** Tiptap editor for the active tile. We attach pointer listeners to
    *  `editor.view.dom` and read its DOM bounding rects for positioning. */
   readonly editor: Editor;
@@ -74,11 +80,15 @@ interface HoverState {
  *  - The hover threadId is mirrored into the Zustand store so the
  *    decoration plugin paints the matching anchor at the same time the
  *    popover appears.
- *  - We pull the thread payload from the cached
- *    `epic.listCommentThreads` query - no extra RPC traffic. If the cache
- *    is empty (sidebar never opened) we render nothing rather than blocking
- *    on a fetch; the click fallback still works because the parent invokes
- *    the sidebar swap which lazily fetches.
+ *  - The thread payload comes from the state lane's records when the lane has
+ *    spoken about this artifact, and otherwise from the cached
+ *    `epic.listCommentThreads` query - no extra RPC traffic either way. The
+ *    lane arm also closes the cold-cache hole in the poll arm: the cached read
+ *    is deliberately `enabled: false`, so before the lane it rendered nothing
+ *    at all until some other surface had populated that exact cache key. With
+ *    neither source holding the thread we still render nothing rather than
+ *    blocking on a fetch; the click fallback works regardless, because the
+ *    parent invokes the sidebar swap which lazily fetches.
  */
 export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const {
@@ -86,6 +96,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     hostClient,
     artifactType,
     artifactId,
+    laneThreads,
     editor,
     resolvedThreadIds,
     onActivateThread,
@@ -115,12 +126,17 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   });
   const threadsById = useMemo(() => {
     const map = new Map<string, CommentThreadWire>();
-    if (threadsQuery.data === undefined) return map;
-    for (const thread of threadsQuery.data.threads) {
+    const { threads } = resolveArtifactCommentThreads({
+      laneThreads,
+      pollThreads:
+        threadsQuery.data === undefined ? null : threadsQuery.data.threads,
+    });
+    if (threads === null) return map;
+    for (const thread of threads) {
       map.set(thread.threadId, thread);
     }
     return map;
-  }, [threadsQuery.data]);
+  }, [laneThreads, threadsQuery.data]);
 
   const cancelTimers = useCallback(() => {
     if (showTimerRef.current !== null) {

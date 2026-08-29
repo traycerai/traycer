@@ -13,9 +13,10 @@
 import type {
   ChatRecordRemovalReason,
   ChatRecordSummary,
+  ChatRecordSummaryV11,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
-import type { ChatsSlice } from "../types";
+import type { ChatsSlice, HeldChatRecordRow } from "../types";
 import { EMPTY_CHATS_SLICE } from "../types";
 import {
   chatRecordsSlice,
@@ -72,7 +73,7 @@ export interface ChatRecordTable {
    */
   ingestSeq(): number;
   applyRecords(
-    records: readonly ChatRecordSummary[],
+    records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): ChatRecordPublication | null;
   applyDelta(delta: ChatRecordDelta): ChatRecordPublication | null;
@@ -167,7 +168,7 @@ export function createChatRecordTable(
     return dropped;
   };
 
-  const table: RecordTable<ChatRecordSummary, ChatsSlice> = createRecordTable(
+  const table: RecordTable<HeldChatRecordRow, ChatsSlice> = createRecordTable(
     {
       rowKey: (row) => recordKey(row.ownerUserId, row.chatId),
       /**
@@ -184,12 +185,26 @@ export function createChatRecordTable(
       isVisibleToUser: (row, currentUserId) =>
         isChatVisibleToUser(row.ownerUserId, currentUserId),
       /**
-       * No doc-resident carve-out here, unlike the terminal-agent twin: chat
-       * records are registry-only, so every row carries a real revision and the
-       * same monotonic test governs both paths.
+       * The monotonic-`revision` test, EXCEPT over a row whose HOME is unknown,
+       * which it cannot judge - the chat plane's own carve-out, narrower than
+       * the terminal twin's and for the opposite reason.
+       *
+       * A delta seeds `docResident: null` for a chat it has never held (see
+       * `applyDelta`), and the `@1.1` answer that states the home is a fresher
+       * read of the SAME registry row, so it routinely carries the SAME
+       * revision. `n > n` is false, so without this the row would keep its
+       * unknown home for the life of the session and every write affordance on
+       * it would stay closed - a chat the user can see and cannot rename.
+       *
+       * One direction only, and only where nothing is being overwritten that
+       * anyone stated: the waiver applies when the HELD row's home is unknown,
+       * so a stated home is never replaced by a stale answer, and the ordinary
+       * guard still governs every other pair. Snapshot-only, like the twin's:
+       * a later ANSWER is a fresher read of the same map, while a delta
+       * arriving out of order is not.
        */
       supersedesOnSnapshot: (candidate, held) =>
-        candidate.revision > held.revision,
+        held.docResident === null || candidate.revision > held.revision,
       supersedesOnUpsert: (candidate, held) =>
         candidate.revision > held.revision,
       /**
@@ -245,15 +260,45 @@ export function createChatRecordTable(
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
 
+    // `@1.1` states the home for every row it carries, so the answer is
+    // authoritative and the held row takes it verbatim.
     applyRecords: (records, issuedAtSeq) =>
-      published(table.applySnapshot(records, issuedAtSeq)),
-
-    applyDelta: (delta) =>
       published(
-        delta.kind === "remove"
-          ? table.applyRemoval(delta.chatId, delta.reason)
-          : table.applyUpsert(delta.record),
+        table.applySnapshot(
+          records.map((record) => ({
+            ...record,
+            docResident: record.docResident,
+          })),
+          issuedAtSeq,
+        ),
       ),
+
+    applyDelta: (delta) => {
+      if (delta.kind === "remove") {
+        return published(table.applyRemoval(delta.chatId, delta.reason));
+      }
+      // `host.chatRecords.subscribe` carries the BASE row, which says nothing
+      // about the home - and unlike the terminal twin, "a doc-homed row cannot
+      // produce a delta" is FALSE here: `ChatRegistryService.acquire` calls
+      // `hydrateLegacyDocSecondary(legacyDocChats, true)`, deliberately
+      // announcing doc-homed chats so a chat-list stream that won the first
+      // acquire with no Y.Doc learns its baseline grew. Stamping `false` would
+      // route exactly those rows' renames to a writer that cannot address them.
+      //
+      // So: carry forward what the last ANSWER stated for this chat, and admit
+      // ignorance when nothing has. The published slice is the held statement -
+      // reading it here rather than keeping a second map is deliberate, since
+      // two books that can disagree is the defect class this plane already
+      // documents. It is keyed by `chatId` alone and filtered to the viewer,
+      // which is exactly the population whose mutations this client routes.
+      const heldHome = table.current().byId[delta.record.chatId];
+      return published(
+        table.applyUpsert({
+          ...delta.record,
+          docResident: heldHome === undefined ? null : heldHome.docResident,
+        }),
+      );
+    },
 
     beginPendingCreation(pending) {
       // A chat this session has already seen retracted cannot be created back

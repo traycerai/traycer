@@ -45,8 +45,12 @@ import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import {
   deriveEpicSyncPillState,
+  deriveEpicWriteCommandAlert,
+  summarizeEpicWriteCommands,
   type EpicHostDirtyState,
   type EpicSyncPillState,
+  type EpicWriteCommandAlert,
+  type EpicWriteCommandSummary,
 } from "@/lib/epic-sync-pill-state";
 import {
   agentActivityTiers,
@@ -151,9 +155,10 @@ export function useEpicConnectionStatus(): StreamConnectionStatus {
 }
 
 /**
- * Host dirtiness is known only after this subscription cycle's atomic @1.1
- * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)
- * is unknown rather than evidence that the cloud has acknowledged everything.
+ * Input (iii) of the sync pill: the control lane's aggregate dirty bit, known
+ * only after this open cycle's atomic dirty snapshot. A clean-looking map
+ * before then (or on a legacy connection that cannot produce one) is unknown
+ * rather than evidence that the cloud has acknowledged everything.
  */
 const selectHostDirtyState = createSelector(
   (s: OpenEpicState) => s.hasDirtySnapshotForOpenCycle,
@@ -173,10 +178,26 @@ const selectHostDirtyState = createSelector(
 );
 
 /**
- * The sync pill's single source of truth. Weighs all five legs of the
- * durability chain rather than the lossy blended `connectionStatus` the pill
- * used to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
- * contract and why each leg has to be visible separately.
+ * Inputs (iv) and (v) of the sync pill, counted per outcome off the projected
+ * command list. Memoized at module scope so the two hooks below share one
+ * count per publication rather than walking the list twice.
+ */
+const selectWriteCommandSummary = createSelector(
+  (s: OpenEpicState) => s.writeCommands,
+  (writeCommands): EpicWriteCommandSummary =>
+    summarizeEpicWriteCommands(writeCommands),
+);
+
+/**
+ * The pill's link/durability claim, over the five inputs of wire-lane
+ * invariant 8 rather than the lossy blended `connectionStatus` the pill used
+ * to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
+ * contract and why each input has to stay visible separately.
+ *
+ * Input (v) reaches the pill through {@link useEpicWriteCommandAlert}, NOT
+ * through this verdict: it is a different class, and the one thing it may
+ * never do is disappear behind this one. It is passed in here only to gate the
+ * green claim.
  *
  * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
  * and never re-renders the pill.
@@ -188,9 +209,27 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       cloudSyncStatus: s.cloudSyncStatus,
       hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
       hostDirtyState: selectHostDirtyState(s),
-      hasUnsyncedLocalChanges: s.isDirty || s.writeCommands.length > 0,
+      hasUnsyncedDocClassChanges: s.isDirty,
+      writeCommands: selectWriteCommandSummary(s),
       hasConnectedOnce: s.hasConnectedOnce,
     }),
+  );
+}
+
+/**
+ * Input (v) of the sync pill - a refused or superseded write - plus the
+ * ambiguous arm of input (iv), as their own verdict.
+ *
+ * Separate from {@link useEpicSyncPillState} because they are a separate
+ * class, and the pill weighs the two side by side: a rejected write is
+ * reported even while the link is down, and it can never be absorbed into a
+ * green claim about the link.
+ *
+ * Returns a string union or `null`, so an unchanged verdict re-renders nobody.
+ */
+export function useEpicWriteCommandAlert(): EpicWriteCommandAlert | null {
+  return useEpicStore((s) =>
+    deriveEpicWriteCommandAlert(selectWriteCommandSummary(s)),
   );
 }
 
@@ -1218,7 +1257,7 @@ function liveAgentIdsSnapshot(
   const state = handle.store.getState();
   const key = [...state.chats.allIds, ...state.tuiAgents.allIds]
     .sort()
-    .join(" ");
+    .join("\x00");
   const cached = registeredLiveAgentIdsCache.get(handle);
   if (cached !== undefined && cached.key === key) return cached.ids;
   const ids = new Set<string>([

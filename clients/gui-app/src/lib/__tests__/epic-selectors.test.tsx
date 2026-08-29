@@ -579,6 +579,9 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     userId: null,
     hostId: "host-a",
     isTitleEditedByUser: false,
+    // Ordinary registry-backed chat - this suite exercises selector
+    // behavior, not doc residency.
+    docResident: false,
     archivedAt: null,
     settings,
   };

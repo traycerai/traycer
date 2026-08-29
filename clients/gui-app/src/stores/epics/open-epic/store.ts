@@ -34,7 +34,7 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
 import type {
   ChatRecordRemovalReason,
-  ChatRecordSummary,
+  ChatRecordSummaryV11,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -53,6 +53,7 @@ import type {
   ArtifactsSlice,
   ArtifactRoomsSlice,
   ChatsSlice,
+  CommentThreadsSlice,
   DeletedArtifactsSlice,
   EpicArtifactRoomAvailability,
   EpicHeader,
@@ -60,6 +61,7 @@ import type {
   TreeSlice,
 } from "./types";
 import type { PendingChatCreation } from "./pending-chat-creations";
+import { readEpicDocRecordArms } from "./doc-record-arms";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createEpicReplicaRuntime,
@@ -231,6 +233,14 @@ export interface OpenEpicState {
   /** Doc entries unioned with the host's registry rows. Components read THIS. */
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
+  /**
+   * Comment threads the RECORDS LANE has served, grouped by artifact. Empty on
+   * every legacy connection - that arm's wire carries no comment records - so
+   * `epic.listCommentThreads` remains the source there and the cold-read path
+   * on both. A MISSING artifact key means nothing has been said about that
+   * artifact, which is not the same as "no threads"; see `CommentThreadsSlice`.
+   */
+  readonly commentThreads: CommentThreadsSlice;
   readonly tree: TreeSlice;
   /**
    * Per-artifact-room availability mirrored from `epic.subscribe@1.0` `artifactRoomState`
@@ -392,7 +402,7 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (
-    records: readonly ChatRecordSummary[],
+    records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -827,6 +837,15 @@ export function createOpenEpicStore(
     // constructed before the auth profile hydrates must pick up the id on its
     // next projection.
     getCurrentUserId: () => useAuthStore.getState().profile?.userId ?? null,
+    // Read LIVE off the negotiated manifest, never captured: a host that
+    // handshakes after this session is constructed - or upgrades in place -
+    // must move the arms without the tab reopening. See `readEpicDocRecordArms`
+    // for why the two planes ask different questions and why unknown keeps the
+    // doc on.
+    getDocArm: () =>
+      readEpicDocRecordArms(
+        options.commandRequester?.getActiveHostId() ?? null,
+      ),
     onAuthError: options.onAuthError,
     commandIdFactory: { next: () => crypto.randomUUID() },
     writeCommandSender: {

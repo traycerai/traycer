@@ -23,7 +23,7 @@ import {
   applyAwarenessUpdate,
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
@@ -63,6 +63,7 @@ import {
   readArtifactKind,
   readMaybeString,
 } from "../projection-helpers";
+import type { EpicDocRecordArms } from "../projection-helpers";
 import type { PendingChatCreation } from "../pending-chat-creations";
 import { createEpicProjector, type EpicProjector } from "./epic-projector";
 import type { EpicRootEvent, EpicOutboundRequest } from "./epic-runtime-events";
@@ -111,6 +112,18 @@ export interface EpicRecordsReplicaSources {
    * the seam.
    */
   readonly getCurrentUserId: () => string | null;
+  /**
+   * Whether the doc is still a record SOURCE, per population.
+   *
+   * INJECTED rather than derived here, and a getter rather than a value, for
+   * the two reasons `getCurrentUserId` is: the answer is settled by what the
+   * host negotiated for `epic.listChatRecords` / `epic.listTuiAgents` and that
+   * arrives on its own schedule, and reading the negotiated-manifest registry
+   * from inside `runtime/` would put ambient main-thread module state on the
+   * wrong side of the worker boundary. The composition root reads it; this
+   * plane only asks. See `EpicDocRecordArms`.
+   */
+  readonly getDocArm: () => EpicDocRecordArms;
   readonly send: (request: EpicOutboundRequest) => void;
   /**
    * Whether any artifact room holds unsent or unacknowledged local state.
@@ -210,7 +223,7 @@ export interface EpicRecordsReplica extends Replica<
 
   // ── Record tables ───────────────────────────────────────────────────────
   applyChatRecords(
-    records: readonly ChatRecordSummary[],
+    records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
@@ -280,6 +293,7 @@ export function createEpicRecordsReplica(
     session,
     sink,
     getCurrentUserId,
+    getDocArm,
     send,
     hasRoomDivergence,
     isDisposed,
@@ -388,6 +402,7 @@ export function createEpicRecordsReplica(
     getCurrentUserId,
     getChatRecords: () => chatTable.current(),
     getTuiAgentRecords: () => tuiTable.current(),
+    getDocArm,
     getPendingOverlay: () => overlay.overlay(),
     onDeadMutations: (requestIds) => overlay.collectDead(requestIds),
   });
